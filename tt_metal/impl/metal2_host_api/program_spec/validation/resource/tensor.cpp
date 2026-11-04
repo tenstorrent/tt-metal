@@ -4,9 +4,12 @@
 
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
@@ -106,6 +109,35 @@ void ValidateTensorParametersUsed(const ValidationContext& ctx) {
             used_tensor_parameters.contains(tensor_parameter.unique_id),
             "TensorParameter '{}' is defined but not bound by any kernel",
             tensor_parameter.unique_id);
+    }
+}
+
+void ValidatePerNodeTensorPlacement(const ValidationContext& ctx) {
+    // A per-node binding reads its own node's shard address, so every node of a kernel that binds a per-node tensor
+    // must hold a shard. The TensorSpec fixes those nodes, so this is checked once here rather than on every enqueue.
+    for (const auto& kernel : ctx.spec.kernels) {
+        const NodeRangeSet& kernel_nodes = ctx.collected.kernel_node_set.at(kernel.unique_id);
+        for (const auto& binding : kernel.tensor_bindings) {
+            auto it = ctx.collected.tensor_parameter_by_name.find(binding.tensor_parameter_name);
+            if (it == ctx.collected.tensor_parameter_by_name.end()) {
+                continue;  // Reported by the binding reference check.
+            }
+            const TensorSpec& tensor_spec = it->second->spec;
+            if (!per_core_allocation::is_per_core_allocation(tensor_spec.memory_config())) {
+                continue;
+            }
+            const std::vector<CoreCoord> data_nodes =
+                tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec()->cores_with_data();
+            const std::unordered_set<CoreCoord> data_node_set(data_nodes.begin(), data_nodes.end());
+            for (const NodeCoord& node : corerange_to_cores(kernel_nodes)) {
+                TT_FATAL(
+                    data_node_set.contains(node),
+                    "Kernel '{}' runs on node {}, where per-node TensorParameter '{}' has no shard.",
+                    kernel.unique_id,
+                    node.str(),
+                    binding.tensor_parameter_name);
+            }
+        }
     }
 }
 

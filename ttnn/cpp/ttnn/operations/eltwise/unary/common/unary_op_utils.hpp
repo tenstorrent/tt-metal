@@ -9,7 +9,7 @@
 #include <string>
 #include <span>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -131,6 +131,9 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 // True when op_type is compiled by a kernel of its own rather than the generic eltwise_sfpu_metal2.cpp chain
 // kernel. Such an op is not emitted into SFPU_OP_CHAIN_0, so it cannot share a chain with other ops.
 bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+
+// Whether the compute kernel can take its tiles chunk by chunk, as the DRAM read work queue hands them out.
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype);
 
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);

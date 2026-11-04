@@ -1191,10 +1191,15 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
         return std::nullopt;
     }
     const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
     std::string op_name;
     switch (op.type()) {
         case UnaryOpType::LOGSIGMOID: op_name = "log_sigmoid"; break;
         default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
     }
     return std::map<std::string, std::string>{
         {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
@@ -1250,6 +1255,11 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 
 bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     return get_compute_kernel_path(op_type, input_dtype) != kGenericChainKernel;
+}
+
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    const std::string_view kernel = get_compute_kernel_path(op_type, input_dtype);
+    return kernel == kGenericChainKernel || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
 }
 
 std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {

@@ -19,6 +19,8 @@ constexpr float correction_exp_scale(int degree) {
 
 // Exponent leaf shared by the exp_hw_eval compositions. MULT may be an
 // immediate, a programmable constant or a DST value.
+// PoolHeld takes ResidualPool's two upper coefficients as immediates of the call, the values
+// init_abs_exp_correction would program in Prgm1/2.
 template <
     uint32_t DEG,
     bool SquareStore,
@@ -27,8 +29,9 @@ template <
     bool ResidualFold,
     bool SkipClamp,
     bool SplitScaleBias,
-    typename Mult>
-inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
+    typename Mult,
+    bool PoolHeld = false>
+__attribute__((always_inline)) inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
     vFloat xlog2;
     if constexpr (SplitScaleBias) {
         // An explicit MAD(product, 1, bias) keeps the compiler from contracting the MUL into it.
@@ -73,6 +76,8 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
         p = dst_reg[64 + DEG].mode<DataLayout::F32>();
     } else if constexpr (SquareFold) {
         p = c[DEG] * correction_exp_scale(DEG);
+    } else if constexpr (ResidualPool && PoolHeld) {
+        p = ResidualFold ? c[DEG] * correction_exp_scale(DEG) : c[DEG];
     } else if constexpr (ResidualPool) {
         p = vConstFloatPrgm1;
     } else {
@@ -88,6 +93,12 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
             }
         } else if constexpr (SquareFold) {
             p = p * f + c[k] * correction_exp_scale(k);
+        } else if constexpr (ResidualPool && PoolHeld) {
+            if (k == (int)DEG - 1) {
+                p = p * f + (ResidualFold ? c[k] * correction_exp_scale(k) : c[k]);
+            } else {
+                p = p * f + c[k];
+            }
         } else if constexpr (ResidualPool) {
             if (k == (int)DEG - 1) {
                 p = p * f + vConstFloatPrgm2;
