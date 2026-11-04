@@ -40,6 +40,9 @@ RETIRED_LABELS = {
 }
 
 ONLINE_MODES = ("local-disk", "lfc")
+# lfc is online too, but on those CIv2 runners model code fetches weights from the large-file
+# cache instead of HF, so only local-disk SKUs can trace a model no CI test uses.
+HF_DOWNLOAD_MODES = ("local-disk",)
 
 _HF_MODEL_RE = re.compile(r"""\bHF_MODEL[ \t]*[=:][ \t]*["']?([A-Za-z0-9_.\-/]+)""")
 _HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
@@ -144,10 +147,10 @@ def hf_model_coverage(test_yaml_dir):
 def check_models(hf_models, sku, skus, coverage, repo_root="."):
     """Return warnings for hub models whose weights the SKU's cache likely lacks."""
     mode = skus[sku].get("weights-cache-mode", "")
-    if mode in ONLINE_MODES:
+    if mode in HF_DOWNLOAD_MODES:
         return []
     mount = weights_mount(mode)[0]
-    online = sorted(s for s, e in skus.items() if e.get("weights-cache-mode") in ONLINE_MODES)
+    online = sorted(s for s, e in skus.items() if e.get("weights-cache-mode") in HF_DOWNLOAD_MODES)
     warnings = []
     for model in hf_models:
         if not model or not is_hub_id(model, repo_root):
@@ -166,7 +169,7 @@ def check_models(hf_models, sku, skus, coverage, repo_root="."):
             continue
         where = f"CI runs it on: {', '.join(sorted(covered))}" if covered else "no CI test uses it"
         warnings.append(
-            f"{model} is likely not in the {sku} weights cache (read-only, offline; {where}). "
+            f"{model} is likely not in the {sku} weights cache ({where}). "
             f"Use one of those SKUs, or a SKU that downloads from HF: {', '.join(online)}"
         )
     return warnings

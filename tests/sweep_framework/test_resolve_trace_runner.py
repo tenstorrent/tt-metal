@@ -21,6 +21,7 @@ SKUS = {
     "bh_p150": {"runs_on": ["arch-blackhole", "P150"], "weights-cache-mode": "cloud-mlperf"},
     "bh_loudbox": {"runs_on": ["arch-blackhole", "BH-LoudBox"], "weights-cache-mode": "cloud-mlperf"},
     "bh_p150_perf": {"runs_on": ["arch-blackhole", "P150"], "weights-cache-mode": "local-disk"},
+    "bh_p150b_civ2": {"runs_on": ["tt-ubuntu-2204-P150b-stable"], "weights-cache-mode": "lfc"},
     "cpu_medium": {"runs_on": ["tt-ubuntu-2204-medium-stable"]},
     "bh_sc4": {"runs_on": ["exabox-multihost-ci-sc4-8kw"]},
     "bh_legacy_alloc": {"runs_on": ["arch-blackhole"], "allocation": {"hosts": 2}},
@@ -176,6 +177,13 @@ def test_uncovered_model_on_offline_cache_warns_and_names_alternatives():
     warnings = check_models(["meta-llama/Llama-3.2-1B-Instruct"], "bh_loudbox", SKUS, COVERAGE)
     assert len(warnings) == 1
     assert "wh_n150" in warnings[0] and "bh_p150_perf" in warnings[0]
+
+
+def test_lfc_cache_is_checked_and_never_suggested():
+    # CIv2 model code reads the large-file cache, not HF, so an lfc SKU can't trace an uncovered model.
+    warnings = check_models(["meta-llama/Llama-3.2-1B-Instruct"], "bh_p150b_civ2", SKUS, COVERAGE)
+    assert len(warnings) == 1
+    assert warnings[0].endswith("downloads from HF: bh_p150_perf")
 
 
 def test_online_cache_and_local_paths_skip_the_check(tmp_path):
