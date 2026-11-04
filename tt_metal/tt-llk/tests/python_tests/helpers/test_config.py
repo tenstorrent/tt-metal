@@ -448,10 +448,22 @@ class TestConfig:
                 if runner_temp
                 else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
             )
-            return base / f"tt-llk-hardware-free-{run_id}"
-        if runner_temp:
-            return Path(runner_temp) / "tt-llk-build"
-        return TestConfig.DEFAULT_ARTEFACTS_PATH
+            root = base / f"tt-llk-hardware-free-{run_id}"
+        elif runner_temp:
+            root = Path(runner_temp) / "tt-llk-build"
+        else:
+            root = TestConfig.DEFAULT_ARTEFACTS_PATH
+        # A gathering build compiles every kernel and the shared firmware differently, and the
+        # artefact cache is keyed by variant, not by compile options: keep it in its own tree.
+        if TestConfig.gathering_build():
+            root = root / "gathering"
+        return root
+
+    @staticmethod
+    def gathering_build() -> bool:
+        """tt-metal's JIT switch: the LLK tests build in the gathering configuration tt-metal
+        ships. "1" only, like TT_METAL_DISABLE_SFPLOADMACRO."""
+        return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -1491,6 +1503,16 @@ class TestConfig:
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
+        if TestConfig.gathering_build():
+            # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
+            gathering_options = "-DENABLE_GATHERING "
+            if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+                # As tt-metal's JIT build does on Blackhole only: the compiler's own replay
+                # optimisation turns unrolled SFPU loops into records it never brackets.
+                gathering_options += "-mno-tt-tensix-optimize-replay "
+            OPTIONS_COMPILE += gathering_options
+            NON_COVERAGE_OPTIONS_COMPILE += gathering_options
 
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 

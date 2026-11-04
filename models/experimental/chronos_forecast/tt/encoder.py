@@ -72,6 +72,7 @@ class TtEncoder:
         l1_series_chunk: int | None = None,
         embed=None,
         tail_start: int | None = None,
+        tail_end: int | None = None,
         head=None,
     ):
         """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
@@ -82,8 +83,8 @@ class TtEncoder:
 
         Optional stages run on each chunk in the same memory: ``embed(x, memory_config)``
         maps the (borrowed) input to the encoder input, ``tail_start`` keeps rows
-        [tail_start, T) after the last block (the final norm is per token), and
-        ``head(normed, memory_config)`` consumes the normed rows and returns the output
+        [tail_start, tail_end or T) after the last block (the final norm is per token),
+        and ``head(normed, memory_config)`` consumes the normed rows and returns the output
         in DRAM. Only the input and output are then in DRAM.
         """
         import ttnn
@@ -102,6 +103,7 @@ class TtEncoder:
                 group_block,
                 embed=embed,
                 tail_start=tail_start,
+                tail_end=tail_end,
                 head=head,
             )
         dram = ttnn.DRAM_MEMORY_CONFIG
@@ -117,15 +119,17 @@ class TtEncoder:
                 diagonal_group_attention=diagonal_group_attention,
                 group_block=group_block,
             )
-        return self._final(x, dram, tail_start, head)
+        return self._final(x, dram, tail_start, head, tail_end)
 
-    def _final(self, h, mem, tail_start: int | None, head):
+    def _final(self, h, mem, tail_start: int | None, head, tail_end: int | None = None):
         """Tail slice, final norm and head of one (chunk) stream; consumes ``h``."""
         import ttnn
 
-        if tail_start is not None:
+        if tail_start is not None or tail_end is not None:
             begin, end = [0] * len(h.shape), list(h.shape)
-            begin[-2] = tail_start
+            begin[-2] = tail_start or 0
+            if tail_end is not None:
+                end[-2] = tail_end
             tail = ttnn.slice(h, begin, end, memory_config=mem)
             ttnn.deallocate(h)
             h = tail
@@ -172,6 +176,7 @@ class TtEncoder:
         *,
         embed=None,
         tail_start: int | None = None,
+        tail_end: int | None = None,
         head=None,
     ):
         """Chunks never split a group, so each runs all blocks without leaving L1."""
@@ -209,7 +214,7 @@ class TtEncoder:
                     group_block=group_block,
                     memory_config=l1,
                 )
-            out = self._final(h, l1, tail_start, head)
+            out = self._final(h, l1, tail_start, head, tail_end)
             if chunk_mask is not None and chunk_mask is not group_mask:
                 ttnn.deallocate(chunk_mask)
             chunks.append(out)
