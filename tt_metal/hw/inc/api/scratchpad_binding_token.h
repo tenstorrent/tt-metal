@@ -73,9 +73,7 @@ private:
  * non-empty value on the host. Missing metadata fails constant evaluation regardless of device assertion settings.
  */
 constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 
@@ -118,7 +116,7 @@ constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
 // Returns the tile storage size in bytes.
 // precondition: The token has format metadata and a supported tile storage size.
 constexpr uint32_t get_tile_size(const ScratchpadBindingToken& token) {
-    (void)get_dataformat(token);
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     if (token.llk_metadata_.tile_size_bytes == 0) {
         binding_details::tile_size_metadata_not_set();
     }

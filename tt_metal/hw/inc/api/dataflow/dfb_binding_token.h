@@ -99,9 +99,7 @@ private:
  */
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 
@@ -153,7 +151,7 @@ constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token) {
 // precondition: The token has format metadata and a supported tile storage size.
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint32_t get_tile_size(const DFBBindingToken<P, C>& token) {
-    (void)get_dataformat(token);
+    binding_details::assert_dataformat_set(token.llk_metadata_);
     if (token.llk_metadata_.tile_size_bytes == 0) {
         binding_details::tile_size_metadata_not_set();
     }
