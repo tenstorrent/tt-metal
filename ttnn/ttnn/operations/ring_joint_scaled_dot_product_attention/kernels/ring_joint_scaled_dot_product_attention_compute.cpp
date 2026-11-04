@@ -191,7 +191,9 @@ void kernel_main() {
     // Streamed score phases of one key block (bf16 DEST). Leaves cb_max_blk (R, fronted), cb_sum_{acc|blk} (R),
     // cb_out_{acc|blk} (R*DVt) exactly as the op's phase-by-phase body does; cb_scores is consumed.
     // ------------------------------------------------------------------------------------------------------------
-    auto stream_block = [&](uint32_t R, uint32_t skv, const BlockMask& bm, bool first) {
+    // m_old / m_new: the running max (previous blocks) and this block's max ping-pong between cb_max_acc and
+    // cb_max_blk (both Sq pages, same format) instead of a per-block m_acc <- m_blk copy.
+    auto stream_block = [&](uint32_t R, uint32_t skv, const BlockMask& bm, bool first, uint32_t m_old, uint32_t m_new) {
         const uint32_t sbw = subblock_w(skv);
         // Single accumulators: block 0 fills l_acc / O_acc; every later block corrects them in place inside S2
         // (l_acc = rowsum P + a*l_acc, O_acc = P.V + a*O_acc), so there is no l_blk / O_blk and no rescale pass.
@@ -206,7 +208,7 @@ void kernel_main() {
         cb_wait_front(cb_k, Sk * DHt);
         cb_wait_front(cb_q, Sq * DHt);
         if (!first) {
-            cb_wait_front(cb_max_acc, R);
+            cb_wait_front(m_old, R);
         }
         if (bm.any) {
             cb_wait_front(cb_mask, mask_tiles);
@@ -256,20 +258,20 @@ void kernel_main() {
         // section (same pack-thread exp stream) and is packed to cb_row_factor for S2's in-place l / O update.
         auto exp_chunk = [&](uint32_t i, uint32_t c0, uint32_t w, bool with_a) {
             if (c0 == 0) {
-                cb_wait_front(cb_max_blk, i + 1);
+                cb_wait_front(m_new, i + 1);
             }
             tile_regs_acquire();
             if (w) {
-                src.use(cb_scores, cb_max_blk);
-                sub_bcast_cols_init(cb_scores, cb_max_blk);
+                src.use(cb_scores, m_new);
+                sub_bcast_cols_init(cb_scores, m_new);
                 for (uint32_t j = 0; j < w; ++j) {
-                    sub_tiles_bcast_cols(cb_scores, cb_max_blk, i * Sk + c0 + j, i, j);
+                    sub_tiles_bcast_cols(cb_scores, m_new, i * Sk + c0 + j, i, j);
                 }
             }
             if (with_a) {
-                src.use(cb_max_acc, cb_max_blk);
-                sub_init(cb_max_acc, cb_max_blk);
-                sub_tiles(cb_max_acc, cb_max_blk, i, i, w);
+                src.use(m_old, m_new);
+                sub_init(m_old, m_new);
+                sub_tiles(m_old, m_new, i, i, w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -297,13 +299,13 @@ void kernel_main() {
             if (do_max) {
                 cb_wait_front(cb_scores, (mrow + 1) * Sk);
                 if (!first) {
-                    src.use(cb_max_acc, src.b);
-                    copy_init(cb_max_acc, 0, 1);  // within-face transpose: col 0 -> the GMPOOL row-0 accumulator
-                    copy_tile(cb_max_acc, mrow, 0);
+                    src.use(m_old, src.b);
+                    copy_init(m_old, 0, 1);  // within-face transpose: col 0 -> the GMPOOL row-0 accumulator
+                    copy_tile(m_old, mrow, 0);
                 }
                 src.use(cb_scores, cb_max_scaler);
                 // (stock reduce_tile MAX on top of the preloaded m_acc measured INCORRECT: inf output)
-                reduce_block_max_row_init_runtime(cb_max_blk, skv, cb_scores, cb_max_scaler);
+                reduce_block_max_row_init_runtime(m_new, skv, cb_scores, cb_max_scaler);
                 reduce_block_max_row_runtime(cb_scores, cb_max_scaler, mrow * Sk, 0);
                 reduce_block_max_row_uninit_runtime(cb_scores);
             }
@@ -342,12 +344,12 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(cb_max_blk)));
-            set_pack_width(cb_max_blk, 1);
+            PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(m_new)));
+            set_pack_width(m_new, 1);
             if (do_max) {
-                cb_reserve_back(cb_max_blk, 1);
-                pack_tile(0, cb_max_blk);
-                cb_push_back(cb_max_blk, 1);
+                cb_reserve_back(m_new, 1);
+                pack_tile(0, m_new);
+                cb_push_back(m_new, 1);
             }
             if (do_pv) {
                 cb_reserve_back(sum_cb, 1);
@@ -433,7 +435,7 @@ void kernel_main() {
         if (!first) {  // the rescale pass used to consume these
             cb_wait_front(cb_row_factor, R);
             cb_pop_front(cb_row_factor, R);
-            cb_pop_front(cb_max_acc, R);
+            cb_pop_front(m_old, R);
         }
         set_pack_width(cb_scores, 1);  // the helpers that follow pack one tile per call
     };
@@ -471,6 +473,7 @@ void kernel_main() {
     auto run_unit = [&](uint32_t R, uint32_t i) {
         MaybeDeviceZoneScope("compute_unit");
         uint32_t kb = 0;  // processed key blocks of this unit
+        uint32_t m_old = cb_max_acc, m_new = cb_max_blk;  // bf16 DEST swaps them per block; fp32 DEST copies
         [[maybe_unused]] uint32_t max_gq = 0, min_gq = 0;
         if constexpr (causal) {
             const AttnUnit unit = i < W ? decode_unit<Sq, NQ, LQ>(core_idx + i * C) : tail_piece(tail_idx);
@@ -502,7 +505,10 @@ void kernel_main() {
                     // One zone over the whole streamed block: its steps interleave QK / max / exp / rowsum / P.V
                     // rows across the three TRISCs, so per-phase zones no longer measure separable work.
                     MaybeDeviceZoneScopeIf("compute_stream", zs);
-                    stream_block(R, skv, bm, kb == 0);
+                    stream_block(R, skv, bm, kb == 0, m_old, m_new);
+                    const uint32_t m_t = m_old;
+                    m_old = m_new;
+                    m_new = m_t;
                 } else {
                     // ---- fp32 DEST: the op's phase-by-phase body (helpers), unchanged ----
                     {
@@ -686,7 +692,7 @@ void kernel_main() {
                 // ---- rescale_block + m_acc <- m_blk (the op's helpers, unchanged) ----
                 auto rescale_copy = [&](auto rows_t) {
                     const uint32_t RR = rows_t;
-                    if (DST_ACCUM_MODE && kb > 0) {  // bf16 DEST corrects l / O in place inside the stream
+                    if (kb > 0) {  // bf16 DEST corrects l / O in place inside the stream
                         MaybeDeviceZoneScopeIf("compute_rescale", zs);
                         eltwise_chain(
                             IterationShape::tiles(RR),
@@ -726,10 +732,12 @@ void kernel_main() {
                     MaybeDeviceZoneScopeIf("compute_copy_max", zs);
                     copy<input(cb_max_blk), output(cb_max_acc)>(IterationShape::tiles(RR));
                 };
-                if (R == Sq) {
-                    rescale_copy(std::integral_constant<uint32_t, Sq>{});
-                } else {
-                    rescale_copy(R);
+                if constexpr (DST_ACCUM_MODE) {
+                    if (R == Sq) {
+                        rescale_copy(std::integral_constant<uint32_t, Sq>{});
+                    } else {
+                        rescale_copy(R);
+                    }
                 }
             }
         }
@@ -741,8 +749,8 @@ void kernel_main() {
                 input(cb_row_factor, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
                 output(cb_out_tiles)>(IterationShape::grid(R, DVt));
         }
-        cb_wait_front(cb_max_acc, R);
-        cb_pop_front(cb_max_acc, R);
+        cb_wait_front(m_old, R);
+        cb_pop_front(m_old, R);
         cb_pop_front(cb_q, Sq * DHt);
     };
 
