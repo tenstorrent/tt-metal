@@ -3,13 +3,18 @@
 
 """MiniMax-M3 media module and stored-value format, host only."""
 
+import os
 import pickle
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
 from models.demos.minimax_m3.vision import format as media_format
+from models.demos.minimax_m3.vision import media as media_module
 from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
 
 CONFIG = {"image_token_index": 200025, "text_config": {"hidden_size": 64}, "vision_config": {"patch_size": 14}}
@@ -54,9 +59,11 @@ def test_prepare_rejects(expect_error, kind, image, message):
 
 def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     media = MiniMaxM3Media(CONFIG)
-    with expect_error(NotImplementedError, "stub_embeddings"):
-        media.load("", {})
+    with expect_error(ValueError, "checkpoint directory"):
+        media.load("", {})  # before any chip or ttnn import
     media.load("", {"stub_embeddings": True})
+    with expect_error(RuntimeError, "load after load"):
+        media.load("", {"stub_embeddings": True})
     item = media.prepare("image", rgba(100, 60))
     bufs = [memoryview(bytearray(media.value_size(item))) for _ in range(2)]
     media.encode([item], bufs[:1])
@@ -98,3 +105,35 @@ def test_image_pickles_out_of_band():
     back = pickle.loads(stream, buffers=buffers)
     assert (back.grid_h, back.grid_w) == (item.grid_h, item.grid_w)
     assert np.array_equal(back.pixels, item.pixels)
+
+
+def test_media_imports_without_ttnn():
+    """The media module imports without ttnn, so a process that only prepares media runs without it; only load
+    imports ttnn and the encoder."""
+    repo = Path(__file__).resolve().parents[5]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(repo), os.environ.get("PYTHONPATH")]))}
+    code = (
+        "import sys; import models.demos.minimax_m3.vision.media; print(sorted(m for m in sys.modules if m == 'ttnn'))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env, capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.strip() == "[]", out.stdout + out.stderr
+
+
+def test_failed_encode_leaves_no_valid_header(monkeypatch, expect_error):
+    """encode writes a value's header only after its embeddings: if they fail, the slot holds no valid header, not
+    the one a previous value left there, so prefill rejects it."""
+    media = MiniMaxM3Media(CONFIG)
+    media.load("", {"stub_embeddings": True})
+    item = media.prepare("image", rgba(100, 60))
+    value = memoryview(bytearray(media.value_size(item)))
+    media.encode([item], [value])
+    media_format.read_header(value)  # a valid value in the slot
+
+    def fail(item, hidden):
+        raise RuntimeError("the chip went away")
+
+    monkeypatch.setattr(media_module, "_stub_rows", fail)
+    with expect_error(RuntimeError, "the chip went away"):
+        media.encode([item], [value])
+    with expect_error(ValueError, "no embeddings"):
+        media_format.read_header(value)
