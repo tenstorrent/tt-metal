@@ -74,9 +74,32 @@ HeadShape head_shape_of(
     return s;
 }
 
+namespace fused_head_l1_detail {
+
+// The free L1 a core the head plans on when none is given: the L1 from the allocator's base up to the
+// lowest occupied address now, less what the block keeps after planning (the head's own words among it),
+// at most the planner's host figure, less its margin.
+int64_t measured_free_l1(const tt::tt_metal::distributed::MeshDevice& mesh) {
+    constexpr int64_t kBeforeHead = 56 * 1024;
+    const int64_t base = int64_t(mesh.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    const int64_t top = int64_t(mesh.lowest_occupied_compute_l1_address().value_or(base + mesh.l1_size_per_core()));
+    return std::min(kL1Free, top - base - kBeforeHead) - kL1Margin;
+}
+
+}  // namespace fused_head_l1_detail
+
+int64_t fused_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> l1_free) {
+    if (l1_free) {
+        return *l1_free;
+    }
+    // (measured once, at the block's first head: later calls keep its plan whatever L1 the block took since)
+    return resources.plan<int64_t>(
+        "fused_head/l1_free", [&] { return fused_head_l1_detail::measured_free_l1(resources.mesh_device()); });
+}
+
 const HeadFit& plan_fused_head(
     MoEBlockResources& resources, const MoEDtypes& dtypes, uint32_t accumulators, std::optional<int64_t> l1_free) {
-    const int64_t l1 = l1_free.value_or(kL1Free - kL1Margin);
+    const int64_t l1 = fused_head_l1_free(resources, l1_free);
     const std::string name = "fused_head/plan/A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/w" +
                              std::to_string(static_cast<int>(dtypes.shared_weights));
     return resources.plan<HeadFit>(name, [&] {
@@ -191,24 +214,12 @@ std::vector<float> to_floats(const Tensor& t) {
     return out;
 }
 
-// The free L1 a core the head plans on when none is given (FusedHead.env): the L1 from the allocator's base up to the
-// lowest occupied address now, less what the block keeps after planning (the head's own words among it,
-// FusedHead.BEFORE_HEAD), at most the planner's host figure, less its margin.
-int64_t measured_free_l1(const tt::tt_metal::distributed::MeshDevice& mesh) {
-    constexpr int64_t kBeforeHead = 56 * 1024;
-    const int64_t base = int64_t(mesh.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
-    const int64_t top = int64_t(mesh.lowest_occupied_compute_l1_address().value_or(base + mesh.l1_size_per_core()));
-    return std::min(kL1Free, top - base - kBeforeHead) - kL1Margin;
-}
-
 }  // namespace fused_head_entry_detail
 
 const FusedHeadSetup& setup_fused_head(
     MoEBlockResources& resources, const MoEDtypes& dtypes, uint32_t accumulators, std::optional<int64_t> l1_free) {
     using namespace fused_head_entry_detail;
-    // (measured once, at the block's first head: later calls keep its plan whatever L1 the block took since)
-    const int64_t l1 = l1_free.value_or(
-        resources.plan<int64_t>("fused_head/l1_free", [&] { return measured_free_l1(resources.mesh_device()); }));
+    const int64_t l1 = fused_head_l1_free(resources, l1_free);
     const std::string key = key_of(accumulators, l1, dtypes.shared_weights);
     return resources.plan<FusedHeadSetup>("fused_head/setup/" + key, [&] {
         const HeadFit& fit = plan_fused_head(resources, dtypes, accumulators, l1);

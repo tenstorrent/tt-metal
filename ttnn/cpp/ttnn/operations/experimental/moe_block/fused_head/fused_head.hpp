@@ -47,9 +47,14 @@ HeadShape head_shape_of(
     uint32_t accumulators,
     tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B);
 
-// The fused head's whole host plan on the block's resources (FusedHead.plan), computed once and kept in the resources
-// ("fused_head/plan/..."): model_checks, then head_plan_fit with config.head_dram_fallback. l1_free: the free L1 a
-// core the head may take (default the planner's host figure, kL1Free - kL1Margin).
+// The free L1 a core the head plans on: l1_free, else the one measured at the block's first head (the L1 under the
+// lowest occupied address then, less what the block keeps after planning, at most kL1Free - kL1Margin), kept in the
+// resources so every later plan of the block uses the same figure.
+int64_t fused_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> l1_free = std::nullopt);
+
+// The fused head's whole host plan on the block's resources, computed once and kept in the resources
+// ("fused_head/plan/..."): model_checks, then head_plan_fit with config.head_dram_fallback, at
+// fused_head_l1_free(resources, l1_free) - the plan the op runs.
 const HeadFit& plan_fused_head(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,

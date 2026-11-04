@@ -79,10 +79,10 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("accumulators"),
         nb::arg("l1_free").none() = nb::none(),
         R"doc(
-        The fused head's whole host plan on a block's resources (MoEBlock's FusedHead.plan): the model's
-        requirements, then the head planner on the mesh's compute grid, fabric payload and the config's DRAM fallback.
-        Computed once and kept in the resources. l1_free: free L1 a core the head may take (default the planner's
-        host figure).)doc");
+        The fused head's whole host plan on a block's resources: the model's requirements, then the head planner on
+        the mesh's compute grid, fabric payload and the config's DRAM fallback. Computed once and kept in the
+        resources. l1_free: free L1 a core the head may take (default: the figure measured at the block's first head,
+        as fused_head plans with - the plan the op runs).)doc");
 
     nb::class_<FusedHeadWeights>(
         mod, "FusedHeadWeights", "The shared expert's and the router's weights in the head's layouts.")
