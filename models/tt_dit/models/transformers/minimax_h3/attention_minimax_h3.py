@@ -80,11 +80,14 @@ class MiniMaxH3Attention(Module):
 
     # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
     # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
-    # 4768 / 9216 / 13632 are 768P at 5s / 10s / 15s, packed and padded, divided by SP=8.
+    # 4736 / 9184 / 13664 are 768P at 5s / 10s / 15s with the perf gate's 39-token prompt, packed and
+    # padded to SP * TILE, divided by SP=8 -- the values the pipeline logs as "rows/device". Padding
+    # buckets prompt length: at 15 s any prompt of 1-250 tokens lands on 13664. The 5 s entry was
+    # measured on Blackhole's 110 SDPA cores and not yet re-checked on Wormhole's 63.
     measured_sdpa_chunk_sizes = {
-        4768: (320, 384),
-        9216: (256, 512),
-        13632: (256, 512),
+        4736: (320, 384),
+        9184: (256, 512),
+        13664: (256, 512),
     }
 
     def __init__(
@@ -100,8 +103,13 @@ class MiniMaxH3Attention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
+
+        self.kv_gather_capacity = kv_gather_capacity
+        self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -191,6 +199,7 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
             self.use_ring
+            and ccl_manager.topology == ttnn.Topology.Ring
             and is_blackhole()
             and tp_factor == 4
             and parallel_config.sequence_parallel.factor == 32
@@ -492,6 +501,7 @@ class MiniMaxH3Attention(Module):
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
         # running as a separate op. Only on ring topologies -- on a line the unfused path is faster,
         # which is the same condition WanAttention uses.
+        # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
@@ -502,10 +512,13 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            default_block_size=(
+                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                if self.use_fused_agmm
+                else None
             ),
             force_transpose=False,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -542,10 +555,10 @@ class MiniMaxH3Attention(Module):
                 self.dummy_joint_input,
                 self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
+                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
+                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
@@ -570,10 +583,10 @@ class MiniMaxH3Attention(Module):
                 self.dummy_joint_input,
                 self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
+                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
+                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
@@ -619,12 +632,15 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            default_block_size=(
+                agmm_block_size(self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2])
+                if self.use_fused_agmm
+                else None
             ),
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)

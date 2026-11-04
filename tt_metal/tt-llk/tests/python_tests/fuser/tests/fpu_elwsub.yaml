@@ -2,24 +2,28 @@
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "elwsub_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
+        block_tiles: [2, 4]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [64, 128]
     pack:
       - output: "elwsub_out"
+        block_tiles: [2, 4]
         packer: "Packer"

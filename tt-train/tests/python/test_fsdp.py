@@ -21,9 +21,9 @@ Covered:
     grad sliced to the local shard, so the gathered FSDP grad must
     match the full reference grad (modulo bf16 rounding).
 
-These tests need at least ``FSDP_AXIS_SIZE`` devices on the host (default
-2 — the smallest viable layout, e.g. an N300 board). The module-scoped
-fixture skips the whole file when fewer devices are available.
+These tests need two devices on the ``"fsdp"`` axis (the smallest viable
+layout, e.g. an N300 board); the shared module-scoped ``fsdp_mesh`` fixture in
+``conftest.py`` skips the whole file when the mesh cannot be opened.
 
 NOTE: placements on the underlying ttnn tensors are NOT a reliable
 indicator of shard state in TTML right now — several CCL ops drop or
@@ -34,8 +34,7 @@ marker and on actual data-level checks via host-side numpy gathers.
 
 from __future__ import annotations
 
-import os
-from typing import Dict, Optional
+from typing import Dict, List
 
 import numpy as np
 import pytest
@@ -46,126 +45,6 @@ from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
 
 pytestmark = pytest.mark.requires_device
-
-
-# How many devices we need on the FSDP axis. 2 is the smallest viable
-# layout (N300 / a single Blackhole tray). Bump this and re-export
-# ``TT_MESH_GRAPH_DESC_PATH`` (or extend ``_MGD_FOR_SHAPE`` below) to
-# exercise larger mesh sizes.
-FSDP_AXIS_SIZE = 2
-
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    """Return ``"blackhole"`` or ``"wormhole_b0"`` for the host, or ``None``.
-
-    Uses ``ttnn.get_arch_name()`` which reads the cluster yaml at
-    process start and does not require any device to be open. Returns
-    ``None`` on any failure so the caller can fall back to whatever the
-    user supplied via ``TT_MESH_GRAPH_DESC_PATH``.
-    """
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Multi-device mesh fixture
-# ---------------------------------------------------------------------------
-
-
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """If ``TT_MESH_GRAPH_DESC_PATH`` isn't set, point it at a bundled MGD.
-
-    ``ttml.open_device_mesh`` calls ``_validate_mgd``, which only does a
-    soft warning when the env var is unset — but the underlying fabric
-    layer relies on the MGD too, so on a Blackhole galaxy host the open
-    can hang or fail without one. We pick a bundled MGD that matches the
-    host arch + requested mesh shape; if no match exists we leave the
-    env alone so the open path can still succeed on hosts that don't
-    need an MGD.
-
-    Returns the previous value of the env var (``None`` if unset), so the
-    caller can restore it on teardown.
-    """
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-@pytest.fixture(scope="module")
-def fsdp_mesh():
-    """Open a 2D mesh ``[1, FSDP_AXIS_SIZE]`` with axes ``("dp", "fsdp")``.
-
-    A 2D layout with ``dp=1`` keeps the same fixture re-usable for HSDP
-    tests later (those need a real ``dp`` axis without re-shaping the
-    mesh). Skips the module if the system can't host the requested mesh.
-
-    If ``TT_MESH_GRAPH_DESC_PATH`` isn't set in the environment, we point
-    it at a bundled MGD that matches the host arch + requested shape (see
-    ``_MGD_FOR_ARCH_AND_SHAPE``) so the fabric layer can come up cleanly.
-    The original value is restored at teardown.
-    """
-    shape = (1, FSDP_AXIS_SIZE)
-    previous_mgd = _ensure_mgd_path(shape)
-
-    _close_device_quietly()
-    try:
-        m = ttml.Mesh(shape, ("dp", "fsdp"))
-        ttml.open_device_mesh(m)
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"FSDP tests need {FSDP_AXIS_SIZE} devices on the 'fsdp' axis: {e}")
-
-    yield ttml.mesh()
-
-    # Close at teardown so later test modules can lazily reopen a fresh
-    # single-device handle if they need to. The global ``ttml._mesh._mesh``
-    # is reset so ``ttml.mesh()`` doesn't return a handle to a closed
-    # device for any test that runs after this module.
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +126,7 @@ def _set_param_replicated(autograd_tensor, full_np, *, dtype=ttnn.DataType.BFLOA
 
 
 class _TinyBlock(AbstractModuleBase):
-    """Two-linear-layer block with biases. All shapes are tile-aligned (32-mult)."""
+    """Two-linear-layer block with biases."""
 
     def __init__(self, in_features: int, hidden: int, out_features: int) -> None:
         super().__init__()
@@ -270,6 +149,19 @@ class _TinyModel(AbstractModuleBase):
         for blk in self.blocks:
             x = blk(x)
         return self.head(x)
+
+
+class _TiedPair(AbstractModuleBase):
+    """Two linears sharing one weight, the way ``tok_emb``/``fc`` are tied in Llama."""
+
+    def __init__(self, features: int) -> None:
+        super().__init__()
+        self.fc1 = LinearLayer(features, features, has_bias=False)
+        self.fc2 = LinearLayer(features, features, has_bias=False)
+        self.fc2.weight = self.fc1.weight
+
+    def forward(self, x):
+        return self.fc2(self.fc1(x))
 
 
 def _build_block_with_known_weights(in_features: int, hidden: int, out_features: int, *, seed: int = 42) -> _TinyBlock:
@@ -299,7 +191,7 @@ class TestFullyShardLinear:
     @pytest.fixture(autouse=True)
     def _setup(self, fsdp_mesh):
         self.mesh = fsdp_mesh
-        self.axis_size = FSDP_AXIS_SIZE
+        self.axis_size = fsdp_mesh.axis_size("fsdp")
         ttml.autograd.AutoContext.get_instance().set_seed(42)
         np.random.seed(42)
 
@@ -397,11 +289,105 @@ class TestFullyShardLinear:
         with expect_error(RuntimeError, "already wrapped with fully_shard"):
             ttml.fsdp.fully_shard(linear)
 
+    def test_replicate_patterns_keep_params_replicated(self):
+        """Params matching ``replicate`` are left unsharded."""
+        linear = LinearLayer(64, 48, has_bias=True)
+        ttml.fsdp.fully_shard(linear, replicate=["bias"])
+
+        assert linear.bias.tensor.shape() == [1, 1, 1, 48]
+        assert not ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+        assert ttml.fsdp.is_fsdp_managed(linear.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
+        assert ttml.fsdp.unmatched_replicate_patterns(linear, ["bias", "no_such_param"]) == ["no_such_param"]
+
+    def test_replicate_keeps_a_lazy_param_replicated(self):
+        """A lazy param built without a mapper has no placements yet; it is replicated, so the pattern holds."""
+        with ttml.lazy_init():
+            linear = LinearLayer(64, 48, has_bias=True)
+        ttml.fsdp.fully_shard(linear, replicate=["bias"])
+        ttml.materialize_module(linear)
+
+        assert linear.bias.tensor.shape() == [1, 1, 1, 48]
+        assert not ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+        assert ttml.fsdp.is_fsdp_managed(linear.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
+
+    def test_unmatched_patterns_empty_without_fully_shard(self):
+        """If nothing was wrapped, no pattern was applied, so none is reported."""
+        linear = LinearLayer(64, 48, has_bias=True)
+        assert ttml.fsdp.unmatched_replicate_patterns(linear, ["no_such_param"]) == []
+
+    def test_replicate_rejects_a_bare_string(self, expect_error):
+        linear = LinearLayer(64, 48, has_bias=True)
+        with expect_error(TypeError, "replicate must be a list of regex patterns"):
+            ttml.fsdp.fully_shard(linear, replicate="bias")
+
+    def test_replicate_rejects_an_invalid_regex(self, expect_error):
+        linear = LinearLayer(64, 48, has_bias=True)
+        with expect_error(ValueError, "invalid pattern"):
+            ttml.fsdp.fully_shard(linear, replicate=["bias("])
+        assert not hasattr(linear, "_fsdp_state"), "a rejected pattern must not leave the module half-wrapped"
+
+    def test_replicate_matches_any_alias_of_a_tied_param(self):
+        """A pattern naming the second alias of a tied weight still keeps it replicated."""
+        model = _TiedPair(64)
+        ttml.fsdp.fully_shard(model, replicate=[r"^fc2\.weight$"])
+
+        assert model.fc1.weight is model.fc2.weight
+        assert model.fc1.weight.tensor.shape() == [1, 1, 64, 64]
+        assert not ttml.fsdp.is_fsdp_managed(model.fc1.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(model) == {"fc1.weight": [r"^fc2\.weight$"]}
+
+    def test_outer_wrapper_skips_a_tied_param_an_inner_wrapper_replicated(self):
+        """The root sees the tied weight through ``fc2`` but must not shard what ``fc1``'s wrapper replicated."""
+        model = _TiedPair(64)
+        ttml.fsdp.fully_shard(model.fc1, replicate=["weight"])
+        ttml.fsdp.fully_shard(model)
+
+        assert model.fc2.weight.tensor.shape() == [1, 1, 64, 64]
+        assert not ttml.fsdp.is_fsdp_managed(model.fc2.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(model) == {"fc1.weight": ["weight"]}
+
+    def test_replicate_rejects_a_param_already_sharded_on_the_axis(self, expect_error):
+        """A param already sharded on the FSDP axis can't be reported as replicated."""
+        linear = LinearLayer(64, 128, has_bias=False)
+        data = np.zeros(tuple(linear.weight.tensor.shape()), dtype=np.float32)
+        sharded = ttml.autograd.Tensor.from_numpy(
+            data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self.mesh.axis_mapper("fsdp", tdim=2)
+        )
+        linear.weight.tensor.set_value(sharded.get_value())
+        with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
+            ttml.fsdp.fully_shard(linear, replicate=["weight"])
+
     def test_invalid_axis_raises(self, expect_error):
         """Sharding on an axis the mesh doesn't have raises before any state change."""
         linear = LinearLayer(64, 128, has_bias=False)
         with expect_error(RuntimeError, "Mesh has no axis named"):
             ttml.fsdp.fully_shard(linear, mesh_axis="this_axis_does_not_exist")
+
+    def test_prefers_tile_aligned_shard_dim(self):
+        """``[1,1,24k,32k]`` over ``k``: rows would split into 24 (sub-tile), so columns (32) are sharded."""
+        in_features, out_features = 32 * self.axis_size, 24 * self.axis_size
+        linear = LinearLayer(in_features, out_features, has_bias=False)
+        ttml.fsdp.fully_shard(linear)
+
+        assert linear.weight.tensor.shape() == [1, 1, out_features, 32]
+        assert linear.weight.tensor._fsdp_shard_dim == 3
+
+    def test_warns_once_per_shape_when_no_dim_is_tile_aligned(self, monkeypatch):
+        """Bias ``[1,1,1,24k]`` has no aligned dim: still sharded, warned once per shape."""
+        monkeypatch.setattr(ttml.fsdp, "_warned_misaligned", set())
+        in_features, out_features = 32 * self.axis_size, 24 * self.axis_size
+        first = LinearLayer(in_features, out_features, has_bias=True)
+        second = LinearLayer(in_features, out_features, has_bias=True)
+        with pytest.warns(UserWarning, match="composite path") as record:
+            ttml.fsdp.fully_shard(first)
+            ttml.fsdp.fully_shard(second)
+
+        assert sum("composite path" in str(w.message) for w in record) == 1
+        for linear in (first, second):
+            assert ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+            assert linear.bias.tensor.shape() == [1, 1, 1, 24]
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +453,11 @@ class TestFSDPEquivalence:
         rng = np.random.default_rng(seed)
         return rng.standard_normal((batch_size, 1, seq_len, features)).astype(np.float32) * 0.1
 
-    def test_forward_matches_reference(self):
+    @pytest.mark.parametrize("replicate", [(), ("fc1.bias",)], ids=["sharded", "bias_replicated"])
+    @pytest.mark.parametrize("hidden", [128, 48], ids=["tile_aligned", "misaligned"])
+    def test_forward_matches_reference(self, replicate, hidden):
         """FSDP forward output ≈ replicated-reference forward output."""
-        in_features, hidden, out_features = 64, 128, 64
+        in_features, out_features = 64, 64
         batch_size, seq_len = 2, 32
         input_np = self._make_input(batch_size, seq_len, in_features, seed=0)
         mapper = _replicated_mapper()
@@ -485,7 +473,7 @@ class TestFSDPEquivalence:
         # ---- FSDP: same initial weights, fully_shard, same input.
         fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
         fsdp_model.eval()
-        ttml.fsdp.fully_shard(fsdp_model)
+        ttml.fsdp.fully_shard(fsdp_model, replicate=replicate)
         x_fsdp = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         out_fsdp = fsdp_model(x_fsdp)
         out_fsdp_np = _read_replicated_to_numpy(out_fsdp, self.mesh)
@@ -494,9 +482,11 @@ class TestFSDPEquivalence:
         assert out_fsdp_np.shape == out_ref_np.shape
         np.testing.assert_array_equal(out_fsdp_np, out_ref_np)
 
-    def test_backward_matches_reference(self):
-        """FSDP gathered gradients ≈ replicated-reference gradients."""
-        in_features, hidden, out_features = 64, 128, 64
+    @pytest.mark.parametrize("replicate", [(), ("fc1.bias",)], ids=["sharded", "bias_replicated"])
+    @pytest.mark.parametrize("hidden", [128, 48], ids=["tile_aligned", "misaligned"])
+    def test_backward_matches_reference(self, replicate, hidden):
+        """FSDP gathered gradients ≈ replicated-reference gradients (``hidden=48`` shards ``fc1.bias`` sub-tile)."""
+        in_features, out_features = 64, 64
         batch_size, seq_len = 2, 32
         input_np = self._make_input(batch_size, seq_len, in_features, seed=1)
         mapper = _replicated_mapper()
@@ -522,20 +512,29 @@ class TestFSDPEquivalence:
         # ---- FSDP backward
         fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
         fsdp_model.train()
-        ttml.fsdp.fully_shard(fsdp_model)
+        ttml.fsdp.fully_shard(fsdp_model, replicate=replicate)
         x_fsdp = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         out_fsdp = fsdp_model(x_fsdp)
         loss_fsdp = ttml.ops.unary.mean(out_fsdp)
         loss_fsdp.backward(False)
 
         fsdp_grads: Dict[str, np.ndarray] = {}
+        unmanaged: List[str] = []
         for name, t in fsdp_model.named_parameters():
             if not t.is_grad_initialized():
                 continue
             grad_t = t.get_grad_tensor()
-            shard_dim = int(t._fsdp_shard_dim)
-            fsdp_grads[name] = _read_fsdp_sharded_to_numpy(grad_t, self.mesh, shard_dim)
+            if ttml.fsdp.is_fsdp_managed(t):
+                fsdp_grads[name] = _read_fsdp_sharded_to_numpy(grad_t, self.mesh, int(t._fsdp_shard_dim))
+            else:
+                # Replicated: every rank got the same input, so the grads already match.
+                unmanaged.append(name)
+                fsdp_grads[name] = _read_replicated_to_numpy(grad_t, self.mesh)
         ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # Exactly the params named by ``replicate`` stayed replicated; everything else was sharded.
+        assert ttml.fsdp.replicated_parameters(fsdp_model) == {p: [p] for p in replicate}
+        assert len(unmanaged) == len(replicate), f"unexpectedly unsharded: {unmanaged}"
 
         assert set(fsdp_grads.keys()) == set(
             ref_grads.keys()
@@ -546,6 +545,40 @@ class TestFSDPEquivalence:
                 f"FSDP gathered {fsdp_grads[name].shape} vs reference {ref_grads[name].shape}"
             )
             np.testing.assert_array_equal(fsdp_grads[name], ref_grads[name])
+
+    def test_sync_gradients_averages_replicated_grads(self):
+        """With a different batch slice on each rank, ``sync_gradients`` averages a replicated grad."""
+        in_features, hidden, out_features = 64, 128, 64
+        batch_size, seq_len = 2 * self.mesh.axis_size("fsdp"), 32
+        input_np = self._make_input(batch_size, seq_len, in_features, seed=2)
+
+        # ---- Reference: full batch on every device.
+        ref_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        ref_model.train()
+        x_ref = ttml.autograd.Tensor.from_numpy(
+            input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, _replicated_mapper()
+        )
+        ttml.ops.unary.mean(ref_model(x_ref)).backward(False)
+        ref_grad = _read_replicated_to_numpy(ref_model.fc1.weight.tensor.get_grad_tensor(), self.mesh)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # ---- FSDP with fc1.weight replicated, batch sharded over the fsdp axis.
+        fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        fsdp_model.train()
+        ttml.fsdp.fully_shard(fsdp_model, replicate=["fc1.weight"])
+        x_fsdp = ttml.autograd.Tensor.from_numpy(
+            input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self.mesh.axis_mapper("fsdp", tdim=0)
+        )
+        ttml.ops.unary.mean(fsdp_model(x_fsdp)).backward(False)
+        weight = fsdp_model.fc1.weight.tensor
+        local_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)  # rank 0's slice only
+        ttml.sync_gradients(fsdp_model.parameters(), axis_names=("fsdp",))
+        synced_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        tol = {"rtol": 1e-2, "atol": 1e-2 * float(np.abs(ref_grad).max())}
+        assert not np.allclose(local_grad, ref_grad, **tol), "each rank should start with its own slice's grad"
+        np.testing.assert_allclose(synced_grad, ref_grad, **tol)
 
 
 if __name__ == "__main__":

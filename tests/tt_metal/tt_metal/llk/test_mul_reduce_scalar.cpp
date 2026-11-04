@@ -26,7 +26,7 @@
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
@@ -48,10 +48,12 @@ struct MulReduceScalarConfig {
     uint32_t tile_height = 32;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
+    bool accumulate_in_one_tile = false;
+    float rel_tol = 0.01f;
 };
 
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.
@@ -113,7 +115,8 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    const std::map<std::string, std::string> compute_defines = {{"REDUCE_OP", "PoolType::SUM"}};
+    const std::map<std::string, std::string> compute_defines = {
+        {"REDUCE_OP", "PoolType::SUM"}, {"ACCUMULATE_IN_ONE_TILE", config.accumulate_in_one_tile ? "true" : "false"}};
     auto mul_reduce_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar.cpp",
@@ -171,24 +174,30 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         device_scalar,
         std::abs(device_scalar - golden_scalar));
 
-    float rel_tol = 0.01f;
     float abs_tol = 0.01f;
-    float tolerance = std::max(rel_tol * std::abs(golden_scalar), abs_tol);
+    float tolerance = std::max(config.rel_tol * std::abs(golden_scalar), abs_tol);
     bool pass = std::abs(device_scalar - golden_scalar) < tolerance;
 
     return pass;
 }
 
+// A bf16 DEST rounds each element's running sum at every one-tile accumulate, so the bound widens with the tile
+// count. It stays under the 1/num_tiles a dropped tile would cost for every count the suites use.
+float one_tile_rel_tol(int num_tiles) { return 0.01f + 0.001f * static_cast<float>(num_tiles); }
+
 }  // namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
-// Runs on any single card (Wormhole or Blackhole); mul_reduce_scalar is
-// supported on both architectures.
+// Wormhole and Blackhole. Quasar skips: the reader and writer are still
+// DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923).
 class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Standard 32x32-tile suite parametrized by tile count.
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 32}));
 }
@@ -204,6 +213,9 @@ INSTANTIATE_TEST_SUITE_P(
 class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 16}));
 }
@@ -214,4 +226,46 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// One-tile accumulation, parametrized past the 8-tile DEST capacity.
+class MulReduceScalarOneTileTest : public LLKBlackholeSingleCardFixture, public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarOneTileTest, MulReduceScalarOneTile) {
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = num_tiles,
+         .tile_height = 32,
+         .accumulate_in_one_tile = true,
+         .rel_tol = one_tile_rel_tol(num_tiles)}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarOneTileTests,
+    MulReduceScalarOneTileTest,
+    testing::Values(1, 2, 8, 16, 24),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalarOneTile_" + std::to_string(info.param) + "_Tiles";
+    });
+
+class MulReduceScalarOneTileTinyTileTest : public LLKBlackholeSingleCardFixture,
+                                           public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarOneTileTinyTileTest, MulReduceScalarOneTileTinyTile) {
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = num_tiles,
+         .tile_height = 16,
+         .accumulate_in_one_tile = true,
+         .rel_tol = one_tile_rel_tol(num_tiles)}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarOneTileTinyTileTests,
+    MulReduceScalarOneTileTinyTileTest,
+    testing::Values(1, 8, 16),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalarOneTile_16x32_" + std::to_string(info.param) + "_Tiles";
     });

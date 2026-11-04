@@ -139,7 +139,8 @@ def test_fixed_block_tail_is_synchronized_per_row(device, Ht, Wt):
 
 
 @pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
-def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
+@pytest.mark.parametrize("reserve_upfront", [False, True], ids=["block-reserve", "upfront-reserve"])
+def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt, reserve_upfront):
     """ValidTiles mode clamps both PerBlockSize synchronization and math to each logical row tail."""
     block_size = 8
     n = Ht * Wt
@@ -154,10 +155,16 @@ def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     # A block-sized ring would let the partial first-row tail misalign a later full chunk
     # across the physical ring boundary.
     pages = 2 * Wt
-    cbs = [lib.cb_descriptor(0, dt, pages, core_grid), lib.cb_descriptor(16, dt, pages, core_grid)]
+    output_pages = n if reserve_upfront else pages
+    cbs = [lib.cb_descriptor(0, dt, pages, core_grid), lib.cb_descriptor(16, dt, output_pages, core_grid)]
     reader = lib.build_reader_kernel([tt_in], n, core_grid)
     writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
-    compute = lib.build_compute_kernel(FIXED_BLOCK_TAIL_KERNEL, [Ht, Wt, block_size, 0], core_grid)
+    compute = lib.build_compute_kernel(
+        FIXED_BLOCK_TAIL_KERNEL,
+        [Ht, Wt, block_size, 0],
+        core_grid,
+        defines=[("RESERVE_UPFRONT", "1")] if reserve_upfront else None,
+    )
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
 
     output = ttnn.generic_op([tt_in, tt_out], program)

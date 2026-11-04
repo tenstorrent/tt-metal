@@ -8,7 +8,7 @@ import ttnn
 
 @dataclass
 class AttentionConfig:
-    """Core attention configuration - model agnostic"""
+    """Per-layer attention configuration, filled from the model config by ``DecoderLayer`` (no model defaults)."""
 
     hidden_size: int
     num_heads: int
@@ -16,35 +16,33 @@ class AttentionConfig:
     head_dim: int
     max_seq_len: int
     max_local_batch_size: int
+    rotary_dim: int  # partial rotary width (rotary_dim)
+    rms_norm_eps: float  # used by QK-norm
 
     users_row_sharded: bool = False
     sliding_window: int | None = None
     scaling: float | None = None  # Computed if None
 
-    # MiniMax-M3 specifics
-    rotary_dim: int | None = None  # partial rotary width; defaults to head_dim (full)
-    rms_norm_eps: float = 1e-6  # used by QK-norm
-    use_qk_norm: bool = True  # M3 uses per-head RMSNorm on Q/K (over head_dim)
-    use_gemma_norm: bool = False  # M3: QK-norm uses gemma (1+w) RMSNorm (folded into the gain)
     # SP=8 dense-attention path: when True (and prefill SP>1), prefill SDPA uses
     # ring_joint_scaled_dot_product_attention (seq sharded across the SP/rows axis) instead of the
     # local scaled_dot_product_attention. Default off so the DP/EP prefill path is unchanged.
     sequence_parallel: bool = False
-    # MSA (sparse) layers (M3 layers 3-59, sparse_attention_freq[idx]==1): when True this layer runs
-    # the index branch (index_q/k proj -> norm -> RoPE) + block-sparse attention (indexer -> top-k ->
-    # sparse_sdpa_msa) instead of dense GQA. Dense layers 0-2 stay False. See tt/attention/msa.py.
+    # MSA (sparse) layers (sparse_attention_freq[idx]==1): when True this layer runs the index branch
+    # (index_q/k proj -> norm -> RoPE) + block-sparse attention (indexer -> top-k -> sparse_sdpa_msa)
+    # instead of dense GQA. See tt/attention/msa.py.
     is_sparse: bool = False
-    # MSA (sparse) hyperparams, from hf_config.text_config.sparse_attention_config (used when is_sparse).
-    msa_block_size: int = 128  # sparse_block_size
-    msa_topk_blocks: int = 16  # sparse_topk_blocks
-    msa_index_dim: int = 128  # sparse_index_dim
+    # MSA hyperparams from sparse_attention_config (utils/general_utils.msa_params); required when is_sparse.
+    msa_block_size: int | None = None  # sparse_block_size
+    msa_topk_blocks: int | None = None  # sparse_topk_blocks
+    msa_index_dim: int | None = None  # sparse_index_dim
 
     def __post_init__(self):
         """Compute scaling factor if not provided"""
         if self.scaling is None:
             self.scaling = self.head_dim**-0.5
-        if self.rotary_dim is None:
-            self.rotary_dim = self.head_dim
+        if self.is_sparse:
+            missing = [f for f in ("msa_block_size", "msa_topk_blocks", "msa_index_dim") if getattr(self, f) is None]
+            assert not missing, f"MSA attention needs {missing} (from sparse_attention_config)"
 
 
 @dataclass

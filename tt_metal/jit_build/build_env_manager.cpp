@@ -5,18 +5,18 @@
 #include "build_env_manager.hpp"
 
 #include <tracy/Tracy.hpp>
-#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <future>
 #include <map>
-#include <memory>
 #include <string>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "common/stable_hash.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/precompiled.hpp"
 #include "jit_build/jit_device_config.hpp"
@@ -24,87 +24,6 @@
 #include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal {
-
-namespace {
-
-// Per-ContextId BuildEnvManager instances. Each MetalContext (silicon, mock, future) gets its
-// own slot so that contexts with different dispatch configurations do not share
-// device_id_to_build_env_ entries. Seeded lazily by seed_if_unseeded_with_hal(ContextId, Hal).
-// Slots are read-only for the lifetime of the process once seeded.
-//
-// PRE-EXISTING LIMITATION (carried forward from the original singleton design, now scoped
-// per-context): HAL layout within a single context can be modulated by rtoptions --
-// simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so the HAL that first
-// seeds a context's slot wins and shapes the kernel/firmware build_state_indices_ tables
-// for the lifetime of that context. Cross-context, the slots are independent and unaffected.
-std::array<std::atomic<BuildEnvManager*>, MAX_CONTEXT_COUNT> s_instances{};
-std::mutex s_seed_mutex;
-
-}  // namespace
-
-void BuildEnvManager::seed_if_unseeded_with_hal(ContextId context_id, const Hal& hal) {
-    const int slot = context_id.get();
-    TT_FATAL(
-        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
-        "BuildEnvManager: context_id {} out of range [0, {})",
-        slot,
-        MAX_CONTEXT_COUNT);
-    // Fast path: this context's slot is already seeded. No lock, no allocation.
-    if (s_instances[slot].load(std::memory_order_acquire) != nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(s_seed_mutex);
-    if (s_instances[slot].load(std::memory_order_acquire) != nullptr) {
-        return;
-    }
-    // Seed this context's slot with the supplied HAL. The constructor sizes
-    // kernel_build_state_indices_ / firmware_build_state_indices_ from that HAL's
-    // programmable-core-type, processor-class, and fw-binary counts.
-    s_instances[slot].store(new BuildEnvManager(hal), std::memory_order_release);
-}
-
-void BuildEnvManager::destroy_for_context(ContextId context_id) {
-    const int slot = context_id.get();
-    TT_FATAL(
-        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
-        "BuildEnvManager: context_id {} out of range [0, {})",
-        slot,
-        MAX_CONTEXT_COUNT);
-    // Lock pairs with seed_if_unseeded_with_hal()'s double-check to avoid a concurrent reseed.
-    std::lock_guard<std::mutex> lock(s_seed_mutex);
-    auto* existing = s_instances[slot].exchange(nullptr, std::memory_order_acq_rel);
-    delete existing;
-}
-
-BuildEnvManager& BuildEnvManager::get_instance(ContextId context_id) {
-    const int slot = context_id.get();
-    TT_FATAL(
-        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
-        "BuildEnvManager: context_id {} out of range [0, {})",
-        slot,
-        MAX_CONTEXT_COUNT);
-    auto* existing = s_instances[slot].load(std::memory_order_acquire);
-    if (existing != nullptr) {
-        return *existing;
-    }
-    // Lazy seeding path: resolve the ContextId to a HAL via MetalContext::instance(context_id).
-    // Callers that already hold g_instance_mutex (i.e. MetalContext::create_*) must use
-    // seed_if_unseeded_with_hal() directly with the in-scope HAL to avoid re-entering
-    // MetalContext::instance().
-    seed_if_unseeded_with_hal(context_id, MetalContext::instance(context_id).hal());
-    return *s_instances[slot].load(std::memory_order_acquire);
-}
-
-BuildEnvManager& BuildEnvManager::get_instance() {
-    auto* existing = s_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire);
-    TT_FATAL(
-        existing != nullptr,
-        "BuildEnvManager::get_instance() called before the default-context MetalContext was "
-        "created. The default-context slot is seeded by MetalContext::create_instance(); "
-        "ensure at least one default-context MetalEnv has been constructed first, or call "
-        "get_instance(ContextId) explicitly for a non-default context.");
-    return *existing;
-}
 
 BuildEnvManager::BuildEnvManager(const Hal& hal) {
     uint32_t kernel_index = 0;
@@ -158,6 +77,12 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
     device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(config.pcie_core.x));
     device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(config.pcie_core.y));
 
+    // Quasar: interleaved L1 TensorAccessor transfers use software addresses where the L1 banks are not one ascending
+    // ATT selector run (internal/tt-2xx/quasar/tensor/addrgen_sequencer.h).
+    if (!config.l1_banks_form_selector_run) {
+        device_kernel_defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
+    }
+
     return device_kernel_defines;
 }
 
@@ -168,6 +93,8 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
     hasher.update(static_cast<uint32_t>(config.resolved_dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
 
+    hasher.update(static_cast<uint32_t>(config.fds_signalling));
+
     // Hash the number of hardware command queues
     hasher.update(static_cast<uint32_t>(config.num_hw_cqs));
 
@@ -177,6 +104,8 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
         // devices with different cores harvested.
         hasher.update(config.harvesting_mask);
     }
+
+    hasher.update(static_cast<uint32_t>(config.l1_banks_form_selector_run));
 
     hasher.update(rtoptions.get_compile_hash_string());
 
@@ -212,6 +141,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
                 .processor_class = static_cast<HalProcessorClassType>(processor_class),
                 .is_fw = is_fw,
                 .dispatch_message_addr = dev_config.dispatch_message_addr,
+                .fds_signalling = dev_config.fds_signalling,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
 
@@ -231,20 +161,9 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 
 }  // namespace
 
-void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
-    const std::lock_guard<std::mutex> lock(this->lock);
-    auto dev_config = create_jit_device_config(device_id, num_hw_cqs, context_id);
-    add_build_env_locked(device_id, dev_config, MetalContext::instance(context_id).rtoptions());
-}
-
 void BuildEnvManager::add_build_env(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    add_build_env_locked(device_id, dev_config, rtoptions);
-}
-
-void BuildEnvManager::add_build_env_locked(
-    ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     auto& dev_build_env = device_id_to_build_env_[device_id];
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
@@ -347,7 +266,39 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
             build_env.build_env.get_firmware_binary_root());
         return;
     }
-    jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    // Dedup each firmware target on (build key, target) rather than the whole set on the build key: contexts
+    // that share a build key can have different firmware targets. Blackhole DRAM programmable cores are not
+    // part of the build key, and only a context that enables them (silicon on firmware >= 19.12, not a mock or
+    // the simulator) has a drisc target. Keying each target lets a later context build the targets an earlier
+    // one lacked, without rebuilding the ones that context already built.
+    const auto& states = build_env.firmware_build_states;
+    std::vector<uint64_t> target_keys;
+    target_keys.reserve(states.size());
+    for (const auto& state : states) {
+        StableHasher hasher;
+        hasher.update(build_env.build_key());
+        hasher.update(state.get_target_full_path());
+        target_keys.push_back(hasher.digest());
+    }
+    // A build step that waited for another thread's build of the same target would hold an executor worker
+    // that build may need, so targets in progress elsewhere are joined after the sync. uint8_t, not bool:
+    // the steps write their elements concurrently.
+    std::vector<uint8_t> in_progress_elsewhere(states.size(), 0);
+    std::vector<std::shared_future<void>> events;
+    for (size_t i = 0; i < states.size(); ++i) {
+        launch_build_step(
+            [&, i] {
+                in_progress_elsewhere[i] =
+                    !jit_build_once_no_wait(target_keys[i], [&states, i] { states[i].build(nullptr); });
+            },
+            events);
+    }
+    sync_build_steps(events);
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (in_progress_elsewhere[i]) {
+            jit_build_once(target_keys[i], [&states, i] { states[i].build(nullptr); });
+        }
+    }
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(

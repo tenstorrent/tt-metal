@@ -114,11 +114,20 @@ TensorSpec make_zero_memory_dram_tensor_spec(uint32_t page_size_bytes, uint32_t 
 
 experimental::DataMovementHardwareConfig make_dm_config(tt::ARCH arch, DataMovementProcessor processor, NOC noc) {
     if (arch == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for_all = true,
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
         };
     }
-    return experimental::DataMovementGen1Config{.processor = processor, .noc = noc};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = processor,
+                .noc = noc,
+            },
+    };
 }
 
 // ---------------------------------------------------------------------------

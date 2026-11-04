@@ -6,18 +6,21 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <string>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <utility>
 #include <vector>
 
 #include "hostdevcommon/kernel_structs.h"
+#include "metal/common/program_utils.hpp"
+#include "softmax_backward_device_operation.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -37,6 +40,16 @@ constexpr const char* const kWriterPath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/dataflow/writer_softmax_backward.cpp";
 constexpr const char* const kComputePath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp";
+
+// Kernel handles are the push order into ProgramDescriptor::kernels: reader, writer, compute.
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+
+// reader common runtime args
+constexpr uint32_t kSoftmaxOutputAddrIdx = 0U;
+constexpr uint32_t kUpstreamGradAddrIdx = 1U;
+// writer common runtime args
+constexpr uint32_t kOutputAddrIdx = 0U;
 
 struct CoreRowAssignment {
     tt::tt_metal::CoreCoord core;
@@ -160,25 +173,14 @@ static void get_tensor_properties(
     intermed_tile_size = tile_size(intermed_data_format);
 }
 
-static tt::tt_metal::ComputeConfig precise(
-    std::vector<uint32_t> compile_time_args, std::map<std::string, std::string> defines) {
-    tt::tt_metal::ComputeConfig config;
-    config.fp32_dest_acc_en = true;
-    config.math_approx_mode = false;
-    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
-    config.compile_args = std::move(compile_time_args);
-    config.defines = std::move(defines);
-    return config;
-}
-
-SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
+tt::tt_metal::ProgramDescriptor SoftmaxBackwardFactory::create_descriptor(
     const SoftmaxBackwardParams& operation_attributes,
     const SoftmaxBackwardInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     const ttnn::Tensor& softmax_output = tensor_args.softmax_output;
     const ttnn::Tensor& upstream_grad = tensor_args.upstream_grad;
     auto* device = softmax_output.device();
-    Program program = CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     uint32_t num_rows, width_tiles, mask_w;
     DataFormat input_data_format, output_data_format, intermed_data_format;
@@ -217,28 +219,20 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
     const tt::tt_metal::CoreRangeSet worker_cores(worker_core_ranges);
+    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
+    const tt::tt_metal::CoreRangeSet cb_cores = worker_cores.merge_ranges();
 
-    const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
-    const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
+    const uint32_t block_cb_num_tiles = buffering_multiplier * tiles_per_block;
 
-    auto c_in0_config = CircularBufferConfig(block_cb_size_in0, {{src0_cb_index, input_data_format}})
-                            .set_page_size(src0_cb_index, input_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_in0_config);
-    auto c_in1_config = CircularBufferConfig(block_cb_size_in0, {{src1_cb_index, input_data_format}})
-                            .set_page_size(src1_cb_index, input_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_in1_config);
-    auto c_scaler_config = CircularBufferConfig(intermed_tile_size, {{ones_cb_index, intermed_data_format}})
-                               .set_page_size(ones_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_scaler_config);
-    auto c_out_config = CircularBufferConfig(block_cb_size_out, {{out_cb_index, output_data_format}})
-                            .set_page_size(out_cb_index, output_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_out_config);
-    auto c_sum_reduce_config = CircularBufferConfig(intermed_tile_size, {{sum_reduce_cb_index, intermed_data_format}})
-                                   .set_page_size(sum_reduce_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_sum_reduce_config);
-    auto c_partial_config = CircularBufferConfig(intermed_tile_size, {{partial_cb_index, intermed_data_format}})
-                                .set_page_size(partial_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_partial_config);
+    desc.cbs.push_back(
+        make_cb_descriptor(cb_cores, src0_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
+    desc.cbs.push_back(
+        make_cb_descriptor(cb_cores, src1_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(cb_cores, ones_cb_index, intermed_data_format, intermed_tile_size, 1U));
+    desc.cbs.push_back(
+        make_cb_descriptor(cb_cores, out_cb_index, output_data_format, output_tile_size, block_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(cb_cores, sum_reduce_cb_index, intermed_data_format, intermed_tile_size, 1U));
+    desc.cbs.push_back(make_cb_descriptor(cb_cores, partial_cb_index, intermed_data_format, intermed_tile_size, 1U));
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
@@ -260,42 +254,45 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
 
     std::map<std::string, std::string> compute_defines = {
         {"BROADCAST_TYPE", "BroadcastType::COL"}, {"FP32_DEST_ACC_EN", "1"}};
-    const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines);
 
-    auto reader_kernel_id =
-        CreateKernel(program, kReaderPath, worker_cores, ReaderDataMovementConfig(reader_compile_time_args));
-    auto writer_kernel_id =
-        CreateKernel(program, kWriterPath, worker_cores, WriterDataMovementConfig(writer_compile_time_args));
-    auto compute_kernel_id = CreateKernel(program, kComputePath, worker_cores, wconf);
+    KernelDescriptor reader =
+        make_reader_kernel_descriptor(worker_cores, reader_compile_time_args, /*defines=*/{}, kReaderPath);
+    KernelDescriptor writer =
+        make_writer_kernel_descriptor(worker_cores, writer_compile_time_args, /*defines=*/{}, kWriterPath);
+    // Precise math: fp32 dest accumulation, HiFi4, no approximation.
+    KernelDescriptor compute = make_compute_kernel_descriptor(
+        worker_cores, compute_compile_time_args, compute_defines, kComputePath, /*fp32_dest_acc_en=*/true);
 
-    SetCommonRuntimeArgs(
-        program, reader_kernel_id, {softmax_output.buffer()->address(), upstream_grad.buffer()->address()});
-    SetCommonRuntimeArgs(program, writer_kernel_id, {tensor_return_value.buffer()->address()});
+    // Buffer addresses travel in common runtime args (slots named at the top of the file); override_runtime_arguments()
+    // rewrites them on every cache hit. start_row/num_rows follow from the hashed tensor specs and sub_core_grids.
+    reader.emplace_common_runtime_args({softmax_output.buffer(), upstream_grad.buffer()});
+    writer.emplace_common_runtime_args({tensor_return_value.buffer()});
     for (const CoreRowAssignment& a : core_row_assignments) {
-        SetRuntimeArgs(program, reader_kernel_id, a.core, {a.start_row, a.num_rows});
-        SetRuntimeArgs(program, writer_kernel_id, a.core, {a.start_row, a.num_rows});
-        SetRuntimeArgs(program, compute_kernel_id, a.core, {a.num_rows});
+        reader.emplace_runtime_args(a.core, {a.start_row, a.num_rows});
+        writer.emplace_runtime_args(a.core, {a.start_row, a.num_rows});
+        compute.emplace_runtime_args(a.core, {a.num_rows});
     }
 
-    return {
-        std::move(program), {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
+    desc.kernels.push_back(std::move(reader));  // kReaderKernelIdx
+    desc.kernels.push_back(std::move(writer));  // kWriterKernelIdx
+    desc.kernels.push_back(std::move(compute));
+    return desc;
 }
 
 void SoftmaxBackwardFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const SoftmaxBackwardParams& /*operation_attributes*/,
     const SoftmaxBackwardInputs& tensor_args,
-    ttnn::Tensor& tensor_return_value) {
-    const Program& program = cached_program.program;
-    const KernelHandle& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    const KernelHandle& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    const ttnn::Tensor& softmax_output = tensor_args.softmax_output;
-    const ttnn::Tensor& upstream_grad = tensor_args.upstream_grad;
-    RuntimeArgsData& reader_common_args = GetCommonRuntimeArgs(program, reader_kernel_id);
-    reader_common_args[0] = softmax_output.buffer()->address();
-    reader_common_args[1] = upstream_grad.buffer()->address();
-    RuntimeArgsData& writer_common_args = GetCommonRuntimeArgs(program, writer_kernel_id);
-    writer_common_args[0] = tensor_return_value.buffer()->address();
+    ttnn::Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    auto& reader_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
+    reader_common_args[kSoftmaxOutputAddrIdx] = tensor_args.softmax_output.buffer()->address();
+    reader_common_args[kUpstreamGradAddrIdx] = tensor_args.upstream_grad.buffer()->address();
+
+    auto& writer_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIdx);
+    writer_common_args[kOutputAddrIdx] = tensor_return_value.buffer()->address();
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SoftmaxBackwardDeviceOperation, SoftmaxBackwardFactory);
 
 }  // namespace ttml::metal::ops::softmax_backward::device

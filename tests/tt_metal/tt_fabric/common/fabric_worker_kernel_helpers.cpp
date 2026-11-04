@@ -6,7 +6,7 @@
 #include "fabric_command_interface.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <stdexcept>
 #include <chrono>
 #include <llrt/tt_cluster.hpp>
@@ -51,8 +51,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     const tt::tt_metal::CoreCoord& logical_core,
     const FabricNodeId& dest_fabric_node,
     const WorkerMemoryLayout& mem_layout) {
-
-    auto program = std::make_shared<tt_metal::Program>();
+    auto program = std::make_shared<tt_metal::Program>(CreateProgram(*device));
 
     // Get source fabric node ID from logical first device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -99,18 +98,12 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     };
 
     // Get a valid link index for the connection
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node, dest_fabric_node);
+    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(*device, src_fabric_node, dest_fabric_node);
     TT_FATAL(!link_indices.empty(), "No forwarding link indices found for source {} to destination {}", src_fabric_node, dest_fabric_node);
 
     // Append fabric connection runtime args
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node,
-        dest_fabric_node,
-        0,
-        *program,
-        logical_core,
-        runtime_args,
-        CoreType::WORKER);
+        *device, src_fabric_node, dest_fabric_node, 0, *program, logical_core, runtime_args, CoreType::WORKER);
 
     // Set runtime args
     tt_metal::SetRuntimeArgs(*program, kernel_id, logical_core, runtime_args);

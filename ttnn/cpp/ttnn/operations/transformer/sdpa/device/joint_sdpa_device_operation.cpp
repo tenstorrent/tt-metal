@@ -55,7 +55,7 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
@@ -115,7 +115,11 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_nqh = joint_q_shape[1];
     const auto joint_nkv = joint_k_shape[1];
 
-    TT_FATAL(nqh == nkv, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", nqh, nkv);
+    TT_FATAL(
+        nkv > 0 && nqh == nkv,
+        "Q num_heads must be equal to K num_heads, and greater than 0. Got Q: {}, K: {}",
+        nqh,
+        nkv);
 
     TT_FATAL(
         joint_nqh == joint_nkv,
@@ -130,13 +134,13 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
         q_chunk_size,
         tt::constants::TILE_WIDTH);
     TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
 

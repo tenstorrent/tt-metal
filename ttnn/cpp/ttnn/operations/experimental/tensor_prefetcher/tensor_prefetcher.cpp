@@ -4,11 +4,19 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include "device/signal_tensor_prefetcher_device_operation.hpp"
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
+#include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::experimental {
+
+namespace metal_exp = tt::tt_metal::experimental;
 
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     return tt::tt_metal::experimental::IsTensorPrefetcherSupported(*mesh_device);
@@ -39,20 +47,30 @@ void start_tensor_prefetcher(
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
+    TT_FATAL(!prefetcher_pipes.empty(), "queue_tensor_prefetcher_request needs at least one PrefetcherPipe");
+
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
         // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
-        // rotation) supplies the per-receiver streaming rotation table for that tensor.
+        // rotation) supplies the per-receiver streaming rotation table for that tensor, and a fourth
+        // element the mask selecting which of a grouped weight's groups to stream.
         if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
             inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
-        } else {
-            const auto& [tensor, block_count, rotation] =
-                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+        } else if (const auto* triple = std::get_if<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(&item)) {
+            const auto& [tensor, block_count, rotation] = *triple;
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
+        } else {
+            const auto& [tensor, block_count, rotation, selector] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>(item);
+            inputs.push_back(
+                {tensor.mesh_tensor(),
+                 block_count,
+                 rotation,
+                 tt::tt_metal::experimental::TensorPrefetcherGroupSelector{selector.mesh_tensor()}});
         }
     }
     // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
@@ -60,12 +78,23 @@ void queue_tensor_prefetcher_request(
     // the thread's current one. So the knob left here is whether to consider a queue at all
     // — with capture_into_trace false we hand metal no queue, and the request is sent
     // immediately even mid trace-capture.
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-        *mesh_device,
-        global_cb,
-        device_subset,
-        inputs,
-        capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr);
+        *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
+}
+
+std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
+    metal_exp::PrefetcherPipeSpace& space,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
+    bool support_multi_receiver_shards) {
+    std::vector<metal_exp::PrefetcherPipe> pipes =
+        metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
+    std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> shared;
+    shared.reserve(pipes.size());
+    for (auto& pipe : pipes) {
+        shared.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
+    }
+    return shared;
 }
 
 void wait_for_cq_on_tensor_prefetcher(
@@ -77,6 +106,29 @@ void wait_for_cq_on_tensor_prefetcher(
     // queue current. Resolving nullopt to the thread's current queue is what makes the two
     // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
+}
+
+uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id) {
+    return tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id);
+}
+
+void queue_tensor_prefetcher_wait_for_signal(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace) {
+    // A NO_DISPATCH graph capture launches no program, so no op raises the signal that would release
+    // the wait, and every later wait and request would sit behind it.
+    if (ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
+        return;
+    }
+    // Same queue rule as queue_tensor_prefetcher_request: a cq_id keyword has already been made the
+    // thread's current queue, so the only choice left is whether to offer it for capture.
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    tt::tt_metal::experimental::QueueTensorPrefetcherWaitForSignal(*mesh_device, signal_id, trace_cq);
+}
+
+void signal_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, const tt::tt_metal::CoreCoord& core) {
+    ttnn::prim::signal_tensor_prefetcher(
+        mesh_device, tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id), core);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

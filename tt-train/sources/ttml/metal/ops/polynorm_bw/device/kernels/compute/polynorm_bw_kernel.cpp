@@ -200,8 +200,8 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
     sqrt_tile_first_column(reg_acc);
-    recip_tile_init<false>();
-    recip_tile<false>(reg_acc, VectorMode::C);
+    recip_tile_init();
+    recip_tile(reg_acc, VectorMode::C);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);

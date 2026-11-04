@@ -22,7 +22,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 using namespace tt::constants;
@@ -369,7 +369,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     TT_FATAL(
         input_padded_shape[3] % tt::constants::TILE_WIDTH == 0,

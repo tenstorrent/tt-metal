@@ -62,8 +62,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     for (const auto& tensor : input_tensors) {
         TT_FATAL(
             tensor.storage_type() == StorageType::DEVICE, "Operands to ring-distributed SDPA need to be on device");
-        TT_FATAL(
-            tensor.buffer() != nullptr, "Operands to ring-distributed SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to ring-distributed SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to ring-distributed SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
@@ -88,6 +87,16 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
     const auto k_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
+    TT_FATAL(
+        q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
+        q_chunk_size,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
+        k_chunk_size,
+        tt::constants::TILE_WIDTH);
 
     // Validate chunk_start_idx and page_table
     bool is_chunked = operation_attributes.chunk_start_idx.has_value();
@@ -97,7 +106,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     if (has_page_table) {
         const auto& page_table_tensor = tensor_args.page_table.value();
         TT_FATAL(page_table_tensor.storage_type() == StorageType::DEVICE, "page_table tensor must be on device");
-        TT_FATAL(page_table_tensor.buffer() != nullptr, "page_table tensor must be allocated in a buffer on device");
+        TT_FATAL(page_table_tensor.is_allocated(), "page_table tensor must be allocated in a buffer on device");
         TT_FATAL(
             page_table_tensor.dtype() == DataType::INT32,
             "page_table tensor must have INT32 dtype. Got {}",
@@ -198,8 +207,9 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         k_shape[3],
         v_shape[3]);
     TT_FATAL(
-        nqh >= nkv && nqh % nkv == 0,
-        "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+        nkv > 0 && nqh >= nkv && nqh % nkv == 0,
+        "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. Got "
+        "Q: {}, K: {}",
         nqh,
         nkv);
 
@@ -216,17 +226,6 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.ring_size);
 
     // Chunk size compatibility
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
-
     TT_FATAL(
         q_chunk_size <= Sq / (2 * operation_attributes.ring_size),
         "q_chunk_size must be less than or equal to per-device sequence length. Got q_chunk_size: {}, per-device "

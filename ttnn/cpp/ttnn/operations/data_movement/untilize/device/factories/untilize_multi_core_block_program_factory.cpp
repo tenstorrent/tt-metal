@@ -94,7 +94,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         plan.split;
 
     // Same grid `make_block_plan` split over -- the runtime-arg loop below walks it in core order.
-    IDevice* device = a.device();
+    auto* device = a.device();
     const CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     if (single_sub_block_size > 0 && single_block_size % single_sub_block_size) {
@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ProgramSpec spec{.name = "untilize_multi_core_block"};
 
@@ -196,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
     };
 
@@ -231,7 +231,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
@@ -251,10 +251,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_data_format == tt::DataFormat::Int32 || input_data_format == tt::DataFormat::UInt32 ||
-        input_data_format == tt::DataFormat::Float32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // The compute kernel stays split per region -- each region has its own block *count* -- but each
     // instance binds the buffer set matching its cores' block *width*. The region's block-width CTA
@@ -276,8 +272,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets' DFBs
         // would name `cliffrow_set`'s input even when that set is empty -- an operand with no buffer
         // on any core -- and would do so in the full-set kernels too.
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 

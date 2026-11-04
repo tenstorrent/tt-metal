@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -24,10 +25,10 @@ class AttentionWeights:
     wqkv: ttnn.Tensor
     o_proj: ttnn.Tensor
     # QK-norm weights (full-width RMSNorm gains), sharded column-parallel to match
-    # the Q/K projection sharding. None when use_qk_norm is False / no state_dict.
+    # the Q/K projection sharding. None when the state_dict has no q/k-norm gains.
     q_norm: ttnn.Tensor | None = None
     k_norm: ttnn.Tensor | None = None
-    # MSA index branch (sparse layers 3-59 only; None for dense layers 0-2). index_q_proj is
+    # MSA index branch (sparse_attention_freq==1 layers only; None for dense-attention layers). index_q_proj is
     # column-parallel (4 index heads -> 1 per TP col); index_k_proj + both index norms are
     # REPLICATED (index_k is the single shared head, present on every TP col). See tt/attention/msa.py.
     index_q_proj: ttnn.Tensor | None = None
@@ -78,7 +79,7 @@ def load_attention_weights(
 
         # QK-norm gains (MiniMax-M3): per-head RMSNorm over head_dim, so the gain is a
         # single [head_dim] vector shared across all heads (replicated, NOT TP-sharded).
-        # Gemma (1 + w) is folded in here (fp32, pre-bf16 cast) when use_gemma_norm, exactly
+        # Gemma (1 + w) is folded in here (fp32, pre-bf16 cast; use_gemma_norm is always set), exactly
         # like tt/rms_norm.py; reshaped to (1, 1, head_dim/32, 32) ROW_MAJOR to match the
         # weight layout ttnn.rms_norm expects (see RMSNorm class / apply_qk_norm_per_head).
         q_norm_w = substate(state_dict, "q_norm").get("weight") if "q_norm.weight" in state_dict else None
@@ -87,9 +88,7 @@ def load_attention_weights(
         def _prep_qk_norm_gain(w):
             if w is None:
                 return None
-            if config.use_gemma_norm:
-                w = w.float() + 1.0
-            return w.reshape(1, 1, -1, ttnn.TILE_SIZE)
+            return (w.float() + 1.0).reshape(1, 1, -1, ttnn.TILE_SIZE)
 
         q_norm_w = _prep_qk_norm_gain(q_norm_w)
         k_norm_w = _prep_qk_norm_gain(k_norm_w)
@@ -151,9 +150,10 @@ def load_attention_weights(
         index_q_proj_w = index_k_proj_w = index_q_norm_w = index_k_norm_w = None
 
     # Whether to build the optional weights: from source presence when we have a state_dict, else
-    # (cache-only) from the model config — use_qk_norm gates q/k-norm, is_sparse gates the MSA index
-    # branch (only sparse layers cached those). torch weights stay None in cache-only mode -> cache load.
-    build_qk_norm = (q_norm_w is not None) if state_dict else bool(config.use_qk_norm)
+    # (cache-only) from the model config — every layer has q/k-norm (use_qk_norm: check_supported_config),
+    # is_sparse gates the MSA index branch (only sparse layers cached those). torch weights stay None in
+    # cache-only mode -> cache load.
+    build_qk_norm = (q_norm_w is not None) if state_dict else True
     build_index = (index_q_proj_w is not None) if state_dict else bool(config.is_sparse)
 
     # Clean mesh mapping using MeshConfig
@@ -169,6 +169,7 @@ def load_attention_weights(
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_dump_mode=CACHE_DUMP_MODE,
     )
 
     o_proj_tt = ttnn.as_tensor(
@@ -179,6 +180,7 @@ def load_attention_weights(
         mesh_mapper=row_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_dump_mode=CACHE_DUMP_MODE,
     )
 
     # QK-norm gains (M3 per-head): a single [head_dim] gain replicated across all devices
@@ -194,6 +196,7 @@ def load_attention_weights(
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "q_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if build_qk_norm
         else None
@@ -207,6 +210,7 @@ def load_attention_weights(
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "k_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if build_qk_norm
         else None
@@ -226,6 +230,7 @@ def load_attention_weights(
             mesh_mapper=mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, name),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
 
     index_q_proj_tt = _as_index(index_q_proj_w, col_mesh_mapper, ttnn.TILE_LAYOUT, "index_q_proj", weight_dtype)

@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -93,7 +94,7 @@ ttnn::device_operation::ProgramArtifacts FullShardedProgramFactory::create_progr
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"fill_value", "start_page_id", "num_pages_per_shard_row", "num_pages_per_shard_col"}},
-        .hw_config = ttnn::create_writer_datamovement_config(operation_attributes.mesh_device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     uint32_t shard_height_in_pages = output.buffer()->shard_spec().shape_in_pages()[0];

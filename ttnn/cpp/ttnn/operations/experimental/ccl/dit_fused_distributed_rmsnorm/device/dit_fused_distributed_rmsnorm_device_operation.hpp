@@ -9,6 +9,9 @@
 
 namespace ttnn::experimental::prim {
 
+// Mesh extent along cluster_axis, or 1 when it is absent (local norm, no all-gather).
+uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<uint32_t> cluster_axis);
+
 // Single-program fused distributed RMSNorm for Wan2.2 attention:
 //   pre RMSNorm stats  +  ring AG of stats  +  post RMSNorm with optional head-split,
 //   RoPE, and output dtype cast — all in one kernel program with the input
@@ -44,7 +47,7 @@ namespace ttnn::prim {
 // tensor_return_value_t vector — the stats DRAM scratch is internal).
 Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology,
@@ -63,6 +66,7 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
-    const std::optional<const Tensor>& reciprocals = std::nullopt);
+    const std::optional<const Tensor>& reciprocals = std::nullopt,
+    const std::optional<const Tensor>& affine_tile_row_map = std::nullopt);
 
 }  // namespace ttnn::prim

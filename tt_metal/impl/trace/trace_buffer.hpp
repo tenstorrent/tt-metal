@@ -4,13 +4,9 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <functional>
+#include <cstdint>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
-#include <utility>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
@@ -52,8 +48,6 @@ struct TraceBuffer {
 
     TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
     ~TraceBuffer();
-
-    void validate();
 };
 
 }  // namespace tt::tt_metal

@@ -2,17 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
+#include "common/memory_pin_impl.hpp"
 #include <tt_stl/span.hpp>
-#include <tt_stl/overloaded.hpp>
 
 #include "distributed/pinned_memory_cache.hpp"
 
-#include <memory>
 #include <utility>
-#include <vector>
 
 namespace tt::tt_metal {
 
@@ -46,7 +43,7 @@ void HostBuffer::register_pinned_memory_cache_release_callback() {
         return;
     }
     const void* host_address = static_cast<const void*>(view_.data());
-    pin_.add_final_release_callback(
+    pin_.impl().add_final_release_callback(
         [host_address]() { experimental::PinnedMemoryCache::instance().release(host_address); });
 }
 

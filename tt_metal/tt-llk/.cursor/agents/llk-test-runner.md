@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap with the correct `CHIP_ARCH` if missing.
+- **NEVER skip env setup.** Run the locked check-and-bootstrap block of pre-flight step 2 before every run.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -22,21 +22,20 @@ The rule passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--port`, `--timeout`)
+- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
 
 ## Mandatory Pre-Flight (do this every run)
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .cursor/scripts/run_test.sh` → strip `/.cursor/scripts/run_test.sh`.
 
-2. **Check the venv:**
+2. **Check and bootstrap the env under a lock on `tests/`**, every run, with a blocking shell call and a ~30 minute timeout. The block is a no-op when `.venv/bin/pytest` and `sfpi/sfpi.version` both exist; a missing `pytest` runs the full setup (`sudo apt-get`, `.venv` rebuilt), a missing `sfpi.version` alone runs only the SFPI fetch, which leaves `.venv` untouched:
    ```bash
-   test -f "<worktree>/tests/.venv/bin/activate"
+   cd <worktree>/tests && flock . bash -c '
+     if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi
+     test -x .venv/bin/pytest && test -f sfpi/sfpi.version'
    ```
-   If missing, bootstrap with the correct `CHIP_ARCH`:
-   ```bash
-   cd <worktree>/tests && CHIP_ARCH=<arch> ./setup_testing_env.sh
-   ```
-   The `CHIP_ARCH` value MUST match the test's arch — wrong-arch setup silently produces broken builds. Never run `setup_testing_env.sh` without `CHIP_ARCH`.
+   If it exits non-zero, report `ENV_ERROR` with the setup output and stop.
 
 3. **Check the test dir:**
    ```bash
@@ -58,7 +57,7 @@ bash .cursor/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [-k EXPR] [--test-id ID] \
-    [--no-split] [--port PORT] [--timeout SECS]
+    [--no-split] [--timeout SECS]
 ```
 
 Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) so the command finishes before any terminal read. Synchronous, never run in background. If a retry is needed, re-run with a higher timeout rather than polling.
@@ -97,7 +96,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 0    | PASS         | Report PASS                                                           |
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
-| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
 | 4    | BAD_ARGS     | Bug in the rule/agent invocation — surface and stop                   |
 | 5    | HANG         | Watchdog tripped or post-mortem detected `TENSIX TIMED OUT`. Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` output if available). Device has already been reset (`tt-smi -r`) and any stale `pytest --compile-consumer` killed. Do **not** retry — report HANG with the failing variant and the triage summary. |
 

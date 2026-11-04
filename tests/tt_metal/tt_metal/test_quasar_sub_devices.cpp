@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -13,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <array>
@@ -82,7 +84,7 @@ distributed::MeshWorkload create_l1_write_workload(
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
     };
@@ -116,8 +118,9 @@ SyncWorkloads create_sync_workloads(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const SubDevice& incrementer_sub_device,
     const SubDevice& waiter_sub_device) {
-    const auto waiter_node = waiter_sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().front().start_coord;
-    const auto& incrementer_nodes = incrementer_sub_device.cores(HalProgrammableCoreType::TENSIX);
+    const auto waiter_node =
+        waiter_sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().front().start_coord;
+    const auto& incrementer_nodes = incrementer_sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
     const auto syncer_node = incrementer_nodes.ranges().back().end_coord;
     const auto waiter_physical = mesh_device->worker_core_from_logical_core(waiter_node);
     const auto syncer_physical = mesh_device->worker_core_from_logical_core(syncer_node);
@@ -134,7 +137,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_waiter.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "num_inc", "sync_core_x", "sync_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = experimental::NodeCoord(waiter_node)}},
     };
@@ -159,7 +162,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = experimental::NodeCoord(syncer_node)}},
     };
@@ -180,7 +183,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "waiter_core_x", "waiter_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "incrementer", .kernels = {incrementer_kernel}, .target_nodes = incrementer_nodes}},
     };

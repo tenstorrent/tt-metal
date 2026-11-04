@@ -1,0 +1,24 @@
+# CosyVoice2 reference venv, install step 1 of 2: torch and torchaudio ONLY, from the PyTorch CPU index.
+#
+# Host-only, never imported by the on-device model. See requirements-reference.txt (step 2) and
+# docs/security.md for what this venv is for and why the install is split in two.
+#
+#   uv venv --python 3.10 $COSYVOICE2_REF_ENV
+#   VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference-torch.txt
+#   VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference.txt -c requirements-reference-lock.txt
+#   uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio     # both must say +cpu
+#
+# Pinned to the torch in tt-metal's python_env (2.11.0+cpu), so the reference and the TTNN port share one
+# torch: RAS sampling's RNG stream depends on the torch version (torch.multinomial's single-sample path changed
+# between 2.6 and 2.8, per the CosyVoice1 bring-up), and cross-venv token comparisons stay greedy or
+# teacher-forced regardless.
+#
+# Why a separate step: with the CPU index as an extra index, uv takes every package that index hosts from it
+# (first-index strategy, a dependency-confusion defence), and it hosts old requests/urllib3/certifi/idna with
+# open advisories. Installing only torch/torchaudio from it, then everything else from PyPI, keeps that defence
+# and gets current versions of the rest.
+
+--index-url https://download.pytorch.org/whl/cpu
+
+torch==2.11.0+cpu
+torchaudio==2.11.0+cpu

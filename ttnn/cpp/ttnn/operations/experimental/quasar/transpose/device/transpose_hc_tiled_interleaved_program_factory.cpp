@@ -51,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     const float pad_value = operation_attributes.pad_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     auto tile = input_tensor.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
@@ -173,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
                 {"tile_width", 1u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer DFB bindings (SRC_CB consumer; PAD_CB consumer when padding).
@@ -211,8 +211,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
         // Quasar: writer drains SRC/PAD CBs with ~32B face-line (sub-tile) writes; implicit sync
         // mis-credits per NOC op and stalls. Revert to explicit credits. See ~/implicit_sync.md.
-        .hw_config = ttnn::create_writer_datamovement_config(
-            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels.push_back(std::move(reader));

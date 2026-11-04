@@ -634,6 +634,12 @@ def test_demo(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                # Qwen3-VL sampling does not feed the sampled token back into
+                # its traced decode input, so the demo must restage it each step.
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             # Get the next token
@@ -916,16 +922,19 @@ def test_demo(
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        # Also save the avg decode performance for the 128 iterations (excluding the compile time).
+        # With stop_at_eos the last batch can end before 128 iterations; average over the ones that ran.
+        num_iterations_for_avg = min(128, iteration)
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
+            for i in range(1, num_iterations_for_avg)
         )
         benchmark_data.add_measurement(
             profiler,
             0,
             "inference_decode",
             "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
+            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
             step_warm_up_num_iterations=None,
             target=None,
         )

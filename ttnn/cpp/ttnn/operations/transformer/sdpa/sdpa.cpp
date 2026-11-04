@@ -46,7 +46,9 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink,
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
+    bool output_concat_heads,
+    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -93,7 +95,10 @@ ttnn::Tensor scaled_dot_product_attention(
         kernel_config_val,
         cu_window_seqlens,
         windowed_q_token_offset,
-        windowed_q_token_offset_tensor);
+        windowed_q_token_offset_tensor,
+        std::nullopt,  // paged_cache_geometry
+        output_concat_heads,
+        attn_mask_block_map);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -107,7 +112,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -115,12 +122,12 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        std::nullopt,        // attn_mask
-        page_table_tensor,   // page_table
-        std::nullopt,        // attention_sink
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        attention_sink,
         /*is_causal=*/true,  // Always causal for chunked version
         scale,
-        std::nullopt,  // sliding_window_size (not supported yet)
+        sliding_window_size,
         chunk_start_idx,
         std::nullopt,  // chunk_start_idx_tensor
         false,         // use_mla
@@ -145,7 +152,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -155,10 +164,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_v,
         std::nullopt,       // attn_mask
         page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        attention_sink,
         /*is_causal=*/true,
         scale,
-        std::nullopt,  // sliding_window_size
+        sliding_window_size,
         std::nullopt,
         chunk_start_idx_tensor,
         false,         // use_mla
@@ -234,7 +243,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -301,7 +311,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         circular_kv_cache,
         logical_n_tensor,
-        logical_l_tensor);
+        logical_l_tensor,
+        kv_valid_end_tensor);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -332,7 +343,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -353,7 +366,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         num_links,
         cluster_axis,
         mesh_device,
-        topology,
+        topology_1d,
         ccl_core_grid_offset,
         subdevice_id,
         /*is_causal=*/true,
@@ -370,7 +383,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
-        std::nullopt);  // sliding_window_size
+        std::nullopt,  // sliding_window_size
+        /*circular_kv_cache=*/false,
+        std::nullopt,  // logical_n_tensor
+        std::nullopt,  // logical_l_tensor
+        kv_valid_end_tensor);
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

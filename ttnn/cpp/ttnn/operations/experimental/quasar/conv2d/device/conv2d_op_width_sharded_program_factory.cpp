@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -122,7 +123,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -207,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -230,8 +231,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         a.storage_type() == ttnn::StorageType::DEVICE && b.storage_type() == ttnn::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == ttnn::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -327,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         num_blocks_output_w,
         num_blocks_weight_w);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_FATAL(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
@@ -615,7 +615,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----
@@ -626,9 +626,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
         // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
         // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        act_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+        act_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = act_noc,
+                },
+        };
     }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
@@ -733,10 +744,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
         // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
         // authoritative.
-        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        weights_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = weights_noc,
+                },
+        };
     }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,

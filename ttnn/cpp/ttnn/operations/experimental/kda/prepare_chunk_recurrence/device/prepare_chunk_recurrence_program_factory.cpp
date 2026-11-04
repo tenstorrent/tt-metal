@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/prepare_chunk_recurrence_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -26,15 +28,36 @@ using namespace tt::constants;
 namespace ttnn::experimental::prim {
 namespace m2 = tt::tt_metal::experimental;
 
-ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::create_program_artifacts(
-    const PrepareChunkRecurrenceParams& attrs, const PrepareChunkRecurrenceInputs& in, std::vector<Tensor>& outputs) {
+uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& attrs, uint32_t max_items) {
+    constexpr uint64_t fp32 = tt::tile_size(tt::DataFormat::Float32);
+    constexpr uint64_t bf16 = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint64_t Kt = attrs.key_dim / TILE_WIDTH;
+    const uint64_t Vt = attrs.value_dim / TILE_WIDTH;
+    const auto output = [&](uint32_t index) { return (attrs.output_bf16_mask >> index) & 1U ? bf16 : fp32; };
+    constexpr uint64_t batch = prepare_chunk_recurrence_batch_items;
+    // A batch of the BF16 q, k, g, v and beta logits, and its activated beta's rows and columns and inverse norms.
+    const uint64_t inputs = batch * ((3 * Kt + Vt + 1) * bf16 + 3 * fp32);
+    // eye, tril, ones, gate_tril, gate_ones and the three block masks.
+    const uint64_t constants = 8 * fp32;
+    // Six Kt-tile rows per batch item: workspace_0/1/2, centered_inverse_decay, anchor_decay and normalized_k.
+    const uint64_t intermediates = batch * 6 * Kt * fp32;
+    // A batch of v_beta, kd, q_decay, k_dec_t, dl and intra.
+    const uint64_t outputs = batch * (Vt * output(0) + Kt * (output(1) + output(2) + output(4) + output(5)) + fp32);
+    return inputs + constants + intermediates + outputs +
+           max_items * prepare_chunk_recurrence_inverse_tiles_per_item * fp32;
+}
+
+ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFactory::create_mesh_workload_artifacts(
+    const PrepareChunkRecurrenceParams& attrs,
+    const PrepareChunkRecurrenceInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& q = in.q.mesh_tensor();
     const auto& k = in.k.mesh_tensor();
     const auto& v = in.v.mesh_tensor();
     const auto& g = in.g.mesh_tensor();
     const auto& beta = in.beta.mesh_tensor();
     const auto& device = q.device();
-    const auto arch = device.arch();
 
     const uint32_t num_heads = attrs.num_heads;
     const uint32_t num_chunks = attrs.num_chunks;
@@ -44,12 +67,15 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
     const uint32_t cv = Ct * Vt;
-    const uint32_t kv = Kt * Vt;
     const uint32_t kc = Kt * Ct;
-    const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
     const auto distribution = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
+    // The inverse runs once over all of a core's work items, so its buffers hold one tile per item; validation
+    // checks prepare_chunk_recurrence_l1_bytes, which mirrors the buffer list below, against L1.
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
+    // The per-item buffers hold one stage batch.
+    constexpr uint32_t batch = prepare_chunk_recurrence_batch_items;
 
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
@@ -59,12 +85,16 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName v_dfb{"v"};
     const m2::DFBSpecName g_dfb{"g"};
     const m2::DFBSpecName beta_dfb{"beta"};
+    // Sigmoid of the beta logits, in row 0, then transposed to column 0.
+    const m2::DFBSpecName beta_row_dfb{"beta_row"};
+    const m2::DFBSpecName beta_activated_dfb{"beta_activated"};
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
+    const m2::DFBSpecName gate_tril_dfb{"gate_tril"};
+    const m2::DFBSpecName gate_ones_dfb{"gate_ones"};
     const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
-    const m2::DFBSpecName scan_decay_dfb{"scan_decay"};
     const m2::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
     const m2::DFBSpecName akk_dfb{"akk"};
     const m2::DFBSpecName t_inv_dfb{"t_inv"};
@@ -76,13 +106,11 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName final_decay_dfb{"final_decay"};
     const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
-    const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
+    const m2::DFBSpecName inverse_norms_dfb{"inverse_norms"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
     const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
     const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
-
-    const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
     const m2::TensorParamName Q_TENSOR{"q"};
     const m2::TensorParamName K_TENSOR{"k"};
@@ -113,39 +141,40 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             .data_format_metadata = format};
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(q_dfb, 2 * ck, bf16),
-        make_dfb(k_dfb, 2 * ck, bf16),
-        make_dfb(v_dfb, 2 * cv, bf16),
-        make_dfb(g_dfb, 2 * ck, gate_format),
-        make_dfb(beta_dfb, 2 * Ct, fp32),
+        make_dfb(q_dfb, batch * ck, bf16),
+        make_dfb(k_dfb, batch * ck, bf16),
+        make_dfb(v_dfb, batch * cv, bf16),
+        make_dfb(g_dfb, batch * ck, gate_format),
+        make_dfb(beta_dfb, batch * Ct, bf16),
+        make_dfb(beta_row_dfb, batch * Ct, fp32),
+        make_dfb(beta_activated_dfb, batch * Ct, fp32),
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
+        make_dfb(gate_tril_dfb, cc, fp32),
+        make_dfb(gate_ones_dfb, cc, fp32),
         make_dfb(block_masks_dfb, 3, fp32),
-        make_dfb(workspace_0_dfb, ck, fp32),
-        make_dfb(scan_decay_dfb, ck, fp32),
-        make_dfb(centered_inverse_decay_dfb, ck, fp32),
-        make_dfb(akk_dfb, cc, fp32),
-        make_dfb(t_inv_dfb, 2 * cc, output_formats[6]),
-        make_dfb(v_beta_dfb, 2 * cv, output_formats[0]),
-        make_dfb(kd_dfb, 2 * ck, output_formats[1]),
-        make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
-        make_dfb(intra_dfb, 2 * cc, output_formats[3]),
-        make_dfb(workspace_1_dfb, ck, fp32),
-        make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
-        make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
-        make_dfb(anchor_decay_dfb, kv, fp32),
-        make_dfb(normalized_q_dfb, ck, fp32),
-        make_dfb(normalized_k_dfb, ck, fp32),
+        make_dfb(workspace_0_dfb, batch * ck, fp32),
+        make_dfb(centered_inverse_decay_dfb, batch * ck, fp32),
+        make_dfb(akk_dfb, max_items * cc, fp32),
+        make_dfb(t_inv_dfb, max_items * cc, output_formats[6]),
+        make_dfb(v_beta_dfb, batch * cv, output_formats[0]),
+        make_dfb(kd_dfb, batch * ck, output_formats[1]),
+        make_dfb(q_decay_dfb, batch * ck, output_formats[2]),
+        make_dfb(intra_dfb, batch * cc, output_formats[3]),
+        make_dfb(workspace_1_dfb, batch * ck, fp32),
+        make_dfb(final_decay_dfb, batch * Kt, output_formats[5]),
+        make_dfb(k_decay_transposed_dfb, batch * kc, output_formats[4]),
+        make_dfb(anchor_decay_dfb, batch * ck, fp32),
+        make_dfb(normalized_k_dfb, batch * ck, fp32),
+        make_dfb(inverse_norms_dfb, batch * Ct, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
-        make_dfb(tile_workspace_0_dfb, 1, fp32),
-        // The nested inverse reads its current level while packing the next one.
-        make_dfb(tile_workspace_1_dfb, 2, fp32),
-        make_dfb(tile_workspace_2_dfb, 1, fp32),
-
-        make_dfb(workspace_3_dfb, scratch, fp32),
-        make_dfb(workspace_2_dfb, ck, fp32),
+        make_dfb(tile_workspace_0_dfb, max_items, fp32),
+        // The nested inverse reads its current level while packing the next one, for every item at once.
+        make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
+        make_dfb(tile_workspace_2_dfb, max_items, fp32),
+        make_dfb(workspace_2_dfb, batch * ck, fp32),
     };
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -159,10 +188,9 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
+                // After its reads, the reader writes the two largest outputs on its own NoC.
+                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
             },
         .tensor_bindings =
             {
@@ -171,10 +199,18 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{V_TENSOR, "v"},
                 m2::TensorBinding{G_TENSOR, "g"},
                 m2::TensorBinding{BETA_TENSOR, "beta"},
+                m2::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
+                m2::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
+             {"beta_offset_tiles", attrs.beta_logits_column_offset / tt::constants::TILE_WIDTH},
+             {"batch_items", batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -184,42 +220,54 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             "writer_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{kd_dfb, "kd", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{final_decay_dfb, "final_decay", m2::DFBEndpointType::CONSUMER},
+                // The writer generates compute's constants while the reader reads the first batch.
+                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
                 m2::TensorBinding{KD_OUTPUT, "kd_output"},
                 m2::TensorBinding{Q_DECAY_OUTPUT, "q_decay_output"},
                 m2::TensorBinding{INTRA_OUTPUT, "intra_output"},
-                m2::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
                 m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"max_items", max_items},
+             {"batch_items", batch},
+             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
+             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     unpack_modes[q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[v_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[g_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[beta_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[beta_row_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[beta_activated_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_tril_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_ones_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[scan_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[centered_inverse_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[akk_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[t_inv_dfb] = UnpackMode::UnpackToSrc;
@@ -231,13 +279,11 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[final_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_decay_transposed_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[inverse_norms_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_1_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_2_dfb] = UnpackMode::UnpackToSrc;
-
-    unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -252,14 +298,18 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{beta_row_dfb, "beta_row", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{beta_row_dfb, "beta_row", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{akk_dfb, "akk", m2::DFBEndpointType::PRODUCER},
@@ -268,19 +318,16 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{inverse_norms_dfb, "inverse_norms", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{inverse_norms_dfb, "inverse_norms", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::CONSUMER},
-
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::PRODUCER},
@@ -295,15 +342,11 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             {{"Ct", Ct},
              {"Kt", Kt},
              {"Vt", Vt},
-             {"SCALE_BITS",
-              [&] {
-                  uint32_t bits;
-                  const float value = 1.0F / std::sqrt(static_cast<float>(attrs.key_dim));
-                  std::memcpy(&bits, &value, sizeof(bits));
-                  return bits;
-              }()},
+             {"max_items", max_items},
+             {"batch_items", batch},
+             {"SCALE_BITS", std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(attrs.key_dim)))},
              {"EPS_BITS", 0x358637BDU}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -324,13 +367,15 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         m2::AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
-            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}});
-        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"work_item_count", work_item_count}});
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
+        m2::AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            core,
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
     }
 
     m2::ProgramSpec spec{
         .name = "prepare_chunk_recurrence",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfb_specs),
         .tensor_parameters =
             {
@@ -366,7 +411,25 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         {FINAL_DECAY_OUTPUT, outputs[5].mesh_tensor()},
         {T_INV_OUTPUT, outputs[6].mesh_tensor()},
     };
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
+    const m2::DFBSpecName writer_chronology{"chronology_writer"};
+    spec.dataflow_buffers.push_back(
+        {.unique_id = writer_chronology,
+         .entry_size = 32,
+         .num_entries = 1,
+         .data_format_metadata = tt::DataFormat::UInt32});
+    reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
+    writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        {.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.num_chunks * TILE_HEIGHT,
+        READER);
 }
 
 }  // namespace ttnn::experimental::prim

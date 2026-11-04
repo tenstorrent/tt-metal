@@ -18,10 +18,10 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-template <typename TensorAccessorType>
+template <typename TensorAccessorType, typename DFB>
 void read_block_from_dram(
     const Noc& noc,
-    DataflowBuffer& dfb,
+    DFB& dfb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -43,7 +43,9 @@ void read_block_from_dram(
     noc.async_read_barrier();
 }
 
-static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
+namespace {
+
+void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t pv_core_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
@@ -51,23 +53,33 @@ static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
     const bool is_privilaged = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++)) == 1;
     if (is_privilaged) {
         const uint32_t target_sem_value = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        Semaphore<> sig_sem(signalling_semaphore_id);
+        const uint32_t num_signal_ranges = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const Semaphore<> sig_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
-        sig_sem.set(1);
-        sig_sem.set_multicast(
-            noc, multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, num_signalling_semaphores);
+        // Only the RS cores own sig_sem, so write it per RS rectangle and never on the rectangles'
+        // bounding box: that box can hold cores of other sub-devices. This core owns no sig_sem slot
+        // either, hence the relay from pv_sem.
+        for (uint32_t r = 0; r < num_signal_ranges; ++r) {
+            const uint32_t start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t num_dests = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            if (num_dests == 1) {
+                pv_sem.relay_unicast(noc, sig_sem, start_x, start_y);
+            } else {
+                pv_sem.relay_multicast(noc, sig_sem, start_x, start_y, end_x, end_y, num_dests);
+            }
+        }
     } else {
         pv_sem.up(noc, pv_core_x, pv_core_y, 1);
         noc.async_atomic_barrier();
     }
 }
+
+}  // namespace
 
 void kernel_main() {
     // Compile time args
@@ -225,20 +237,22 @@ void kernel_main() {
                 dfb_in1.reserve_back(in1_block_num_tiles);
                 l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
-                const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                const BankView dram_bank(s1);
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         const uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
                         noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                            dram_bank, curr_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr},
+                            dram_bank,
+                            curr_page_size,
+                            {.bank_id = dram_bank_id, .offset_bytes = 0},
                             NocOptVals{.vc = vc});
                         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                             dram_bank,
                             CoreLocalMem<uint32_t>(l1_write_addr_in1),
                             curr_page_size,
-                            {.bank_id = dram_bank_id, .addr = in1_tensor_addr + curr_l1_read_addr_in1},
+                            {.bank_id = dram_bank_id, .offset_bytes = curr_l1_read_addr_in1},
                             {},
                             NocOptVals{.vc = vc});
                         curr_l1_read_addr_in1 += curr_page_size;
@@ -270,4 +284,12 @@ void kernel_main() {
     noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
+
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    if constexpr (in1_is_dram_sharded) {
+        const uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    }
 }

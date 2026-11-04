@@ -38,10 +38,10 @@ const DFBSpecName FC_PAGE_TABLE{"page_table"};
 const DFBSpecName FC_BATCH_IDX{"batch_idx"};
 const DFBSpecName FC_VALID_SEQ_LEN{"valid_seq_len"};
 
-// Quasar (Gen2) rejects self-loop DFBs on data-movement kernels. The writer's three metadata buffers
-// (page_table/batch_idx/valid_seq_len) are self-loops — it NoC-reads a stick and reads it straight
-// back, never pushing — so on Quasar they become node-local scratchpads instead. The accessor names
-// match the DFB ones, so the writer kernel selects dfb::… or scratch::… under #ifdef ARCH_QUASAR.
+// Quasar (Gen2) rejects self-loop DFBs on data-movement kernels, so the writer's three metadata
+// buffers (page_table/batch_idx/valid_seq_len) become node-local scratchpads there. The accessor
+// names match the DFB ones, so the writer kernel selects dfb::… or scratch::… under #ifdef
+// ARCH_QUASAR.
 const ScratchpadSpecName FC_PAGE_TABLE_SCRATCH{"page_table"};
 const ScratchpadSpecName FC_BATCH_IDX_SCRATCH{"batch_idx"};
 const ScratchpadSpecName FC_VALID_SEQ_LEN_SCRATCH{"valid_seq_len"};
@@ -83,7 +83,7 @@ std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         valid_seq_len_stick_size_B = valid_seq_len_tensor->element_size();
     }
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
@@ -300,16 +300,14 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             },
         .compile_time_args = {{"Wt", Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_rows", "noop"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ---------------- Writer ----------------
 
-    // The three metadata buffers below are touched by the writer alone: it reserves an entry, takes
-    // the write pointer, NoC-reads the metadata into it and reads it straight back through an SRAM
-    // pointer, never pushing. With no second kernel to take the opposite endpoint, each is bound as
-    // a self-loop pair: one PRODUCER and one CONSUMER on the same kernel, which is the one form of
-    // repeated binding the spec validator sanctions.
+    // The three metadata buffers below are touched by the writer alone. With no second kernel to
+    // take the opposite endpoint, each is bound as a self-loop pair: one PRODUCER and one CONSUMER
+    // on the same kernel, which is the one form of repeated binding the spec validator sanctions.
     Group<DFBBinding> writer_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = FC_IN_TILES,
@@ -421,7 +419,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_runtime_arg_names)},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     // ---------------- Tensor parameters ----------------

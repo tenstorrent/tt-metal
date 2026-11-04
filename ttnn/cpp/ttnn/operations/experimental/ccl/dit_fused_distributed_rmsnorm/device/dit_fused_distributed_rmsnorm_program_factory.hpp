@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <tt-metalium/runtime_args_data.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -14,20 +15,13 @@
 namespace ttnn::experimental::prim {
 
 struct DitFusedDistributedRmsnormSharedVariables {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
-    // Forwarder kernels (AG path) + their cores; used to refresh the stats DRAM
-    // scratch address on cache hits. Empty on the is_tp_1 path.
-    std::vector<tt::tt_metal::KernelHandle> forwarder_kernel_ids;
-    std::vector<tt::tt_metal::CoreCoord> forwarder_cores;
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    // Index of the stats DRAM scratch address inside the worker-writer's
-    // runtime-args vector. Set on the all-gather path (TP>1, whole-row norm);
-    // empty on the is_tp_1 path. The address changes per launch because the
-    // scratch is a regular device tensor allocated by create_output_tensors, so
-    // override_runtime_arguments refreshes this slot on cache hits.
-    std::optional<size_t> stats_dram_addr_writer_arg_idx;
+    // Kernel-owned objects remain stable across Program moves. Dispatch assembly
+    // redirects their data(), so cache these objects rather than raw payload pointers.
+    tt::tt_metal::RuntimeArgsData* reader_common_args = nullptr;
+    tt::tt_metal::RuntimeArgsData* writer_common_args = nullptr;
+    // Empty on the local-normalization path; each forwarder uses slots 0 and 1
+    // for the stats scratch and ping-pong semaphore addresses.
+    std::vector<tt::tt_metal::RuntimeArgsData*> forwarder_runtime_args;
 };
 
 struct DitFusedDistributedRmsnormMeshWorkloadFactory {

@@ -10,6 +10,7 @@
 #include "tt-metalium/math.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -544,10 +545,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     const bool is_block_sharded = setup.is_block_sharded;
     const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    const auto all_cores = input.shard_spec().value().grid;
+    const auto& shard_spec = input.shard_spec().value();
+    const auto all_cores = shard_spec.grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    const uint32_t num_cores_x = shard_spec.grid.bounding_box().grid_size().x;
+    // Same origin-anchored walk as the runtime-arg placement below (#60513).
+    ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
+        all_cores, is_block_sharded, shard_spec.orientation);
+    const uint32_t rectangular_x =
+        ttnn::operations::sliding_window::sliding_window_shard_row_width(all_cores, is_block_sharded);
     const uint32_t max_out_nhw_per_core = output_tensors[0].shard_spec()->shape[0];
     const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
     TT_FATAL(
@@ -755,9 +761,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
     const bool single_partial_fits_in_face = last_tile_is_partial && in_c <= tt::constants::FACE_WIDTH;
-    const auto pack_untilize_tile = single_partial_fits_in_face
-                                        ? tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH})
-                                        : tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH});
+    const auto pack_untilize_tile = single_partial_fits_in_face ? tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH})
+                                                                : tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH});
 
     std::vector<DataflowBufferSpec> dfbs;
 
@@ -807,8 +812,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             READER_INDICES_TENSOR));
     }
     // input CB
-    dfbs.push_back(
-        local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_tile));
+    dfbs.push_back(local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_tile));
 
     // MPWI scratch / index CBs
     if (return_indices) {
@@ -880,11 +884,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const uint32_t scratch_npages = params.num_threads_per_cluster;
         const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
         dfbs.push_back(local_dfb(
-            DFB_SCRATCH_0,
-            scratch_pagesize,
-            scratch_npages,
-            params.output_data_format,
-            tt::tt_metal::Tile()));
+            DFB_SCRATCH_0, scratch_pagesize, scratch_npages, params.output_data_format, tt::tt_metal::Tile()));
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;
@@ -1173,8 +1173,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // exactly the sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader
         // pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
         // workaround and opt out of implicit sync so explicit reserve/push credits stay authoritative.
-        .hw_config =
-            ttnn::create_reader_datamovement_config(mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1190,8 +1189,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             // QSR: companion opt-out on the mpwi second reader (writer-face). Same sub-tile stick
             // DFB transfers as reader0; keep explicit reserve/push credits authoritative to avoid the
             // implicit-sync NWFW/NRBW stall (mirrors tilize/transpose HC-sharded).
-            .hw_config = ttnn::create_writer_datamovement_config(
-                mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     }
 
@@ -1261,8 +1259,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
         // full output shard, so the producer never wraps), so there is no real consumer.
         // Self-loop the compute as producer+consumer to satisfy the SPSC completeness
-        // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
-        // pop is needed since the data is the final resident output.
+        // check (mirrors the mpwi writer-face self-loop on DFB_OUT). The compute kernel pops
+        // each block after pushing it so the DFB is left balanced (the data stays resident).
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT,
             .accessor_name = "out_cb",
@@ -1380,13 +1378,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        device_arch,
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-            .math_approx_mode = false,
-            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,

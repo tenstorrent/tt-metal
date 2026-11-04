@@ -4,11 +4,16 @@
 
 #pragma once
 
+#include <limits>
+
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace ttnn::prim {
 uint32_t largest_power_of_two(uint32_t x);
@@ -57,7 +62,23 @@ bool verify_multi_core_cost(
 
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
 
+// True when indices into a reduced dim of `padded_width` elements need 32 bits. Indices run
+// 0 .. padded_width - 1, so 16 bits hold every width up to and including 65536 (largest index
+// 65535). The single source of truth for the index width, shared by topk and topk_route_finish.
+constexpr bool padded_width_needs_uint32_indices(uint64_t padded_width) {
+    return padded_width > uint64_t{std::numeric_limits<uint16_t>::max()} + 1;
+}
+
 // True when the op must use 32-bit indices: the padded reduced dim does not fit in 16 bits, or the
 // input is fp32, which sorts with fp32 dest accumulation and loads indices as INT32.
 bool is_uint32_index_required(const ttnn::Tensor& input_tensor, int8_t dim);
+
+// True when the reader kernels fill the width padding: bf16/fp32, 32x32 tiles, padded only to the next tile.
+bool topk_reader_fills_width_padding(const ttnn::Tensor& input);
+
+// Whole pad tiles the single-core reader appends so a row spans the two tiles the sort needs (0 or 1).
+uint32_t topk_reader_pad_tiles(const ttnn::Tensor& input);
+
+// Reader defines that fill the padding of each row's last tile and append pad tiles, or none when not needed.
+std::vector<std::pair<std::string, std::string>> topk_width_padding_defines(const ttnn::Tensor& input, bool largest);
 }  // namespace ttnn::prim

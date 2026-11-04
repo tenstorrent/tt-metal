@@ -86,7 +86,7 @@ Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unp
      | grep -vE 'record_mailbox|clear_mailbox|debug_mailbox|mailbox_base\[|inline |^[[:space:]]*//' | grep -v /tests/
    ```
 2. Per site, decode the channel via the convention (writer's `dest` id + issuing thread → directed FIFO; reader's `src` id + issuing thread → same FIFO). Pair writes with reads. Each `mailbox_write` is its OWN one-to-one directed channel — a fan-out (write to Math AND Pack) is several independent channels, not one broadcast; check each.
-3. Run checks 1–5. For balance/symmetry, read the enclosing function and confirm all threads reach it equally (watch `if constexpr`/runtime branches and the `UNPACK/MATH/PACK` split).
+3. Run checks 1–5. For balance/symmetry, read the enclosing function and confirm all threads reach it equally (watch `if constexpr`/runtime branches and the `UNPACK/MATH/PACK` split). **Count per executed iteration, not per source line:** a push/pop expressed as an opcode value in a MOP slot or a replay buffer runs `outer` or `outer × inner` times per `run()`/`replay()`, and a `*_LAST` slot override can make the final iteration asymmetric — see `race-audit-all` → *"A word's SLOT, not its line"*. If the counts do not resolve, report UNCERTAIN rather than balancing the text.
 
 ## Verdict
 - **Balanced 1:1 per channel, symmetric across threads, 1-writer/1-reader, ≤depth, value self-contained (no cross-memory ordering assumed)** → SAFE.

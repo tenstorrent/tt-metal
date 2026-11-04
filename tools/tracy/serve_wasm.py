@@ -30,6 +30,12 @@ from tracy.common import (
 # WebSocket port is always HTTP+1 (see run_server).
 DEFAULT_HTTP_PORT = 8080
 
+# Turn the web UI off entirely (no HTTP server, no WebSocket, no lingering daemon):
+#   - CLI:  python -m tracy --no-web-server ...
+#   - env:  TRACY_NO_WEB_SERVER=1
+# For headless CI and measurement loops that only want the numbers.
+_TRUTHY = ("1", "true", "yes", "on")
+
 _SERVER_LOG_BASENAME = "tracy_wasm_gui_server.log"
 
 
@@ -178,6 +184,16 @@ def _resolve_wasm_http_port(explicit_port=None):
     return port
 
 
+def web_server_disabled() -> bool:
+    """True when ``TRACY_NO_WEB_SERVER`` asks for the WASM web UI to stay off.
+
+    Mirrors ``TRACY_WASM_HTTP_PORT``: an explicit CLI flag wins, this is the env
+    fallback. Enforced inside ``launch_server_subprocess`` so *every* caller is
+    covered, not just ``python -m tracy``.
+    """
+    return os.environ.get("TRACY_NO_WEB_SERVER", "").strip().lower() in _TRUTHY
+
+
 def _list_traces_newest_first(traces_dir: Path) -> list[str]:
     """Basenames of regular ``*.tracy`` files under ``traces_dir``, newest first.
 
@@ -280,7 +296,17 @@ def _kill_previous_server_process(target_port: int):
         logger.warning(f"Could not kill previous server process: {e}")
 
 
-def launch_server_subprocess(directory=None, port=None, daemon=True):
+def launch_server_subprocess(directory=None, port=None, daemon=True, enabled=None):
+    """Start the WASM web UI server, unless it has been switched off.
+
+    ``enabled=False`` (``python -m tracy --no-web-server``) or ``TRACY_NO_WEB_SERVER=1``
+    returns ``None`` without binding a port or spawning anything, so nothing is left
+    listening after the run that started it exits. ``enabled=None`` means "no explicit
+    CLI choice" and defers to the env var.
+    """
+    if enabled is False or (enabled is None and web_server_disabled()):
+        logger.info("Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.")
+        return None
     logger.info("Launching tracy web app GUI server subprocess...")
     http_port = _resolve_wasm_http_port(port)
     ws_port = http_port + 1

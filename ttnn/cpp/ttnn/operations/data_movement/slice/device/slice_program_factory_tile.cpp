@@ -28,7 +28,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 
@@ -38,9 +38,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
     const auto& input_shape = input.padded_shape();
@@ -130,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options =
             {
                 // Per-core: the id_per_dim seed.
@@ -164,7 +165,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Reader per-core: start_id, num_tiles, and the id_per_dim seed.

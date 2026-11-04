@@ -61,7 +61,7 @@ struct Conv2dConfig {
     std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
 
     // used only if override_sharding_config or override_output_sharding_config is true
-    std::optional<CoreRangeSet> core_grid = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> core_grid = std::nullopt;
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
     bool transpose_shards = false;

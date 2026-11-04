@@ -106,6 +106,10 @@ target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\""
 # ttnn target (PUBLIC so header consumers see it consistently) instead of defining it globally.
 if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
     target_compile_definitions(ttnn_core PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    # ttnn_pch_full precompiles <ttnn/device_operation.hpp>, which pulls in the adapter header.
+    # Without the define here the #ifdef is resolved when the PCH is built, and every target that
+    # reuses the PCH silently compiles the check out despite carrying -D on its own command line.
+    target_compile_definitions(ttnn_pch_full PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
 endif()
 
 tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
@@ -116,6 +120,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/overlapped_tensor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/d2d_pipeline_descriptor.fbs
 )
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
@@ -316,9 +321,6 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
     )
-    if(TTNN_BUILD_TESTS)
-        target_compile_definitions(ttnn PRIVATE TTNN_WITH_LAYER_COMPLETION_CONSUMER)
-    endif()
     target_include_directories(
         ttnn
         PUBLIC

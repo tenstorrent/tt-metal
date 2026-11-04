@@ -4,7 +4,7 @@ emoji: 🔷
 engine:
   id: copilot
   max-continuations: 6
-model: claude-sonnet-5
+model: claude-sonnet-5.5
 features:
   gh-aw-detection: true
 cache:
@@ -32,7 +32,7 @@ pre-agent-steps:
         CACHE_HEAD_SHA="$(tr -d '\n' < /tmp/gh-aw/agent/pr-data-head-sha.txt)"
       fi
       # Skip fetch only when cache data matches current PR head commit.
-      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && [ -n "$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)" ]; then
+      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && ! grep -q '^# PR diff unavailable:' /tmp/gh-aw/agent/pr-diff.patch && [ -n "$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)" ]; then
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)"
@@ -46,6 +46,23 @@ pre-agent-steps:
             > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
         DIFF_EXIT=$?
         set -e
+        if [ $DIFF_EXIT -ne 0 ] && grep -qE 'HTTP 406|exceeded the maximum number of files' /tmp/gh-aw/agent/pr-diff.err; then
+          # GitHub refuses `gh pr diff` for PRs touching more than 300 files.
+          # Rebuild an equivalent diff from the paginated REST files endpoint
+          # (same exclusions as above) instead of failing the whole check.
+          echo "::warning::gh pr diff refused: PR exceeds GitHub's 300-file diff limit. Falling back to the paginated pulls/files API; per-file patches may be omitted for very large files."
+          set +e
+          gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[] | select(.filename | test("(^|/)[^/]*\\.lock\\.yml$|(^|/)(generated|dist|build)/") | not) | "diff --git a/\(.previous_filename // .filename) b/\(.filename)\n--- a/\(.previous_filename // .filename)\n+++ b/\(.filename)\n\(.patch // "(patch omitted by GitHub API: binary or too large)")"' \
+            > /tmp/gh-aw/agent/pr-diff.full 2>>/tmp/gh-aw/agent/pr-diff.err
+          DIFF_EXIT=$?
+          set -e
+          if [ $DIFF_EXIT -ne 0 ]; then
+            echo "::warning::Fallback diff fetch also failed (exit $DIFF_EXIT); continuing without a diff: $(cat /tmp/gh-aw/agent/pr-diff.err)"
+            echo "# PR diff unavailable: PR exceeds GitHub's 300-file diff limit and the fallback fetch failed. Review from pr-meta.json only and say so in the review." > /tmp/gh-aw/agent/pr-diff.full
+            DIFF_EXIT=0
+          fi
+        fi
         if [ $DIFF_EXIT -ne 0 ]; then
           echo "::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
           exit 1

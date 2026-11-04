@@ -91,6 +91,8 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
 
         math::srca_bank_wait();
 
+        // The switch below only encodes tiles 0..7; any higher idst would silently reuse stale SrcA.
+        LLK_ASSERT(idst < 8, "mul_reduce_scalar move_dest_to_src: idst must be 0..7");
         switch (idst)
         {
             case 0:

@@ -22,8 +22,7 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to Std/Var reductions need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(
-        tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.is_allocated(), "Operands to Std/Var reductions need to be allocated in buffers on device!");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to Std/Var reductions must be tilized");
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
@@ -95,7 +94,7 @@ ttnn::Tensor welford_reduce(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 

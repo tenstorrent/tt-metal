@@ -13,7 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
@@ -79,7 +79,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     const uint32_t num_units =
         tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
 
-    IDevice* device = output.device();
+    MeshDevice* device = output.device();
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;

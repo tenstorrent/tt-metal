@@ -22,19 +22,62 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "gelu_bw/device/gelu_bw_device_operation.hpp"
 #include "device/unary_backward_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <cstdint>
 
 namespace ttnn {
+
+namespace {
+
+// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel serves this call. The
+// kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16 operands in untransposed 16x16
+// faces, with one shape, interleaved or sharded in L1 or DRAM: the device operation binds each operand's
+// shard in place or addresses its pages. Every other call, including a broadcast gradient or a host
+// operand, keeps the path the program replaces. It is defined once for every generated route, so a tree
+// may hold it before any route calls it. input_grad, when given, overrides output_mem_config.
+[[maybe_unused]] bool generated_bf16_kernel_applies(
+    const Tensor& grad,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& input_grad = std::nullopt) {
+    const auto* device = input.device();
+    if (device == nullptr || (device->arch() != tt::ARCH::BLACKHOLE && device->arch() != tt::ARCH::WORMHOLE_B0)) {
+        return false;
+    }
+    const auto bf16_tiles = [&](const Tensor& tensor) {
+        const auto tile = tensor.tensor_spec().tile();
+        return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
+               tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+               tile.get_face_shape() ==
+                   tt::tt_metal::Tile::FaceShape{tt::constants::FACE_HEIGHT, tt::constants::FACE_WIDTH} &&
+               !tile.get_transpose_within_face() && !tile.get_transpose_of_faces() &&
+               tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
+    };
+    if (!bf16_tiles(grad) || !bf16_tiles(input)) {
+        return false;
+    }
+    if (input_grad.has_value()) {
+        return bf16_tiles(*input_grad);
+    }
+    // A sharded output config without a shard spec leaves the replaced path to derive one from its
+    // operands, which the program does not do.
+    if (output_mem_config.has_value()) {
+        return !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
+               output_mem_config->nd_shard_spec().has_value();
+    }
+    // Several replaced ops default to their operands' placement, which agrees with the program's only when
+    // both operands share one.
+    return grad.memory_config() == input.memory_config();
+}
+
+}  // namespace
 
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
@@ -48,20 +91,20 @@ std::vector<Tensor> clamp_bw(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        Tensor result = ttnn::where(minT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        Tensor result = ttnn::where(maxT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
+    result = ttnn::where(result, grad, 0.0f, output_memory_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -78,20 +121,20 @@ std::vector<Tensor> clamp_bw(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::where(minT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::where(maxT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
     Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
+    result = ttnn::where(result, grad, 0.0f, output_memory_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -151,6 +194,9 @@ std::vector<Tensor> threshold_bw(
 }
 
 // Softplus
+// d/dx of (1/beta) * log1p(exp(beta * x)) is exp(beta * x) / (1 + exp(beta * x)), which is
+// sigmoid(beta * x). Evaluating it as sigmoid keeps the tail finite, where the explicit
+// exp form overflows for beta * x above about 88 and loses the gradient entirely.
 std::vector<Tensor> softplus_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -158,20 +204,19 @@ std::vector<Tensor> softplus_bw(
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(1);
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
-    Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_mem_config);
-    Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_mem_config);
-    Tensor temp = ttnn::multiply(
-        ttnn::multiply(grad, exp_beta_self, std::nullopt, output_mem_config),
-        ttnn::reciprocal(ttnn::add(exp_beta_self, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
+    Tensor sigmoid_beta_self = ttnn::sigmoid(
+        mul_input_beta,
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor grad_result = ttnn::where(ttnn::gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    Tensor temp = ttnn::multiply(grad, sigmoid_beta_self, std::nullopt, output_mem_config);
+    sigmoid_beta_self.deallocate();
+    grad_tensor.emplace_back(ttnn::where(
+        ttnn::gt(mul_input_beta, threshold, std::nullopt, output_mem_config), grad, temp, output_mem_config));
     mul_input_beta.deallocate();
-    exp_beta_self.deallocate();
-    sub_result.deallocate();
     temp.deallocate();
-    grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
 
@@ -188,16 +233,34 @@ std::vector<Tensor> rdiv_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
     if (rounding_mode == std::nullopt) {
+        // -grad * scalar / input^2, evaluated as -grad * ((scalar / input) / input).
+        //
+        // Forming input^2 first loses the answer at both ends of the range. Below
+        // |input| = 1.0842e-19 the square falls under the smallest normal and flushes to zero,
+        // so the reciprocal returns infinity. Above |input| = 2^63 it is the reciprocal of the
+        // square that falls under the smallest normal, so the gradient comes back as zero --
+        // and that starts a full octave before the square itself overflows at 2^64, because in
+        // between the square is still perfectly representable. The exact gradient is an
+        // ordinary float32 throughout.
+        //
+        // Taking the reciprocal first, with the scalar folded in between the two multiplies,
+        // keeps every intermediate in range for the same op count -- one reciprocal and two
+        // multiplies either way.
+        Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(
                 ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
-                    ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
+                    ttnn::multiply(recip_input, scalar, std::nullopt, output_mem_config),
+                    recip_input,
+                    std::nullopt,
+                    output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
             output_mem_config);
+        recip_input.deallocate();
         if (scalar > 0) {
             result = ttnn::where(
                 ttnn::logical_and(
@@ -269,17 +332,57 @@ std::vector<std::optional<Tensor>> pow_bw(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::pow(input, std::fabs(exponent - 1.0f), output_mem_config);
-    if (exponent < 1.0f) {
-        power_input = ttnn::reciprocal(power_input, output_mem_config);
+    // d/dx x^n = n * x^(n-1), computed as one binary program: grad * x with the
+    // power applied to x as an rhs activation and the scale by n as a post
+    // activation. The power op is picked the way ttnn::pow(Tensor, float) picks
+    // it (POWER_ITERATIVE for an integral exponent up to 3, POWER otherwise);
+    // both are sign-correct for a negative base with an integral exponent and
+    // NaN for a non-integral one, so no sign fix-up is needed. The old
+    // where(lez, +inf) was overwriting those values, and x == 0, with +inf.
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const float power_exponent = std::fabs(exponent - 1.0f);
+    std::vector<EltwiseUnaryWithParam> power_ops;
+    if (static_cast<std::int32_t>(std::floor(power_exponent)) == power_exponent) {
+        const auto int_exponent = static_cast<std::int32_t>(power_exponent);
+        if (int_exponent <= 3) {
+            power_ops.emplace_back(UnaryOpType::POWER_ITERATIVE, static_cast<std::uint32_t>(int_exponent));
+        } else {
+            power_ops.emplace_back(UnaryOpType::POWER, int_exponent);
+        }
+    } else {
+        power_ops.emplace_back(UnaryOpType::POWER, power_exponent);
     }
-
-    Tensor result = ttnn::multiply(power_input, exponent, std::nullopt, output_mem_config);
-    power_input.deallocate();
-    Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
-    result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    if (exponent < 1.0f) {
+        power_ops.emplace_back(UnaryOpType::RECIP);
+    }
+    const bool nan_below_zero = exponent < 1.0f && std::nearbyint(exponent) != exponent;
+    // The SFPU reciprocal maps NaN to 0, so the non-integral n < 1 case alone
+    // needs the NaN restored at x < 0.
+    const std::vector<EltwiseUnaryWithParam> scale_by_n = {
+        EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, exponent}};
+    if (nan_below_zero) {
+        Tensor final_result = ttnn::multiply(
+            grad,
+            input,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            /*post_activations=*/scale_by_n,
+            /*lhs_activations=*/{},
+            /*rhs_activations=*/power_ops);
+        where(ttnn::ltz(input), std::nanf(""), final_result, output_mem_config, input_grad);
+    } else {
+        ttnn::multiply(
+            grad,
+            input,
+            std::nullopt,
+            output_mem_config,
+            input_grad,
+            /*post_activations=*/scale_by_n,
+            /*lhs_activations=*/{},
+            /*rhs_activations=*/power_ops);
+    }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -291,7 +394,8 @@ std::vector<std::optional<Tensor>> exp_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor exp_result = ttnn::exp(input, false, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
@@ -307,8 +411,13 @@ std::vector<std::optional<Tensor>> tanh_bw(
 
     DataType output_dtype = input.dtype();
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
-        grad, input, output_dtype, output_memory_config, input_grad);
+    auto result_tensor = ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW,
+        grad,
+        input,
+        output_dtype,
+        output_memory_config,
+        input_grad);
     grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
@@ -323,7 +432,8 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
@@ -494,9 +604,8 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
+        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
-    float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
     ttnn::rsqrt(input, false, output_mem_config, input_grad);
@@ -507,7 +616,10 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
         std::nullopt,
         output_mem_config,
         input_grad);
-    where(ttnn::eqz(input, output_mem_config), t_inf, input_grad.value(), output_mem_config, input_grad);
+    // d/dx rsqrt(x) is -0.5 * x^-3/2, so at zero the answer is -inf for a positive gradient
+    // and +inf for a negative one -- which is what the arithmetic above already produces,
+    // since rsqrt(0) is inf and the -0.5f carries the sign. Writing +inf unconditionally
+    // inverted it for every positive gradient.
     where(ttnn::ltz(input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
     where(
         ttnn::logical_and(
@@ -527,7 +639,8 @@ std::vector<std::optional<Tensor>> neg_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     result[0] = ttnn::neg(grad, output_mem_config, input_grad);
     return result;
 }
@@ -535,7 +648,7 @@ std::vector<std::optional<Tensor>> neg_bw(
 std::vector<Tensor> relu_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
+    Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -868,17 +981,17 @@ std::vector<Tensor> log_bw(
 std::vector<Tensor> relu6_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(ttnn::le(input, 0.0f, std::nullopt, output_mem_config), 0.0f, 6.0f, output_mem_config);
-    grad_result = where(
+    // grad where 0 < input < 6, zero elsewhere. Both comparisons are false for a NaN input, so the
+    // false arm is also what NaN returns and has to stay zero, which is the gradient torch gives.
+    Tensor grad_result = where(
         ttnn::logical_and(
             ttnn::gtz(input, output_mem_config),
             ttnn::lt(input, 6.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         grad,
-        grad_result,
+        0.0f,
         output_mem_config);
-    grad_result = where(ttnn::ge(input, 6.0f, std::nullopt, output_mem_config), 0.0f, grad_result, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
@@ -893,7 +1006,8 @@ std::vector<std::optional<Tensor>> silu_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor sigmoid_res = ttnn::sigmoid(
         input,
         (int)ttnn::operations::unary::VecMode::RC,
@@ -1577,7 +1691,11 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
 
-    return {ttnn::prim::gelu_bw(grad, input, variant, input.dtype(), output_memory_config, input_grad)};
+    const auto op_type = variant == operations::unary::GeluVariant::TANH
+                             ? ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_TANH_BW
+                             : ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_BW;
+    return {ttnn::operations::unary_backward::launch_unary_backward(
+        op_type, grad, input, input.dtype(), output_memory_config, input_grad)};
 }
 
 std::vector<Tensor> repeat_bw(
@@ -1650,8 +1768,10 @@ Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*o
 
 namespace ttnn {
 
-// Prod
-// along a single dimension --> result: grad_data * (y / input )
+// prod(input) / input is undefined at zero. Reduce with zeros replaced by one, then select:
+//   0 zeros  -> 1 / input
+//   1 zero   -> 1 at the zero, 0 elsewhere
+//   2+ zeros -> 0
 std::vector<Tensor> prod_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -1663,20 +1783,53 @@ std::vector<Tensor> prod_bw(
 
     const bool all_dimensions = !dim.has_value();
     const bool keepdim = !all_dimensions;
-    Tensor prod_result = ttnn::prod(input, dim, keepdim, output_memory_config);
+    Tensor is_zero = ttnn::eqz(input, output_memory_config);
+    Tensor safe_input = ttnn::add(input, is_zero, std::nullopt, output_memory_config);
+    Tensor prod_result = ttnn::prod(safe_input, dim, keepdim, output_memory_config);
 
     if (prod_result.layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
 
+    // Keep the count broadcastable with the input.
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>> reduce_dim = dim;
+    Tensor zero_count = ttnn::sum(is_zero, reduce_dim, /*keepdim=*/true, output_memory_config);
+    if (zero_count.layout() == Layout::ROW_MAJOR && zero_count.storage_type() == StorageType::DEVICE) {
+        zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count, output_memory_config);
+    }
+    // A non-zero element survives only where the count is 0, a zero only where it is the only one.
+    Tensor survives = ttnn::eq(is_zero, zero_count, std::nullopt, output_memory_config);
+    zero_count.deallocate();
+    is_zero.deallocate();
+    const std::array<ttnn::operations::unary::EltwiseUnaryWithParam, 1> recip{
+        ttnn::operations::unary::EltwiseUnaryWithParam(ttnn::operations::unary::UnaryOpType::RECIP)};
+    Tensor per_element = ttnn::multiply(
+        survives,
+        safe_input,
+        /*output_dtype=*/std::nullopt,
+        output_memory_config,
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        /*lhs_activations=*/{},
+        /*rhs_activations=*/recip);
+    survives.deallocate();
+    safe_input.deallocate();
+
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
-            temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(all_dimension_result);
+        // Reducing over every dimension yields a scalar, so the gradient is prod(x) * grad[0] / x_i,
+        // with x_i's zeros handled by per_element.
+        // Both prod(x) and grad[0] are single values the device already holds. Forming the full-volume
+        // product first and then broadcasting its first element sent the whole tensor to the host and
+        // back to move one number, which is what made this scale with host work rather than data.
+        const auto rank = grad.logical_shape().rank();
+        ttsl::SmallVector<uint32_t> first_start(rank, 0);
+        ttsl::SmallVector<uint32_t> first_end(rank, 1);
+        ttsl::SmallVector<uint32_t> first_step(rank, 1);
+        Tensor grad_first = ttnn::slice(grad, first_start, first_end, first_step, std::nullopt);
+        Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_memory_config);
+        grad_first.deallocate();
+        Tensor all_dimension_result = ttnn::multiply(per_element, scale, std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(std::move(all_dimension_result));
         return grad_tensor;
     }
 
@@ -1712,7 +1865,6 @@ std::vector<Tensor> prod_bw(
             }
         }
     }
-    Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
     Tensor temp = ttnn::multiply(
         prod_result,
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
@@ -1723,22 +1875,22 @@ std::vector<Tensor> prod_bw(
     }
     if (*dim == 3 || *dim == -1) {
         Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
     if (*dim == 2 || *dim == -2) {
         Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
+            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
     if (*dim == 1 || *dim == -3) {
-        Tensor tensor_1_temp = reciprocal_input;
-        if (reciprocal_input.padded_shape()[1] % 32 != 0) {
+        Tensor tensor_1_temp = per_element;
+        if (per_element.padded_shape()[1] % 32 != 0) {
             ttsl::SmallVector<std::array<std::uint32_t, 2>> padding = {
-                {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
-            tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
+                {0, 0}, {0, 32 - (per_element.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
+            tensor_1_temp = ttnn::pad(per_element, padding, 0, true, std::nullopt);
         }
         ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1773,7 +1925,7 @@ std::vector<Tensor> prod_bw(
             after_permute_dims,
             output_memory_config);
         Tensor grad_result = result;
-        if (reciprocal_input.padded_shape()[1] % 32 != 0) {
+        if (per_element.padded_shape()[1] % 32 != 0) {
             ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<std::uint32_t> end_index = {
                 input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
@@ -1784,11 +1936,11 @@ std::vector<Tensor> prod_bw(
         return grad_tensor;
     }
     // dim 0
-    Tensor tensor_1_temp = reciprocal_input;
-    if (reciprocal_input.padded_shape()[0] % 32 != 0) {
+    Tensor tensor_1_temp = per_element;
+    if (per_element.padded_shape()[0] % 32 != 0) {
         ttsl::SmallVector<std::array<std::uint32_t, 2>> padding = {
-            {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
-        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
+            {0, (32 - (per_element.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
+        tensor_1_temp = ttnn::pad(per_element, padding, 0, false, std::nullopt);
     }
     ttsl::SmallVector<std::int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1822,7 +1974,7 @@ std::vector<Tensor> prod_bw(
         after_permute_dims,
         output_memory_config);
     Tensor grad_result = result;
-    if (reciprocal_input.padded_shape()[0] % 32 != 0) {
+    if (per_element.padded_shape()[0] % 32 != 0) {
         ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
         ttsl::SmallVector<std::uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};

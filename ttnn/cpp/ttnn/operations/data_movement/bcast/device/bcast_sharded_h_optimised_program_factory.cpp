@@ -12,7 +12,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     const std::uint32_t NC = N * C;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;
@@ -95,7 +95,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         "Shard shapes must be multiple of TILE_HEIGHT ");
 
     const std::uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
 
     const std::uint32_t h_blk = std::min(Ht, 8u);
     // w_blk must divide Wt. The reader streams b tiles through the small c_1 ring buffer
@@ -163,10 +163,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"}},
         // Legacy reader index 4 ("batch_offset") is fed tile_offset.
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "offset", "batch_offset", "w_blk", "batch_b"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(

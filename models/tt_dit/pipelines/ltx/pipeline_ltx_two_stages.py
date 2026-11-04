@@ -20,6 +20,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
 
@@ -55,6 +56,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._distilled_lora_strength = distilled_lora_strength
         super().__init__(*args, **kwargs)
 
+    @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
         *,
@@ -124,7 +126,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
         full_latent_count = latent_frames * full_lh * full_lw
         dummy_v_init = torch.zeros(1, full_latent_count, self.in_channels)
-        vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+        vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=self.fps)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
@@ -156,6 +158,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._prepare_transformer(0)
         logger.info(f"warmup (2-stage) done in {time.time() - t0:.1f}s")
 
+    @cap_torch_threads_to_half_the_cpus()
     def generate(
         self,
         prompt: str,
@@ -186,11 +189,12 @@ class LTXTwoStagesPipeline(LTXPipeline):
         # Stage 2 (refine) knobs.
         stage_2_sigma_values: list[float] | None = None,
         seed: int = 10,
-        fps: int = 24,
+        fps: float | None = None,
     ) -> str:
         """Run the 2-stage AV pipeline (full-guidance s1 + distilled s2) and write an MP4."""
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
+        fps = self._resolve_fps(fps)
 
         s1_h, s1_w = height // 2, width // 2
         s2_sigma_values = list(stage_2_sigma_values) if stage_2_sigma_values else STAGE_2_DISTILLED_SIGMA_VALUES

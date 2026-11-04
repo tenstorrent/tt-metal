@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
             {
                 .runtime_arg_names = {"input_is_dram", "num_rows_per_core", "Wt", "tile_offset", "origin_w"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -219,7 +219,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
             {
                 .runtime_arg_names = {"output_is_dram", "num_rows_per_core", "Wt", "tile_offset"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -230,19 +230,20 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
     if (p == 0.0f) {
         compute_defines["REDUCE_OP"] = "PoolType::SUM";
-        compute_defines["IS_ZERO"] = "1";
     } else {
         compute_defines["REDUCE_OP"] = "PoolType::MAX";
-        if (p == -std::numeric_limits<float>::infinity()) {
-            compute_defines["MINUS_INF"] = "1";
-        }
     }
+
+    const KernelSpec::CompileTimeArgs compute_compile_time_args{
+        {"is_zero", static_cast<uint32_t>(p == 0.0f)},
+        {"minus_inf", static_cast<uint32_t>(p == -std::numeric_limits<float>::infinity())},
+    };
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(arch, operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // The legacy config set UnpackToDestMode::Default for every CB index; Default is UnpackToSrc.
     // An explicit entry is *required* for any Float32 DFB the compute kernel consumes while
     // enable_32_bit_dest (= fp32_dest_acc_en) is set. That is reachable two independent ways here:
@@ -250,7 +251,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
     // input dtype is float32. Naming every consumed DFB covers both without a dtype-dependent branch,
     // and reproduces the legacy all-Default vector byte for byte. `output` is producer-only on
     // compute, so it takes no entry.
-    std::get<ComputeGen1Config>(compute_hw_config).unpack_modes = {
+    compute_hw_config.unpack_modes = {
         {INPUT_DFB, UnpackMode::UnpackToSrc},
         {ONE_DFB, UnpackMode::UnpackToSrc},
         {MASK_W_DFB, UnpackMode::UnpackToSrc},
@@ -331,6 +332,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
+            .compile_time_args = compute_compile_time_args,
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"num_rows_per_core", "Wt", "origin_w"},

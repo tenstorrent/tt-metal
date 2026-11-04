@@ -10,6 +10,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     get_mesh_composer,
     get_model_traced_mesh_shape,
+    is_wormhole_t3k_1x8,
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
@@ -85,6 +86,10 @@ def run(
     device,
     **kwargs,
 ) -> list:
+    # Skip on Wormhole T3K (mesh1x8) due to device hang/timeout, refs #52913
+    if is_wormhole_t3k_1x8():
+        return [(True, "SKIPPED: device hang on Wormhole T3K mesh1x8, refs #52913"), 0]
+
     torch.manual_seed(1234)  # Match unit test seed
 
     is_mesh_device = hasattr(device, "get_num_devices")

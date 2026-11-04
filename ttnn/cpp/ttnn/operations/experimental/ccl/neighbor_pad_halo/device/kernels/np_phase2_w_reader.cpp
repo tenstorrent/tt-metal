@@ -5,7 +5,7 @@
 // Phase 2 W fabric reader for the fused neighbor_pad + conv3d op
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_common/kernels/np_reorder.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_common/kernels/np_zero_pad.hpp"
 #include <cstdint>
@@ -32,7 +32,7 @@ constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_src + 1);
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_src + 2);
 // Uniform-mux mode: all W devices
 constexpr uint32_t W_MUX_MODE = get_compile_time_arg_val(ct_after_src + 3);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 
 void kernel_main() {
     // Common runtime args (uniform across all cores, updated between dispatches)

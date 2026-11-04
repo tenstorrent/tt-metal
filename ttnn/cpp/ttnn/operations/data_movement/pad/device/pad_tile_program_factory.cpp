@@ -44,7 +44,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
 
     const auto& output_shape = output_padded_shape;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
@@ -121,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                 },
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                      "num_padded_Xt",
                      "pad_value"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ProgramSpec spec{

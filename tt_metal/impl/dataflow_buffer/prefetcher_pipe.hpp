@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -15,14 +17,68 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
+class DriscL1Allocation;
+class IDevice;
+
 namespace distributed {
+class MeshBuffer;
 class MeshDevice;
-}
+}  // namespace distributed
 
 namespace experimental {
+
+// Per-core config pages, keyed by logical worker core.
+using PrefetcherPipeConfigPages = std::unordered_map<CoreCoord, std::vector<uint32_t>>;
+
+// The data ring and config pages of the spaces one CreatePrefetcherPipeSpaces call made: one
+// allocation of each over the union of their reservation cores, so every one of those spaces sees
+// the same two addresses. Each of them holds this object, so the L1 is released when the last of
+// them is destroyed.
+class PrefetcherPipeSpaceL1 {
+public:
+    // `source` is resolved (never Default). `config_page_size` is the largest page of the spaces.
+    PrefetcherPipeSpaceL1(
+        distributed::MeshDevice& device,
+        PrefetcherPipeL1Source source,
+        const CoreRangeSet& cores,
+        uint32_t ring_size,
+        uint32_t config_page_size);
+
+    PrefetcherPipeSpaceL1(const PrefetcherPipeSpaceL1&) = delete;
+    PrefetcherPipeSpaceL1& operator=(const PrefetcherPipeSpaceL1&) = delete;
+    PrefetcherPipeSpaceL1(PrefetcherPipeSpaceL1&&) = delete;
+    PrefetcherPipeSpaceL1& operator=(PrefetcherPipeSpaceL1&&) = delete;
+    ~PrefetcherPipeSpaceL1();
+
+    uint32_t data_address() const { return data_address_; }
+    uint32_t config_address() const { return config_address_; }
+
+    // Allocator source: write config pages at config_address() through the command queue, as one
+    // write of the config buffer limited to `cores`. `pages_on(coord)` holds the page of every core
+    // in `cores` for the device at `coord`; devices handed the same pages share one host image.
+    void enqueue_config_pages(
+        const CoreRangeSet& cores,
+        const std::function<const PrefetcherPipeConfigPages&(const distributed::MeshCoordinate&)>& pages_on) const;
+
+private:
+    void allocate_from_arena(const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size);
+    void allocate_from_allocator(const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size);
+    void release() noexcept;
+
+    distributed::MeshDevice* device_ = nullptr;
+    // PersistentArena source.
+    uint64_t data_allocation_id_ = 0;
+    uint64_t config_allocation_id_ = 0;
+    // Allocator source.
+    std::shared_ptr<distributed::MeshBuffer> data_buffer_;
+    std::shared_ptr<distributed::MeshBuffer> config_buffer_;
+    uint32_t data_address_ = 0;
+    uint32_t config_address_ = 0;
+};
 
 // Byte layout of one config page in a space. Every page in a space is sized for the space's
 // max_receivers_per_pipe x credit_lane_capacity; a pipe with fewer receivers writes its real count
@@ -35,14 +91,16 @@ struct PrefetcherPipeConfigPageLayout {
     uint32_t page_size = 0;
 };
 
-// Implementation of PrefetcherPipeSpace: the persistent L1 reservation (one ring allocation and
-// one config-page allocation over sender_cores ∪ receiver_domain), the claim table that keeps
-// live pipes on disjoint cores, and the page writer. Owned by exactly one PrefetcherPipeSpace
-// handle. Pipes carved from it point back at it without owning it: the space must outlive its
-// pipes. If it does not, the destructor detaches every live pipe (so a later use of that pipe
-// fails with a clear error rather than dereferencing freed memory) and logs the violation.
+// Implementation of PrefetcherPipeSpace: the L1 reservation (one ring allocation and one
+// config-page allocation over sender_cores ∪ receiver_domain, possibly shared with other spaces
+// created in the same batch), the claim table that keeps live pipes on disjoint cores, and the
+// page writer. Owned by exactly one PrefetcherPipeSpace handle. Pipes carved from it point back at
+// it without owning it: the space must outlive its pipes. If it does not, the destructor detaches
+// every live pipe (so a later use of that pipe fails with a clear error rather than dereferencing
+// freed memory) and logs the violation.
 class PrefetcherPipeSpaceImpl {
 public:
+    // Validates `config` and resolves its l1_source; the space has no L1 until attach_l1().
     PrefetcherPipeSpaceImpl(const distributed::MeshDevice& device, PrefetcherPipeSpaceConfig config);
 
     PrefetcherPipeSpaceImpl(const PrefetcherPipeSpaceImpl&) = delete;
@@ -51,8 +109,13 @@ public:
     PrefetcherPipeSpaceImpl& operator=(PrefetcherPipeSpaceImpl&&) = delete;
     ~PrefetcherPipeSpaceImpl();
 
-    uint32_t buffer_address() const { return data_address_; }
-    uint32_t config_address() const { return config_address_; }
+    // Give the space its L1, which may be shared with the other spaces of a batch, and write the
+    // zeroed template page to every reservation core. Called once, before any pipe is carved.
+    void attach_l1(std::shared_ptr<PrefetcherPipeSpaceL1> l1);
+
+    uint32_t buffer_address() const { return l1().data_address(); }
+    uint32_t config_address() const { return l1().config_address(); }
+    PrefetcherPipeL1Source l1_source() const { return config_.l1_source; }
     uint32_t ring_size() const { return config_.ring_size; }
     uint32_t config_page_size() const { return layout_.page_size; }
     uint32_t max_receivers_per_pipe() const { return config_.max_receivers_per_pipe; }
@@ -68,56 +131,89 @@ public:
     bool is_claimed(const CoreCoord& core) const { return claimed_.contains(core); }
     const distributed::MeshDevice* get_device() const { return device_; }
 
-    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers);
-    std::vector<PrefetcherPipe> create_pipes(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes);
+    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes);
+    std::vector<PrefetcherPipe> create_pipes(
+        std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes, uint32_t num_credit_lanes);
+    void set_dram_sender_cores(std::span<const CoreCoord> dram_senders);
+    void validate_dram_carves(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) const;
+    PrefetcherPipe create_dram_sender_pipe(
+        CoreCoord dram_sender,
+        const CoreRangeSet& receivers,
+        uint32_t recv_index_base = 0,
+        uint64_t tensor_prefetcher_factory_id = 0,
+        uint32_t tensor_prefetcher_factory_num_pipes = 0);
 
     // Used by PrefetcherPipeImpl. `pending` holds cores claimed earlier in the same create_pipes
     // batch (validation runs before any claim is taken).
     void validate_carve(
-        CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
+        CoreCoord sender,
+        const CoreRangeSet& receivers,
+        uint32_t num_credit_lanes,
+        const std::unordered_set<CoreCoord>* pending) const;
+    void validate_dram_carve(CoreCoord sender, const CoreRangeSet& receivers) const;
     // `owner` is the pipe taking / releasing the claim; the space tracks it so it can detach the
     // pipe if the space is destroyed first.
     void claim(const CoreRangeSet& cores, PrefetcherPipeImpl& owner);
     void unclaim(const CoreRangeSet& cores, PrefetcherPipeImpl& owner) noexcept;
 
-    // Write `page` at config_address() on every core in `cores`: one NOC multicast per rectangle,
-    // unicast for single-core rectangles.
-    void write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const;
-    // Write per-core pages, grouping cores with identical bytes into multicast rectangles.
-    void write_pages(const std::unordered_map<CoreCoord, std::vector<uint32_t>>& pages) const;
+    // Write per-core pages at config_address() on every device. A PersistentArena space writes
+    // them from the host, multicasting identical pages to rectangles. An Allocator space writes
+    // them through the command queue, because earlier work may still be using that L1.
+    void write_pages(const PrefetcherPipeConfigPages& pages) const;
+    // Allocator spaces: write each device's own pages, as write_pages() does.
+    void write_device_pages(const std::map<distributed::MeshCoordinate, PrefetcherPipeConfigPages>& pages) const;
+    // Call after carving DRAM-sender pipes. Their DRISC senders are not ordered with the command
+    // queue, so keep them from writing ring data or credits into receiver L1 before the queue has
+    // written the receivers' pages.
+    void order_dram_sender_pages() const;
 
 private:
-    void setup_reservation();
-    void release_allocations() noexcept;
+    friend class PrefetcherPipeImpl;
+    // Shared by validate_dram_carve and validate_dram_carves: everything a DRAM carve must satisfy
+    // except that its sender is reserved, which the two forms check at different points.
+    void validate_dram_pipe_geometry(CoreCoord sender, const CoreRangeSet& receivers) const;
+    const PrefetcherPipeSpaceL1& l1() const;
+    // PersistentArena spaces: write `page` at config_address() on every core in `cores` of every
+    // device, one NOC multicast per rectangle and a unicast for single-core rectangles.
+    void write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const;
 
     const distributed::MeshDevice* device_ = nullptr;
     PrefetcherPipeSpaceConfig config_;
     CoreRangeSet reservation_cores_;
     uint32_t credit_lane_capacity_ = 1;
     PrefetcherPipeConfigPageLayout layout_;
-    uint64_t data_allocation_id_ = 0;
-    uint64_t config_allocation_id_ = 0;
-    uint32_t data_address_ = 0;
-    uint32_t config_address_ = 0;
+    std::shared_ptr<PrefetcherPipeSpaceL1> l1_;
     std::unordered_set<CoreCoord> claimed_;
     std::unordered_set<PrefetcherPipeImpl*> live_pipes_;
+    std::unordered_set<CoreCoord> claimed_dram_senders_;
+    std::unordered_map<CoreCoord, std::shared_ptr<DriscL1Allocation>> dram_sender_allocations_;
 };
 
 // Implementation of the PrefetcherPipe host object declared in
 // tt-metalium/experimental/prefetcher_pipe.hpp: one sender -> receivers mapping carved from a
 // space. It claims its cores in the space, composes each core's config page and stamps those
-// pages onto the device; addresses come from the space. A PrefetcherPipe holds one of these and
-// forwards to it, and the host runtime records a binding by pointing at one. That pointer is only
-// as good as the handle: destroying the PrefetcherPipe destroys this object and releases the claim,
-// which is why the handle must outlive every Program bound to it. Moving a handle hands this
-// object to the new owner without relocating it, so destruction is the only way to get there.
+// pages onto the device; addresses come from the space. A PrefetcherPipe owns one of these and
+// forwards to it. A Program that binds the pipe copies what it needs from this object and keeps no
+// reference to it. Destroying the PrefetcherPipe destroys this object and releases the claim.
 //
 // The space pointer is non-owning (the PrefetcherPipeSpace handle owns the space). Every
 // accessor that needs the space goes through space(), which rejects a pipe whose space has
 // already been destroyed.
 class PrefetcherPipeImpl {
 public:
-    PrefetcherPipeImpl(PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores);
+    PrefetcherPipeImpl(
+        PrefetcherPipeSpaceImpl& space,
+        CoreCoord sender_core,
+        const CoreRangeSet& receiver_cores,
+        uint32_t num_credit_lanes);
+    PrefetcherPipeImpl(
+        PrefetcherPipeSpaceImpl& space,
+        CoreCoord dram_sender,
+        const CoreRangeSet& receiver_cores,
+        std::shared_ptr<DriscL1Allocation> drisc_config_page,
+        uint32_t recv_index_base,
+        uint64_t tensor_prefetcher_factory_id,
+        uint32_t tensor_prefetcher_factory_num_pipes);
 
     PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
     PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
@@ -128,23 +224,15 @@ public:
     uint32_t buffer_address() const { return space().buffer_address(); }
     uint32_t config_address() const { return space().config_address(); }
     uint32_t ring_size() const { return space().ring_size(); }
-    // Active pipe-consumer lanes (matches relay num_producers when multi-producer).
-    uint32_t num_credit_lanes() const { return active_credit_lanes_; }
-    // Slots allocated in the config page (Quasar may reserve headroom above active).
+    // Pipe-consumer lanes P, fixed at carve (matches relay num_producers when multi-producer). A
+    // bound Program packs it into its kernel-config slot on sender and receiver cores alike;
+    // nothing in persistent L1 holds it.
+    uint32_t num_credit_lanes() const { return num_credit_lanes_; }
+    // Slots allocated in the config page (Quasar may reserve headroom above num_credit_lanes()).
     uint32_t credit_lane_capacity() const { return space().credit_lane_capacity(); }
-    // Set active lanes from consumer geometry. Host state only: dispatch packs the value into
-    // every bound program's kernel-config slot (ordered with that program), nothing in
-    // persistent L1 is written. May upgrade from the carve-time default of 1, or no-op if
-    // already equal. Reprogramming to a different value after arming is rejected.
-    void set_active_credit_lanes(uint32_t num_lanes);
-    // The checks set_active_credit_lanes(num_lanes) would apply if the pipe were currently armed
-    // with `from_lanes`; throws on rejection, no state change. Lets a program preflight a batch of
-    // bindings (which may arm the same pipe more than once) before committing any of them.
-    void validate_credit_lane_transition(uint32_t from_lanes, uint32_t num_lanes) const;
-    // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
-    // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected bind
-    // does not leave the persistent pipe re-armed.
-    void validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const;
+    // Lane mode (num_credit_lanes() > 1) needs an exact entry ring whose entry count is a multiple
+    // of num_credit_lanes(); throws otherwise.
+    void validate_lane_geometry(uint32_t entry_size) const;
 
     uint32_t config_page_size() const { return space().config_page_size(); }
     uint32_t credit_reset_offset() const { return space().layout().sent_offset; }
@@ -158,24 +246,44 @@ public:
     const distributed::MeshDevice* get_device() const { return space().get_device(); }
     // The space this pipe was carved from. Throws if that space has been destroyed.
     const PrefetcherPipeSpaceImpl& space() const;
+    SenderCoreType sender_core_type() const;
+    uint32_t initial_entry_size() const { return initial_entry_size_; }
+    PrefetcherPipeIdentity identity() const { return identity_; }
+    uint64_t tensor_prefetcher_factory_id() const { return tensor_prefetcher_factory_id_; }
+    // How many pipes the CreatePrefetcherPipesForTensorPrefetcher call that made this one returned.
+    uint32_t tensor_prefetcher_factory_num_pipes() const { return tensor_prefetcher_factory_num_pipes_; }
+    uint32_t recv_index_base() const { return recv_index_base_; }
+    // The receivers in a DRAM sender's receiver-table order: the sender delivers bank-local shard
+    // recv_index_base() + r to entry r.
+    std::vector<CoreCoord> dram_sender_receiver_table() const;
+    DeviceAddr sender_state_drisc_l1_base() const;
+    // The DRISC L1 range that sender_state_drisc_l1_base() lies in. Shared with the space, which keeps
+    // it for the sender core after the pipe is gone. Null for a worker-sender pipe.
+    const std::shared_ptr<DriscL1Allocation>& sender_state_drisc_l1_allocation() const { return drisc_config_page_; }
 
 private:
     friend class PrefetcherPipeSpaceImpl;
 
     void build_config_pages();
+    void build_dram_sender_config_pages();
     // Called by the space's destructor when it is destroyed while this pipe is still alive.
     void detach_from_space() noexcept;
 
     PrefetcherPipeSpaceImpl* space_ = nullptr;
+    PrefetcherPipeIdentity identity_{0};
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     bool claimed_ = false;
-    // Active lanes for striping / wait_front (per-program kernel-config slot); set from the
-    // receiver kernel's thread count when a Program binds the pipe.
-    uint32_t active_credit_lanes_ = 1;
+    uint32_t num_credit_lanes_ = 1;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
+    SenderCoreType sender_core_type_{};
+    uint32_t initial_entry_size_ = 0;
+    uint32_t recv_index_base_ = 0;
+    uint64_t tensor_prefetcher_factory_id_ = 0;
+    uint32_t tensor_prefetcher_factory_num_pipes_ = 0;
+    std::shared_ptr<DriscL1Allocation> drisc_config_page_;
 };
 
 }  // namespace experimental

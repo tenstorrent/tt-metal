@@ -33,6 +33,36 @@ def _make_fp32_to_int32_input(shape):
     return make_typecast_test_input(shape, torch.float32, in_low, in_high)
 
 
+@pytest.mark.parametrize("num_tiles", [1, 128])
+@pytest.mark.parametrize("memory_config", mem_configs)
+def test_typecast_uint32_to_fp32_rounding(device, num_tiles, memory_config):
+    generator = torch.Generator().manual_seed(52787)
+    values = torch.randint(0, 2**32, (num_tiles * 1024,), dtype=torch.int64, generator=generator)
+    # Include every uint32 binade requiring rounding, both midpoint parities,
+    # and the 23-bit split boundaries used by the conversion kernel.
+    boundaries = [0, 1, 2**32 - 1, 2164260993]
+    for exponent in range(24, 32):
+        ulp = 1 << (exponent - 23)
+        for offset in (0, ulp, 1 << 23):
+            midpoint = (1 << exponent) + offset + ulp // 2
+            boundaries.extend((midpoint - 1, midpoint, midpoint + 1))
+    for high in (1, 2, 127, 128, 255, 256, 510, 511):
+        boundaries.extend(((high << 23) - 1, high << 23, (high << 23) + 1))
+    values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+    expected = values.to(torch.float32).reshape(1, 1, num_tiles * 32, 32)
+    # Preserve all 32 input bits, including values above INT32_MAX.
+    input_tensor = ttnn.from_torch(
+        values.to(torch.uint32).reshape(expected.shape),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.float32, memory_config=memory_config))
+    # Compare bits: PCC and tolerances would hide one-ULP conversion errors.
+    assert torch.equal(output.view(torch.int32), expected.view(torch.int32))
+
+
 @pytest.mark.parametrize(
     "tt_input_dtype, tt_output_dtype, expected",
     [
@@ -217,20 +247,29 @@ def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_outp
     assert torch.all(result == 0), f"0.0 -> {tt_output_dtype} produced non-zero values: {result.unique().tolist()}"
 
 
+@pytest.mark.parametrize(
+    "tt_output_dtype, torch_output_dtype", [(ttnn.int32, torch.int32), (ttnn.uint32, torch.uint32)]
+)
 @pytest.mark.parametrize("tt_input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_typecast_fp_to_int32_saturates_out_of_range(device, tt_input_dtype):
-    """Regression for #55933: out-of-range floats saturate to the int32 limit of their own sign.
+def test_typecast_fp_to_int_saturates_out_of_range(device, tt_input_dtype, tt_output_dtype, torch_output_dtype):
+    """Regression for #55933: out-of-range floats saturate to the output limit of their own sign.
 
     calculate_typecast_fp32_to_int32 loads INT32_MIN as the saturation constant for every
     overflowing lane and only negates negative inputs, so positive overflow used to come
-    out as INT32_MIN. The random inputs in test_run_eltwise_typecast_op stay far inside the
-    int32 range, so this test covers both overflow directions and the values either side of
-    the boundary. NaN is left out: SFPSETCC is unspecified for it.
+    out as INT32_MIN. The random inputs in test_run_eltwise_typecast_op stay below 80000, so
+    this test covers both overflow directions and the values either side of each boundary,
+    including the upper half of the uint32 range (#61736). NaN is left out: it saturates by
+    its sign bit like +-inf, but torch's NaN conversion is platform-dependent.
     """
     values = [
-        # positive overflow, starting at the first float32 at 2^31
+        # int32 positive overflow starting at the first float32 at 2^31; in range for uint32
         2.0**31,
+        1.25 * 2.0**31,
         3e9,
+        4294901760.0,
+        # largest float32 below 2^32, then uint32 positive overflow
+        4294967040.0,
+        2.0**32,
         1e38,
         float("inf"),
         # negative overflow, starting at the first float32 below -2^31
@@ -254,13 +293,13 @@ def test_typecast_fp_to_int32_saturates_out_of_range(device, tt_input_dtype):
 
     # Expected values come from what the device holds, because bfloat16 packing rounds some inputs.
     held = ttnn.to_torch(tt_input).to(torch.float64)
-    int32_info = torch.iinfo(torch.int32)
-    expected = held.trunc().clamp(int32_info.min, int32_info.max).to(torch.int32)
+    output_info = torch.iinfo(torch_output_dtype)
+    expected = held.trunc().clamp(output_info.min, output_info.max).to(torch.int64)
 
-    tt_output = ttnn.typecast(tt_input, tt_input_dtype, ttnn.int32)
-    assert tt_output.dtype == ttnn.int32
-    # Compared in int64 so a mis-saturated lane reports its real distance instead of an int32 wrap.
-    assert_equal(expected.to(torch.int64), ttnn.to_torch(tt_output).to(torch.int64))
+    tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype)
+    assert tt_output.dtype == tt_output_dtype
+    # Compared in int64 so a mis-saturated lane reports its real distance instead of a 32-bit wrap.
+    assert_equal(expected, ttnn.to_torch(tt_output).to(torch.int64))
 
 
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
@@ -741,6 +780,51 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     npu_result = ttnn.to_torch(output_tensor)
     expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.float32, tt_output_dtype=ttnn.int32)
     assert_integer_typecast_equal(expected, npu_result)
+
+
+@pytest.mark.parametrize(
+    "shape, shard_layout, shard_shape",
+    [
+        # Rows longer than one tile (1056 elements)
+        ([1, 1, 8, 2112], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [8, 1056]),
+        ([1, 1, 16, 1056], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [8, 1056]),
+        # Rows shorter than one tile (64 elements)
+        ([1, 1, 8, 128], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [8, 64]),
+    ],
+    ids=["width_wide", "height_wide", "width_narrow"],
+)
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype, tt_output_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16, ttnn.uint16),
+        (torch.float32, ttnn.float32, ttnn.int32),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.float32),
+    ],
+)
+def test_typecast_legacy_sharded_row_major_page_not_tile_sized(
+    device, shape, shard_layout, shard_shape, pt_input_dtype, tt_input_dtype, tt_output_dtype
+):
+    """Sharded ROW_MAJOR input whose rows are shorter or longer than one tile."""
+    torch.manual_seed(0)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    in_low, in_high = typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
+    torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=tt_input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
+    assert output_tensor.dtype == tt_output_dtype
+
+    result = ttnn.to_torch(output_tensor)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
+    if uses_exact_integer_typecast_check(tt_input_dtype, tt_output_dtype):
+        assert_integer_typecast_equal(expected, result)
+    else:
+        assert_equal(expected, result)
 
 
 @pytest.mark.parametrize(

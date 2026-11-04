@@ -4,26 +4,29 @@ dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [32, 32]
     format: "Float16_b"
-    # const_value: 1.0
   - name: "input_B"
+    tile_dims: all
     dims: [32, 32]
     format: "Float16_b"
   - name: "output_A"
+    tile_dims: all
     dims: [32, 32]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        math_fidelity: "HiFi2"
-    block_size: [32, 32]
+        math_fidelity: "LoFi"
     pack:
       - output: "output_A"
+        block_size: [32, 32]
         packer: "Packer"

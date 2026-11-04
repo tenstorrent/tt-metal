@@ -7,13 +7,19 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 
 def assert_quality(torch_output, tt_output):
@@ -510,11 +516,19 @@ def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N
     assert check_result["relative_rmse"] < 0.02
 
 
+# An odd subblock_w would split a gate / up tile pair across two DST subblocks, so without a bias it falls back from the
+# pack-thread SwiGLU to the swiglu_block epilogue (fp32 DST holds 4 tiles, hence subblock_h=1 there). out_N=384 gives 24
+# interleaved N tiles, which 6- and 2-tile N blocks divide.
+@pytest.mark.parametrize(
+    "out_N, N_block_size, subblock_h, subblock_w",
+    [(256, 8, 2, 2), (384, 6, 1, 3), (384, 2, 1, 1)],
+    ids=["sbw2", "sbw3", "sbw1"],
+)
 @pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
 @pytest.mark.parametrize("gate_is_first", [False, True], ids=["up_gate", "gate_up"])
-def test_linear_swiglu(device, gate_is_first, use_bias):
+def test_linear_swiglu(device, gate_is_first, use_bias, out_N, N_block_size, subblock_h, subblock_w):
     """fuse_swiglu=True: silu(gate)*up with both [up|gate] and [gate|up] weight layouts."""
-    M, K, out_N = 256, 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
+    M, K = 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
     two_N = 2 * out_N
     torch_dtype = torch.float32
 
@@ -550,9 +564,9 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     matmul_config = ttnn.MinimalMatmulConfig(
         M_block_size=8,
         K_block_size=8,
-        N_block_size=8,
-        subblock_h=2,
-        subblock_w=2,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
         compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
     )
 
@@ -567,8 +581,67 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
 
     tt_output = ttnn.to_torch(tt_output)
     result = assert_quality(golden, tt_output)
-    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}: PCC={result['pcc']:.7f}")
+    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}, subblock_w={subblock_w}: PCC={result['pcc']:.7f}")
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
+
+
+@pytest.mark.parametrize(
+    "output_dtype, max_relative_rmse",
+    # Measured on Blackhole: bf16 out 0.00236 (0.00514 if it took the block-float sigmoid); bfp8 out 0.01132 with the
+    # block-float sigmoid, 0.01179 with silu_tile's.
+    [(ttnn.bfloat16, 0.0035), (ttnn.bfloat8_b, 0.0125)],
+    ids=["bf16_out", "bfp8_out"],
+)
+def test_linear_swiglu_bf16_dest(device, output_dtype, max_relative_rmse):
+    """fuse_swiglu=True without fp32_dest_acc_en: the sigmoid depends on the output format (swiglu_sfpu.hpp).
+
+    A block-float output gets a cheaper sigmoid whose error its 7-bit mantissas hide; a bf16 output keeps silu_tile's.
+    One-hot weight columns copy bf16 input columns into gate and up exactly, so the error measured is the SwiGLU's
+    alone (a random weight's bf16 DST accumulation error would swamp the sigmoid's). The gate sits at std ~2, where the
+    sigmoid is neither saturated nor linear.
+    """
+    torch.manual_seed(0)
+    M, K, out_N = 512, 256, 512
+
+    torch_input = (torch.randn((M, K), dtype=torch.float32) * 2.0).bfloat16().float()
+    columns = torch.randint(0, K, (2 * out_N,))
+    weight_input = torch.nn.functional.one_hot(columns, K).T.float()  # [K, 2N]: column j copies input column columns[j]
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(
+        prepare_for_fused_swiglu(weight_input, ndev=1), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+
+    with torch.no_grad():
+        up, gate = torch.chunk(torch_input @ weight_input, 2, dim=-1)
+        golden = torch.nn.functional.silu(gate) * up
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+        dtype=output_dtype,
+        fuse_swiglu=True,
+    )
+
+    result = assert_quality(golden, ttnn.to_torch(tt_output).float())
+    logger.info(f"{output_dtype}: PCC={result['pcc']:.7f}, relative RMSE={result['relative_rmse']:.5f}")
+    assert result["relative_rmse"] < max_relative_rmse, f"relative RMSE {result['relative_rmse']:.5f}"
 
 
 def _cache_hit_config(device, block_size=1, subblock=1, core_grid=None):
@@ -634,7 +707,10 @@ def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
             "are patched once and then frozen instead of on every dispatch."
         )
 
-    device.disable_and_clear_program_cache()
+    # Clear the entries this helper added, but leave the cache ENABLED: that is the state a freshly
+    # opened device has, and with a module-scoped device, exiting disabled would silently disable it
+    # for every later test in the file - including the perf gate, whose warm-up would warm nothing.
+    device.clear_program_cache()
 
 
 def test_program_cache_hit_bias(device):
@@ -812,25 +888,67 @@ def test_run_performance(device):
     assert check_result["relative_rmse"] < 0.02
 
 
-def test_performance():
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-    command = (
-        f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_run_performance"
+# The real-time profiler's D2H socket needs host IOMMU on Blackhole (no hugepage fallback), and
+# ETH-dispatch SKUs (N300) cannot supply records at all, so this gate runs on the BH viommu job.
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="perf gate measured on Blackhole")
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_performance(device):
+    # Measured in-process with the real-time profiler. Running this under the Tracy
+    # profiler instead costs a subprocess launch, its own device open and a CSV
+    # post-process - ~300s to time a matmul that takes microseconds.
+    require_realtime_profiler("minimal_matmul perf checks")
+    core_grid = ttnn.CoreCoord(8, 8)
+    core_count = core_grid.x * core_grid.y
+    M, K, N = 4096, 4096, 4096
+
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=core_grid,
     )
 
-    run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        "ttnn_minimal_matmul_performance",
-        float_columns=float_cols,
-        columns=cols,
-        op_name="",
-        sum_vals=False,
-        has_signposts=False,
+    def run_matmul():
+        return ttnn.experimental.minimal_matmul(
+            tt_input,
+            tt_weight,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+    def warm_then_measure():
+        # The warm-up keeps kernel compilation out of the measured dispatch. It runs INSIDE the
+        # profiler window on purpose: its record is published asynchronously, so dispatching it
+        # before the callback is registered does not keep it out of the window, and the measured
+        # dispatch then has to be identified rather than assumed to be the only record.
+        run_matmul()
+        return run_matmul()
+
+    _, records = profile_realtime_program(device, warm_then_measure, collect_all=True)
+    assert len(records) == 2, (
+        f"expected the warm-up and the measured dispatch, got {len(records)} record(s): {records}. "
+        "An unattributed record set would grade whichever dispatch happened to land first."
     )
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
-    expected_ns = perf_model(4096, 4096, 4096, core_count, 2)
+    # runtime_id increases with dispatch order, so the measured dispatch is the later of the two.
+    record = max(records, key=lambda record: record["runtime_id"])
+    duration_ns = record["duration_ns"]
+    expected_ns = perf_model(M, K, N, core_count, 2)
 
     util = expected_ns / duration_ns
     logger.info(f"Utilization: {util*100:.1f}%")

@@ -258,7 +258,7 @@ inline void vector_iota()
         asm volatile("v" #op ".vx v%c[dst], v%c[src1], %[val] \n" : : [dst] "i"(dest_vec_reg_no), [src1] "i"(src1_vec_reg_no), [val] "r"(val));     \
     }                                                                                                                                               \
     template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, std::int32_t imm>                                                                         \
-    inline void vector_##op()                                                                                                                       \
+    inline void vector_##op##_imm()                                                                                                                 \
     {                                                                                                                                               \
         if (imm < -16 || imm > 15)                                                                                                                  \
         {                                                                                                                                           \

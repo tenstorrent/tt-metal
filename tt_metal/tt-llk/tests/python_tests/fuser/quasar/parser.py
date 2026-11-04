@@ -6,13 +6,14 @@
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
 unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR),
-unary broadcast (COL/ROW/SCALAR).
-Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
-SubBcastColCustom.
+unary broadcast (COL/ROW/SCALAR), and experimental MatmulNoMop,
+ReduceBlockMaxRuntime, SubBcastColCustom.
 """
 
 from typing import Annotated, ClassVar, List, Union
 
+from fuser.fpu_node import FpuNode
+from fuser.fuser_config import GlobalConfig
 from fuser.validator import (
     ELTWISE_DIMS,
     IN0_REQUIRED,
@@ -33,44 +34,96 @@ from fuser.validator import (
     PACK_NO_L1_ACC,
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
+    SUB_BCAST_COL_REQUIRED,
+    TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
     reject,
     require_dest_tiles,
     require_src_a_tiles,
+    require_src_b_tiles,
 )
+from helpers.chip_architecture import ChipArchitecture
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
+    DestAccumulation,
+    MathFidelity,
     MathOperation,
     ReduceDimension,
+    ReducePool,
 )
 from pydantic import Field
 
 from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
+from .fpu.matmul_no_mop import MatmulNoMopFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
+from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
 from .fpu.transpose_dest import TransposeDestFpu
 from .fpu.unary_broadcast import UnaryBroadcastFpu
 from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
 from .unpacker.reduce_tilize_a import UnpackReduceTilize
+from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
+
+
+def _validate_math_fidelities(operation, config):
+    wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
+    config.sentinel.prepare_operation(config, operation)
+    output_format = operation._get_pack_nodes()[0].output.data_format
+    errors = []
+    for index, node in enumerate(operation.math_nodes, start=1):
+        if not isinstance(node, FpuNode) or node.math_fidelity == MathFidelity.LoFi:
+            continue
+        if not isinstance(node.fpu, (EltwiseFpu, MatmulFpu, ReduceFpu)):
+            continue
+        formats = config.sentinel._infer_node_formats(
+            config, node, output_format, operation
+        )
+        src_a, src_b = formats[1], formats[3]
+        if node.unpacker is not None:
+            src_a, src_b = node.unpacker.physical_order(src_a, src_b)
+        allowed = [MathFidelity.LoFi]
+        if src_a in wide_formats:
+            allowed.append(MathFidelity.HiFi2)
+        if src_b in wide_formats:
+            allowed.append(MathFidelity.HiFi3)
+        if src_a in wide_formats and src_b in wide_formats:
+            allowed.append(MathFidelity.HiFi4)
+        if node.math_fidelity not in allowed:
+            errors.append(
+                f"Math node {index} (Fpu)\n    Quasar "
+                f"{node.math_fidelity.name} has redundant fidelity phases for "
+                f"SrcA={src_a.name}, SrcB={src_b.name}; "
+                f"allowed fidelities: {', '.join(f.name for f in allowed)}"
+            )
+    if errors:
+        raise ValueError("\n".join(errors))
+
 
 _broadcast_required = reject(
     lambda s, a, b: s.broadcast_type == BroadcastType.None_,
@@ -83,7 +136,7 @@ _no_transpose_mismatch = reject(
 )
 
 _block_full_width = reject(
-    lambda s, a, b: s._block_size[1] != a.dimensions[1],
+    lambda s, a, b: s.block_size[1] != a.dimensions[1],
     "block width must be same as operand width",
 )
 
@@ -97,10 +150,29 @@ _eltwise_checks = [
     _no_transpose_mismatch,
     *eltwise_unpacker_rules,
     NO_BROADCAST_REUSE_DEST,
-    NO_BROADCAST_ACC_TO_DEST,
 ]
 
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
+
+_matmul_checks = [
+    NO_UNPACK_TO_DEST,
+    NO_REUSE_DEST,
+    NO_BROADCAST,
+    MATMUL_OPERAND_DIMS,
+    forced_unpackers("MatmulUnpacker"),
+    MATMUL_INNER_TILE_DIMS,
+]
+
+_experimental_unpacker_checks = [
+    IN0_REQUIRED,
+    IN1_REQUIRED,
+    NO_TRANSPOSE,
+    NO_UNPACK_TO_DEST,
+    reject(
+        lambda s, a, b: a.data_format.is_integer() or b.data_format.is_integer(),
+        "experimental kernels require floating-point operands",
+    ),
+]
 
 UNPACKER_MAP = {
     "UnpackerA": (
@@ -110,6 +182,12 @@ UNPACKER_MAP = {
             INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
+            reject(
+                lambda s, a, b: s.unpack_to_dest.value
+                and a.tile_shape.tile_dims != (32, 32),
+                "Quasar unpack_to_dest requires 32x32 tiles",
+            ),
         ],
     ),
     "UnpackerTilizeA": (
@@ -120,11 +198,27 @@ UNPACKER_MAP = {
             NO_TRANSPOSE,
             _block_full_width,
             NO_UNPACK_TO_DEST,
+            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
+        [
+            IN0_REQUIRED,
+            IN1_REQUIRED,
+            NO_TRANSPOSE,
+            require_src_a_tiles((32, 32), (16, 16), (32, 16), (16, 32), (1, 32)),
+            reject(
+                lambda s, a, b: a.tile_shape.tile_dims not in ((32, 32), (16, 16))
+                and s.broadcast_type != BroadcastType.None_,
+                "Quasar binary broadcast requires 32x32 or 16x16 tiles",
+            ),
+            reject(
+                lambda s, a, b: a.tile_shape.tile_dims != (32, 32)
+                and s.broadcast_type in (BroadcastType.Row, BroadcastType.Column),
+                "Quasar binary ROW/COL broadcast requires 32x32 tiles",
+            ),
+        ],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
@@ -133,6 +227,14 @@ UNPACKER_MAP = {
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
         [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
+    ),
+    "ReduceBlockMaxRuntimeUnpacker": (
+        lambda s: ReduceBlockMaxRuntimeUnpacker(),
+        _experimental_unpacker_checks,
+    ),
+    "SubBcastColCustomUnpacker": (
+        lambda s: SubBcastColCustomUnpacker(),
+        _experimental_unpacker_checks,
     ),
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
@@ -143,7 +245,7 @@ UNPACKER_MAP = {
         [IN0_REQUIRED, _broadcast_required, NO_TRANSPOSE, NO_UNPACK_TO_DEST],
     ),
     "UnpackReduceTilize": (
-        lambda s: UnpackReduceTilize(s.reduce_dim, s.reduce_pool),
+        lambda s: UnpackReduceTilize(s.reduce_pool),
         [
             IN0_REQUIRED,
             IN1_REQUIRED,
@@ -176,25 +278,76 @@ FPU_MAP = {
             NO_BROADCAST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
         ],
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
+        _matmul_checks,
+    ),
+    "MatmulNoMop": (
+        lambda s: MatmulNoMopFpu(),
+        [
+            *_matmul_checks,
+            require_src_a_tiles((32, 32)),
+            require_src_b_tiles((32, 32)),
+        ],
+    ),
+    "ReduceBlockMaxRuntime": (
+        lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             NO_REUSE_DEST,
             NO_BROADCAST,
-            MATMUL_OPERAND_DIMS,
-            forced_unpackers("MatmulUnpacker"),
-            MATMUL_INNER_TILE_DIMS,
+            forced_unpackers("ReduceBlockMaxRuntimeUnpacker"),
+            reject(
+                lambda s, a, b: s._dest_acc,
+                "Quasar ReduceBlockMaxRuntime requires dest_acc: false",
+            ),
+            require_src_a_tiles((32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)),
+        ],
+    ),
+    "SubBcastColCustom": (
+        lambda s: SubBcastColCustomFpu(),
+        [
+            NO_REUSE_DEST,
+            NO_BROADCAST_ACC_TO_DEST,
+            LOFI_ONLY,
+            SUB_BCAST_COL_REQUIRED,
+            forced_unpackers("SubBcastColCustomUnpacker"),
+            require_src_a_tiles((32, 32), (16, 32)),
         ],
     ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
+            NO_UNPACK_TO_DEST,
+            IN0_REQUIRED,
+            IN1_REQUIRED,
             NO_REUSE_DEST,
             NO_BROADCAST,
             REDUCE_PARAMS_REQUIRED,
             forced_unpackers("ReduceUnpacker", "UnpackReduceTilize"),
+            reject(
+                lambda s, a, b: s.reduce_pool == ReducePool.Max
+                and s.math_fidelity != MathFidelity.LoFi,
+                "Quasar MAX Reduce requires LoFi fidelity",
+            ),
+            reject(
+                lambda s, a, b: a.data_format.is_integer()
+                and a.tile_shape.tile_dims != (32, 32),
+                "Quasar integer Reduce requires 32x32 tiles",
+            ),
+            reject(
+                lambda s, a, b: a.data_format.is_integer()
+                and s.math_fidelity != MathFidelity.LoFi,
+                "Quasar integer Reduce requires LoFi fidelity",
+            ),
+            reject(
+                lambda s, a, b: a.data_format.is_integer()
+                and s.reduce_dim == ReduceDimension.Scalar
+                and s.reduce_pool != ReducePool.Max,
+                "Quasar integer scalar SUM/AVG is unsupported on the FPU",
+            ),
         ],
     ),
     "TransposeDest": (
@@ -239,7 +392,10 @@ OUTPUT_DIMS = {
     "Elwsub": ELTWISE_DIMS,
     "Datacopy": SRC_A_DIMS,
     "Matmul": MATMUL_DIMS,
+    "MatmulNoMop": MATMUL_DIMS,
     "Reduce": SRC_A_DIMS,
+    "ReduceBlockMaxRuntime": SRC_A_DIMS,
+    "SubBcastColCustom": SRC_A_DIMS,
     "TransposeDest": SRC_A_DIMS,
     "UnaryBroadcast": SRC_A_DIMS,
 }
@@ -247,6 +403,9 @@ OUTPUT_DIMS = {
 
 UNARY_SFPU_OPS = {
     MathOperation.Abs,
+    MathOperation.AbsInt32,
+    MathOperation.Fill,
+    MathOperation.Rand,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
@@ -263,6 +422,89 @@ UNARY_SFPU_OPS = {
     MathOperation.GreaterThanZero,
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
+    MathOperation.Signbit,
+    MathOperation.Hardsigmoid,
+    MathOperation.Celu,
+    MathOperation.Elu,
+    MathOperation.Hardmish,
+    MathOperation.Mish,
+    MathOperation.Hardshrink,
+    MathOperation.Hardtanh,
+    MathOperation.Heaviside,
+    MathOperation.Prelu,
+    MathOperation.Selu,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Threshold,
+    MathOperation.SigmoidAppx,
+    MathOperation.Tanhshrink,
+    MathOperation.Xielu,
+    MathOperation.Neg,
+    MathOperation.Dropout,
+    MathOperation.Add1,
+    MathOperation.Cbrt,
+    MathOperation.Exp2,
+    MathOperation.Expm1,
+    MathOperation.Rpow,
+    MathOperation.Sign,
+    MathOperation.UnaryPower,
+    MathOperation.UnaryPowerIterative,
+    MathOperation.Log,
+    MathOperation.Digamma,
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Erfinv,
+    MathOperation.I0,
+    MathOperation.I1,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+    MathOperation.Isinf,
+    MathOperation.Isposinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+    MathOperation.Isfinite,
+    MathOperation.LogicalNotUnary,
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
+    MathOperation.BitwiseNot,
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
+    MathOperation.RsubScalarInt32,
+    MathOperation.SumIntCol,
+    MathOperation.SumIntRow,
+    MathOperation.Fmod,
+    MathOperation.Remainder,
+    MathOperation.RemainderUint32,
+    MathOperation.Rdiv,
+    MathOperation.TiledProd,
+    MathOperation.Ema,
+    MathOperation.Identity,
+    MathOperation.CastFp32ToFp16a,
+    MathOperation.AltComplexRotate90,
+    MathOperation.Softcap,
+    MathOperation.TanhDerivative,
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
+    MathOperation.Asinh,
+    MathOperation.Acosh,
+    MathOperation.Atanh,
 }
 
 BINARY_SFPU_OPS = {
@@ -273,6 +515,40 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuElwLt,
     MathOperation.SfpuElwLe,
     MathOperation.SfpuElwGe,
+    MathOperation.SfpuLogsigmoid,
+    MathOperation.SfpuIsclose,
+    MathOperation.SfpuMask,
+    MathOperation.SfpuMaskPosinf,
+    MathOperation.SfpuIntMask,
+    MathOperation.SfpuBinaryFmod,
+    MathOperation.SfpuBinaryRemainder,
+    MathOperation.SfpuElwpow,
+    MathOperation.SfpuBitwiseAnd,
+    MathOperation.SfpuBitwiseOr,
+    MathOperation.SfpuBitwiseXor,
+    MathOperation.SfpuFmodInt32,
+    MathOperation.SfpuRemainderInt32,
+    MathOperation.SfpuRemainderUint32,
+    MathOperation.SfpuLgammaStirlingFp32,
+    MathOperation.SfpuRsubInt32,
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+    MathOperation.SfpuIntSumAdd,
+    MathOperation.SfpuClampedSiluGlu,
+    MathOperation.SfpuSituGlu,
+    MathOperation.SfpuLogaddexp,
+    MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuReshuffleRows,
+}
+
+
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
 }
 
 
@@ -285,15 +561,41 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _dropout_ops: ClassVar = {"Dropout"}
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _sign_magnitude_ops: ClassVar = {
+        "SfpuElwadd",
+        "SfpuElwmul",
+        "SfpuElwGt",
+        "SfpuElwLt",
+        "SfpuElwLe",
+        "SfpuElwGe",
+        "SfpuGcd",
+        "SfpuLcm",
+    }
+
+
+class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
+class QuasarTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
 
 
 MathSchema = Annotated[
-    Union[FpuMathSchema, QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        QuasarUnarySfpuMathSchema,
+        QuasarBinarySfpuMathSchema,
+        QuasarTernarySfpuMathSchema,
+        QuasarTopKSfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -303,12 +605,48 @@ class QuasarPackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema, QuasarPackSchema
+    QuasarUnarySfpuMathSchema,
+    QuasarBinarySfpuMathSchema,
+    QuasarTernarySfpuMathSchema,
+    QuasarTopKSfpuMathSchema,
+    QuasarPackSchema,
 ]
 
 
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
 
+    def _validate_sfpu_tile_shape(self, tile_shape, schemas):
+        for schema in schemas:
+            if not isinstance(schema, (UnarySfpuMathSchema, BinarySfpuMathSchema)):
+                continue
+            if tile_shape.face_r_dim != 16:
+                raise ValueError("Quasar SFPU requires 16-row faces")
+            if tile_shape.tile_dims == (32, 32):
+                continue
+            if isinstance(schema, UnarySfpuMathSchema):
+                allowed_iterations = ("tile", tile_shape.total_tile_size() // 32)
+                recommended = "tile"
+            elif isinstance(schema, TernarySfpuMathSchema):
+                continue  # Ternary iterations are already per face and fixed at eight.
+            else:
+                # Binary iterations: 32 supplies eight row-pair iterations to each selected face.
+                allowed_iterations = (32,)
+                recommended = 32
+            if schema.iterations not in allowed_iterations:
+                raise ValueError(
+                    f"Quasar {schema.type} on tiny tiles requires whole-tile iterations; "
+                    f"use iterations: {recommended}"
+                )
+
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)
+
+    def to_l1_operation(self, operands, dest_acc=False):
+        operation = super().to_l1_operation(operands, dest_acc)
+        config = GlobalConfig(
+            architecture=ChipArchitecture.QUASAR,
+            dest_acc=DestAccumulation(dest_acc),
+        )
+        _validate_math_fidelities(operation, config)
+        return operation

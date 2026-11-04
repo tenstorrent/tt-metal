@@ -9,11 +9,9 @@ import pytest
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
-)
+from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
     check_with_tolerances,
@@ -39,9 +37,12 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.39, 0.36),  # NuScenes tiny model
+        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.39, 0.36),  # Reduced sizes, 4 heads x 4 samples: "padded"
         ("nuscenes_base", 1, 10000, 0.999, 0.02, 0.21, 0.23),  # NuScenes base model with larger queries
         ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
+        # 8 heads x 8 samples, BEVFormer-small's and -tiny's SCA: "grouped", with its
+        # intermediates in L1 at 80000 queries.
+        ("nuscenes_small_upstream", 2, 40000, 0.999, 0.02, 0.21, 0.23),
     ],
 )
 @pytest.mark.parametrize("seed", [0])
@@ -60,21 +61,16 @@ def test_ms_deformable_attention_forward(
     torch.manual_seed(seed)
 
     # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
-    model_config = preset_config.model_config
+    config = PRESETS[config_name]
 
     # Extract parameters from configs
-    embed_dims = model_config.embed_dims
-    num_heads = model_config.num_heads
-    num_levels = model_config.num_levels
-    num_points = model_config.num_points
+    embed_dims = config.embed_dims
+    num_heads = config.num_heads
+    num_levels = config.num_levels
+    num_points = config.num_points
 
     # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes_list = config.spatial_shapes[:num_levels]
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
@@ -110,12 +106,7 @@ def test_ms_deformable_attention_forward(
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model,
-        device=device,
-        config=config,
-        dtype=ttnn.float32,
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     # Create ttnn model with preprocessed parameters
     tt_model = TTMSDeformableAttention(

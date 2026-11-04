@@ -46,6 +46,7 @@ def test_mean_pool(device, config, batch, seqlen):
     ref = postprocessing.mean_pool(x, mask)
     got = ttnn.to_torch(pooled).float().reshape(batch, config.hidden_size)
     assert tuple(pooled.shape) == (batch, 1, 1, config.hidden_size)
+    assert pooled.dtype == ttnn.float32, "l2_normalize is exact only on an fp32 mean"
     assert compute_max_abs_error(got, ref) < 1e-2, "the divisor is not the kept-token count"
     assert_with_pcc(ref.reshape(batch, 1, 1, config.hidden_size), pooled, MODULE_PCC)
 
@@ -88,6 +89,23 @@ def test_mean_pool_ignores_what_padding_holds(device, config, batch, seqlen):
     pooled_perturbed = pooling.mean_pool(to_device(to_block_layout(perturbed), device), mask_tt)
 
     assert torch.equal(ttnn.to_torch(pooled), ttnn.to_torch(pooled_perturbed))
+
+
+@pytest.mark.parametrize("batch, seqlen", [(2, 37), (2, 75)])
+def test_mean_pool_ignores_non_finite_tile_padding(device, config, batch, seqlen):
+    """The matmul's K runs over the tile padding of S, which the hidden states need not hold finite.
+
+    The MoE layer's output padding is unwritten (tt.common.unflatten_tokens) and the norms pass it
+    on. The weights are zero there, and on device zero times inf or NaN is zero, so the padding has
+    to drop out of the mean with no fill.
+    """
+    x = hidden_states(batch, seqlen, config.hidden_size)
+    mask_tt = pooling_mask(keep_mask(batch, seqlen, (seqlen * 3) // 4), device)
+    clean = pooling.mean_pool(to_device(to_block_layout(x), device), mask_tt)
+    # In place: the fill returns a tensor on the same buffer.
+    poisoned = ttnn.fill_implicit_tile_padding(to_device(to_block_layout(x), device), float("inf"))
+
+    assert torch.equal(ttnn.to_torch(pooling.mean_pool(poisoned, mask_tt)), ttnn.to_torch(clean))
 
 
 @pytest.mark.parametrize("dim", [768, 512, 256, 128])
@@ -140,7 +158,8 @@ def test_pool_truncate_normalize(device, config, batch, seqlen, dim):
     """The three steps in sequence, which is what the end-to-end model calls.
 
     The norm is asserted separately from PCC: PCC is insensitive to a uniform scale, so a
-    normalization that is off by a constant factor would still correlate.
+    normalization that is off by a constant factor would still correlate. On mean_pool's fp32
+    output it is exact to the tolerance here, where a bfloat16 mean left it within 0.5% of 1.
     """
     x = hidden_states(batch, seqlen, config.hidden_size)
     mask = keep_mask(batch, seqlen, (seqlen * 3) // 4)
@@ -151,5 +170,5 @@ def test_pool_truncate_normalize(device, config, batch, seqlen, dim):
 
     ref = postprocessing.l2_normalize(postprocessing.matryoshka_truncate(postprocessing.mean_pool(x, mask), dim))
     got = ttnn.to_torch(embeddings).float().reshape(batch, width)
-    assert torch.allclose(got.norm(dim=-1), torch.ones(batch), atol=1e-2)
+    assert torch.allclose(got.norm(dim=-1), torch.ones(batch), atol=1e-5)
     assert_with_pcc(ref.reshape(batch, 1, 1, width), embeddings, MODULE_PCC)

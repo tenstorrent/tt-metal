@@ -10,7 +10,7 @@
 #include "hostdev/dev_msgs.h"
 #include "hostdev/rta_constants.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "api/debug/waypoint.h"
@@ -22,7 +22,7 @@
 #include "internal/circular_buffer_init.h"
 #include "internal/hw_thread.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)

@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -23,10 +24,11 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -86,9 +88,15 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                                 : tt::tt_metal::NOC::RISCV_0_default;
             experimental::DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementGen2Config{};
+                dm_cfg = experimental::DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+                dm_cfg = experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = gen1_proc,
+                            .noc = gen1_noc,
+                        },
+                };
             }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},
@@ -109,11 +117,11 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
-        compute_config = experimental::ComputeGen2Config{};
+        compute_config = experimental::ComputeHardwareConfig{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
-        compute_config = experimental::ComputeGen1Config{};
+        compute_config = experimental::ComputeHardwareConfig{};
     }
     kernel_specs.push_back(experimental::KernelSpec{
         .unique_id = compute_kernel_name,
@@ -221,7 +229,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 }
 
 void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Metal 2.0 does not yet support ETH KernelSpecs";
@@ -246,7 +254,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> active_eth_args = {clk_mhz * 3000000};  // 3 seconds
     std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     if (has_active_eth_cores) {
         std::set<CoreRange> ranges;
@@ -348,6 +356,9 @@ TEST_F(MeshWatcherFixture, TestWatcherWaypoints) {
 }
 
 TEST_F(MeshWatcherFixture, TestWatcherWaypointsEth) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunEthTest, mesh_device);
     }
