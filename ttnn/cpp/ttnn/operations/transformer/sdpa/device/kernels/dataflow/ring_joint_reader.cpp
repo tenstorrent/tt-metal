@@ -419,7 +419,7 @@ void kernel_main() {
     constexpr auto sol_bias_args = TensorAccessorArgs<sol_bias_args_offset>();
     constexpr uint32_t sol_after_bias_offset =
         sol_gen_bias ? sol_after_pv_offset : sol_bias_args.next_compile_time_args_offset();
-    // Gather mode, per-block real-token counts: accessor after the bias's iff sol_has_counts.
+    // Gather and compact modes, per-block real-token counts: accessor after the bias's iff sol_has_counts.
     constexpr bool sol_has_counts = get_named_compile_time_arg_val("sol_has_counts") == 1;
     constexpr uint32_t sol_counts_args_offset =
         (sol_enabled && sol_has_counts) ? sol_after_bias_offset : kFirstAccessorArgOffset;
@@ -1104,9 +1104,9 @@ void kernel_main() {
         }
         return fill;
     };
-    // Gather mode with block counts: one tile row of column bias for a gathered chunk, 0 on real key columns and
-    // sol_prepass.NEG on columns [count, 64) of each block, identical in every row. Compute adds it to the chunk's
-    // QK^T before the max/exp, like the pooled-chunk bias.
+    // Block counts (gather and compact modes): one tile row of column bias for a chunk of kept blocks in slot order,
+    // 0 on real key columns and sol_prepass.NEG on columns [count, 64) of each block, identical in every row.
+    // Compute adds it to the chunk's QK^T before the max/exp, like the pooled-chunk bias.
     [[maybe_unused]] const auto sol_push_count_bias =
         [&](const uint32_t* block_ids, uint32_t n_blocks, CoreLocalMem<volatile uint32_t> block_counts) {
             static_assert(!sol_has_counts || sol_bias_tile_bytes == 2048, "sol bias tiles are Float16_b 32x32");
@@ -2334,6 +2334,8 @@ void kernel_main() {
 
                 // Chunk mode: chain-wide kept union for this stream position (== own mask off the chain).
                 [[maybe_unused]] uint32_t sol_union_lo = 0xffffffffu, sol_union_hi = 0xffffffffu;
+                // Compact mode with block counts: kept chunks holding a block with fewer than 64 real tokens.
+                [[maybe_unused]] uint32_t sol_ragged_lo = 0, sol_ragged_hi = 0;
                 if constexpr (sol_chunk_mode) {
                     // ---- Sol-Attn chunk mode: publish this (ring iter, Q chunk)'s kept-chunk bitmask, the pooled
                     // flag and the chain-union bitmask. The K/V stream below is the dense one (chains intact) minus
@@ -2431,6 +2433,31 @@ void kernel_main() {
                                 plan_words[w] = 0;
                             }
                         }
+                        // This shard's block counts follow the row slice in the plan page scratch; a kept chunk with
+                        // a partial block is ragged and gets a column-bias tile row after its K page.
+                        [[maybe_unused]] CoreLocalMem<volatile uint32_t> block_counts(
+                            mask_row_addr + sol_mask_row_bytes);
+                        if constexpr (sol_compact && sol_has_counts) {
+                            noc.async_read(
+                                sol_counts_reader,
+                                CoreLocalMem<uint32_t>(mask_row_addr + sol_mask_row_bytes),
+                                sol_nb_pad * sizeof(uint32_t),
+                                {.page_id = 0, .offset_bytes = ring_id * sol_nb_pad * sizeof(uint32_t)},
+                                {});
+                            noc.async_read_barrier();
+                        }
+                        const auto row_chunk_ragged = [&](uint32_t k) -> bool {
+                            if constexpr (sol_compact && sol_has_counts) {
+                                constexpr uint32_t bpc = Sk_chunk_t / kSolBlockTiles;
+                                for (uint32_t b = k * bpc; b < (k + 1) * bpc; ++b) {
+                                    if (sol_block_exact(mask_row, ring_id, b) &&
+                                        block_counts[b] < kSolBlockTiles * 32) {
+                                        return true;
+                                    }
+                                }
+                            }
+                            return false;
+                        };
                         uint32_t lo = 0, hi = 0;
                         [[maybe_unused]] uint32_t sol_total_kept = 0;
                         for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
@@ -2445,6 +2472,13 @@ void kernel_main() {
                                 if constexpr (sol_compact) {
                                     const uint32_t w = 8 + k / 4;
                                     plan_words[w] = plan_words[w] | (cnt << (8 * (k % 4)));
+                                }
+                                if (row_chunk_ragged(k)) {
+                                    if (k < 32) {
+                                        sol_ragged_lo |= 1u << k;
+                                    } else {
+                                        sol_ragged_hi |= 1u << (k - 32);
+                                    }
                                 }
                             }
                         }
@@ -2511,6 +2545,10 @@ void kernel_main() {
                         plan_words[2] = do_pooled;
                         plan_words[3] = ulo;
                         plan_words[4] = uhi;
+                        if constexpr (sol_compact) {
+                            plan_words[6] = sol_ragged_lo;
+                            plan_words[7] = sol_ragged_hi;
+                        }
                         cb_plan.push_back(1);
                     }
                 }
@@ -2916,6 +2954,27 @@ void kernel_main() {
                     if constexpr (!sol_pack) {
                         cb_k.push_back(k_chunk_tiles);
                         KV_chunks_processed_in_iter++;
+                    }
+                    if constexpr (sol_compact && sol_has_counts) {
+                        // Ragged kept chunk: its column bias, in the compacted slot order, between K and V as in
+                        // gather mode.
+                        const bool ragged = k_chunk < 32 ? ((sol_ragged_lo >> k_chunk) & 1u) != 0
+                                                         : ((sol_ragged_hi >> (k_chunk - 32)) & 1u) != 0;
+                        if (!is_padded_iter && ragged) {
+                            constexpr uint32_t bpc = Sk_chunk_t / kSolBlockTiles;
+                            CoreLocalMem<volatile uint32_t> row(sol_row_addr);
+                            uint32_t block_ids[bpc];
+                            uint32_t n_blocks = 0;
+                            for (uint32_t b = k_chunk * bpc; b < (k_chunk + 1) * bpc; ++b) {
+                                if (sol_block_exact(row, ring_id, b)) {
+                                    block_ids[n_blocks++] = b;
+                                }
+                            }
+                            sol_push_count_bias(
+                                block_ids,
+                                n_blocks,
+                                CoreLocalMem<volatile uint32_t>(sol_row_addr + sol_mask_row_bytes));
+                        }
                     }
 
                     // Download Q on the first K iteration — after K is downloaded and forwarded.

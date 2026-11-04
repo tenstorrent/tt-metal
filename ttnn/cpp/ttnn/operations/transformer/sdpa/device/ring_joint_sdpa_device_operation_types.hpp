@@ -213,8 +213,8 @@ struct RingJointSDPAInputs {
     //   sol_row_max     Optional bf16 tile [1, NH, q_rows_pad, 32] (q_rows_pad = the local Q shard's padded row
     //                   count); accepted by sol_mode="resident" only and shape-validated, but ignored: resident
     //                   compute always runs its own (lazy) running row max. Omit it.
-    //   sol_block_counts OPTIONAL uint32 row-major [1, 1, 1, n_blocks_pad], gather mode only: real tokens per global
-    //                   padded block (64, 1..63, or 0). A gathered block with count < 64 has its key columns
+    //   sol_block_counts OPTIONAL uint32 row-major [1, 1, 1, n_blocks_pad], gather and compact modes: real tokens
+    //                   per global padded block (64, 1..63, or 0). A kept block with count < 64 has its key columns
     //                   [count, 64) set to a large negative before the max/exp, so a block whose tail rows are
     //                   padding attends only its real tokens.
     std::optional<Tensor> sol_block_mask;

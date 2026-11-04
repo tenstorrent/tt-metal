@@ -219,6 +219,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        self._vsa_prefix_rows = 0
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
@@ -528,7 +529,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None),
+            tracer_trace_key=(pad_to, adaln_tile_map is not None, self._vsa_prefix_rows),
         )
 
         hidden = self.norm_out(
@@ -586,8 +587,14 @@ class MiniMaxH3Transformer3DModel(Module):
             ttnn.deallocate(tilerow[1])
         return hidden
 
+    def vsa_q_chunk(self, rows: int) -> int:
+        """The attention's query chunk at `rows` per device, which a rung's VSA pre-pass is built for."""
+        return self.transformer_blocks[0].attn.ring_sdpa_q_chunk(rows)
+
     def set_vsa_prepass(self, prepass: VSAPrepass) -> None:
         """Bind one geometry's VSA pre-pass to every block: its constants are shared across layers."""
+        # The prefix recompute's shapes follow the prefix length, so a rung's trace is per prefix length.
+        self._vsa_prefix_rows = prepass.prefix_rows
         for block in self.transformer_blocks:
             block.attn.set_vsa_prepass(prepass)
 

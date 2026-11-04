@@ -295,6 +295,19 @@ def upload_rope(rope_cos: torch.Tensor, rope_sin: torch.Tensor, *, mesh_device, 
     return _upload(rope_cos), _upload(rope_sin)
 
 
+def format_host_times(host_ms: dict[str, float], breakdown: dict[str, dict[str, float]]) -> str:
+    """One line per step and the total; a step in `breakdown` also lists its sub-steps and the unaccounted rest."""
+    lines = []
+    for name, ms in host_ms.items():
+        lines.append(f"  {name:<26} {ms:10.3f} ms")
+        sub = breakdown.get(name, {})
+        lines += [f"    {sub_name:<24} {sub_ms:10.3f} ms" for sub_name, sub_ms in sub.items()]
+        if sub:
+            lines.append(f"    {'other':<24} {ms - sum(sub.values()):10.3f} ms")
+    lines.append(f"  {'total':<26} {sum(host_ms.values()):10.3f} ms")
+    return "\n".join(lines)
+
+
 def build_visual_encoder(config: dict, mesh_device, num_frames: int, **overrides):
     from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 

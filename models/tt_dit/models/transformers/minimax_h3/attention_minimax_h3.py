@@ -17,15 +17,14 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .sol_prepass import BLOCK as SOL_BLOCK
-from .sol_prepass import SolGeometry, SolPrepass
+from .sol_prepass import PREFIX_EXTRA, SolGeometry, SolPrepass
 from .sol_prepass_fused import SolPrepassFused
-from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, _timed
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -164,6 +163,7 @@ class MiniMaxH3Attention(Module):
         # ring, instead of an all-gather; SOL_PREFIX_BROADCAST=0 forces the all-gather.
         self.sol_prefix_broadcast = os.environ.get("SOL_PREFIX_BROADCAST", "1") != "0"
         self._sol_prefix_cache: dict = {}
+        self._sol_marker_cache: dict = {}
         self.sol_mode = sol_mode  # "gather" (block gathering, chains off) or "chunk" (compute skip, chains on)
         self.sol_fused = (
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
@@ -647,34 +647,38 @@ class MiniMaxH3Attention(Module):
     def sol_dense_prefix(self, value: bool) -> None:
         self.sol_prefix_mode = "fused" if value else "off"
 
-    # Spare channel block appended to Q/K/V for the prefix recompute: channel `head_dim` carries the marker.
-    _SOL_PREFIX_EXTRA = 32
     # Q's marker value; a pad key's marker is -1, so its logit is -_SOL_PREFIX_MARK * scale (-362 at head_dim
     # 128): exp() of that is exactly 0 next to the probe key's logit of 0. Exact in bf16.
     _SOL_PREFIX_MARK = 4096.0
 
-    def _sol_prefix_rows(self, rows: int) -> int:
+    def _sol_prefix_rows(self) -> int:
         """Query rows the prefix covers: whole 64-token blocks whose first token lies before `sol_sink_tokens`."""
-        n_pre = -(-self.sol_sink_tokens // SOL_BLOCK) * SOL_BLOCK
-        assert n_pre <= rows, f"prefix of {n_pre} rows does not fit the {rows}-row shard"
-        assert n_pre % ttnn.TILE_SIZE == 0, n_pre
-        return n_pre
+        return -(-self.sol_sink_tokens // SOL_BLOCK) * SOL_BLOCK
 
-    def _sol_prefix_consts(self, rows: int, n_pre: int) -> dict:
-        """Per-request constants for `_sol_prefix_dense_rows`, rebuilt only when the geometry changes."""
-        key = (rows, n_pre, self.sol_logical_n)
-        if self._sol_prefix_cache.get("key") == key:
+    def _sol_prefix_marker(self, rows: int) -> ttnn.Tensor:
+        """-1 in the marker channel of every key row chip s must not attend -- rows past its valid length (the
+        logical_n tail; the whole shard when it lies entirely in the tail) and the recompute's extra rows, except
+        the probe key in the last one. Rebuilt only when the geometry changes."""
+        key = (rows, self.sol_logical_n)
+        if self._sol_marker_cache.get("key") != key:
+            sp = self.parallel_config.sequence_parallel.factor
+            D, X = self.head_dim, PREFIX_EXTRA
+            marker = torch.zeros(sp, 1, rows + X, D + X)
+            for s in range(sp):
+                valid = max(0, min(rows, self.sol_logical_n - s * rows))
+                marker[s, 0, valid : rows + X - 1, D] = -1.0
+            self._sol_marker_cache = dict(
+                key=key, marker=bf16_tensor(marker, device=self.mesh_device, mesh_axis=self.sp_mesh_axis, shard_dim=0)
+            )
+        return self._sol_marker_cache["marker"]
+
+    def _sol_prefix_consts(self, rows: int) -> dict:
+        """Constants of `_sol_prefix_dense_rows` that depend on the shard size only."""
+        if self._sol_prefix_cache.get("rows") == rows:
             return self._sol_prefix_cache
         sp = self.parallel_config.sequence_parallel.factor
-        D, X = self.head_dim, self._SOL_PREFIX_EXTRA
+        D, X = self.head_dim, PREFIX_EXTRA
         R = rows + X  # 32 extra key rows: padding, with the probe key in the last one
-        # marker[s]: -1 in the marker channel of every key row chip s must not attend -- rows past its valid
-        # length (the logical_n tail; the whole shard when it lies entirely in the tail) and the 31 pad rows.
-        marker = torch.zeros(sp, 1, R, D + X)
-        for s in range(sp):
-            valid = max(0, min(rows, self.sol_logical_n - s * rows))
-            marker[s, 0, valid:, D] = -1.0
-            marker[s, 0, R - 1, D] = 0.0  # the probe key: K = 0, so its logit is 0 for every query
         probe = torch.zeros(1, 1, R, D + X)
         probe[0, 0, R - 1, D] = 1.0  # the probe key's V: a unit vector in the marker channel
         qmark = torch.zeros(1, 1, 1, D + X)
@@ -682,17 +686,18 @@ class MiniMaxH3Attention(Module):
         colfix = torch.ones(1, 1, 1, X)  # 0 in the marker column, 1 elsewhere: keeps 1/x finite off-column
         colfix[..., 0] = 0.0
         onehot = 1.0 - colfix
-        flag = torch.zeros(sp, 1, 1, 1)  # 1 on the ring's first chip, whose rows are the real prefix
-        flag[0] = 1.0
+        # flags[c]: 1 on ring chip c, whose rows are overwritten, 0 elsewhere
+        flags = torch.zeros(sp, sp, 1, 1, 1)
+        for c in range(sp):
+            flags[c, c] = 1.0
         dev, sp_axis = self.mesh_device, self.sp_mesh_axis
         self._sol_prefix_cache = dict(
-            key=key,
-            marker=bf16_tensor(marker, device=dev, mesh_axis=sp_axis, shard_dim=0),
+            rows=rows,
             probe=bf16_tensor(probe, device=dev),
             qmark=bf16_tensor(qmark, device=dev),
             colfix=bf16_tensor(colfix, device=dev),
             onehot=bf16_tensor(onehot, device=dev),
-            flag=bf16_tensor(flag, device=dev, mesh_axis=sp_axis, shard_dim=0),
+            flags=[bf16_tensor(flag, device=dev, mesh_axis=sp_axis, shard_dim=0) for flag in flags],
             # Plain SDPA over the full grid (no CCL column to reserve). 128-row Q chunks keep the 160-wide
             # CBs well inside L1 and give 10 x n_local_heads work items.
             cfg=ttnn.SDPAProgramConfig(
@@ -705,106 +710,123 @@ class MiniMaxH3Attention(Module):
         return self._sol_prefix_cache
 
     def _sol_prefix_dense_rows(
-        self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, out_BHNE: ttnn.Tensor
+        self,
+        q_BHNE: ttnn.Tensor,
+        k_BHNE: ttnn.Tensor,
+        v_BHNE: ttnn.Tensor,
+        out_BHNE: ttnn.Tensor,
+        n_pre: int,
+        marker: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Exact attention for the prefix query rows, as a separate op after the sparse ring op.
+        """Exact attention for the first `n_pre` query rows of the sequence, as a separate op after the sparse
+        ring op. `marker` is the per-chip [1, 1, rows + PREFIX_EXTRA, head_dim + PREFIX_EXTRA] tensor with -1 in
+        channel `head_dim` of every key row the chip must not attend.
 
-        The prefix rows live on the ring's first chip. Every chip gets a copy of them (one all-gather), runs
-        a plain dense SDPA of those rows against its OWN K/V shard, and the per-chip partial results are merged
-        the way ring attention merges them -- which needs each chip's softmax normalizer Z_r. The plain SDPA
-        does not output it, so the inputs carry a marker: 32 spare channels are appended to Q/K/V; one probe
-        key (K = 0, V = unit vector in the spare channel) is appended to each shard, so the spare channel of
-        the output is exactly 1 / (Z_r + 1); pad keys get a -1 in the spare channel of K against a +4096 in
-        Q, which masks them (logit -362) without an attn_mask tensor. One all-reduce then sums the
-        renormalized numerators and the Z_r, and the first chip's rows are overwritten with the quotient.
-        Every chip attends only its own keys, so the dense work is spread over the ring instead of landing
-        on the first chip's cores (the "fused" prefix mode).
+        The prefix rows fill the ring's first chip, then the next, and so on. For each chip holding prefix
+        rows, every chip gets a copy of them (one broadcast), runs a plain dense SDPA of those rows against its
+        OWN K/V shard, and the per-chip partial results are merged the way ring attention merges them -- which
+        needs each chip's softmax normalizer Z_r. The plain SDPA does not output it, so the inputs carry a
+        marker: 32 spare channels are appended to Q/K/V; one probe key (K = 0, V = unit vector in the spare
+        channel) is appended to each shard, so the spare channel of the output is exactly 1 / (Z_r + 1); masked
+        keys get a -1 in the spare channel of K against a +4096 in Q, which masks them (logit -362) without an
+        attn_mask tensor. One all-reduce then sums the renormalized numerators and the Z_r, and the owning
+        chip's rows are overwritten with the quotient. Every chip attends only its own keys, so the dense work
+        is spread over the ring instead of landing on the owning chip's cores (the "fused" prefix mode).
         """
-        rows, H, D, X = q_BHNE.shape[2], self.n_local_heads, self.head_dim, self._SOL_PREFIX_EXTRA
-        n_pre = self._sol_prefix_rows(rows)
+        rows, H, D, X = q_BHNE.shape[2], self.n_local_heads, self.head_dim, PREFIX_EXTRA
         if n_pre == 0:
             return out_BHNE
-        c = self._sol_prefix_consts(rows, n_pre)
+        assert n_pre % ttnn.TILE_SIZE == 0, n_pre
+        assert n_pre <= rows * self.parallel_config.sequence_parallel.factor, (n_pre, rows)
+        c = self._sol_prefix_consts(rows)
         ccl, sp_axis = self.ccl_manager, self.sp_mesh_axis
 
-        # 1. the prefix queries, from the ring's first chip to every chip. The one-sender ring broadcast
-        # (per ring line, so the TP-sharded heads are fine) moves the prefix once around the ring; without it,
-        # an all-gather moves one copy per chip and the first chip's copy is kept.
-        q_pre = ttnn.slice(q_BHNE, [0, 0, 0, 0], [1, H, n_pre, D])
-        if self.sol_prefix_broadcast and hasattr(ttnn.experimental, "broadcast_ring"):
-            q_bc = ttnn.experimental.broadcast_ring(
-                q_pre,
-                sender_ring_index=0,
-                cluster_axis=sp_axis,
-                num_links=ccl.num_links,
-                topology=ccl.topology,
-                subdevice_id=ccl.ccl_sub_device_id,
-            )
-            ttnn.deallocate(q_pre)
-        else:
-            q_all = ccl.all_gather(q_pre, dim=0, mesh_axis=sp_axis, use_hyperparams=False)  # [sp, H, n_pre, D]
-            ttnn.deallocate(q_pre)
-            q_bc = ttnn.slice(q_all, [0, 0, 0, 0], [1, H, n_pre, D])
-            ttnn.deallocate(q_all)
-
-        # 2. marked inputs with the spare channel block (and, for K/V, the probe row)
-        qx = ttnn.add(ttnn.pad(q_bc, [(0, 0), (0, 0), (0, 0), (0, X)], 0.0), c["qmark"])
-        ttnn.deallocate(q_bc)
-        kx = ttnn.add(ttnn.pad(k_BHNE, [(0, 0), (0, 0), (0, X), (0, X)], 0.0), c["marker"])
+        # marked K/V with the spare channel block and the probe row, shared by every prefix chip's rows
+        kx = ttnn.add(ttnn.pad(k_BHNE, [(0, 0), (0, 0), (0, X), (0, X)], 0.0), marker)
         vx = ttnn.add(ttnn.pad(v_BHNE, [(0, 0), (0, 0), (0, X), (0, X)], 0.0), c["probe"])
+        for chip in range(-(-n_pre // rows)):
+            n_c = min(rows, n_pre - chip * rows)
+            # 1. the prefix queries, from the owning chip to every chip. The one-sender ring broadcast (per
+            # ring line, so the TP-sharded heads are fine) moves the prefix once around the ring; without it,
+            # an all-gather moves one copy per chip and the owning chip's copy is kept.
+            q_pre = ttnn.slice(q_BHNE, [0, 0, 0, 0], [1, H, n_c, D])
+            if self.sol_prefix_broadcast and hasattr(ttnn.experimental, "broadcast_ring"):
+                q_bc = ttnn.experimental.broadcast_ring(
+                    q_pre,
+                    sender_ring_index=chip,
+                    cluster_axis=sp_axis,
+                    num_links=ccl.num_links,
+                    topology=ccl.topology,
+                    subdevice_id=ccl.ccl_sub_device_id,
+                )
+                ttnn.deallocate(q_pre)
+            else:
+                q_all = ccl.all_gather(q_pre, dim=0, mesh_axis=sp_axis, use_hyperparams=False)  # [sp, H, n_c, D]
+                ttnn.deallocate(q_pre)
+                q_bc = ttnn.slice(q_all, [chip, 0, 0, 0], [chip + 1, H, n_c, D])
+                ttnn.deallocate(q_all)
 
-        # 3. dense attention of the prefix rows against this chip's shard
-        ox = ttnn.transformer.scaled_dot_product_attention(
-            qx,
-            kx,
-            vx,
-            is_causal=False,
-            scale=D**-0.5,  # the real head_dim's scale, not the padded width's
-            program_config=c["cfg"],
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-        )
-        for t in (qx, kx, vx):
-            ttnn.deallocate(t)
-        o_part = ttnn.slice(ox, [0, 0, 0, 0], [1, H, n_pre, D])  # N_r / (Z_r + 1)
-        p = ttnn.slice(ox, [0, 0, 0, D], [1, H, n_pre, D + X])  # column 0: 1 / (Z_r + 1)
-        ttnn.deallocate(ox)
+            # 2. marked queries with the spare channel block
+            qx = ttnn.add(ttnn.pad(q_bc, [(0, 0), (0, 0), (0, 0), (0, X)], 0.0), c["qmark"])
+            ttnn.deallocate(q_bc)
 
-        # 4. per-chip normalizer and renormalized numerator: A_r = Z_r + 1, N_r = o_part * A_r
-        a = ttnn.reciprocal(ttnn.add(p, c["colfix"]))  # column 0: A_r; other columns: 1
-        ttnn.deallocate(p)
-        a0 = ttnn.sum(ttnn.multiply(a, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_pre, 1]
-        num = ttnn.multiply(o_part, a0)
-        ttnn.deallocate(o_part)
-        z = ttnn.subtract(a, 1.0)  # column 0: Z_r; other columns: 0
-        ttnn.deallocate(a)
-        packed = ttnn.concat([num, z], dim=3)  # [1, H, n_pre, D + X]
-        ttnn.deallocate(num)
-        ttnn.deallocate(z)
+            # 3. dense attention of the prefix rows against this chip's shard
+            ox = ttnn.transformer.scaled_dot_product_attention(
+                qx,
+                kx,
+                vx,
+                is_causal=False,
+                scale=D**-0.5,  # the real head_dim's scale, not the padded width's
+                program_config=c["cfg"],
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )
+            ttnn.deallocate(qx)
+            o_part = ttnn.slice(ox, [0, 0, 0, 0], [1, H, n_c, D])  # N_r / (Z_r + 1)
+            p = ttnn.slice(ox, [0, 0, 0, D], [1, H, n_c, D + X])  # column 0: 1 / (Z_r + 1)
+            ttnn.deallocate(ox)
 
-        # 5. one all-reduce over the ring: sum of N_r next to sum of Z_r
-        total = ccl.all_gather(
-            ccl.reduce_scatter(packed, dim=2, mesh_axis=sp_axis), dim=2, mesh_axis=sp_axis, use_hyperparams=False
-        )
-        ttnn.deallocate(packed)
-        n_sum = ttnn.slice(total, [0, 0, 0, 0], [1, H, n_pre, D])
-        z_cols = ttnn.slice(total, [0, 0, 0, D], [1, H, n_pre, D + X])
-        ttnn.deallocate(total)
-        z_sum = ttnn.sum(ttnn.multiply(z_cols, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_pre, 1]
-        ttnn.deallocate(z_cols)
-        merged = ttnn.multiply(n_sum, ttnn.reciprocal(z_sum))
-        ttnn.deallocate(n_sum)
+            # 4. per-chip normalizer and renormalized numerator: A_r = Z_r + 1, N_r = o_part * A_r
+            a = ttnn.reciprocal(ttnn.add(p, c["colfix"]))  # column 0: A_r; other columns: 1
+            ttnn.deallocate(p)
+            a0 = ttnn.sum(ttnn.multiply(a, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_c, 1]
+            num = ttnn.multiply(o_part, a0)
+            ttnn.deallocate(o_part)
+            z = ttnn.subtract(a, 1.0)  # column 0: Z_r; other columns: 0
+            ttnn.deallocate(a)
+            packed = ttnn.concat([num, z], dim=3)  # [1, H, n_c, D + X]
+            ttnn.deallocate(num)
+            ttnn.deallocate(z)
 
-        # 6. overwrite the prefix rows on the ring's first chip only (its `flag` is 1, the others' 0)
-        out_pre = ttnn.slice(out_BHNE, [0, 0, 0, 0], [1, H, n_pre, D])
-        out_rest = ttnn.slice(out_BHNE, [0, 0, n_pre, 0], [1, H, rows, D])
-        sel = ttnn.add(out_pre, ttnn.multiply(ttnn.subtract(merged, out_pre), c["flag"]))
-        ttnn.deallocate(merged)
-        ttnn.deallocate(out_pre)
-        new_out = ttnn.concat([sel, out_rest], dim=2)
-        ttnn.deallocate(sel)
-        ttnn.deallocate(out_rest)
-        ttnn.deallocate(out_BHNE)
-        return new_out
+            # 5. one all-reduce over the ring: sum of N_r next to sum of Z_r
+            total = ccl.all_gather(
+                ccl.reduce_scatter(packed, dim=2, mesh_axis=sp_axis), dim=2, mesh_axis=sp_axis, use_hyperparams=False
+            )
+            ttnn.deallocate(packed)
+            n_sum = ttnn.slice(total, [0, 0, 0, 0], [1, H, n_c, D])
+            z_cols = ttnn.slice(total, [0, 0, 0, D], [1, H, n_c, D + X])
+            ttnn.deallocate(total)
+            z_sum = ttnn.sum(ttnn.multiply(z_cols, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_c, 1]
+            ttnn.deallocate(z_cols)
+            merged = ttnn.multiply(n_sum, ttnn.reciprocal(z_sum))
+            ttnn.deallocate(n_sum)
+
+            # 6. overwrite the prefix rows on the owning chip only (its flag is 1, the others' 0)
+            out_pre = ttnn.slice(out_BHNE, [0, 0, 0, 0], [1, H, n_c, D])
+            sel = ttnn.add(out_pre, ttnn.multiply(ttnn.subtract(merged, out_pre), c["flags"][chip]))
+            ttnn.deallocate(merged)
+            ttnn.deallocate(out_pre)
+            if n_c < rows:
+                out_rest = ttnn.slice(out_BHNE, [0, 0, n_c, 0], [1, H, rows, D])
+                new_out = ttnn.concat([sel, out_rest], dim=2)
+                ttnn.deallocate(sel)
+                ttnn.deallocate(out_rest)
+            else:
+                new_out = sel
+            ttnn.deallocate(out_BHNE)
+            out_BHNE = new_out
+        ttnn.deallocate(kx)
+        ttnn.deallocate(vx)
+        return out_BHNE
 
     # Resident mode: the op streams each K/V piece once per core and applies it to every resident 64-row query
     # chunk, so the query chunk is the 64-token block (no union over blocks). The exact set is per 64-token block:
@@ -883,18 +905,24 @@ class MiniMaxH3Attention(Module):
         assert self.vsa_config is not None, "set_vsa_prepass requires the attention to be built with vsa_config"
         self.vsa_prepass = prepass
 
+    def ring_sdpa_q_chunk(self, rows: int) -> int:
+        """The query chunk of the ring op at `rows` per device; the VSA pre-pass builds its mask per chunk."""
+        return self._sdpa_program_config(rows, ring=True).q_chunk_size
+
     def _sparse_attention(self, q_BHNE, k_BHNE, v_BHNE, logical_n, routing: dict) -> ttnn.Tensor:
         """Block-sparse ring attention over `routing["block_mask"]`, kept blocks only.
 
-        The Sol op in gather mode without pooled K/V, so it runs the exact step over the kept blocks only; q_chunk 64
-        makes one mask row per query tile.
+        The Sol op in gather mode without pooled K/V, so it runs the exact step over the kept blocks only, with the
+        dense call's chunk sizes (the mask has one row per query chunk); the block counts mask the pad rows of partial
+        blocks. Compact mode (K/V streamed through the chains, kept blocks left-justified per chunk) also supports the
+        block counts, and measured slower at this density: the chain streams every chunk any chain member keeps.
         """
         return self._ring_attention(
             q_BHNE,
             k_BHNE,
             v_BHNE,
             logical_n,
-            self._sdpa_program_config(q_BHNE.shape[2], ring=True, q_chunk=VSA_TILE_TOKENS),
+            self._sdpa_program_config(q_BHNE.shape[2], ring=True),
             dict(
                 sol_block_mask=routing["block_mask"],
                 sol_block_counts=routing["block_counts"],
@@ -953,6 +981,7 @@ class MiniMaxH3Attention(Module):
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
+        timings: dict[str, float] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -966,6 +995,7 @@ class MiniMaxH3Attention(Module):
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
         cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
             tensor), plain-SDPA (non-ring) path only.
+        timings: when given, receives each section's host wall time in ms, the device drained at the end of each.
 
         Returns the attention output with the same distribution as the input.
         """
@@ -998,18 +1028,20 @@ class MiniMaxH3Attention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
-        q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
-            spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
-            parallel_config=matmul_parallel_config,
-            default_block_size=(
-                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
-                if self.use_fused_agmm
-                else None
-            ),
-            force_transpose=False,
-            use_persistent_buffer=self.use_persistent_ccl_buffers,
-        )
+        sync = self.mesh_device
+        with _timed(timings, "to_qkv", sync=sync):
+            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=matmul_parallel_config,
+                default_block_size=(
+                    agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                    if self.use_fused_agmm
+                    else None
+                ),
+                force_transpose=False,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
+            )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -1029,9 +1061,10 @@ class MiniMaxH3Attention(Module):
             rope_sin=rope_sin,
             trans_mat=self.rope_trans_mat if rope_cos is not None else None,
         )
-        q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
-        k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
-        v_BHNE = create_heads(v_1BNF)
+        with _timed(timings, "qk norm + rope", sync=sync):
+            q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
+            k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
+            v_BHNE = create_heads(v_1BNF)
 
         block_input_1BND = spatial_1BND
         coarse_1BND = None
@@ -1039,89 +1072,109 @@ class MiniMaxH3Attention(Module):
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
         if self.vsa_prepass is not None:
-            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE)
-            spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, logical_n, routing)
-            coarse_1BND = routing["coarse_out"]
-            ttnn.deallocate(routing["block_mask"])
-        elif exp_program_config is not None:
-            spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                joint_strategy="rear",
-                logical_n=logical_n,
-                program_config=exp_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis),
-                num_links=self.ccl_manager.num_links,
-                cluster_axis=self.sp_mesh_axis,
-                mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
-                subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                num_workers_per_link=5,
-                num_buffers_per_channel=32,
-            )
-        elif self.use_ring:
-            sol_kwargs = {}
-            if self.sol_attn and self.sol_active:
-                sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
-            if sol_kwargs and self.sol_mode == "resident" and self._SOL_RESIDENT_PASSES > 1:
-                spatial_BHNE = self._sol_resident_multipass(q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs)
-            else:
-                spatial_BHNE = self._ring_attention(
+            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE, timings=timings)
+            with _timed(timings, "vsa fine", sync=sync):
+                spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, logical_n, routing)
+            with _timed(timings, "vsa prefix dense rows", sync=sync):
+                spatial_BHNE = self._sol_prefix_dense_rows(
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
-                    logical_n,
-                    self._sdpa_program_config(
-                        q_BHNE.shape[2],
-                        ring=True,
-                        q_chunk=self._sol_q_chunk if sol_kwargs else None,
-                        k_chunk=self._sol_k_chunk if sol_kwargs else None,
-                    ),
-                    sol_kwargs,
+                    spatial_BHNE,
+                    self.vsa_prepass.prefix_rows,
+                    self.vsa_prepass.prefix_marker.value,
                 )
+            coarse_1BND = routing["coarse_out"]
+            ttnn.deallocate(routing["block_mask"])
+        elif exp_program_config is not None:
+            with _timed(timings, "exp ring sdpa", sync=sync):
+                spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    self.dummy_joint_input,
+                    self.dummy_joint_input,
+                    self.dummy_joint_input,
+                    persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                        k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
+                    ),
+                    persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                        v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
+                    ),
+                    joint_strategy="rear",
+                    logical_n=logical_n,
+                    program_config=exp_program_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    dim=2,
+                    multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis),
+                    num_links=self.ccl_manager.num_links,
+                    cluster_axis=self.sp_mesh_axis,
+                    mesh_device=self.mesh_device,
+                    topology=self.ccl_manager.topology,
+                    subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                    num_workers_per_link=5,
+                    num_buffers_per_channel=32,
+                )
+        elif self.use_ring:
+            sol_kwargs = {}
+            if self.sol_attn and self.sol_active:
+                with _timed(timings, "sol prepass", sync=sync):
+                    sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
+            if sol_kwargs and self.sol_mode == "resident" and self._SOL_RESIDENT_PASSES > 1:
+                with _timed(timings, "sol resident ring sdpa", sync=sync):
+                    spatial_BHNE = self._sol_resident_multipass(q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs)
+            else:
+                with _timed(timings, "sol ring sdpa" if sol_kwargs else "ring sdpa", sync=sync):
+                    spatial_BHNE = self._ring_attention(
+                        q_BHNE,
+                        k_BHNE,
+                        v_BHNE,
+                        logical_n,
+                        self._sdpa_program_config(
+                            q_BHNE.shape[2],
+                            ring=True,
+                            q_chunk=self._sol_q_chunk if sol_kwargs else None,
+                            k_chunk=self._sol_k_chunk if sol_kwargs else None,
+                        ),
+                        sol_kwargs,
+                    )
             if sol_kwargs and self.sol_prefix_mode == "separate":
-                spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
+                with _timed(timings, "sol prefix dense rows", sync=sync):
+                    rows = q_BHNE.shape[2]
+                    spatial_BHNE = self._sol_prefix_dense_rows(
+                        q_BHNE, k_BHNE, v_BHNE, spatial_BHNE, self._sol_prefix_rows(), self._sol_prefix_marker(rows)
+                    )
         else:
-            spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                cu_window_seqlens=cu_window_seqlens,
-                is_causal=False,
-                program_config=self._sdpa_program_config(
-                    q_BHNE.shape[2], ring=False, windowed=cu_window_seqlens is not None
-                ),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-            )
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
-        spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
-        if coarse_1BND is not None:
-            # Gate and coarse output are both [1, 1, rows, H * D], so the gated add needs no head split.
-            gate_1BND = self.to_gate_compress(
-                block_input_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=matmul_parallel_config,
-                default_block_size=agmm_block_size(
-                    self.hidden_size, self.inner_dim // tp_factor, block_input_1BND.padded_shape[-2]
-                ),
-                force_transpose=False,
-                use_persistent_buffer=self.use_persistent_ccl_buffers,
-            )
-            spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BND, coarse_1BND)
-            ttnn.deallocate(gate_1BND)
-            ttnn.deallocate(coarse_1BND)
+            with _timed(timings, "windowed sdpa" if cu_window_seqlens is not None else "sdpa", sync=sync):
+                spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    cu_window_seqlens=cu_window_seqlens,
+                    is_causal=False,
+                    program_config=self._sdpa_program_config(
+                        q_BHNE.shape[2], ring=False, windowed=cu_window_seqlens is not None
+                    ),
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                )
+        with _timed(timings, "heads + gate", sync=sync):
+            spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
+            spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+            if coarse_1BND is not None:
+                # Gate and coarse output are both [1, 1, rows, H * D], so the gated add needs no head split.
+                gate_1BND = self.to_gate_compress(
+                    block_input_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=matmul_parallel_config,
+                    default_block_size=agmm_block_size(
+                        self.hidden_size, self.inner_dim // tp_factor, block_input_1BND.padded_shape[-2]
+                    ),
+                    force_transpose=False,
+                    use_persistent_buffer=self.use_persistent_ccl_buffers,
+                )
+                spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BND, coarse_1BND)
+                ttnn.deallocate(gate_1BND)
+                ttnn.deallocate(coarse_1BND)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
@@ -1134,20 +1187,21 @@ class MiniMaxH3Attention(Module):
         # The gated residual rides along in the matmul epilogue on the fused path; on the unfused
         # path the op has no addcmul, so apply it afterwards.
         fuse_gate = addcmul_residual is not None and self.use_fused_agmm
-        out = self.to_out(
-            spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
-            parallel_config=matmul_parallel_config,
-            default_block_size=(
-                agmm_block_size(self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2])
-                if self.use_fused_agmm
-                else None
-            ),
-            force_transpose=False,
-            addcmul_a=addcmul_residual if fuse_gate else None,
-            addcmul_b=addcmul_gate if fuse_gate else None,
-            use_persistent_buffer=self.use_persistent_ccl_buffers,
-        )
-        if addcmul_residual is not None and not fuse_gate:
-            out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+        with _timed(timings, "to_out", sync=sync):
+            out = self.to_out(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=matmul_parallel_config,
+                default_block_size=(
+                    agmm_block_size(self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2])
+                    if self.use_fused_agmm
+                    else None
+                ),
+                force_transpose=False,
+                addcmul_a=addcmul_residual if fuse_gate else None,
+                addcmul_b=addcmul_gate if fuse_gate else None,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
+            )
+            if addcmul_residual is not None and not fuse_gate:
+                out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out

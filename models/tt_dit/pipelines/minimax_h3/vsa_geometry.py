@@ -42,6 +42,8 @@ from dataclasses import dataclass
 
 import torch
 
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
+
 VSA_TILE_SHAPE = (4, 4, 4)
 # math.prod(VSA_TILE_SHAPE); also the fine-stage block size.
 VSA_TILE_TOKENS = 64
@@ -205,6 +207,7 @@ def vsa_min_padded_len(prefix_segments: tuple[int, ...], video_grid: tuple[int, 
     return VSA_TILE_TOKENS * sp_factor * math.ceil(n_tiles / sp_factor)
 
 
+@cap_torch_threads_to_half_the_cpus()
 def build_vsa_geometry(
     prefix_segments: tuple[int, ...],
     video_grid: tuple[int, int, int],

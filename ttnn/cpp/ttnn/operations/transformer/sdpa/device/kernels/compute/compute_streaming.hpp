@@ -2980,6 +2980,7 @@ void sdpa_ring_v2(
         [[maybe_unused]] uint32_t sol_total_kept_blocks = 0, sol_n_pages = 0;
         [[maybe_unused]] uint32_t sol_kept_lo = 0, sol_kept_hi = 0, sol_do_pooled = 0;
         [[maybe_unused]] uint32_t sol_union_lo = 0xffffffffu, sol_union_hi = 0xffffffffu;
+        [[maybe_unused]] uint32_t sol_ragged_lo = 0, sol_ragged_hi = 0;
         [[maybe_unused]] uint32_t sol_cnt_words[16] = {};
         if constexpr (sol_chunk_mode) {
             CircularBuffer(cb_sol_plan).wait_front(1);
@@ -2997,6 +2998,10 @@ void sdpa_ring_v2(
                 sol_n_pages = (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
             }
             if constexpr (sol_compact) {
+                // Ragged chunk bits (words 6, 7): a kept chunk holding a block with fewer than 64 real tokens, whose
+                // column-bias tile row (block counts) the reader pushes after the chunk's K page.
+                sol_ragged_lo = ckernel::read_tile_value(cb_sol_plan, 0, 6);
+                sol_ragged_hi = ckernel::read_tile_value(cb_sol_plan, 0, 7);
                 for (uint32_t w = 0; w < (num_local_k_chunks + 3) / 4; ++w) {
                     sol_cnt_words[w] = ckernel::read_tile_value(cb_sol_plan, 0, 8 + w);
                 }
@@ -3020,6 +3025,9 @@ void sdpa_ring_v2(
         // Streamed by the reader at all (chain-wide union); own-dropped streamed chunks are drained.
         const auto sol_chunk_streamed = [&](uint32_t k) -> bool {
             return k < 32 ? ((sol_union_lo >> k) & 1u) != 0 : ((sol_union_hi >> (k - 32)) & 1u) != 0;
+        };
+        [[maybe_unused]] const auto sol_chunk_ragged = [&](uint32_t k) -> bool {
+            return k < 32 ? ((sol_ragged_lo >> k) & 1u) != 0 : ((sol_ragged_hi >> (k - 32)) & 1u) != 0;
         };
         uint32_t per_q_valid_kv =
             packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
@@ -3502,11 +3510,14 @@ void sdpa_ring_v2(
                                                                   : largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }
                 }
+                [[maybe_unused]] bool sol_col_bias = sol_is_pooled;
                 if constexpr (sol_compact) {
                     if (!sol_is_pooled) {
                         // Compacted chunk: the first 2 * kept tile columns (K^T) / rows (V) are full valid blocks; the
-                        // ragged tail never reaches here (partial blocks are pooled), so no mask is applied.
+                        // ragged tail never reaches here (partial blocks are pooled), so no mask is applied. With
+                        // block counts, a kept block whose tail rows are padding gets the column bias instead.
                         //
+                        sol_col_bias = sol_chunk_ragged(k_chunk);
                         // Packing: same shape, but the count is the PAGE's fill rather than one chunk's. Every page
                         // but the last is full, so active_Sk_param == Sk_chunk_t and the subblock width is the optimal
                         // one -- the awkward factorisations of a partial width occur at most once per ring iteration
@@ -3589,7 +3600,7 @@ void sdpa_ring_v2(
                         apply_mask,
                         lw_partial_tile_idx,
                         active_Sk_param,
-                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !sol_is_pooled,
+                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !sol_col_bias,
                         chunk_sbw,
                         step_save_out_cb,
                         step_save_max_cb,
@@ -3607,7 +3618,7 @@ void sdpa_ring_v2(
                         step_kv_pad_rotation,
                         q_base_tiles,
                         packed_mask,
-                        /*apply_col_bias=*/sol_is_pooled);
+                        /*apply_col_bias=*/sol_col_bias);
                 }
 
                 // Post-iteration cleanup: pop previous values and swap aliases

@@ -2851,6 +2851,7 @@ class MiniMaxH3Pipeline:
                     sparsity=self.vsa_config.sparsity,
                     num_heads=self.transformer_config["num_attention_heads"] // self.tp_factor,
                     head_dim=self.transformer_config["attention_head_dim"],
+                    q_chunk=transformer.vsa_q_chunk(rung // self.sp_factor),
                     mesh_device=self.mesh_device,
                     ccl_manager=self.ccl_manager,
                     sp_axis=self.sp_axis,

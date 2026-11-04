@@ -3837,7 +3837,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Layout (word offsets from rotated_args_base), with RM = sol_static_max ? 1 : 0 and
             // O = RM + (sol_has_counts ? 1 : 0):
             //   +0 mask, +1 pooled K, +2 pooled V, [+3 row max, only when sol_static_max (resident only)],
-            //   [+3+RM block counts, only when sol_has_counts (gather only)], +3+O bias (0 when generated),
+            //   [+3+RM block counts, only when sol_has_counts (gather and compact)], +3+O bias (0 when generated),
             //   +4+O n_members, +5+O my_start, then (generated bias only) kSolLenBiasTableWords packed bf16 table,
             //   then members (start, count)...
             // The optional slots exist only when their tensor does so every other mode keeps the same offsets; the

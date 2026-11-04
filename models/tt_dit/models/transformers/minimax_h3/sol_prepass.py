@@ -44,6 +44,8 @@ VAR_EPS = 1.0e-6
 NEG = -30000.0  # finite "minus infinity" for bf16 bias/mask arithmetic (exp2 underflows to exactly 0)
 BLOCK = 64
 TILE = 32
+# Spare channel block the prefix-row recompute appends to Q/K/V; channel `head_dim` carries its marker.
+PREFIX_EXTRA = 32
 
 
 def _pad32(n: int) -> int:

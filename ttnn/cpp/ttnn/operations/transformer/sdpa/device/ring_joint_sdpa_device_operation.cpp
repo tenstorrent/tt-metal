@@ -717,8 +717,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         if (tensor_args.sol_block_counts.has_value()) {
             const auto& counts = tensor_args.sol_block_counts.value();
             TT_FATAL(
-                tensor_args.sol_gather_mode(args.sol_mode),
-                "sol_block_counts is supported in gather mode only (sol_mode {})",
+                tensor_args.sol_gather_mode(args.sol_mode) || args.sol_mode == "compact",
+                "sol_block_counts is supported in gather and compact modes only (sol_mode {})",
                 args.sol_mode);
             TT_FATAL(
                 counts.layout() == Layout::ROW_MAJOR && counts.dtype() == DataType::UINT32,
