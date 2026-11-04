@@ -2300,7 +2300,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
-            } else {
+            } else if constexpr (stream_registers_available) {
+                // The retrain sync word is a stream scratch register; without stream registers there is none.
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
