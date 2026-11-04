@@ -208,7 +208,7 @@ jobs:
 
   blaze-merge-gate:
     needs: [build-artifact-profiler]
-    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+    if: ${{ !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
     # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
