@@ -242,10 +242,9 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         noc_async_atomic_barrier();
         close_connections(connections);
     }
-    // The replacement carry, three full rows in scratch, goes out in history's layout.
-    for (uint32_t row = 0; row < history_rows; ++row) {
-        write_tail_row<token_paged, page_channels>(
-            noc, scratch, final_history, row, channel_tiles, offset_of(carry) + row * row_bytes);
-    }
+    // The replacement carry, three full rows in scratch, goes out in history's layout; the outgoing rows have been
+    // sent, so their scratch gathers its pages.
+    write_tail<token_paged, page_channels>(
+        noc, scratch, final_history, channel_tiles, offset_of(carry), offset_of(outgoing));
     noc.async_write_barrier();
 }

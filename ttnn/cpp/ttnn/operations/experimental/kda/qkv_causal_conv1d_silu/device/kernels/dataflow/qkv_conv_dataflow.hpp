@@ -78,20 +78,40 @@ inline void read_tail_row(
     }
 }
 
-// The mirror for a whole row: `channel_tiles` tiles' row from `source` at byte `source_offset` into tail row `row`, one
-// write per page.
-template <uint32_t token_paged, uint32_t page_channels, typename Source, typename Tail>
-inline void write_tail_row(
-    Noc& noc, const Source& source, const Tail& tail, uint32_t row, uint32_t channel_tiles, uint32_t source_offset) {
+// The mirror for a whole tail: its `history_rows` rows of `channel_tiles` tiles, row after row in local `scratch` at
+// byte `rows_offset`, into `tail`, one write per page. Token-paged pages are those rows. Channel-paged pages are first
+// gathered, through local reads, into as many bytes of `scratch` at `pages_offset`.
+template <uint32_t token_paged, uint32_t page_channels, typename Scratch, typename Tail>
+inline void write_tail(
+    Noc& noc,
+    const Scratch& scratch,
+    const Tail& tail,
+    uint32_t channel_tiles,
+    uint32_t rows_offset,
+    uint32_t pages_offset) {
+    const uint32_t row_bytes = channel_tiles * tile_row_bytes;
     const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(channel_tiles);
-    for (uint32_t ct = 0; ct < channel_tiles; ct += page_tiles) {
-        const auto [page, offset] = tail_location<token_paged, page_channels>(row, ct);
+    const uint32_t pages = token_paged ? history_rows : channel_tiles / page_tiles;
+    const uint32_t page_bytes = history_rows * row_bytes / pages;
+    uint32_t pages_source = rows_offset;
+    if constexpr (!token_paged) {
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            for (uint32_t ct = 0; ct < channel_tiles; ct += page_tiles) {
+                const auto [page, offset] = tail_location<token_paged, page_channels>(row, ct);
+                noc.async_read(
+                    scratch,
+                    scratch,
+                    page_tiles * tile_row_bytes,
+                    {.offset_bytes = rows_offset + row * row_bytes + ct * tile_row_bytes},
+                    {.offset_bytes = pages_offset + page * page_bytes + offset});
+            }
+        }
+        noc.async_read_barrier();
+        pages_source = pages_offset;
+    }
+    for (uint32_t page = 0; page < pages; ++page) {
         noc.async_write(
-            source,
-            tail,
-            page_tiles * tile_row_bytes,
-            {.offset_bytes = source_offset + ct * tile_row_bytes},
-            {.page_id = page, .offset_bytes = offset});
+            scratch, tail, page_bytes, {.offset_bytes = pages_source + page * page_bytes}, {.page_id = page});
     }
 }
 
