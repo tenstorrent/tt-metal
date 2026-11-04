@@ -115,15 +115,15 @@ CombineAuto combine_auto(
     uint32_t a_max = kAccMax,
     std::optional<CombineMode> mode = std::nullopt);
 
-// The credit policy: a port returns a source's credits once it consumed CRED_THR of its rows; idle snapshots go out
-// at once on small meshes, batched (CRED_IDLE rows, or CRED_AGE cycles old) on meshes of 16 chips or more.
+// The credit policy: a port returns a source's credits once it consumed CRED_THR of its rows; its idle credit
+// snapshots are batched (CRED_IDLE rows, or CRED_AGE cycles old) on every mesh.
 struct CreditPolicy {
     uint32_t cred_thr = 8;
-    uint32_t cred_idle = 1;
-    uint32_t cred_age = 0;
+    uint32_t cred_idle = 8;
+    uint32_t cred_age = 8100;
     bool operator==(const CreditPolicy&) const = default;
 };
-CreditPolicy credit_policy(uint32_t N);
+CreditPolicy credit_policy();
 
 // fused_arena_reserve / exchange_arena_reserve: bytes a bank keeps below the combine's arena over a call (the static
 // CBs of the programs that run while it is allocated, the y writers' words, slack), and the arena budget (bytes a

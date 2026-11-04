@@ -186,12 +186,11 @@ void bind_routed_experts_combine(nb::module_& mod) {
         "The combine's automatic configuration as a dict (mode: a CombineMode, or none for the best).");
     mod.def(
         "combine_credit_policy",
-        [](uint32_t N) {
-            const auto p = credit_policy(N);
+        [] {
+            const auto p = credit_policy();
             return nb::make_tuple(p.cred_thr, p.cred_idle, p.cred_age);
         },
-        nb::arg("N"),
-        "The combine's credit policy on N chips: (CRED_THR, CRED_IDLE, CRED_AGE).");
+        "The combine's credit policy: (CRED_THR, CRED_IDLE, CRED_AGE).");
     mod.def(
         "routed_experts_combine_static_cb_bytes",
         &routed_experts_combine_static_cb_bytes,

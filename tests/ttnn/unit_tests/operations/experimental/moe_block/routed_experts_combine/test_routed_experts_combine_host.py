@@ -29,12 +29,8 @@ ARENAS = [64 << 10, 400 << 10, 900 << 10, 1200 << 10, 1400 << 10]
 
 
 def test_credit_policy():
-    """Credits go back every 8 consumed rows; idle snapshots at once below 16 chips, batched (8 rows or 8100 cycles old)
-    from 16 chips (the Galaxy)."""
-    for N in (2, 4, 8, 15):
-        assert mb.combine_credit_policy(N) == (8, 1, 0)
-    for N in (16, 32):
-        assert mb.combine_credit_policy(N) == (8, 8, 8100)
+    """Credits go back every 8 consumed rows; idle snapshots batched (8 rows or 8100 cycles old) on every mesh."""
+    assert mb.combine_credit_policy() == (8, 8, 8100)
 
 
 def test_auto_invariants():

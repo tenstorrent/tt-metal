@@ -173,14 +173,10 @@ CombineAuto combine_auto(
     return res;
 }
 
-CreditPolicy credit_policy(uint32_t N) {
-    CreditPolicy p;
-    // idle credit snapshots batched (at least 8 rows, or 6 us old) where there are many sources (Galaxy: -9 %)
-    if (N >= 16) {
-        p.cred_idle = 8;
-        p.cred_age = 8100;
-    }
-    return p;
+CreditPolicy credit_policy() {
+    // idle credit snapshots batched (at least 8 rows, or 6 us old): Galaxy -9 %; on the 1x4 ring experts + combine
+    // unchanged (GLM-5.3-Flash 750.1 -> 749.5 us, K3 1473.7 -> 1473.9)
+    return CreditPolicy{};
 }
 
 uint32_t fused_arena_reserve(uint32_t flat_static_bytes) {

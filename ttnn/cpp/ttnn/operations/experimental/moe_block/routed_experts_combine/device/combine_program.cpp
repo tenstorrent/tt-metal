@@ -271,7 +271,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     TT_FATAL(PSL < 4096, "routed_experts_combine: a ring's base / depth are 12-bit fields");
     plan->PSL = static_cast<uint32_t>(PSL);
     plan->D = N > 1 ? plan->PSL / (N - 1) : 0;
-    plan->cred = credit_policy(N);
+    plan->cred = credit_policy();
     const uint32_t acc_area = plan->st.RINGS + plan->PSL * SLOT;
     uint32_t QP = QP0, QL = 0;
     if (plan->fused) {  // (local ring up to 16 slots, then the injection ring up to QP, from what is left)
