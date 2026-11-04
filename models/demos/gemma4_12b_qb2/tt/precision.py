@@ -17,6 +17,10 @@ so a value in the JSON is a value in the built tensors and compute configs:
 * ``compute_fidelity``: decode / prefill matmul fidelity per group with per-layer exceptions, LM head, SDPA decode /
   prefill. ``fixed`` lists the fidelities the decoder does not expose (norms, RoPE, short-chunk SDPA); they are
   validated against the implementation.
+* ``approximations`` (optional; absent = the decoder defaults ``"fast"`` / ``false`` / sliding ``true``): the gated
+  MLP's GELU (``"fast"``: ttnn GELU with its fast approximation, ``"tanh"``: gelu_pytorch_tanh as the checkpoint
+  defines it) and the exp approximation of decode / prefill SDPA (``sdpa_decode_exp_approx``,
+  ``sdpa_prefill_exp_approx`` per sliding / full).
 * ``kv_cache.dtype``, ``ccl`` (decode all-reduce payloads, prefill o_proj reduce-scatter, prefill norm-output
   all-gathers), ``activations`` (prefill MLP intermediates per layer), ``lm_head.dtype``.
 * ``activations.residual``, ``activations.decode_intermediates``, ``logits`` and ``sampling`` record the dtype
@@ -46,6 +50,7 @@ MATMUL_FIDELITIES = ("lofi", "lofifp32", "hifi2", "hifi2fp32", "hifi4", "hifi4fp
 KV_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 AR_DTYPES = ("bf16", "bfp8", "bfp4")
 ACT_DTYPES = {"bf16": None, "bfp8": "bfp8"}  # decoder policy encoding: None = BF16
+GELU_VARIANTS = ("fast", "tanh")
 # fidelities the decoder hard-codes (validated, not swept)
 FIXED_FIDELITIES = {"norms": "hifi4fp32", "rope_decode": "hifi4", "sdpa_prefill_short_chunk": "hifi2"}
 # dtype assumptions with a single legal value in this implementation
@@ -168,6 +173,25 @@ class PrecisionConfig:
             "activations.prefill_mlp_intermediates needs gate_up / product",
         )
         self.prefill_mlp = _per_layer(mlp, "dtype", num_layers, ACT_DTYPES, "prefill MLP intermediates")
+        self.approx = {}
+        apx = cfg.get("approximations", {})
+        _require(
+            set(apx) <= {"gelu", "sdpa_decode_exp_approx", "sdpa_prefill_exp_approx"},
+            f"approximations: unknown key(s) {sorted(set(apx) - {'gelu', 'sdpa_decode_exp_approx', 'sdpa_prefill_exp_approx'})}",
+        )
+        if "gelu" in apx:
+            _require(apx["gelu"] in GELU_VARIANTS, f"approximations.gelu {apx['gelu']!r} not in {GELU_VARIANTS}")
+            self.approx["gelu"] = apx["gelu"]
+        if "sdpa_decode_exp_approx" in apx:
+            _require(isinstance(apx["sdpa_decode_exp_approx"], bool), "approximations.sdpa_decode_exp_approx: bool")
+            self.approx["sdpa_decode_exp_approx"] = apx["sdpa_decode_exp_approx"]
+        if "sdpa_prefill_exp_approx" in apx:
+            v = apx["sdpa_prefill_exp_approx"]
+            _require(
+                isinstance(v, dict) and set(v) == {"sliding", "full"} and all(isinstance(b, bool) for b in v.values()),
+                "approximations.sdpa_prefill_exp_approx needs sliding / full bools",
+            )
+            self.approx["sdpa_prefill_exp_approx"] = dict(v)
         for (sec, key), legal in FIXED_ASSUMPTIONS.items():
             v = cfg[sec][key]
             _require(v == legal, f"{sec}.{key} = {v!r}: this implementation supports only {legal!r}")
@@ -221,6 +245,7 @@ class PrecisionConfig:
             "prefill_mlp_act_dtype": {k: ACT_DTYPES[v] for k, v in self.prefill_mlp[layer_idx].items()},
             "sdpa_decode_fid": self.sdpa_decode_fid,
             "sdpa_prefill_fid": dict(self.sdpa_prefill_fid),
+            **{k: (dict(v) if isinstance(v, dict) else v) for k, v in self.approx.items()},
         }
 
     @staticmethod
@@ -280,6 +305,15 @@ class PrecisionConfig:
                 f"layer {i} prefill gathers", row["prefill_norm_dtype"], {r: dt[d] for r, d in self.prefill_ag.items()}
             )
             check(f"layer {i} prefill mlp", row["prefill_mlp_act"], {k: dt[v] for k, v in self.prefill_mlp[i].items()})
+            if "gelu" in self.approx:
+                check(f"layer {i} gelu", row["gelu"], self.approx["gelu"])
+            if "sdpa_decode_exp_approx" in self.approx:
+                check(
+                    f"layer {i} sdpa decode exp", row["sdpa_decode_exp_approx"], self.approx["sdpa_decode_exp_approx"]
+                )
+            if "sdpa_prefill_exp_approx" in self.approx:
+                want = self.approx["sdpa_prefill_exp_approx"]["full" if kind == "full_attention" else "sliding"]
+                check(f"layer {i} sdpa prefill exp", row["sdpa_prefill_exp_approx"], want)
         if errs:
             raise AssertionError(f"built model differs from precision config {self.config_id}: " + "; ".join(errs[:8]))
 
@@ -337,6 +371,9 @@ def built_precision_summary(model):
                 ),
             },
             "fused_gate_up_packed": dt(layer.w_gate_up_packed) if layer.fused_gate_up else None,
+            "gelu": layer.policy["gelu"],
+            "sdpa_decode_exp_approx": layer.policy["sdpa_decode_exp_approx"],
+            "sdpa_prefill_exp_approx": layer.sdpa_prefill_exp_approx,
         }
         layers.append(row)
     return {
