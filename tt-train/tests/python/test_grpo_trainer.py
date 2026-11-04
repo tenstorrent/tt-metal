@@ -424,6 +424,20 @@ def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.mark.requires_device
+def test_policy_forward_is_causal(patch_llama_weight_loading):
+    """A change to the last token changes no earlier -log pi; full attention would change them."""
+    model, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    policy = SimpleNamespace(model=model, _batch_layout=SimpleNamespace(mapper=None))
+    inputs = np.tile(np.arange(1, 33, dtype=np.uint32), (2, 1))
+    inputs[1, -1] = 7
+
+    nlog = GRPOTrainer._compute_policy_nlog_probs(policy, inputs, inputs.copy()).to_numpy(ttnn.DataType.FLOAT32)
+
+    np.testing.assert_array_equal(nlog[0, :-1], nlog[1, :-1])
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
 def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_path):
     headers = []
     monkeypatch.setattr(ttml.checkpointing, "save_checkpoint", lambda path, header, **_: headers.append(header))
