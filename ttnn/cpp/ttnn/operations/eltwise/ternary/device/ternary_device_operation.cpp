@@ -74,14 +74,6 @@ CoreRangeSet get_worker_grid(
         return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
     }
 
-    // An output config inferred from ND-sharded inputs has no 2D shard spec, so the native path below declines it.
-    if (memory_config_actual.is_sharded() && !memory_config_actual.shard_spec().has_value()) {
-        if (auto workers = get_sub_device_workers(memory_config_actual)) {
-            log_debug(tt::LogOp, "Using ND shard grid of the output memory config for worker grid {}", workers->str());
-            return *workers;
-        }
-    }
-
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
@@ -95,6 +87,16 @@ CoreRangeSet get_worker_grid(
                     return *workers;
                 }
             }
+        }
+    }
+
+    // An output config inferred from a sharded input (ND, or 2D with inputs the native path declines) is written
+    // through the TensorAccessor path, so it runs on the sub-device holding the output shards, as an explicit
+    // sharded memory_config does.
+    if (memory_config_actual.is_sharded()) {
+        if (auto workers = get_sub_device_workers(memory_config_actual)) {
+            log_debug(tt::LogOp, "Using shard grid of the output memory config for worker grid {}", workers->str());
+            return *workers;
         }
     }
     log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
