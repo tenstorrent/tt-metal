@@ -4,16 +4,19 @@
 
 import itertools
 import os
+from collections.abc import Callable
 
+import numpy as np
 import pytest
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from ....utils.test import skip_if_unsupported_num_links
-from .device_params import line_params_flux2
+from .device_params import line_params_flux2, line_params_flux2_transformer
 
 
 @pytest.mark.parametrize(
@@ -133,3 +136,60 @@ def test_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [(2, 4), line_params_flux2_transformer],
+        [(2, 2), line_params_flux2_transformer],
+        [(4, 8), line_params_flux2_transformer],
+    ],
+    ids=["2x4", "2x2", "4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_sizes_and_editing(
+    *, mesh_device: ttnn.MeshDevice, model_location_generator: Callable[[str], str]
+) -> None:
+    """Klein 4B with its preset layout and default resolutions, with and without a reference image.
+
+    Every case runs untraced first. The traced runs then alternate between the cases twice, so each
+    trace replays after the others were captured, and each must reproduce its untraced image.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    if not is_blackhole() and mesh_shape != (2, 4):
+        pytest.skip(f"no FLUX.2 preset for WH {mesh_shape}")
+
+    pipeline = Flux2Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-klein-4B"),
+        trace_warmup=False,
+    )
+    reference = Image.open("models/sample_data/demo.jpeg")
+
+    cases = [(width, height, edit) for width, height in pipeline.resolutions for edit in (False, True)]
+
+    def run(width: int, height: int, *, edit: bool, traced: bool) -> np.ndarray:
+        images = pipeline(
+            prompts=["turn it into a watercolor painting" if edit else "a lighthouse on a cliff, golden hour"],
+            images=[reference] if edit else None,
+            num_inference_steps=4,
+            seed=0,
+            width=width,
+            height=height,
+            traced=traced,
+        )
+        assert images[0].size == (width, height)
+        name = f"flux2_klein-4B_{width}x{height}_{'edit' if edit else 't2i'}_{'traced' if traced else 'untraced'}"
+        images[0].save(f"{name}.png")
+        return np.asarray(images[0].convert("RGB")).astype(np.float64)
+
+    untraced = {case: run(*case[:2], edit=case[2], traced=False) for case in cases}
+
+    for _ in range(2):
+        for case in cases:
+            traced = run(*case[:2], edit=case[2], traced=True)
+            mse = np.mean((traced - untraced[case]) ** 2)
+            psnr = 10 * np.log10(255**2 / mse) if mse > 0 else np.inf
+            logger.info(f"{case}: traced against untraced {psnr:.1f} dB")
+            assert psnr > 40, f"{case}: the traced image differs from the untraced one ({psnr:.1f} dB)"
