@@ -123,8 +123,4 @@ FORCE_INLINE void keep_in_memory(T& obj) {
 FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 
-// An ordering point outside a read group (std::atomic_signal_fence): the same compiler barrier for memory, where code
-// relies on the order of the memory accesses around it but they form no group.
-FORCE_INLINE void order_point() { std::atomic_signal_fence(std::memory_order_seq_cst); }
-
 }  // namespace fabric_router

@@ -614,7 +614,6 @@ FORCE_INLINE bool send(
     end_read_group();
 
     increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
-    order_point();  // the free-slots update stays before the TX-queue wait
     if (txq_busy(status_after)) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         }
