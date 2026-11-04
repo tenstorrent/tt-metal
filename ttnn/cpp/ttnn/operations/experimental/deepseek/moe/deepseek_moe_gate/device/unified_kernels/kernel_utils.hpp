@@ -8,7 +8,7 @@
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #endif
 #if defined(COMPILE_FOR_TRISC)
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
@@ -63,10 +63,11 @@ SplitHalfCoreInfo get_split_half_core_info(
 // Setup a sharded persistent buffer by reserving and pushing tiles
 // This makes the buffer available for compute to read from
 // Note: Can be called from either NCRISC or BRISC, whichever runs first
-FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(num_tiles);
-    cb.push_back(num_tiles);
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+FORCE_INLINE void setup_sharded_buffer(DFBBindingToken<Pap, Cap> dfb_id, uint32_t num_tiles) {
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(num_tiles);
+    dfb.push_back(num_tiles);
 }
 
 // Atomic semaphore decrement (for global semaphore reset across iterations)
