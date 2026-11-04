@@ -16,6 +16,8 @@
 #include <vector>
 
 #include <internal/mesh_device.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -1005,16 +1007,31 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
                 "matmul_reduce_scatter_prefill: the first call on a mesh creates its semaphores and mailbox and cannot "
                 "be traced; call the op once before begin_trace_capture");
         }
-        std::array<GlobalSemaphore, 4> sems{
-            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0),
-            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0),
-            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0),
-            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0)};
+        // They live as long as the mesh, so they go to L1_SMALL when it has room for all of them: in L1 they sit
+        // below every later op's static circular buffers for good (Kimi-K3's ring_mla puts its CBs up to a fixed L1
+        // ceiling a few KB under the top, and ~1.8 KB of these clashed with it). L1 when L1_SMALL is absent or full.
         const uint32_t words = n * detail::kMailboxStride / static_cast<uint32_t>(sizeof(uint32_t));
+        const uint64_t small_align = mesh->allocator()->get_alignment(BufferType::L1_SMALL);
+        const uint64_t small_need =
+            4 * tt::align(sizeof(uint32_t), small_align) + tt::align(uint64_t(words) * sizeof(uint32_t), small_align);
+        const bool in_small = mesh->allocator()->get_bank_size(BufferType::L1_SMALL) > 0 &&
+                              mesh->allocator()->get_statistics(BufferType::L1_SMALL).largest_free_block_bytes >=
+                                  small_need + small_align;  // (a slack: the bank manager's own alignment)
+        const BufferType bt = in_small ? BufferType::L1_SMALL : BufferType::L1;
+        if (!in_small) {
+            log_warning(
+                tt::LogOp,
+                "matmul_reduce_scatter_prefill: L1_SMALL has no room for the {} B of semaphores + mailbox a core: they "
+                "go to L1 for the mesh's life (raise l1_small_size)",
+                small_need);
+        }
+        std::array<GlobalSemaphore, 4> sems{
+            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0, bt),
+            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0, bt),
+            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0, bt),
+            ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0, bt)};
         const MemoryConfig mbox_cfg(
-            TensorMemoryLayout::HEIGHT_SHARDED,
-            BufferType::L1,
-            ShardSpec(grid, {1, words}, ShardOrientation::ROW_MAJOR));
+            TensorMemoryLayout::HEIGHT_SHARDED, bt, ShardSpec(grid, {1, words}, ShardOrientation::ROW_MAJOR));
         const TensorSpec mbox_spec(
             ttnn::Shape({n, words}), TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mbox_cfg));
         Tensor mailbox =

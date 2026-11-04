@@ -34,7 +34,12 @@ MOE_BLOCK_L1_SMALL = 5888
 # attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the
 # SC4 DSpark runner, 5888 by 448 B). KimiK3Config.L1_SMALL_SIZE (4096, inherited, not measured) still floors the mesh
 # open (moe_block_mesh_params takes the max).
-_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 2944}
+# With the fused KDA output projection (matmul_reduce_scatter_prefill, per-call staging): its mesh-lifetime semaphores
+# and mailbox (4 x 16 B + 110 cores x 16 B) go to L1_SMALL when it has room - in L1 they sat under ring_mla's CB
+# ceiling and clashed by 384 - 832 B. Layer 0's KDA allocates them before the block's lazily built slab, so the size is
+# the 3008 B the others hold before the slab (measured, K3 L24 torus XY) + the slab's 2048 B: at 4800 the slab got
+# 1792 B and the combine barrier found no L1_SMALL. K3 L24 depth / chunked / traced pass at 5056 (b08u02, 2026-11-04).
+_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 5056}
 
 
 def moe_block_l1_small(model_cfg) -> int:
