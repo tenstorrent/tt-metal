@@ -550,8 +550,9 @@ progress bars, or dashboards belong in additional callbacks.
 
 `setup_ttml_model` reads the model architecture from `model_source`'s `config.json`.
 The transformer config, a plain dict, sets only what that file does not:
-`max_sequence_length` and `runner_type`, and for Llama `dropout_prob`;
-architecture keys such as `num_heads` are ignored. In YAML configs, the
+`model_type` (`"llama"` or `"qwen3"`, required), `max_sequence_length` and
+`runner_type`, and for Llama `dropout_prob`; architecture keys such as
+`num_heads` are ignored. In YAML configs, the
 transformer config can be provided inline under `transformer_config:` or as a
 path to a separate file via `transformer_config_path:`. The path may use
 `${TT_METAL_RUNTIME_ROOT}` (recommended, matching other tt-train configs) or
@@ -567,6 +568,7 @@ transformer_config_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_config
 
 # Option 2: inline (still supported)
 transformer_config:
+  model_type: "llama"
   max_sequence_length: 1024
   dropout_prob: 0.0
   runner_type: "default"
@@ -696,7 +698,8 @@ directory (it contains `checkpoint.pkl` and the tokenizer files). A
 raises `ValueError`, and a HuggingFace source must provide every model weight.
 Only the weights are loaded: the optimizer starts fresh and the LR schedule
 restarts at step 0. The checkpoint directory must hold `config.json`;
-`save_checkpoint` writes it from `model_source`.
+`save_checkpoint` writes it from `model_source`. If that write fails,
+`save_checkpoint` only logs a warning, and the checkpoint cannot be resumed.
 
 ---
 
