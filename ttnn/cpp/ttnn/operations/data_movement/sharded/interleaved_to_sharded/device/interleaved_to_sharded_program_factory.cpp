@@ -4,6 +4,7 @@
 
 #include "interleaved_to_sharded_program_factory.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
@@ -119,6 +120,32 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
 
+    constexpr uint32_t rows_reader_min_l1_shard_bytes = 4096;
+    constexpr uint32_t rows_reader_dram_first_percent = 70;
+    constexpr uint32_t percent_scale = 100;
+    constexpr uint32_t rows_reader_barrier_slots = 512;
+    constexpr uint32_t rows_reader_barrier_slot_bytes = 1024 + 128;
+    const bool is_wormhole = input.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const uint32_t rows_reader_unit = is_tile ? output_unit_size : input_unit_size;
+    const bool rows_reader_ok = src_is_dram
+                                    ? (is_tile || (input_unit_size % hal::get_dram_alignment() == 0 &&
+                                                   padded_offset_bytes % hal::get_dram_alignment() == 0))
+                                    : (num_units_per_shard_height >= 2 &&
+                                       num_units_per_shard * rows_reader_unit >= rows_reader_min_l1_shard_bytes);
+    const bool use_rows_reader = is_wormhole && !dst_is_dram && !convert_df && rows_reader_ok;
+    const uint32_t rows_reader_one_packet = rows_reader_unit <= hal::get_noc_max_burst_size_bytes() ? 1u : 0u;
+    const uint32_t rows_reader_barrier =
+        is_tile
+            ? ((rows_reader_barrier_slots / all_cores.num_cores()) * rows_reader_barrier_slot_bytes) / output_unit_size
+            : 0u;
+    const auto rows_for_reader = [&](uint32_t rows) {
+        if (rows < 2) {
+            return rows;
+        }
+        return src_is_dram ? std::clamp<uint32_t>(rows * rows_reader_dram_first_percent / percent_scale, 1u, rows - 1)
+                           : rows / 2;
+    };
+
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};            // interleaved pages streamed in; exists only when converting formats
     const DFBSpecName OUT_DFB{"out"};          // the output shard, in the output's data format
@@ -169,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // tile path declares no spec at all rather than an unbound one.
     const bool needs_scratch =
         (src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned;
-    const bool has_scratch = !is_tile && needs_scratch;
+    const bool has_scratch = !is_tile && needs_scratch && !use_rows_reader;
     if (has_scratch) {
         uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
         // Whole region the former DFB reserved on each node: entry_size * num_entries.
@@ -285,6 +312,35 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         writer.runtime_arg_schema.runtime_arg_names = {"num_units"};
     }
 
+    if (use_rows_reader) {
+        for (KernelSpec* ks : {&reader, &writer}) {
+            ks->source =
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "reader_interleaved_to_sharded_rows_metal2.cpp";
+            ks->dfb_bindings = {DFBBinding{
+                .dfb_spec_name = OUT_DFB,
+                .accessor_name = "shard",
+                .endpoint_type = ks == &reader ? DFBEndpointType::PRODUCER : DFBEndpointType::CONSUMER,
+            }};
+            ks->tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
+            ks->compile_time_args = {
+                {"is_tile", is_tile ? 1u : 0u},
+                {"tile_bytes", is_tile ? output_unit_size : 0u},
+                {"barrier_threshold", rows_reader_barrier},
+                {"one_packet", rows_reader_one_packet}};
+            ks->runtime_arg_schema.runtime_arg_names = {
+                "rows",
+                "row_tiles",
+                "row_bytes",
+                "local_stride",
+                "src_offset",
+                "src_stride",
+                "start_id",
+                "local_offset"};
+            ks->scratchpad_bindings.clear();
+        }
+    }
+
     Group<KernelSpec> kernels;
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(writer));
@@ -371,16 +427,44 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
             // Reader run-time args. The source base address is no longer among them -- it arrives with
             // the INPUT tensor binding.
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values,
-                core,
-                {{"block_height_tiles", shard_height},
-                 {"block_width_tiles", shard_width},
-                 {"padded_offset_bytes", padded_offset},
-                 {"input_width_offset_tiles", num_units_offset},
-                 {"block_num_tiles", curr_num_units_per_shard},
-                 {"start_id_offset", curr_idx_h + curr_idx_w},
-                 {"start_id_base", starting_idx_h}});
+            if (use_rows_reader) {
+                const uint32_t reader_rows = rows_for_reader(shard_height);
+                const uint32_t start_id = starting_idx_h + curr_idx_h + curr_idx_w;
+                const uint32_t row_size = shard_width * output_unit_size + padded_offset;
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", reader_rows},
+                     {"row_tiles", shard_width},
+                     {"row_bytes", 0u},
+                     {"local_stride", padded_offset},
+                     {"src_offset", 0u},
+                     {"src_stride", num_units_offset},
+                     {"start_id", start_id},
+                     {"local_offset", 0u}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", shard_height - reader_rows},
+                     {"row_tiles", shard_width},
+                     {"row_bytes", 0u},
+                     {"local_stride", padded_offset},
+                     {"src_offset", 0u},
+                     {"src_stride", num_units_offset},
+                     {"start_id", start_id + reader_rows * num_units_offset},
+                     {"local_offset", reader_rows * row_size}});
+            } else {
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"block_height_tiles", shard_height},
+                     {"block_width_tiles", shard_width},
+                     {"padded_offset_bytes", padded_offset},
+                     {"input_width_offset_tiles", num_units_offset},
+                     {"block_num_tiles", curr_num_units_per_shard},
+                     {"start_id_offset", curr_idx_h + curr_idx_w},
+                     {"start_id_base", starting_idx_h}});
+            }
 
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
@@ -395,7 +479,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                      {"output_width_tiles", num_units_offset},
                      {"start_id_offset", curr_idx_h + curr_idx_w},
                      {"start_id_base", starting_idx_h}});
-            } else {
+            } else if (!use_rows_reader) {
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values, core, {{"num_units", curr_num_units_per_shard}});
             }
@@ -470,17 +554,43 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
             // Reader run-time args. The source base address is no longer among them -- it arrives with
             // the INPUT tensor binding.
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values,
-                core,
-                {{"block_height", shard_height},
-                 {"block_width_bytes", shard_width},
-                 {"padded_block_width_bytes", padded_offset_bytes},
-                 {"aligned", static_cast<uint32_t>(aligned)},
-                 {"aligned_input_width_offset_bytes", aligned_width_offset},
-                 {"aligned_block_width_bytes", aligned_shard_width},
-                 {"aligned_offset", aligned_offset},
-                 {"start_id", curr_idx_h}});
+            if (use_rows_reader) {
+                const uint32_t reader_rows = rows_for_reader(shard_height);
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", reader_rows},
+                     {"row_tiles", 0u},
+                     {"row_bytes", shard_width},
+                     {"local_stride", padded_offset_bytes},
+                     {"src_offset", aligned_width_offset},
+                     {"src_stride", 0u},
+                     {"start_id", curr_idx_h},
+                     {"local_offset", 0u}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {{"rows", shard_height - reader_rows},
+                     {"row_tiles", 0u},
+                     {"row_bytes", shard_width},
+                     {"local_stride", padded_offset_bytes},
+                     {"src_offset", aligned_width_offset},
+                     {"src_stride", 0u},
+                     {"start_id", curr_idx_h + reader_rows},
+                     {"local_offset", reader_rows * padded_offset_bytes}});
+            } else {
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"block_height", shard_height},
+                     {"block_width_bytes", shard_width},
+                     {"padded_block_width_bytes", padded_offset_bytes},
+                     {"aligned", static_cast<uint32_t>(aligned)},
+                     {"aligned_input_width_offset_bytes", aligned_width_offset},
+                     {"aligned_block_width_bytes", aligned_shard_width},
+                     {"aligned_offset", aligned_offset},
+                     {"start_id", curr_idx_h}});
+            }
 
             // Writer run-time args
             if (dst_is_dram) {
@@ -495,7 +605,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                      {"padded_block_width_bytes", padded_offset_bytes},
                      {"start_id", start_id},
                      {"output_width_in_pages", output_width_in_pages}});
-            } else {
+            } else if (!use_rows_reader) {
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values, core, {{"num_units", curr_num_units_per_shard}});
             }
