@@ -1479,3 +1479,22 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   (another model's fixed threshold, open since before this run; for the owner). F244 found and fixed: test_fork_cases
   ::test_a_volatile_cache_key... opened every chip through fork_capture._device -> ttnn.get_fabric_config(); stubbed.
   F248 committed (ab_nonlast / BRINGUP_CHUNK_LAST) with F244.
+- 09:55 INFRA (same event): 11 of 12 cached pre-commit hook repos (~/.cache/pre-commit) lost their git metadata
+  around 09:03 (the job change), so every commit failed (setuptools-scm could not version the hook checkouts).
+  Removed the broken entries (db rows + dirs); pre-commit re-fetched them; commits work (662eddcdd77, 2cd4119bc3e).
+- 18:15 OWNER: copy the bfp4 and bfp4_mse expert caches to shared storage; make bfp4_mse the default; queue what is
+  needed. (1) Copy started (copy_expert_cache_to_data.sh, tmux cachecopy, nice / ionice idle): 240 files, 570 GB ->
+  /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1/experts-5254448103b6 (via .incoming, size-checked,
+  then renamed). A move to another 8x4 copies it into /scratch instead of converting (~50 min a format). (2) FIX.22
+  queued (gate P.28: ladder last + profile): EXPERTS_IMPL default bfp4 -> bfp4_mse; the cache is complete here.
+  (3) Then X.3 (ladder s56320, full prefill profile with ops, positions): run_ds41_8x4.sh --until X.3, launched
+  18:15. Box free (no UMD locks, no other users' jobs). Disk: the bfp8 (538 GB) / bfp8_down4 (454 GB) caches kept for
+  now (/scratch 863 GB free).
+- 18:25 OWNER: deleted the bfp8_down4 expert cache (120 files, 454 GB; rebuildable with tests/perf/test_experts_cache_warm.py,
+  ~1.5 h on the device); kept bfp8 (538 GB), bfp4, bfp4_mse.
+- 18:35 OWNER: queue P.32 after X.3. Queued P.32 WINDOW_KV_KEEP=final (deps X.3; switch full | final, default full,
+  keep_default): per user and layer a 192-row window ring (128 + kv_block 64, so a follow-up's carry is kept) instead
+  of the window history; starts outside the ring served by P.30 / P.31's modes, refused under DECODER_SKIP=off. New
+  test_window_ring.py (3 chunks + a follow-up vs golden, e2e limits) and test_dram.py both sides; A/B at 51200 /
+  512000. Serving's per-position window tests and the tt-d-gen runner tests are out of its gate (tt-d-gen change
+  pending). run_ds41_8x4.sh now --until P.32 (the running orchestrator stops at X.3; relaunch then).

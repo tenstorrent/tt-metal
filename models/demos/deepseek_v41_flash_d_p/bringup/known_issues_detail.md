@@ -1077,3 +1077,17 @@ projection + the tail's 20 layers at 1024 rows (~50 ms, ~2.5-2.9 ms a layer vs ~
 collectives are latency-bound). Wall: the host dispatches the same ~40 layers (~5 ms a layer, DS41-99), plus kv_only's
 steps, the two prepared tail sends and the tail MoE's second L1 arena a layer (one_arena off). The lever left is the
 host (trace), not the tail's device time.
+
+## FIX.22 (overseer, 8x4, 2026-11-04): EXPERTS_IMPL default bfp4 -> bfp4_mse
+- What: tt/settings.py EXPERTS_IMPL default `bfp4` -> `bfp4_mse` (owner 2026-11-04) and its description's owner-decision
+  line; nothing else. Why: P.28's A/B, err_final_hidden 0.140 vs 0.190 for bfp4, same bytes, time within noise (DS41-198).
+- Cache: tt_cache/8x4/v1/experts-5254448103b6/8x4 holds 40 `L*.bfp4_mse.*.done.json` markers; the ladder's load logged
+  `cache=hit` for all 40 layers (0 misses), 1.2-2.8 s a layer (DS41-199: a miss would be 145-195 s).
+- Gate `FIX.22 --check`: PASS (1543 s). Rung last: err_final_hidden 0.1399 (limit 0.2422), top5_overlap 1.0 (>= 0.9943),
+  err_layer_L39 0.622 (limit 1.533), every err_layer / err_state ok. Profile wall: median 194.6 ms over 10 warm runs
+  (program cache 174 -> 174, 0 gap uploads).
+- Known gap (DS41-200): bringup/hooks.py devfmt_component still rounds expert weights only for `bfp4`, so the F137
+  CPU diagnosis models exact weights under the new default. It never gates; hooks.py is outside this step's paths.
+- OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.22 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

@@ -292,10 +292,11 @@ TABLE = {
         "to 1e-5 (worst L03 0.99489 / 0.99490)",
     ),
     "EXPERTS_IMPL": Setting(
-        "bfp4",
+        "bfp4_mse",
         ("bfp8", "bfp4", "bfp4_mse", "bfp8_down4"),
-        "P.27 (owner 2026-11-02, A/B by P.27 / P.28 / P.29; default stays bfp4, F241; P.27 had committed bfp8, P.28 "
-        "set it back): bfp8 / bfp4_mse / bfp8_down4 on "
+        "FIX.22 (owner 2026-11-04: bfp4_mse is the shipped default; P.28's A/B rung last err_final_hidden 0.140 vs "
+        "0.190 for bfp4, same bytes, device +1.9 ms / wall -1.0 ms at 51200, within noise). P.27 (owner 2026-11-02, "
+        "A/B by P.27 / P.28 / P.29; P.27 had committed bfp8, P.28 set it back to bfp4): bfp8 / bfp4_mse / bfp8_down4 on "
         "MOE_IMPL=block too (the block takes the laid-out op in its dtype). bfp4_mse = bfloat4_b with each 16-value "
         "group's shared exponent (along K, inside one ue8m0 block) chosen on the host at load by least squared error "
         "between the group's largest exponent and one below (the large values saturate at 7; ties: the largest), handed "
@@ -306,7 +307,7 @@ TABLE = {
         "The routed experts' weight format (tt/experts.py): every expert's w1 / w3 / w2 laid out ONCE at load in the "
         "flat op's bank layout from the stored [N, K] matrices (weights_nk; no per-chunk weight work). bfp8 = "
         "bfloat8_b, exact for every e2m1 x e8m0 value along K (asserted at load; W^T would round 48 of the run's 2304 "
-        "matrices, DS41-35); bfp4 (owner pick 2026-10-17, P.1: memory for galaxy_4x4; the DEFAULT since P.10, agent "
+        "matrices, DS41-35); bfp4 (owner pick 2026-10-17, P.1: memory for galaxy_4x4; the default P.10 to FIX.22, agent "
         "rule 7 / F117: the checkpoint's own fp4 width) = bfloat4_b, lossy (3 magnitude bits under the group's "
         "exponent, round to nearest even; changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| "
         "0.118-0.124, logged at load), 0.5625 B per value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, "
