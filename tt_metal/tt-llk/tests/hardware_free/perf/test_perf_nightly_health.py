@@ -9,7 +9,7 @@ import sys
 _PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 import baseline_from_warehouse
-import gate_slack_notify
+import gate
 from nightly_health import (
     assess,
     build_text,
@@ -154,17 +154,9 @@ def test_gate_result_reads_the_lines_the_gate_really_prints(
     tmp_path, capsys, monkeypatch
 ):
     verdict = tmp_path / "verdict.json"
-    policy = {"title": "t", "speed_of_light": True, "threshold": 0.02}
-    policy.update(min_cycles=30, modules={}, run_types=["L1_TO_L1"])
-    verdict.write_text(
-        json.dumps(
-            {"arch": "blackhole", "status": "pass", "reason": "", "policy": policy}
-        )
-    )
-    gate_slack_notify.main(
-        ["--channel", "C", "--verdict", str(verdict)]
-        + ["--out", str(tmp_path / "payload.json")]
-    )
+    v = {"arch": "blackhole", "status": "pass", "reason": "", "fails": False}
+    verdict.write_text(json.dumps({**v, "counts": {"points": 1, "regressions": 0}}))
+    gate.main(["verdict", str(verdict)])
     run = {"run_id": "baseline-20260929-1-blackhole", "commit_sha": "6d88aa4fe5b4a049"}
     run["run_ts"] = "2026-09-29 11:38:57+00:00"
     monkeypatch.setattr(baseline_from_warehouse, "connect", lambda: _Conn())

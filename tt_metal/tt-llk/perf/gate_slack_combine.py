@@ -9,16 +9,13 @@ read from their ``.points.csv``: a move under that arch's threshold is easy to
 miss, and the reader should not have to open a second report to see it.
 """
 
-import argparse
 import csv
-import json
 import os
 
 from gate_slack_notify import (
     MODULE_KEY,
     _config_of,
     _cycles,
-    _emit_outputs,
     _escape,
     _pct,
     _subject,
@@ -161,73 +158,3 @@ def build_text(parts, points_by_arch):
                 others.append((other, find_points(path, part["rows"])))
         lines += ["", *_section(part, others)]
     return "\n".join(lines)
-
-
-def _missing(arch, ctx):
-    """A skip for an arch whose gate job wrote no part at all."""
-    reason = "Its gate job wrote no verdict, so the gate compared nothing."
-    ctx = {**ctx, "arch": arch, "reason": reason, "note": ""}
-    return {"status": "skipped", "should_post": True, "rows": [], "ctx": ctx}
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(
-        description="Combine per-arch gate verdicts into one Slack post."
-    )
-    ap.add_argument(
-        "--part", action="append", default=[], help="a part JSON; repeat per arch"
-    )
-    ap.add_argument(
-        "--points",
-        action="append",
-        default=[],
-        help="ARCH=PATH to that arch's .points.csv; repeat per arch",
-    )
-    ap.add_argument(
-        "--expect",
-        default="",
-        help="comma-separated arches that should have written a part",
-    )
-    ap.add_argument(
-        "--gate-name", default="LLK perf gate", help="when no part names it"
-    )
-    ap.add_argument("--run-url", default="", help="when no part links the run")
-    ap.add_argument("--channel", required=True, help="Slack channel id")
-    ap.add_argument("--out", default="slack_payload.json")
-    a = ap.parse_args(argv)
-
-    parts = []
-    for path in a.part:
-        with open(path) as fh:
-            parts.append(json.load(fh))
-    base = (
-        parts[0]["ctx"]
-        if parts
-        else {
-            "gate_name": a.gate_name,
-            "trigger": "merge queue",
-            "run_url": a.run_url,
-        }
-    )
-    seen = {p["ctx"].get("arch") for p in parts}
-    for arch in filter(None, (x.strip() for x in a.expect.split(","))):
-        if arch not in seen:
-            parts.append(_missing(arch, base))
-    if not parts:
-        _emit_outputs(should_post="false")
-        print("No arch wrote a part and none was expected; nothing to post.")
-        return 0
-    points_by_arch = dict(p.split("=", 1) for p in a.points if "=" in p)
-
-    text = build_text(parts, points_by_arch)
-    should_post = any(p.get("should_post") for p in parts)
-    with open(a.out, "w") as fh:
-        json.dump({"channel": a.channel, "text": text}, fh)
-    _emit_outputs(should_post=str(should_post).lower())
-    print(f"should_post={should_post}")
-    print(text)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

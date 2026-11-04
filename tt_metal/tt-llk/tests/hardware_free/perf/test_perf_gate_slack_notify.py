@@ -3,7 +3,6 @@
 
 """Tests for the gate's Slack notifier (lives in tt_metal/tt-llk/perf)."""
 
-import json
 import pathlib
 import sys
 
@@ -13,7 +12,6 @@ from gate_slack_notify import (
     _describe,
     build_text,
     from_verdict,
-    main,
     read_regressions,
 )
 
@@ -69,12 +67,6 @@ def _verdict(status, reason="", **baseline):
         },
         "baseline": {"commit_sha": "abc1234", **baseline},
     }
-
-
-def _write_verdict(tmp_path, v):
-    path = tmp_path / "verdict.json"
-    path.write_text(json.dumps(v))
-    return path
 
 
 def test_regression_is_reported():
@@ -164,70 +156,6 @@ def test_a_broadcast_in_the_pr_title_cannot_ping_the_channel():
     assert "@channel" in text
 
 
-def test_payload_escapes_a_config_value_that_holds_a_quote(tmp_path, monkeypatch):
-    """A sweep value must never be able to break the request body."""
-    row = dict(_ROW, math_fidelity='HiFi4 "quoted", and\nnewline')
-    regressions = _write_regressions(tmp_path, [row])
-    out = tmp_path / "payload.json"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out.txt"))
-
-    main(
-        [
-            "--regressions",
-            str(regressions),
-            "--verdict",
-            str(_write_verdict(tmp_path, _verdict("regression"))),
-            "--channel",
-            "C0TEST",
-            "--out",
-            str(out),
-        ]
-    )
-
-    payload = json.loads(out.read_text())
-    assert payload["channel"] == "C0TEST"
-    assert "newline" in payload["text"]
-
-
-def test_a_missing_verdict_posts_a_skip(tmp_path, monkeypatch):
-    out = tmp_path / "payload.json"
-    output = tmp_path / "out.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-
-    main(
-        [
-            "--verdict",
-            str(tmp_path / "does_not_exist.json"),
-            "--channel",
-            "C0TEST",
-            "--out",
-            str(out),
-        ]
-    )
-
-    assert "status=skipped" in output.read_text()
-    assert "should_post=true" in output.read_text()
-
-
-def test_clean_run_posts_too(tmp_path, monkeypatch):
-    output = tmp_path / "out.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-
-    main(
-        [
-            "--verdict",
-            str(_write_verdict(tmp_path, _verdict("pass"))),
-            "--channel",
-            "C0TEST",
-            "--out",
-            str(tmp_path / "payload.json"),
-        ]
-    )
-
-    assert "status=clean" in output.read_text()
-    assert "should_post=true" in output.read_text()
-
-
 def test_missing_regressions_file_reads_as_no_rows(tmp_path):
     assert read_regressions(str(tmp_path / "nope.csv")) == []
 
@@ -268,27 +196,3 @@ def test_a_run_without_a_pr_names_what_started_it():
         "(manual run on some/branch)" in build_text("skipped", [], ctx).splitlines()[0]
     )
     assert "(nightly)" in build_text("skipped", [], {**_CTX, "pr_number": ""})
-
-
-def _post(tmp_path, monkeypatch, status, *extra):
-    output = tmp_path / "out.txt"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    args = ["--verdict", str(_write_verdict(tmp_path, _verdict(status)))]
-    main(
-        args + ["--channel", "C0TEST", "--out", str(tmp_path / "payload.json"), *extra]
-    )
-    return output.read_text()
-
-
-def test_post_pass_false_keeps_a_pass_out_of_slack(tmp_path, monkeypatch):
-    out = _post(tmp_path, monkeypatch, "pass", "--post-pass", "false")
-    assert "status=clean" in out and "should_post=false" in out
-
-
-def test_post_pass_false_still_posts_a_regression_and_a_skip(tmp_path, monkeypatch):
-    assert "should_post=true" in _post(
-        tmp_path, monkeypatch, "regression", "--post-pass", "false"
-    )
-    assert "should_post=true" in _post(
-        tmp_path, monkeypatch, "no-baseline", "--post-pass", "false"
-    )
