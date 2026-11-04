@@ -564,7 +564,7 @@ CombineHandles add_combine_program(
                 std::vector<uint32_t> fab;
                 const auto& mp = *plan.mesh.chips.at(ch)[static_cast<size_t>(p.dir)];
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    node(ch), node(mp.peer), mp.links.at(p.li), program, p.core, fab);
+                    mesh_device, node(ch), node(mp.peer), mp.links.at(p.li), program, p.core, fab);
                 a.lits(fab);
             }
             if (plan.fused) {  // (the hand-off receiver's args, then the accumulator writer's)

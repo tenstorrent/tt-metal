@@ -216,7 +216,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             tail.insert(tail.end(), {peer.r, peer.c, static_cast<uint32_t>(d)});
             std::vector<uint32_t> fabric;
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                src_node, pn, port.links[li], desc, core, fabric);
+                *mesh, src_node, pn, port.links[li], desc, core, fabric);
             tail.insert(tail.end(), fabric.begin(), fabric.end());
 
             KernelDescriptor::RTArgList sd;

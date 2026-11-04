@@ -462,7 +462,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::engine_workload(
                 }
                 const auto& links = plan.links.at({ChipCoord{r, p}, dd});
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                    node(r, p), pnode, links.at(l), desc, core, tail);
+                    *mesh, node(r, p), pnode, links.at(l), desc, core, tail);
             } else {
                 for (uint32_t x : {0u, 0u, 0u}) {
                     ps.push_back(x);
@@ -626,7 +626,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                 const auto& links = plan.links.at({ch, d});
                 std::vector<uint32_t> fabric;
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                    node(r, p), node(r, *peer), links.at(l), desc, core, fabric);
+                    *mesh, node(r, p), node(r, *peer), links.at(l), desc, core, fabric);
                 ps.append(fabric);
             }
             psender.emplace_runtime_args(core, ps);

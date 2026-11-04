@@ -1179,7 +1179,7 @@ private:
     std::vector<uint32_t> fabric(const Coord& peer, uint32_t link, const CoreCoord& core) {
         std::vector<uint32_t> out;
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-            h.node(coord), h.node(peer), link, desc, core, out);
+            *h.mesh, h.node(coord), h.node(peer), link, desc, core, out);
         return out;
     }
 };

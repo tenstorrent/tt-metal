@@ -144,7 +144,7 @@ def _poke_prog(mesh, src, dst, target, nbytes, pre_delay):
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
     prog.kernels[0].runtime_args[0][0].extend(
-        ttnn.setup_fabric_connection(src_id, dst_id, 0, prog, ttnn.CoreCoord(0, 0))
+        ttnn.setup_fabric_connection(mesh, src_id, dst_id, 0, prog, ttnn.CoreCoord(0, 0))
     )
     prog.custom_program_hash = _hash("poke", src, dst, int(target), int(nbytes), int(pre_delay))
     return prog
