@@ -439,6 +439,33 @@ def test_recurrent_chunk_scan_keeps_fp32_state(
     assert_bit_identical(torch.full((1, 32, 32), expected_value), ttnn.to_torch(final_state), name="final state")
 
 
+def test_recurrent_chunk_scan_updates_state_in_multi_row_partial_width_blocks(
+    zero_actual_start, device: ttnn.Device
+) -> None:
+    """Two key tiles by five value tiles on one core: with FP32 DST the state update's DST blocks are two key rows
+    of one value column, so each block's tiles are not consecutive in the state and must be packed by index."""
+    key_dim, value_dim = 64, 160
+    value_tiles = value_dim // 32
+    grid = device.compute_with_storage_grid_size()
+    # Five value tiles split only into five blocks; with more heads than fit five to a grid line, no core shares a
+    # head and each core holds all five value tiles.
+    batch_heads = max((grid.x // value_tiles) * grid.y, (grid.y // value_tiles) * grid.x) + 1
+    assert batch_heads <= grid.x * grid.y
+    host_inputs = host_protocol(batch_heads, 2, key_dim, value_dim, bf16_names=frozenset())
+    host_state = initial_state(batch_heads, key_dim, value_dim)
+    expected = recurrent_oracle(host_inputs, host_state)
+    inputs = device_protocol(host_inputs, device)
+    state = to_device(host_state, device)
+    actual = run_recurrent(inputs, state, actual_start=zero_actual_start)
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("token_output", "final_state"),
+        context=f"{batch_heads} heads, K={key_dim}, V={value_dim}",
+        nrmse_threshold=0.004,
+    )
+
+
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")

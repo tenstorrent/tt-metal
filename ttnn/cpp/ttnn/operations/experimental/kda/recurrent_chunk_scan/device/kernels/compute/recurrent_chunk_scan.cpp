@@ -260,7 +260,8 @@ FORCE_INLINE void update_state(
     DFBFinalDecay& final_decay,
     DFBCorrected& corrected_value) {
     // A DST block is `rows` key rows of `columns` state columns. Each tile's change reads only that tile of the state,
-    // so any block can be accumulated in place.
+    // so any block can be accumulated in place. A block narrower than the state is not contiguous in it, so the packer
+    // writes each tile at its index.
     constexpr uint32_t columns = kda::MatmulSubblock<Kt, Columns>::columns;
     constexpr uint32_t rows = kda::MatmulSubblock<Kt, Columns>::rows;
     constexpr uint32_t key_state_tiles = Kt * Columns;
@@ -311,8 +312,8 @@ FORCE_INLINE void update_state(
             for (uint32_t row = 0; row < rows; ++row) {
                 for (uint32_t column = 0; column < columns; ++column) {
                     const uint32_t tile = (first_key + row) * Columns + first_column + column;
-                    pack_tile(row * columns + column, state_id, tile);
-                    pack_tile(row * columns + column, carry_id, tile);
+                    pack_tile<true>(row * columns + column, state_id, tile);
+                    pack_tile<true>(row * columns + column, carry_id, tile);
                 }
             }
             tile_regs_release();
