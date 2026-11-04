@@ -13,6 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/reduce_affine_transforms/device/kernels/publish_schedule.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 
 // FP32 half-DST holds four 32x32 output tiles. Production's four-tile output rows fit exactly and use
@@ -72,26 +73,22 @@ void matmul_product(DFBA& a, DFBB& b, DFBOut& out, DFBSend* send) {
     }
 }
 
-// Pack slot `staged` (FP32) to the stage and send buffers and slot `published` to the BF16 output row.
-template <typename DFBStage, typename DFBSend, typename DFBOut>
-FORCE_INLINE void pack_and_publish(
-    DFBStage& stage, DFBSend& send, DFBOut& out, uint32_t tile, uint32_t staged, uint32_t published, uint32_t column) {
+// Pack slot `staged` (FP32) to the stage and send buffers and, with `out`, slot `published` to the BF16 output row.
+template <typename DFBStage, typename DFBSend, typename DFBPub>
+FORCE_INLINE void pack_staged(
+    DFBStage& stage,
+    DFBSend& send,
+    DFBPub* out,
+    uint32_t tile,
+    uint32_t column,
+    uint32_t staged,
+    uint32_t published = 0) {
     pack_tile(staged, stage.get_id(), tile);
     pack_tile(staged, send.get_id(), tile);
-    pack_reconfig_data_format(out.get_id());
-    pack_tile(published, out.get_id(), column);
-    pack_reconfig_data_format(stage.get_id());
-}
-
-// Pack slot `staged` to the stage and send buffers and, with `out`, slot `published` to the output row.
-template <typename DFBStage, typename DFBSend, typename DFBPub>
-FORCE_INLINE void pack_tile_row_entry(
-    DFBStage& stage, DFBSend& send, DFBPub* out, uint32_t tile, uint32_t staged, uint32_t published, uint32_t column) {
     if (out != nullptr) {
-        pack_and_publish(stage, send, *out, tile, staged, published, column);
-    } else {
-        pack_tile(staged, stage.get_id(), tile);
-        pack_tile(staged, send.get_id(), tile);
+        pack_reconfig_data_format(out->get_id());
+        pack_tile(published, out->get_id(), column);
+        pack_reconfig_data_format(stage.get_id());
     }
 }
 
@@ -124,7 +121,7 @@ void add(DFBA& a, DFBB& b, DFBStage& stage, DFBSend& send, DFBPub* out) {
             add_tiles(a_id, b_id, tile, tile, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile_row_entry(stage, send, out, tile, 0, 0, column);
+            pack_staged(stage, send, out, tile, column, 0);
             tile_regs_release();
         }
         if (out != nullptr) {
@@ -162,16 +159,10 @@ void copy_rows(DFBIn& in, DFBStage& stage, DFBSend& send, DFBIdentity& identity,
         for (uint32_t column = 0; column < Columns; column++) {
             const uint32_t tile = row * Columns + column;
             tile_regs_acquire();
-            copy_tile(in_id, tile, 0);
-            uint32_t staged = 0;
-            if (Complement && row == column) {
-                kda::apply_identity<false>(identity, in_id, 0, 1, 2);
-                copy_init(in_id);
-                staged = 2;
-            }
+            const uint32_t staged = kda::copy_tile_as_a(in, identity, tile, Complement && row == column, 2);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile_row_entry(stage, send, out, tile, staged, 0, column);
+            pack_staged(stage, send, out, tile, column, staged);
             tile_regs_release();
         }
         if (out != nullptr) {
@@ -210,12 +201,12 @@ void matmul_product_published(DFBA& a, DFBB& b, DFBOut& stage, DFBSend& send, DF
             uint32_t published = 0;
             if (row == column) {
                 // matmul's in1 (b) is SrcA.
-                kda::apply_identity<true>(identity, b_id, 0, 1, 2);
+                kda::a_to_complement(identity, b_id, 0, 1, 2);
                 published = 2;
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_and_publish(stage, send, out, row * Kt + column, 0, published, column);
+            pack_staged(stage, send, &out, row * Kt + column, column, 0, published);
             tile_regs_release();
         }
         out.push_back(Kt);
@@ -254,7 +245,7 @@ TT_KERNEL void compute(uint32_t group) {
     identity.wait_front(1);
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
-    DataflowBuffer* const publish_initial = kda_chronology::publishes_unchanged(group, active) ? &output : nullptr;
+    DataflowBuffer* const publish_initial = kda_reduce::publishes_unchanged(active) ? &output : nullptr;
     copy_rows<Kt, Kt, true>(initial_a, stage_a, send_a, identity, publish_initial);
     copy_rows<Kt, Vt, false>(initial_b, stage_b, send_b, identity, publish_initial);
     initial_a.pop_front(a_tiles);
@@ -274,7 +265,7 @@ TT_KERNEL void compute(uint32_t group) {
         remote_a.wait_front(a_tiles);
         remote_b.wait_front(b_tiles);
         reconfig_data_format(remote_a.get_id(), stage_a.get_id());
-        const bool publish_now = kda_chronology::publishes_at_stage(group, active, distance);
+        const bool publish_now = kda_reduce::publishes_at_stage(group, active, distance);
         // Both FP32 products remain separate calls: they consume different right-hand operands and publish
         // different output rectangles.
         if (publish_now) {

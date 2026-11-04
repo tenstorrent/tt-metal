@@ -60,20 +60,20 @@ FORCE_INLINE void drain(DFB& buffer) {
 // this value block's columns of E and of B in each such slot are zero tiles.
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
 FORCE_INLINE void write_identity_slots(
-    const Accessor& packed, DFB& scratch, Noc& noc, const uint32_t* row_bases, uint32_t slots, uint32_t value_block) {
+    const Accessor& packed, DFB& zero_tile, Noc& noc, const uint32_t* row_bases, uint32_t slots, uint32_t value_block) {
     constexpr uint32_t row_stride = Kt + VtFull;
     const uint32_t first_column = value_block * Vt;
 
-    scratch.reserve_back(1);
-    const uint32_t tile_bytes = scratch.get_entry_size();
-    noc.async_write_zeros(scratch, tile_bytes);
+    zero_tile.reserve_back(1);
+    const uint32_t tile_bytes = zero_tile.get_entry_size();
+    noc.async_write_zeros(zero_tile, tile_bytes);
     noc.write_zeros_l1_barrier();
     for (uint32_t slot = 0; slot < slots; ++slot) {
         for (uint32_t row = 0; row < Kt; ++row) {
             const uint32_t row_page = row_bases[slot] + row * row_stride;
             for (uint32_t column = first_column; column < first_column + Vt; ++column) {
-                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + column});
-                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + Kt + column});
+                noc.async_write(zero_tile, packed, tile_bytes, {}, {.page_id = row_page + column});
+                noc.async_write(zero_tile, packed, tile_bytes, {}, {.page_id = row_page + Kt + column});
             }
         }
     }
@@ -141,8 +141,8 @@ FORCE_INLINE void write_summary(
             identity_rows[identity_slots++] = tail_row_base;
         }
         if (identity_slots != 0) {
-            DataflowBuffer scratch(dfb::identity_scratch);
-            write_identity_slots<Kt, Vt, VtFull>(packed, scratch, noc, identity_rows, identity_slots, value_block);
+            DataflowBuffer zero_tile(dfb::zero_tile);
+            write_identity_slots<Kt, Vt, VtFull>(packed, zero_tile, noc, identity_rows, identity_slots, value_block);
         }
     }
 }

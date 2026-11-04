@@ -20,6 +20,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     recurrent_oracle,
     group_summary_nd_sharded,
     summary_oracle,
+    pack_summary,
     to_device,
     unpack_summary,
 )
@@ -450,16 +451,10 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
             dims = [None, None]
             # Packed complement-form [2, N, K, K+V] summaries ([E | B], E = A - I, exact for these values) of every
             # rank, concatenated along N and sharded back by SP rank.
-            eye = torch.eye(key_dim, dtype=host_dtype)
             packed = torch.cat(
-                [
-                    torch.stack(
-                        [torch.cat([rank[0] - eye, rank[1]], dim=-1), torch.cat([rank[2] - eye, rank[3]], dim=-1)]
-                    )
-                    for rank in ranks
-                ],
+                [torch.stack([pack_summary(rank[0], rank[1]), pack_summary(rank[2], rank[3])]) for rank in ranks],
                 dim=1,
-            )
+            ).to(host_dtype)
             dims[axis] = 1
             summaries = ttnn.from_torch(
                 packed,

@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 // product = E @ state (E = A - I). Each output subblock accumulates the whole key dimension in DST, k = 0 .. Kt - 1 in
@@ -117,10 +118,9 @@ FORCE_INLINE void add(
 
 template <uint32_t Kt, uint32_t Vt, uint32_t steps>
 TT_KERNEL void compute() {
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::e, dfb::initial, dfb::product);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::e, dfb::state, dfb::product);
     constexpr uint32_t e_tiles = Kt * Kt;
     constexpr uint32_t state_tiles = Kt * Vt;
-    DataflowBuffer initial(dfb::initial);
     DataflowBuffer initial_exact(dfb::initial_exact);
     DataflowBuffer state_exact(dfb::state_exact);
     DataflowBuffer e(dfb::e);
@@ -136,23 +136,24 @@ TT_KERNEL void compute() {
     }
     const uint32_t entry_step = (topology.rank + steps - topology.first_rank) % steps;
 
+    // Seed both views of the state, the matmul's (state) and the exact one the add reads (state_exact), with one exact
+    // FP32 copy of the initial state.
+    kda::copy_exact<state_tiles>(initial_exact, state, state_exact);
     for (uint32_t step = 0; step < steps; ++step) {
-        auto& current = step == 0 ? initial : state;
-        auto& current_exact = step == 0 ? initial_exact : state_exact;
-        current.wait_front(state_tiles);
+        state.wait_front(state_tiles);
         e.wait_front(e_tiles);
-        multiply<Kt, Vt>(e, current, product);
-        current.pop_front(state_tiles);
+        multiply<Kt, Vt>(e, state, product);
+        state.pop_front(state_tiles);
         e.pop_front(e_tiles);
         // b is only needed by the add, so its reads may land while the matmul runs.
         b.wait_front(state_tiles);
         product.wait_front(state_tiles);
-        current_exact.wait_front(state_tiles);
+        state_exact.wait_front(state_tiles);
         // Publish the carry after step entry_step - 1 (this rank's entry state) and after the last step.
         const bool publish = step + 1 == entry_step || step + 1 == steps;
-        add<state_tiles>(product, b, current_exact, state, state_exact, publish ? &out : nullptr);
+        add<state_tiles>(product, b, state_exact, state, state_exact, publish ? &out : nullptr);
         product.pop_front(state_tiles);
         b.pop_front(state_tiles);
-        current_exact.pop_front(state_tiles);
+        state_exact.pop_front(state_tiles);
     }
 }

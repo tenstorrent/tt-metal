@@ -93,6 +93,12 @@ def pack_summary(affine_a: torch.Tensor, affine_b: torch.Tensor) -> torch.Tensor
     return torch.cat([affine_a - torch.eye(affine_a.shape[-1]), affine_b], dim=-1)
 
 
+def pack_summary_slots(affine_a: torch.Tensor, affine_b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
+    """Packed [slots, N, K, K+V] summaries whose head slot holds ``pack_summary``. A rank's unread tail slot is NaN."""
+    head = pack_summary(affine_a, affine_b)
+    return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
+
+
 def unpack_summary(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """The transform (A, B) of complement-form [E | B] rows; A = E + I is exact in FP32 for BF16 E."""
     key_dim = packed.shape[-2]

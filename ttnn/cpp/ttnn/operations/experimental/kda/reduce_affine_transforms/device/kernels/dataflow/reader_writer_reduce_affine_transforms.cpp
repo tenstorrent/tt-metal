@@ -15,6 +15,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/reduce_affine_transforms/device/kernels/publish_schedule.hpp"
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
@@ -197,7 +198,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             remote_a.push_back(a_tiles);
             remote_b.push_back(b_tiles);
             // Compute publishes before it releases the next prefix to send, so drain the published rows first.
-            if (kda_chronology::publishes_at_stage(group, active, distance)) {
+            if (kda_reduce::publishes_at_stage(group, active, distance)) {
                 write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
             }
             send_a.wait_front(2 * a_tiles);
@@ -211,9 +212,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     }
 
     // A single active group publishes its copied summary; there is no composition stage.
-    if (kda_chronology::publishes_unchanged(group, active)) {
+    if (kda_reduce::publishes_unchanged(active)) {
         write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
     }
-    send_a.wait_front(a_tiles);
-    send_b.wait_front(b_tiles);
 }
