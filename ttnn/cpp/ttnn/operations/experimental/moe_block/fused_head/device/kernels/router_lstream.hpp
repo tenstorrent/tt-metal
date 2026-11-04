@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/router_stream.py:LSTREAM (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
-// A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// The router's L stream (LStream).
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 struct LStream {
     uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, ns, sfree, u, i, sent;

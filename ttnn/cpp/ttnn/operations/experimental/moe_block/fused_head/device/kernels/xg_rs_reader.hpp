@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_RS_READER (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
-// A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 // (down + reduce-scatter) gather my units: per unit (entry e, block b, halves), per core of my link in the unit's
 // halves holding tiles of b: wait its hand-off on my mailbox word of it, NoC-read its bf16 sub-block from its FINB

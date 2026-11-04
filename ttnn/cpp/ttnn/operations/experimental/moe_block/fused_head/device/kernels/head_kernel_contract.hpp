@@ -3,31 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The fused head's kernel contract: for every kernel the program launches (one program a chip), where it runs, its
-// compile-time args (index enums below), the defines the host must set (and the reference expression that set them),
-// its runtime / common runtime arg layout. Host-side only (the program factory includes it); the kernels read the
-// same indices literally, as the reference's. Reference: models/demos/moe_block/tt/fused_head.py HeadSE3._run
-// (mstaletovic/moe-trim), which assembles x_gather3.XGather3.pieces + router_stream.RouterStream.pieces +
-// routing_stream.RoutingStream.y_kernels + se_engine3.SeEngine3.pieces (+ the kernel_lib mcast attachments).
+// compile-time args (index enums below), the defines the host must set (and the host model's value behind each), its
+// runtime / common runtime arg layout. Host-side only (the program factory includes it); the kernels read the same
+// indices literally. The host model (head_program.*) assembles the x all-gather's, the router's, the routing
+// exchange's and the shared expert's pieces (XGather3, RouterStream, RoutingStream, SeEngine3; + the kernel_lib mcast
+// attachments).
 //
 // Kernel files (all under ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/):
-//   dataflow/xg_reader.cpp       port cores        RISCV_0, NOC1    x_gather3 _READER
-//   dataflow/xg_sender.cpp       port cores        RISCV_1, NOC0    x_gather3 _SENDER (+ LSTREAM, RA_SEND)
-//   dataflow/xg_watcher.cpp      watcher core      RISCV_1, NOC1    x_gather3 _WATCHER (+ RA_SEND under W_RA0)
-//   dataflow/ra_y_send.cpp       watcher core      RISCV_0, default routing_stream _Y_SEND (first Y direction only)
-//   dataflow/se_brisc.cpp        matmul cores      RISCV_0, NOC0    se_engine3 _BRISC
-//   dataflow/se_ncrisc.cpp       matmul cores      RISCV_1, NOC1    se_engine3 _NCRISC
-//   compute/se_compute.cpp       matmul cores      compute          se_engine3 _COMPUTE (one kernel a column group)
-//   dataflow/router_ncrisc.cpp   router cores      RISCV_1, NOC0    router_stream _NCRISC (+ _ROWS, ra::plan)
-//   compute/router_compute.cpp   router cores      compute          router_stream _COMPUTE (+ _ROWS, rw_ route words)
-//   dataflow/router_brisc.cpp    router cores      RISCV_0, NOC1    router_stream _BRISC (+ _ROWS, ra::plan)
+//   dataflow/xg_reader.cpp       port cores        RISCV_0, NOC1    x all-gather reader
+//   dataflow/xg_sender.cpp       port cores        RISCV_1, NOC0    x all-gather sender (+ LStream, RA_SEND)
+//   dataflow/xg_watcher.cpp      watcher core      RISCV_1, NOC1    x all-gather watcher (+ RA_SEND under W_RA0)
+//   dataflow/ra_y_send.cpp       watcher core      RISCV_0, default routing exchange's Y send (first Y direction only)
+//   dataflow/se_brisc.cpp        matmul cores      RISCV_0, NOC0    shared expert BRISC
+//   dataflow/se_ncrisc.cpp       matmul cores      RISCV_1, NOC1    shared expert NCRISC
+//   compute/se_compute.cpp       matmul cores      compute          shared expert compute (one kernel a column group)
+//   dataflow/router_ncrisc.cpp   router cores      RISCV_1, NOC0    router NCRISC (+ router rows, ra::plan)
+//   compute/router_compute.cpp   router cores      compute          router compute (+ router rows, rw_ route words)
+//   dataflow/router_brisc.cpp    router cores      RISCV_0, NOC1    router BRISC (+ router rows, ra::plan)
 // (router split: the three router kernels once a half, each over its half's cores, with their own RT_SPLIT defines)
 //
-// Generated from the reference strings by tests/ttnn/unit_tests/operations/experimental/moe_block/fused_head/
-// gen_head_kernels.py (--check proves each file, includes inlined, is the reference's stitched text). Only these
-// changed: shared pieces became headers; placeholders became the RAP_* / RW_* defines; the GROW macro text became
-// se_defs.hpp; the addresses baked in defines became common runtime args (se_defs.hpp, router_addr.hpp).
+// Shared pieces are headers; the planner's and the route words' parameters are the RAP_* / RW_* defines; the GROW
+// macro is se_defs.hpp; addresses are common runtime args (se_defs.hpp, router_addr.hpp), never defines.
 //
-// Define values: plain tokens (numbers with the reference's `u` suffix where it had one, true / false); the list
+// Define values: plain tokens (numbers, with a `u` suffix where marked `u` below; true / false); the list
 // defines (RW_*_INIT) are comma-separated without spaces. Every define below is structural (no buffer address), so
 // the program hash may include them.
 
@@ -158,8 +156,8 @@ enum SeComputeCt : uint32_t {
 };
 // Defines (all three kernels; SeEngine3.pieces `nd`):
 //   SE_HSL (h slots), SE_ACCP (acc_pages, `u`), SE_DT (dest_tiles() = 8);
-//   SE_GROW_OWN_CR = CR / shards, SE_GROW_OWN_RT = rows / 32 / shards - only when NCH > 1 and shards > 1 (the
-//     reference's GROW text; se_defs.hpp);
+//   SE_GROW_OWN_CR = CR / shards, SE_GROW_OWN_RT = rows / 32 / shards - only when NCH > 1 and shards > 1
+//     (se_defs.hpp GROW);
 //   SE_WRING (if WRING); SE_PREP_LAST (NCH > 1 and not xfree); SE_XRING (XR, `u`, if xring); SE_XFREE 21 (if xfree);
 //   with rs: SE_NENT (rs.G), SE_RS, SE_HOLD 6, SE_FINB 7, SE_ARRF 8, SE_ARRB 9, SE_FINC 10, SE_OUTF 11, SE_PSYNC 12,
 //     SE_FFREE 20, SE_FIN_ROWS (if _fin_rows()), SE_P (rs.P), SE_ZF / SE_ZB (rs.zone_tiles), SE_RS_PM (rs.npass,
@@ -169,7 +167,7 @@ enum SeComputeCt : uint32_t {
 //     SE_RG, SE_RD (6 split / 3), SE_RTR_SPLIT (split, `u`, if split), XACK_ID 128, WACK_ID 144, SE_GX, RXR_ID 0,
 //     RWR_ID 16, SE_RDONE (if rtr_overlay), RXS_ID 32, SE_KC, SE_RTRX_L1 + XRL_ID 96 (if not xring),
 //     SE_RTR_BCT0 (len(bct + xa_ct)), SE_RTR_CT0 (NCRISC accessor offset);
-//     (reference SE_EW = the ewords address: now a common runtime arg, below)
+//     (SE_EW, the ewords address, is a common runtime arg, below)
 //   with prep: SE_PREP, SE_PU 14, SE_PO 15, SE_PREP_FULL, SE_PREP_BCT, SE_PREP_ROW (xbuf aligned page size),
 //     SE_PREP_CT0, SE_LRDY 16 (with a latent);
 //   compute only, first: SE_GLU (glu code: silu 1, situ 2, clamped_silu 3, swiglu_oai 4) and SE_GLU_BETA,
@@ -178,7 +176,7 @@ enum SeComputeCt : uint32_t {
 // chip shares moved to the common args by _common_span (b_span = (7, 12 + GX + len(sor) + len(tail)), n_span =
 // (5 + len(rtr_a) + len(wg[c]) + len(wd[c]), 7 + GY + len(sor) + len(tail))): per core [args before the span] +
 // [args after it]; common args [span start, span length n, the n shared words] (or [0, 0] and the full lists per
-// core), then (new) at common index 2 + n: the ewords address (SE_EW; only read with SE_RTR - pass 0 otherwise).
+// core), then at common index 2 + n: the ewords address (SE_EW; only read with SE_RTR - pass 0 otherwise).
 // Compute: common args = wg + wd + h0 + [HT] + the RS / prep args every core of the group shares; per core the rest
 // ([0] if none) - SE_NC = len(common).
 constexpr uint32_t kSeEwordsCommonArgAfterSpan = 2;  // SE_EW = common[2 + common[1]]
@@ -196,15 +194,15 @@ enum RouterCt : uint32_t {
     RT_CT_K,
     RT_CT_COUNT,
 };
-// Common runtime args (new; router_addr.hpp) - the same on all three kernels:
+// Common runtime args (router_addr.hpp) - the same on all three kernels:
 enum RouterCommonArg : uint32_t {
     RT_CRTA_ARENA_BASE = 0,  // RouterStream.base (the router cores' arena range)
     RT_CRTA_ENG_SEM = 1,     // RouterStream.arr[1] (the engine-done semaphore; 0 without RT_ENG_ON)
     RT_CRTA_COUNT,
 };
 // Defines:
-//   NCRISC and compute (`eng`): RT_ENG_ON (on_engine; the reference's RT_ENG = arr[1]), RT_MSYNC_OFF (off["msync"],
-//     `u`; the reference's RT_MSYNC = base + it), RT_FOLD (fold, `u`), RT_RW_SOLO (logits on the router cores and
+//   NCRISC and compute (`eng`): RT_ENG_ON (on_engine; RT_ENG = common arg 1), RT_MSYNC_OFF (off["msync"], `u`;
+//     RT_MSYNC = arena base + it), RT_FOLD (fold, `u`), RT_RW_SOLO (logits on the router cores and
 //     one router core), RT_ARR_ORDERED (RouterSpec.ordered = MoEBlockConfig.deterministic);
 //   all three with the split (`sd`, per half h): RT_SPLIT, RT_HALF h, RT_HB (h ETL, `u`), RT_ETF (ET, `u`),
 //     RT_PWORD_OFF (off["words"] + 128, `u`), RT_PART_OFF (off["part"], `u`), RT_PART_CB 13;

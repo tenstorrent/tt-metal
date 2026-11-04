@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_RS_SENDER (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
-// A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 // (down + reduce-scatter) my units' chunks, the reader's walk: one fabric packet each into the downstream chip's same
 // core, its zone slot of this direction (slot by the core's half); a core's last chunk carries the fused increment of

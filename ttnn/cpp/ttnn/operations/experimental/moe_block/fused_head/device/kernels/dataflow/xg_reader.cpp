@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_READER (= _CT + _WALK + _LA_READER + _RS_READER + main)
-// (mstaletovic/moe-trim). Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both
-// together.
+// The x all-gather's reader on the port cores (xg_ct.hpp, xg_walk.hpp, xg_la_reader.hpp, xg_rs_reader.hpp).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_ct.hpp"

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/router_stream.py:_COMPUTE (+ _ROWS; + prep_stream._ROUTE_FN under RT_ROUTE)
-// (mstaletovic/moe-trim). Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both
-// together.
+// The router cores' compute kernel (router_rows.hpp; under RT_ROUTE also the dispatch prep's route words,
+// route_words.hpp).
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_addr.hpp"
 
 #include <cstdint>

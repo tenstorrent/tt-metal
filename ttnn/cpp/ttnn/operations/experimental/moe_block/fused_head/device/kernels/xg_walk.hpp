@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_WALK (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
-// A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// The x all-gather's walk over chunks, shards and links.
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 constexpr uint32_t PPS = (KB + RP - 1) / RP, RPR = SPS * PPS;  // (packets a K step, a row tile)
 // chunk m of shard q, link v: row tile R of the chunk (link (R / 2) % NV; part 1 / 2: even / odd R), step j, first

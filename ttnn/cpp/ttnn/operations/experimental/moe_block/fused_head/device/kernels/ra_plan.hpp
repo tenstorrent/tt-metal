@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/routing_stream.py:_plan_fn(routing_a2a.py:_PLAN) - placeholders __X__ as RAP_X
-// defines (mstaletovic/moe-trim). Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py;
-// edit both together. A fragment of the stitched kernel text: it relies on what the including kernel declared before it
-// (no include guard beyond #pragma once - included once a kernel).
+// The routing exchange's planner (ra::plan), parametrized by the RAP_* defines.
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 namespace ra {
 

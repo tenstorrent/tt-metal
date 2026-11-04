@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The matmul-core kernels' macros the reference wrote into their source text (se_engine3.SeEngine3.pieces, the `nd`
-// defines), here from host defines that carry no address.
+// The matmul-core kernels' macros, built from host defines that carry no address.
 #pragma once
 
 // GROW(m, lr): the global row tile of chunk m's chunk-local row tile lr. With row chunks over TP shards (NCH > 1 and
@@ -16,8 +15,7 @@
 #define GROW(m, lr) ((m) * CR + (lr))
 #endif
 
-// SE_EW: the router-phase words (SeEngine3.ewords, a persistent L1 tensor a core) - the reference baked its address as
-// a define. Here the BRISC / NCRISC read it from the common runtime args right past the shared span: their common args
-// are [span start, span length n, n words] (se_engine3._common_span; [0, 0] when nothing is shared), then this address
-// at index 2 + n. Only expanded under SE_RTR, by the dataflow kernels (the compute never names it).
+// SE_EW: the router-phase words (a persistent L1 tensor a core). The BRISC / NCRISC read its address from the common
+// runtime args right past the shared span: their common args are [span start, span length n, n words] ([0, 0] when
+// nothing is shared), then this address at index 2 + n. Only expanded under SE_RTR, by the dataflow kernels (the compute never names it).
 #define SE_EW (get_common_arg_val<uint32_t>(2 + get_common_arg_val<uint32_t>(1)))

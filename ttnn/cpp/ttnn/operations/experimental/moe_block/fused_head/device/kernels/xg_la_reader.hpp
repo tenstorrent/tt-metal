@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_LA_READER (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
-// A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
 // (K3's latent all-to-all) per destination block b of my direction, per core of my link holding rows of b: wait its
 // hand-off on my latent word of it, NoC-read its rows [r0, r0 + nr) of its latent block [MT][LWMAX] in RP-tile chunks

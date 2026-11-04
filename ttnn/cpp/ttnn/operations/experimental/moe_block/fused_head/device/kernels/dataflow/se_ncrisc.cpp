@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/se_engine3.py:_NCRISC (mstaletovic/moe-trim).
-// Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
+// The shared expert's matmul cores' NCRISC kernel.
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/se_defs.hpp"
 
 #include <cstdint>

@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/prep_stream.py:_ROUTE_FN - placeholders __X__ as RW_X defines
-// (mstaletovic/moe-trim). Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both
-// together. A fragment of the stitched kernel text: it relies on what the including kernel declared before it (no
-// include guard beyond #pragma once - included once a kernel).
+// The dispatch prep's route words, parametrized by the RW_* defines.
+// A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
+// kernel).
 #pragma once
-// (dispatch prep's route words: combine_rf/dispatch_prep.py's _ROUTE, one token at a time)
+// (dispatch prep's route words, one token at a time)
 namespace rw_ {
 constexpr uint32_t R = RW_R, C = RW_C, ME = RW_ME, K = RW_K, RW = RW_RW;
 constexpr bool WRAP_X = RW_WRAPX, WRAP_Y = RW_WRAPY;

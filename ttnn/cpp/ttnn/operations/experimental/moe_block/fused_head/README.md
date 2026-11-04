@@ -63,20 +63,16 @@ should pass the L1 the CB may take.
 
 ## Kernels
 
-`device/kernels/head_kernel_contract.hpp` lists every kernel (RISC, NoC, compile-time args, defines and the
-reference expression behind each, runtime / common-arg layouts, the kernel_lib multicast families). The files are
-the reference's stitched sources with the string surgery turned into headers and defines:
+`device/kernels/head_kernel_contract.hpp` lists every kernel (RISC, NoC, compile-time args, defines and the host
+model's value behind each, runtime / common-arg layouts, the kernel_lib multicast families). The kernel files are the
+source:
 
-- shared pieces (x_gather3 `_CT` / `_WALK` / `_LA_*` / `_RS_*`, router_stream `_ROWS` / `LSTREAM`, routing_stream
-  `RA_SEND`, prep_stream's route-word function, routing_a2a's `_PLAN` as rewritten by `routing_stream._plan_fn`) are
+- shared pieces (the x all-gather's compile-time args / walk / latent and reduce-scatter reader and sender, the
+  router's rows and L stream, the routing exchange's send, the dispatch prep's route words, the routing planner) are
   headers (`ra_plan.hpp`: `ra::plan(a0, B)`);
-- placeholders: the planner's `__X__` are `RAP_X` defines, prep_stream's `__X__` are `RW_X` defines; the `GROW()`
-  macro text is `se_defs.hpp`;
-- addresses the reference baked into defines (`SE_EW`, `RT_ENG`, `RT_MSYNC`, `RT_PWORD`, `RT_PART`) are common
-  runtime args, so no define carries an address.
-
-`tests/.../moe_block/fused_head/gen_head_kernels.py --check` (reference environment) rebuilds each stitched text from
-the files and compares it with the reference's.
+- the planner's and the route words' parameters are `RAP_X` / `RW_X` defines; the `GROW()` macro is `se_defs.hpp`;
+- addresses (`SE_EW`, `RT_ENG`, `RT_MSYNC`, `RT_PWORD`, `RT_PART`) are common runtime args, so no define carries an
+  address.
 
 ## Tests
 

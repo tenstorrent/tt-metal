@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/router_stream.py:_NCRISC (+ _ROWS; + routing_stream._plan_fn(routing_a2a._PLAN)
-// under RA_PLAN) (mstaletovic/moe-trim). Generated from the reference by
-// tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
+// The router cores' NCRISC kernel (router_rows.hpp; under RA_PLAN also the routing planner, ra_plan.hpp).
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_addr.hpp"
 #ifdef RA_PLAN
 #include <cstdint>

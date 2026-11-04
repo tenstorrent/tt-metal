@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_WATCHER (+ routing_stream.RA_SEND under W_RA0)
-// (mstaletovic/moe-trim). Generated from the reference by tests/.../moe_block/fused_head/gen_head_kernels.py; edit both
-// together.
+// The x all-gather's watcher core (under W_RA0 also the routing exchange's send, ra_send.hpp).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #ifdef W_RA0

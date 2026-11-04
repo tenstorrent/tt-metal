@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reference: models/demos/moe_block/tt/x_gather3.py:_SENDER (= _CT + _WALK + _LA_SENDER + _RS_SENDER +
-// router_stream.LSTREAM + routing_stream.RA_SEND + main) (mstaletovic/moe-trim). Generated from the reference by
-// tests/.../moe_block/fused_head/gen_head_kernels.py; edit both together.
+// The x all-gather's sender on the port cores (xg_ct.hpp, xg_walk.hpp, xg_la_sender.hpp, xg_rs_sender.hpp,
+// router_lstream.hpp, ra_send.hpp).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
