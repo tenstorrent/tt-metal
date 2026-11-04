@@ -95,6 +95,8 @@ inline void llk_unpack_AB(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_a, "unpack_AB operandA");
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_b, "unpack_AB operandB");
 
     // Consecutive tiles of a batch are stride_size_tiles entries apart, as in llk_unpack_A and on the pack side.
     const std::uint32_t l1_tile_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx +

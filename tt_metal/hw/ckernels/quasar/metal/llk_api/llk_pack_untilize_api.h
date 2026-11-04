@@ -94,6 +94,7 @@ inline void llk_pack_untilize(
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    LLK_DFB_ASSERT_MY_PRODUCER(local_dfb_interface, "pack_untilize");
 
     // Compute how many l1_index units fit in one DFB entry
     const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
