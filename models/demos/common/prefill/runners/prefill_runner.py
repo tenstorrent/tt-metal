@@ -437,7 +437,8 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+            # The sender forwards the activation's record, MTP word included.
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
         )
@@ -475,7 +476,7 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
     idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
+        idx_in, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
     ttnn.deallocate(metadata_msg)
     logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")

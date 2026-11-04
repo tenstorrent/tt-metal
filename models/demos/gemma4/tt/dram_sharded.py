@@ -157,37 +157,49 @@ _PREFILL_CB_BASE = 112000
 _L1_BYTES = 1572864 if is_blackhole() else 1499136
 
 
-def prefill_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes):
-    """Static CB bytes per core of the 2D prefill matmul: in0 and in1 double-buffered, one bf16 output block."""
+def prefill_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes, fp32_acc=False):
+    """Static CB bytes per core of the 2D prefill matmul: in0 and in1 double-buffered, one bf16 output block, and with
+    ``fp32_acc`` (fp32 Dest accumulation) a separate fp32 partials block: the 2D factory keeps its partials in the
+    output buffer only when both share a data format, so a bf16 output gets a second, fp32 block of the same tiles."""
+    out_block = per_core_M * per_core_N
     return (
         _PREFILL_CB_BASE
         + 2 * per_core_M * in0_block_w * 2048
         + 2 * in0_block_w * per_core_N * weight_tile_bytes
-        + per_core_M * per_core_N * 2048
+        + out_block * 2048
+        + (out_block * 4096 if fp32_acc else 0)
     )
+
+
+def fp32_dest_acc(compute_kernel_config) -> bool:
+    """Whether a matmul compute config accumulates in fp32 Dest (None = the op default, bf16 Dest)."""
+    return bool(getattr(compute_kernel_config, "fp32_dest_acc_en", False))
 
 
 def weight_tile_bytes(dtype) -> int:
     return {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}.get(dtype, 2048)
 
 
-def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None):
+def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None, fp32_acc=False):
     """Rows of one prefill slab for a weight of this shape / dtype: the largest per_core_M <= 8 (x grid rows x 32)
-    whose static CBs leave ``headroom`` bytes of L1 (GEMMA4_PREFILL_L1_HEADROOM_KB; 0 = the full 8-tile slab).
-    Calibrated examples (Blackhole): at 128 KB 31B gate_up bfp8 2240 rows, the same weight in bf16 (the unit tests)
-    1280, 12B gate_up bf16 1920; at the 64 KB default the 31B keeps 2560 and the 12B takes 2240; narrow weights 2560."""
+    whose static CBs leave ``headroom`` bytes of L1 (GEMMA4_PREFILL_L1_HEADROOM_KB; 0 = the full 8-tile slab, or
+    with ``fp32_acc`` the largest slab that fits L1 at all). Calibrated examples (Blackhole): at 128 KB 31B gate_up
+    bfp8 2240 rows, the same weight in bf16 (the unit tests) 1280, 12B gate_up bf16 1920; at the 64 KB default the
+    31B keeps 2560 and the 12B takes 2240; narrow weights 2560. ``fp32_acc`` (the prefill linears' fp32 Dest config)
+    adds the fp32 partials block: the 31B gate_up (TP=4, bfp8) drops to 960 rows, the 12B's to 1280."""
     grid = grid or prefill_grid_default()
     headroom = _PREFILL_L1_HEADROOM if headroom is None else headroom
     rows = grid[1] * TILE_SIZE
-    if headroom <= 0:
+    if headroom <= 0 and not fp32_acc:
         return 8 * rows
+    headroom = max(0, headroom)
     cols = _best_prefill_cols(n, max_cols if max_cols is not None else grid[0])
     per_core_N = max(1, math.ceil(n / TILE_SIZE / cols))
     k_tiles = math.ceil(k / TILE_SIZE)
     in0_block_w = _find_largest_divisor(k_tiles, max_div=min(4, max(1, k_tiles // max(1, cols))))
     budget = (l1_bytes or _L1_BYTES) - headroom
     for m in range(8, 0, -1):
-        if prefill_cb_bytes(m, per_core_N, in0_block_w, weight_tile_bytes(dtype)) <= budget:
+        if prefill_cb_bytes(m, per_core_N, in0_block_w, weight_tile_bytes(dtype), fp32_acc=fp32_acc) <= budget:
             return m * rows
     return rows
 
@@ -406,16 +418,24 @@ class DramShardedLinear:
         self.n = n
         self._dtype = dtype
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
-        # the slab this weight's CBs allow (GEMMA4_PREFILL_CUTOFF still pins it)
-        self._slab_rows = (
-            _PREFILL_CUTOFF
-            if os.environ.get("GEMMA4_PREFILL_CUTOFF")
-            else min(_PREFILL_CUTOFF, prefill_slab_rows(k, n, dtype, max_cols=self._prefill_max_cols))
-        )
-        if self._slab_rows < _PREFILL_CUTOFF:  # the rule's decision, once per weight (the knob arms grep this)
-            logger.info(
-                f"prefill slab {self._slab_rows} rows for k={k} n={n} dtype={dtype} (headroom {_PREFILL_L1_HEADROOM // 1024} KB)"
+        # the slab this weight's CBs allow, per Dest accumulation format (GEMMA4_PREFILL_CUTOFF still pins it): the
+        # fp32 Dest compute config of the prefill linears adds an fp32 partials block per core
+        self._slab_rows_by_acc = {
+            fp32: (
+                _PREFILL_CUTOFF
+                if os.environ.get("GEMMA4_PREFILL_CUTOFF")
+                else min(
+                    _PREFILL_CUTOFF, prefill_slab_rows(k, n, dtype, max_cols=self._prefill_max_cols, fp32_acc=fp32)
+                )
             )
+            for fp32 in (False, True)
+        }
+        self._slab_rows = self._slab_rows_by_acc[False]
+        for fp32, slab in self._slab_rows_by_acc.items():
+            if slab < _PREFILL_CUTOFF:  # the rule's decision, once per weight (the knob arms grep this)
+                logger.info(
+                    f"prefill slab {slab} rows for k={k} n={n} dtype={dtype} fp32_acc={fp32} (headroom {_PREFILL_L1_HEADROOM // 1024} KB)"
+                )
         self.weight = ttnn.as_tensor(
             weight_torch,
             device=mesh_device,
@@ -506,10 +526,13 @@ class DramShardedLinear:
             out = ttnn.reshape(out, ttnn.Shape([1, 1, m_rows, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
         return out
 
-    def __call__(self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None):
+    def __call__(
+        self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None, prefill=False
+    ):
         """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
         layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
-        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile)."""
+        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile).
+        ``prefill``: a tile-sized prefill (a 32-token prompt) takes the 2D prefill config, not the decode kernel."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
@@ -522,7 +545,13 @@ class DramShardedLinear:
         M = 1
         for d in orig_leading:
             M *= d
-        if x.is_sharded() and M <= TILE_SIZE and self._decode_1d is None and x.memory_config() == self._act_memcfg:
+        if (
+            not prefill
+            and x.is_sharded()
+            and M <= TILE_SIZE
+            and self._decode_1d is None
+            and x.memory_config() == self._act_memcfg
+        ):
             return self._decode_sharded_rows(
                 x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
             )
@@ -535,7 +564,9 @@ class DramShardedLinear:
                 return out
             return ttnn.reshape(out, (*orig_leading, int(out.shape[-1])))
 
-        if M <= TILE_SIZE:
+        # ``prefill`` keeps a tile-sized prefill (e.g. a 32-token prompt) off the decode
+        # DRAM-sharded kernel, whose CBs do not fit L1 with fp32 dest accumulation.
+        if M <= TILE_SIZE and not prefill:
             # Decode DRAM-sharded kernel + activation memcfg are tiled for
             # M=TILE_SIZE (32). Packed-verify / small-batch paths pass M=B*P
             # (e.g. 4, 16) — pad to one tile, run, then slice back so callers
@@ -602,7 +633,7 @@ class DramShardedLinear:
         if os.environ.get("GEMMA4_DEBUG_L1_DUMP") == "1" and not getattr(self, "_l1_dumped", False):
             self._l1_dumped = True  # diagnostics: the L1 residents a program's CBs must stay below
             ttnn.dump_device_memory_state(x_work.device(), f"prefill_matmul_k{self.k}_n{self.n}_M{M}")
-        slab = self._slab_rows
+        slab = self._slab_rows_by_acc[fp32_dest_acc(compute_kernel_config)]
         if M <= slab:
             pc = self._prefill_pc(M)
             out = ttnn.linear(

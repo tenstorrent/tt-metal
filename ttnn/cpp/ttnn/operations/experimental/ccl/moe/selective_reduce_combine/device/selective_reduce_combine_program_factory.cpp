@@ -299,6 +299,7 @@ auto plan_mux_workers(
 }
 
 void add_mux_worker_kernels(
+    const MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_fabric::FabricMuxV2Config& mux_config,
     const tt::tt_fabric::FabricNodeId& src_node_id,
@@ -309,6 +310,7 @@ void add_mux_worker_kernels(
         // back-pressures their DRAM weight reads; on a Wormhole Galaxy that hung dm0 in
         // noc_async_read_barrier_with_trid (see moe_compute dm0.cpp).
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            mesh_device,
             desc,
             mux_config,
             placement.logical_core,
@@ -892,7 +894,7 @@ void append_selective_reduce_combine_to_descriptor(
         }
     }
 
-    detail::add_mux_worker_kernels(desc, mux_config, fabric_node_id, mux_placements);
+    detail::add_mux_worker_kernels(*mesh_device, desc, mux_config, fabric_node_id, mux_placements);
 }
 
 void UnifiedSelectReduce::override_runtime_arguments(

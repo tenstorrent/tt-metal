@@ -56,6 +56,7 @@ out = ttnn.experimental.fused_msda(
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
     sampling_locations,         # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
+                                #   or (B, Q, H*L*P*2)  ROW_MAJOR bf16   [heads-packed]
     attention_weights,          # (B, Q, H, L, P)       ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P)   ROW_MAJOR bf16   [packed]
     spatial_shapes,             # host: [(H_0, W_0), ..., (H_{L-1}, W_{L-1})]
@@ -88,6 +89,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16 or fp32
     sampling_offsets,           # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
+                                #   or (B, Q, H*L*P*2)  ROW_MAJOR bf16   [heads-packed]
     attention_weights,          # as V1
     spatial_shapes,             # as V1
     *,
@@ -396,7 +398,7 @@ packed offsets and weights hands the geometry over once per output block instead
 of once per point (`kernels/msda_tiled_geometry.hpp` holds the layout). This
 covers both attentions of every upstream BEVFormer encoder: spatial
 cross-attention at `L * P = 32` (base) and 8 (small, tiny), temporal
-self-attention at 4. The reader NoC-reads the block's offsets and attention rows
+self-attention at 8 (its two BEV maps as two levels of 4 points). The reader NoC-reads the block's offsets and attention rows
 into one row-major page and rewrites the reference tile only when the query
 block changes. Compute tilizes them and, in one window per group of 16 points,
 solves `px | py` and the extents with matmuls against per-level constant
@@ -469,9 +471,11 @@ So there is **no single reference-point convention**, which is exactly why V1
 must not depend on one. V2 supports two modes and rejects the rest loudly:
 
 * `reference_mode="level"` — `R == L`, `r(l, p) = l`. DINO-family decoders
-  (UniAD, VADv2).
+  (UniAD, VADv2), and BEVFormer temporal self-attention with an ego shift, whose
+  BEV maps are levels with their own reference points.
 * `reference_mode="pillar"` — `R == Z`, `P % Z == 0`, `r(l, p) = p % Z`.
-  BEVFormer spatial/temporal attention, where the reference points are the
+  BEVFormer spatial cross-attention, and temporal self-attention without a
+  shift (`Z == 1`); in the cross-attention the reference points are the
   `num_points_in_pillar` z-anchors and the point axis is laid out as
   `(P//Z, Z)` — matching
   `sampling_offsets.view(bs, Q, H, L, P//Z, Z, 2)` in the reference.
@@ -499,7 +503,8 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
 
 1. stage attention weights and locations/offsets (+ reference points for V2,
    unless the previous tile staged the same query block) for all `v_rows` rows
-   into L1 arenas — one `noc.async_read` per page;
+   into L1 arenas — one `noc.async_read` per page, or per head at byte offset
+   `h * stick` inside the `(b, q)` page for heads-packed locations/offsets;
 2. for each `(l, p)`: write the operands into column 0 (and the V2 offset into
    column 16) of the geometry tiles and push them (tiled geometry: one row-major staging of
    `G + 1` tiles per block). No
@@ -594,7 +599,11 @@ Known limitations, to revisit after profiling:
   point, and its DRAM pages are alignment-padded 8x. The packed rank-4 form
   (`(B, Q, H, L*P*2)`) is one read per `(b, q, h)` and no padding — prefer it.
   This is the "flatten the semantics into one channel dimension" idea from the
-  design brief; both forms are accepted and tested for equality.
+  design brief; both forms are accepted and tested for equality. The heads-packed
+  `(B, Q, H*L*P*2)` form is a Linear's output as is, so the producer needs no
+  data-moving reshape; it needs each head's `L*P*2` values to fill whole alignment
+  units of their buffer (`hal::get_l1_alignment` / `get_dram_alignment`: 16 B in
+  L1; 32 B in DRAM on Wormhole, 64 B on Blackhole).
 * Sharded inputs unsupported.
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
   `fp32_dest_acc_en` is on unconditionally, but that is about the geometry's
@@ -642,21 +651,26 @@ models/experimental/bevformer/tests/perf/test_fused_msda_perf.py
 BEVFormer's `TTMSDeformableAttention`
 (`models/experimental/bevformer/tt/tt_ms_deformable_attention.py`) computes its
 core attention with `fused_msda_from_offsets` and `reference_mode="pillar"`.
-Spatial cross-attention, temporal self-attention and the detection decoder build this
-module. The decoder passes float32 reference points: on its 200x200 BEV map a bf16
+Spatial cross-attention and the detection decoder build this module. Temporal
+self-attention calls the op itself with its two BEV maps as two levels of one
+value, in `reference_mode="level"` when the previous map's float32 reference
+points carry the ego shift. The decoder passes float32 reference points: on its 200x200 BEV map a bf16
 point in [0, 1] moves in steps of up to 0.8 px, and each layer's refined points feed
 the next.
 
-Spatial cross-attention pads every camera to the planner's capacity. It passes
-each camera's valid count as `num_valid_queries_tensor`, a uint32 tensor the
-planner builds on device, so MSDA skips the padding and a traced frame follows
-each frame's counts. It drops the unwritten rows with `ttnn.where(row_mask, ...)`.
-That select has to stay a select: the dropped rows are undefined, not zero.
+Spatial cross-attention pads every camera to the planner's capacity, at least one
+row past it. It passes each camera's valid count as `num_valid_queries_tensor`,
+a uint32 tensor the planner builds on device, so MSDA skips the padding and a
+traced frame follows each frame's counts. The padding stays undefined, not
+zero. The aggregation gathers only valid rows and, for slots a query does not
+fill, a camera's last row, which it zeroes with `ttnn.experimental.slice_write`
+first.
 
-It feeds the op the **packed** rank-4 forms. The `sampling_offsets` Linear emits
-channels ordered `(head, level, point, xy)` and the joint softmax produces
-`(bs, Q, heads, levels*points)`, so the reshape is a dimension split, not a
-permute.
+The `sampling_offsets` Linear emits channels ordered `(head, level, point, xy)`,
+so its output is the heads-packed `(B, Q, H*L*P*2)` form as it is; the module
+passes it unreshaped when a head's `L*P*2` values fill whole alignment units of
+the buffer and splits off the head dim otherwise. The attention weights go
+packed rank-4, `(bs, Q, heads, levels*points)`.
 
 The module passes raw pixel offsets; the op's per-level constants account for
 `scale_l`.

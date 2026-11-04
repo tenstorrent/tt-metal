@@ -12,7 +12,6 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
