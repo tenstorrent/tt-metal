@@ -45,7 +45,8 @@ needs `transformers`, as upstream does; tests also use `models.common.utility_fu
 The TT modules are `tt/module.py` `Module`s whose children carry the reference's names, so each
 loads the matching reference `state_dict()` with `load_torch_state_dict`. `load_cached` caches the
 loaded weights as `.tensorbin` files. Tests build both, run the same input, and compare with
-`comp_pcc` from `models.common.utility_functions`.
+`assert_quality` (`tests/common.py`): PCC (`comp_pcc`) and relative RMSE (RMS error over the reference's
+standard deviation) are asserted; CCC and the largest element differences are logged.
 
 ```python
 ccl = TT_CCL(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
@@ -56,7 +57,7 @@ out = tt_model.run(pixel_values, grid_thws)  # (h*w, 3, 14, 14), [[1, h, w]] -> 
 
 ## Weights
 
-The `reference` (every layer) and `shallow_reference` (the first two layers, for the full-model
+The `reference` (every layer) and `shallow_reference` (the first two layers, for the CPU
 tests) fixtures in `tests/conftest.py` are parametrized `random` and `checkpoint`:
 
 - `random`: the reference initialized under `torch.manual_seed(0)`, with norm weights drawn around
@@ -91,7 +92,6 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_linear.py \
 # Device, a LoudBox: attention needs the ring
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
-       models/experimental/kimi_k3_moonvit_v2/tests/test_vision_encoder.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py
 ```
 
@@ -103,12 +103,12 @@ Image sizes (`tests/common.py`): the row-wise tests (`ROW_GRIDS`) compare agains
 the full padded length, which takes seconds since nothing there scales with the square of the
 length. Each size has one grid per mesh: `full` (256x256 on the ring, 128x128 on one chip) and
 `max_side` (512x128, 512x32) fill the padded length exactly, `partial` (250x250, 122x130) ends
-inside a tile, and `small` (40x100) is almost all padding. Attention, the block, the encoder and the
+inside a tile, and `small` (40x100) is almost all padding. Attention, the block and the
 full model (`ATTENTION_GRIDS`, 64x64 and 40x100) stay small: their CPU golden builds L x L scores per head.
 
 Full size (`test_full_size.py`, LoudBox, checkpoint only): a 256x256 image fills all 65,536
-rows, and each encoder layer on its own and the full 27-layer encoder are compared against reference
-outputs saved once by `tests/goldens.py`. They are fp32, with attention computed in chunks of query
+rows, and each encoder layer on its own, the full 27-layer encoder and the full model (merger and
+projector included) are compared against reference outputs saved once by `tests/goldens.py`. They are fp32, with attention computed in chunks of query
 rows (~1.5 min and ~25 GB of RAM per layer, about 45 min for all 27): the bf16 reference rounds more
 than the device from about layer 9 on, and upstream's eager attention in fp32 would need about 1 TB.
 `--dtype bf16` writes the bf16 eager reference instead. The outputs go in `$MOONVIT_GOLDEN_DIR`
@@ -119,6 +119,16 @@ export KIMI_K3_HF_MODEL=/path/to/Kimi-K3
 export MOONVIT_GOLDEN_DIR=/path/to/goldens
 python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid 256x256   # resumable
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_full_size.py
+```
+
+Traced perf tests, full size only (`test_full_size_layer_trace` for one layer,
+`test_full_size_encoder_trace`): the forward runs once untraced, then is captured in one trace
+(`Trace` in `tests/common.py`). The first replay must equal the untraced run exactly and pass the
+untraced test's checks. Then `TRACE_ITERATIONS` replays run back to back with one wait at the end,
+and the time per replay is logged:
+
+```bash
+pytest models/experimental/kimi_k3_moonvit_v2/tests/test_full_size.py -k trace
 ```
 
 Device tests that need a forward are marked `xfail(raises=NotImplementedError, strict=True)`, so

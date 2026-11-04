@@ -13,14 +13,13 @@ from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import tpool_patch_merger
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     random_tensor,
-    assert_pcc,
+    assert_quality,
     device_config,
     row_grid,
     ROW_GRIDS,
     NOT_WRITTEN,
+    MeshRows,
     P150_AND_RING,
-    sp_gather,
-    sp_shard,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.patch_merger import TT_Patch_Merger
 
@@ -29,15 +28,17 @@ from models.experimental.kimi_k3_moonvit_v2.tt.patch_merger import TT_Patch_Merg
 @ROW_GRIDS
 @NOT_WRITTEN
 def test_patch_merger(mesh_device, sp_axis, num_links, config, size):
-    config = device_config(config, sp_axis)
-    grid = row_grid(size, sp_axis)
-    tt = TT_Patch_Merger(config)
+    tt = TT_Patch_Merger(device_config(config, sp_axis))
 
+    grid = row_grid(size)
     _, h, w = grid[0]
     x = random_tensor(h * w, config.hidden_size)
     (golden,) = tpool_patch_merger(x, torch.tensor(grid), merge_kernel_size=config.merge_kernel_size)
     golden = golden.reshape(-1, config.merged_dim)
 
-    x_window = host_prep.to_window_order(x, h, w, config.merge_kernel_size)
-    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches))
-    assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, golden.shape[0]))
+    # A window is 4 consecutive rows and each chip's share is whole windows, so the merged tokens on
+    # the mesh are those of its patch rows.
+    rows = MeshRows(h * w, config.max_patches, sp_axis)
+    merged = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
+    out = tt(rows.shard(host_prep.to_window_order(x, h, w, config.merge_kernel_size), mesh_device))
+    assert_quality(merged.take(golden), merged.gather(out, mesh_device))

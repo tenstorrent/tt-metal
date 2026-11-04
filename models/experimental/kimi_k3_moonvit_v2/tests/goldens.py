@@ -10,6 +10,7 @@ are saved instead of recomputed. One folder per case under `$MOONVIT_GOLDEN_DIR`
     patch_embed.pt         `vision_tower.patch_embed(pixels, grid_thws)`
     block_00.pt ... 26     each encoder block's output, the first fed `patch_embed.pt`
     final_layernorm.pt     `encoder.final_layernorm` of the last block (the encoder's output)
+    mm_projector.pt        the model's output: `tpool_patch_merger`, then `mm_projector` (h*w/4 rows)
     meta.json              what the files were made from, and the time each step took
 
 Two precisions:
@@ -26,8 +27,9 @@ Two precisions:
 
 Pixels are `random_patches(config, grid, seed)`. The loop is `MoonViT3dEncoder.forward` with every
 block's output kept: each block gets the arguments `forward` gives it (`reference_rope`).
-`test_goldens.py` checks the loop against `encoder(...)`, and `chunked_attention` against upstream
-`eager_attention`, on small inputs. A run resumes from the last saved block. `meta.json` records
+`test_goldens.py` checks the loop against `encoder(...)` and the model, and `chunked_attention` against upstream
+`eager_attention`, on small inputs. A run resumes from the last saved block (a finished folder only redoes the final norm and the
+model output). `meta.json` records
 hashes of the checkpoint index, the reference code and `chunked_attention`; `load` refuses a folder
 made from different ones.
 
@@ -139,10 +141,19 @@ def fingerprint(checkpoint: Path, dtype: str) -> dict:
 IDENTITY = ("grid", "seed", "dtype", "attention", "checkpoint_index_sha256", "reference_sha256")
 
 
+def model_output(reference, x: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
+    """The rest of `KimiK3VisionModel.forward` after the encoder, for one image: `tpool_patch_merger`
+    of the encoder output `x`, then `mm_projector`."""
+    merged = upstream.tpool_patch_merger(x, grid_thws, merge_kernel_size=reference.vision_tower.merge_kernel_size)
+    (out,) = reference.mm_projector(merged)
+    return out
+
+
 def encoder_steps(reference, x: torch.Tensor, grid_thws: torch.Tensor, start: int = 0, stop: int | None = None):
     """`MoonViT3dEncoder.forward` of `reference` (a `KimiK3VisionModel`) over blocks `start` to
     `stop`, given the input to block `start`: yields ("block_NN", output) per block, then
-    ("final_layernorm", output) when `stop` is the last block. Nothing past `stop` is computed."""
+    ("final_layernorm", output) and ("mm_projector", the model's output) when `stop` is the last
+    block. Nothing past `stop` is computed."""
     encoder = reference.vision_tower.encoder
     stop = len(encoder.blocks) if stop is None else stop
     cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
@@ -150,12 +161,14 @@ def encoder_steps(reference, x: torch.Tensor, grid_thws: torch.Tensor, start: in
         x = encoder.blocks[index](x, cu_seqlens, max_seqlen, rope_freqs_cis=rope_freqs_cis)
         yield block_file(index)[:-3], x
     if stop == len(encoder.blocks):
-        yield "final_layernorm", encoder.final_layernorm(x)
+        x = encoder.final_layernorm(x)
+        yield "final_layernorm", x
+        yield "mm_projector", model_output(reference, x, grid_thws)
 
 
 def load(h: int, w: int, seed: int, name: str, dtype: str = "fp32") -> torch.Tensor:
-    """A saved output (`patch_embed`, `block_00`, ..., `final_layernorm`), checked against the
-    current checkpoint, reference code and (fp32) `chunked_attention`."""
+    """A saved output (`patch_embed`, `block_00`, ..., `final_layernorm`, `mm_projector`), checked
+    against the current checkpoint, reference code and (fp32) `chunked_attention`."""
     folder = case_dir(h, w, seed, dtype)
     meta = json.loads((folder / "meta.json").read_text())
     current = fingerprint(checkpoint_path(), dtype)

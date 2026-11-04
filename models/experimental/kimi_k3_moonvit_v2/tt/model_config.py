@@ -25,6 +25,11 @@ if TYPE_CHECKING:
     from .ccl import ParallelFactor, TT_CCL
 
 
+# The layout the model targets: the padded sequence split over a ring of RING_SIZE chips. One device
+# without the split runs at most one ring chip's share of it (`resolve_parallel`).
+RING_SIZE = 4
+
+
 @dataclass(frozen=True)
 class MoonViTConfig:
     hidden_size: int = 1024
@@ -180,6 +185,11 @@ def resolve_parallel(
 ) -> VisionParallel:
     sp = sequence_parallel
     if sp is None or sp.factor == 1:
+        share = MoonViTConfig.max_patches // RING_SIZE
+        if config.max_patches > share:
+            raise ValueError(
+                f"max_patches={config.max_patches} on one device: it runs at most one ring chip's share, {share} rows"
+            )
         return VisionParallel(sp_axis=None, sp_factor=1, ccl=ccl)
     if ccl is None:
         raise ValueError("sequence parallelism needs a TT_CCL")
