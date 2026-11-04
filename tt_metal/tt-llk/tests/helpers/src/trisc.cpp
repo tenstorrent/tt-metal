@@ -119,7 +119,7 @@ int main(void)
 #elif defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
     // ttsim BRISC resets this core once the mailbox reads complete: _start publishes it after the coverage dump
 #else
-    *mailbox = ckernel::KERNEL_COMPLETE;
+    *mailbox = ckernel::KERNEL_COMPLETE; // kept in L1 too: ttsim's only signal, and what trisc_hangs and llk_triage.py read
     asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
 #endif

@@ -1,6 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+import os
+
+
+def simulator_path() -> str:
+    """TT_METAL_SIMULATOR, or its alias TT_UMD_SIMULATOR_PATH; empty without a simulator."""
+    return os.environ.get("TT_METAL_SIMULATOR") or os.environ.get("TT_UMD_SIMULATOR_PATH") or ""
+
+
+def is_ttsim(path: str | None) -> bool:
+    """ttsim is a shared library run in process; RTL simulators run behind a simulation server."""
+    return bool(path) and path.endswith(".so")
+
 
 class TestTargetConfig:
     """TestTargetConfig class represents where the test will be run: simulator or silicon."""
@@ -33,6 +45,9 @@ class TestTargetConfig:
             self.log_level: str = log_level
             self.reset_simulator_per_test: bool = False
             TestTargetConfig._initialized = True
+
+    def runs_on_ttsim(self) -> bool:
+        return self.run_simulator and is_ttsim(simulator_path())
 
     def update_from_pytest_config(self, config):
         """Update only the simulator related settings from pytest config"""
