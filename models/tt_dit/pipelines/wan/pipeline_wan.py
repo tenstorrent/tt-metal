@@ -542,6 +542,7 @@ class WanPipeline(PipelineAPIMixin):
             vae.reload_weights()
 
         self._boundary_ratio = config.boundary_ratio
+        self._in_warmup = False
         self._expand_timesteps = config.expand_timesteps
         self._cache_config = config.cache_config
         self._last_cache_runners: list[ExpertCacheRunner] = []
@@ -594,17 +595,21 @@ class WanPipeline(PipelineAPIMixin):
         That compiles the programs of each size and allocates the persistent buffers of each padded
         length before the first trace capture.
         """
-        for width, height in self._resolutions:
-            logger.info(f"Pipeline allocation run at {width}x{height}...")
-            self(
-                prompts=["warmup"],
-                num_inference_steps=2,
-                guidance_scale=2 if self._cfg_enabled else 1,
-                guidance_scale_2=2 if self._cfg_enabled else 1,
-                width=width,
-                height=height,
-                **self._warmup_kwargs(width, height),
-            )
+        self._in_warmup = True
+        try:
+            for width, height in self._resolutions:
+                logger.info(f"Pipeline allocation run at {width}x{height}...")
+                self(
+                    prompts=["warmup"],
+                    num_inference_steps=2,
+                    guidance_scale=2 if self._cfg_enabled else 1,
+                    guidance_scale_2=2 if self._cfg_enabled else 1,
+                    width=width,
+                    height=height,
+                    **self._warmup_kwargs(width, height),
+                )
+        finally:
+            self._in_warmup = False
 
     def _warmup_kwargs(self, width: int, height: int) -> dict[str, object]:
         """Extra arguments of the warmup run at a size; the I2V image."""
@@ -1030,7 +1035,8 @@ class WanPipeline(PipelineAPIMixin):
 
         with tqdm.tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
+                # Ensure transformer_2 is also warmed up; only in _warmup, not in user 2-step calls.
+                warmup_t2 = self._in_warmup and i == 1 and len(timesteps) == 2
 
                 # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
                 transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
