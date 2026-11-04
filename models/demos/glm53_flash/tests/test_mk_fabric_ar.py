@@ -45,8 +45,12 @@ def test_mk_fabric_ar(mesh_device):
         for d in range(n):
             o = got[d, 0, :B].reshape(-1)
             r = ref[0, :B].reshape(-1)
-            p = float(torch.corrcoef(torch.stack([o, r]))[0, 1])
-            err = float((o - r).abs().max() / (r.abs().max() + 1e-6))
+            p = float(torch.corrcoef(torch.stack([o.nan_to_num(0, 1e9, -1e9), r]))[0, 1])
+            p = p if p == p else 0.0  # NaN / inf outputs count as a miss
+            err = float((o.nan_to_num(0, 1e9, -1e9) - r).abs().max() / (r.abs().max() + 1e-6))
+            bad_vals = int((~torch.isfinite(o)).sum())
+            if bad_vals:
+                err = float("inf")
             per_chip.append((round(p, 6), round(err, 4)))
             worst = min(worst, p)
         bad = [(d, v) for d, v in enumerate(per_chip) if v[0] < 0.9999]

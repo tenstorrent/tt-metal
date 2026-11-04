@@ -156,11 +156,11 @@ class FabricPhase:
         rounds (`self.alias`): SEND / OWN2 are ALIASES of this chip's own-index round-2 slot instead (one CB allocation
         with three indices, as "tensor" mode binds all three to land2[p2]; no peer writes the own index): 7 instead of
         9 x 128 KiB on the 2x4 mesh, which otherwise end above the layer's L1 tensors at B = 32."""
-        if self.n1 > 1:  # round-1 slots in index order, this chip's own partial at its own index (same positions
-            # on every chip: slot q's base address is the same everywhere; a peer writes slot p1 = its own index)
-            roles = [("own", CB_OWN) if q == r else (f"land1_{q}", CB_L1 + q) for q in range(self.n1)]
-        else:
-            roles = [("own", CB_OWN)]
+        # own FIRST on every chip (the producers' and the lane sender's own address is one runtime value for the
+        # whole mesh), then one round-1 landing slot per axis-0 position q (n1 slots, position q + 1: sender q
+        # multicasts into slot q on every peer, so its address must not depend on the receiver; the receiver's own
+        # index slot is never written and never read -- lane_reduce takes CB_OWN for q == p1)
+        roles = [("own", CB_OWN)] + ([(f"land1_{q}", CB_L1 + q) for q in range(self.n1)] if self.n1 > 1 else [])
         roles += [(f"land2_{q}", CB_L2 + q) for q in range(self.n2 if self.n2 > 1 else 0)]
         roles.append(("res", CB_RES))
         if self.n1 > 1 and self.n2 > 1 and not self.alias:
@@ -206,9 +206,9 @@ class FabricPhase:
             raise RuntimeError(f"fabric lane CB addresses differ across chips / lanes: {seen}")
         addrs = list(next(iter(seen)))
         a = dict(zip(names, addrs))
-        # slot1[q] = the base address of creation position q = round-1 slot q on every chip (n1 > 1)
-        self.addr = dict(own=a["own"], res=a["res"], slot1=addrs[: self.n1] if self.n1 > 1 else [],
-                         land1=[addrs[q] for q in range(1, self.n1)] if self.n1 > 1 else [],
+        # slot1[q] = the base address of round-1 landing slot q (sender q's destination on every chip, n1 > 1)
+        slot1 = [a[f"land1_{q}"] for q in range(self.n1)] if self.n1 > 1 else []
+        self.addr = dict(own=a["own"], res=a["res"], slot1=slot1, land1=slot1,
                          land2=[a[f"land2_{q}"] for q in range(self.n2)] if self.n2 > 1 else [])  # fmt: skip
         return a
 
@@ -259,8 +259,8 @@ class FabricPhase:
         sync = self.sync_lane.buffer_address()
         assert self.addr is not None, "cb mode: probe() first"
         own = self.addr["own"]
-        # the round-1 destination on the axis-0 peers = slot p1 = (cb mode) the address of creation position p1, which
-        # is this chip's own slot; (tensor mode, a pair) the one landing buffer
+        # the round-1 destination on the axis-0 peers = landing slot p1 (cb mode: the same address on every chip);
+        # tensor mode (a pair): the one landing buffer
         land1 = (
             (self.addr["slot1"][p1] if "slot1" in self.addr and self.addr["slot1"] else self.addr["land1"][0])
             if self.n1 > 1
