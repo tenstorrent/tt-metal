@@ -30,7 +30,7 @@ extern "C" __attribute__((noinline, used)) void set_runtime_low(const std::uint3
 }
 
 // CHECK-LABEL: <set_runtime_low>:
-// CHECK-NEXT: lui [[LIMIT:a[0-7]]],0x10
+// CHECK-NEXT: lui [[LIMIT:a[0-7]]],0x10{{$}}
 // CHECK-NEXT: bgeu a0,[[LIMIT]],[[FAIL:[0-9a-f]+]]
 // CHECK: [[FAIL]] <
 // CHECK-NEXT: ebreak
@@ -41,7 +41,7 @@ extern "C" __attribute__((noinline, used)) void set_runtime_high(const std::uint
 }
 
 // CHECK-LABEL: <set_runtime_high>:
-// CHECK-NEXT: lui [[LIMIT:a[0-7]]],0x10
+// CHECK-NEXT: lui [[LIMIT:a[0-7]]],0x10{{$}}
 // CHECK-NEXT: bgeu a0,[[LIMIT]],[[FAIL:[0-9a-f]+]]
 // CHECK: [[FAIL]] <
 // CHECK-NEXT: ebreak
@@ -52,7 +52,7 @@ extern "C" __attribute__((noinline, used)) void add_runtime_immediate(const std:
 }
 
 // CHECK-LABEL: <add_runtime_immediate>:
-// CHECK-NEXT: li [[LIMIT:a[0-7]]],63
+// CHECK-NEXT: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK-NEXT: bltu [[LIMIT]],a0,[[FAIL:[0-9a-f]+]]
 // CHECK: [[FAIL]] <
 // CHECK-NEXT: ebreak
@@ -63,7 +63,7 @@ extern "C" __attribute__((noinline, used)) void add_runtime_gpr(const std::uint3
 }
 
 // CHECK-LABEL: <add_runtime_gpr>:
-// CHECK-NEXT: li [[LIMIT:a[0-7]]],63
+// CHECK-NEXT: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK-NEXT: bltu [[LIMIT]],a0,[[FAIL:[0-9a-f]+]]
 // CHECK: [[FAIL]] <
 // CHECK-NEXT: ebreak
@@ -74,7 +74,7 @@ extern "C" __attribute__((noinline, used)) void compare_runtime_destination(cons
 }
 
 // CHECK-LABEL: <compare_runtime_destination>:
-// CHECK-NEXT: li [[LIMIT:a[0-7]]],63
+// CHECK-NEXT: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK-NEXT: bltu [[LIMIT]],a0,[[FAIL:[0-9a-f]+]]
 // CHECK: [[FAIL]] <
 // CHECK-NEXT: ebreak

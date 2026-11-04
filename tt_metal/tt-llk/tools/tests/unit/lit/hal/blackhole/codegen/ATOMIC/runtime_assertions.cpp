@@ -21,7 +21,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t runtime_fetch_increment
 }
 
 // CHECK-LABEL: <runtime_fetch_increment_descriptor>:
-// CHECK: li [[LIMIT:a[0-7]]],63
+// CHECK: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -32,7 +32,7 @@ extern "C" __attribute__((noinline, used)) void counter_runtime_word(const std::
 }
 
 // CHECK-LABEL: <counter_runtime_word>:
-// CHECK: li [[LIMIT:a[0-7]]],3
+// CHECK: li [[LIMIT:a[0-7]]],3{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -43,7 +43,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t fifo_runtime_increment(
 }
 
 // CHECK-LABEL: <fifo_runtime_increment>:
-// CHECK: li [[LIMIT:a[0-7]]],8
+// CHECK: li [[LIMIT:a[0-7]]],8{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -54,7 +54,7 @@ extern "C" __attribute__((noinline, used)) void fifo_runtime_push_default(const 
 }
 
 // CHECK-LABEL: <fifo_runtime_push_default>:
-// CHECK: li [[LIMIT:a[0-7]]],63
+// CHECK: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -65,7 +65,7 @@ extern "C" __attribute__((noinline, used)) void fifo_runtime_wait_full(const std
 }
 
 // CHECK-LABEL: <fifo_runtime_wait_full>:
-// CHECK: li [[LIMIT:a[0-7]]],63
+// CHECK: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -77,7 +77,7 @@ extern "C" __attribute__((noinline, used)) void lock_runtime_acquire_release(con
 }
 
 // CHECK-LABEL: <lock_runtime_acquire_release>:
-// CHECK: li [[LIMIT:a[0-7]]],63
+// CHECK: li [[LIMIT:a[0-7]]],63{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 
@@ -88,9 +88,9 @@ extern "C" __attribute__((noinline, used)) void lock_runtime_compare_set(const s
 }
 
 // CHECK-LABEL: <lock_runtime_compare_set>:
-// CHECK: li [[LIMIT:a[0-7]]],15
+// CHECK: li [[LIMIT:a[0-7]]],15{{$}}
 // CHECK: bltu [[LIMIT]],a0,
-// CHECK: li [[LIMIT]],15
+// CHECK: li [[LIMIT]],15{{$}}
 // CHECK: bltu [[LIMIT]],a1,
 // CHECK-COUNT-2: ebreak
 
@@ -111,7 +111,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t fifo_runtime_capacity(c
 }
 
 // CHECK-LABEL: <fifo_runtime_capacity>:
-// CHECK: li [[LIMIT:a[0-7]]],14
+// CHECK: li [[LIMIT:a[0-7]]],14{{$}}
 // CHECK: bltu [[LIMIT]],a0,
 // CHECK: ebreak
 

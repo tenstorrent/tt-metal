@@ -24,11 +24,11 @@ extern "C" __attribute__((noinline, used)) void batch_pop()
 }
 
 // ASSERT-LABEL: <batch_pop>:
-// ASSERT: ttstallwait 32,1
+// ASSERT: ttstallwait 32,1{{$}}
 // ASSERT: pc_buf_baseE
 // ASSERT: regfileE
 // ASSERT: fence
-// ASSERT-DAG: ttatincgetptr 0,0,1,3,0,4,3
+// ASSERT-DAG: ttatincgetptr 0,0,1,3,0,4,3{{$}}
 // ASSERT-DAG: ebreak
 
 extern "C" __attribute__((noinline, used)) void reference_batch_pop()
@@ -45,11 +45,11 @@ extern "C" __attribute__((noinline, used)) void batch_push()
 }
 
 // ASSERT-LABEL: <batch_push>:
-// ASSERT: ttstallwait 32,1
+// ASSERT: ttstallwait 32,1{{$}}
 // ASSERT: pc_buf_baseE
 // ASSERT: regfileE
 // ASSERT: fence
-// ASSERT-DAG: ttatincgetptr 0,0,1,3,1,4,3
+// ASSERT-DAG: ttatincgetptr 0,0,1,3,1,4,3{{$}}
 // ASSERT-DAG: ebreak
 
 extern "C" __attribute__((noinline, used)) void reference_batch_push()
@@ -70,7 +70,7 @@ extern "C" __attribute__((noinline, used)) void batch_aliased_address()
 // ASSERT: regfileE
 // ASSERT: fence
 // ASSERT-NOT: ttsetdmareg
-// ASSERT: ttatincgetptr 0,0,1,3,0,3,3
+// ASSERT: ttatincgetptr 0,0,1,3,0,3,3{{$}}
 
 extern "C" __attribute__((noinline, used)) void reference_batch_aliased_address()
 {
