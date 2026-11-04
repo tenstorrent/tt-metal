@@ -424,21 +424,24 @@ inline __attribute__((always_inline)) void init_rd_cmd_buf(uint64_t my_xy) {
         NOC_OVERLAY_MAX_BYTES_IN_PACKET);
 }
 
-inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint32_t atomic_ret_val) {
-    __builtin_riscv_ttrocc_scmdbuf_reset();
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_ATOMIC);
+inline __attribute__((always_inline)) uint64_t noc_atomic_ret_operand(uint32_t atomic_ret_val) {
 #if defined(NOC_ATT_ENABLED)
     // Under ATT every source address is a complete operand: the default atomic
     // return slot is this initiator's local-window operand. A raw local address
     // matches no window, so the response write would fault and the atomic's
     // ack would never arrive (noc_async_atomic_barrier hangs).
-    const uint64_t atomic_ret_operand = NOC_ATT_LOCAL_WINDOW_BASE | static_cast<uint64_t>(atomic_ret_val);
+    return NOC_ATT_LOCAL_WINDOW_BASE | static_cast<uint64_t>(atomic_ret_val);
 #else
-    const uint64_t atomic_ret_operand = atomic_ret_val;
+    return atomic_ret_val;
 #endif
+}
+
+inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint32_t atomic_ret_val) {
+    __builtin_riscv_ttrocc_scmdbuf_reset();
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_operand);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_ATOMIC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_atomic_ret_operand(atomic_ret_val));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
@@ -450,6 +453,54 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
     init_rd_cmd_buf(my_xy);  // Read command buffer (CMDBUF_1): remote src -> local dest
     init_at_cmd_buf(
         my_xy, atomic_ret_val);  // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
+}
+
+// Fields a later read, write, or atomic does not program itself. Virtual channels and the
+// write direction are rewritten on each issue and stay at the values from overlay_cmd_buff_init.
+inline __attribute__((always_inline)) void restore_complex_cmd_buf_launch_state(uint32_t cmd_buf) {
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_BASE_REG_OFFSET / 8,
+        TT_ROCC_CMD_BUF_TR_ID_BASE_REG_DEFAULT);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_SIZE_REG_OFFSET / 8,
+        TT_ROCC_CMD_BUF_TR_ID_SIZE_REG_DEFAULT);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AUTOINC_REG_OFFSET / 8, TT_ROCC_CMD_BUF_AUTOINC_REG_DEFAULT);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8,
+        TT_ROCC_CMD_BUF_PACKET_TAGS_REG_DEFAULT);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
+        NOC_OVERLAY_MAX_BYTES_IN_PACKET);
+}
+
+inline __attribute__((always_inline)) void overlay_cmd_buff_restore_launch_state(uint32_t atomic_ret_val) {
+    uint64_t my_xy = noc_local_xy();
+    restore_complex_cmd_buf_launch_state(OVERLAY_WR_CMD_BUF);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
+    restore_complex_cmd_buf_launch_state(OVERLAY_RD_CMD_BUF);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, my_xy);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_atomic_ret_operand(atomic_ret_val));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, TT_ROCC_CMD_BUF_PACKET_TAGS_REG_DEFAULT);
 }
 
 // set noc local memory state for a single kernel from the global state
