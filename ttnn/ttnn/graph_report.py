@@ -32,10 +32,12 @@ import json
 import math
 import os
 import re
+import secrets
+import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
-import threading
 from collections import defaultdict
 from pathlib import Path
 from typing import Generator, NamedTuple, Optional, Union
@@ -405,30 +407,78 @@ def _unchanged_database_note(db_path: Path, db_existed: bool) -> str:
     return f". {db_path} was not updated" if db_existed else ""
 
 
-def _importing_path(path: Path) -> Path:
-    """Hidden sibling of ``path`` that an import writes first and moves onto ``path`` only once it succeeds.
+_IMPORTING_INFIX = ".importing-"
+_SQLITE_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
+# .<target name>.importing-<host>-<pid>-<random hex>, plus a SQLite sidecar suffix for a database's journal.
+_IMPORTING_FILE_RE = re.compile(
+    r"^\..+" + re.escape(_IMPORTING_INFIX) + r"(?P<host>.+)-(?P<pid>\d+)-[0-9a-f]+(?:-journal|-wal|-shm)?$"
+)
 
-    Per process and thread, so overlapping imports into the same directory don't share one.
+
+def _create_importing_file(path: Path) -> Path:
+    """Create an empty hidden sibling of ``path`` that an import writes first and moves onto ``path`` once it succeeds.
+
+    Created exclusively, so a file or link already at that name is never followed, and with a random part, so
+    overlapping imports into the same directory don't share one. The host and pid in the name let a later import
+    remove it if this process dies before its clean-up runs (see ``_remove_orphaned_importing_files``).
     """
-    return path.with_name(f".{path.name}.importing-{os.getpid()}-{threading.get_ident()}")
+    while True:
+        candidate = path.with_name(
+            f".{path.name}{_IMPORTING_INFIX}{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(4)}"
+        )
+        try:
+            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+        except FileExistsError:
+            continue
+        return candidate
 
 
-def _unlink_sqlite_database(path: Path) -> None:
-    """Remove a SQLite database file and any journal a crashed writer left beside it."""
-    for name in (path.name, f"{path.name}-journal", f"{path.name}-wal", f"{path.name}-shm"):
-        path.with_name(name).unlink(missing_ok=True)
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # Alive, but owned by another user.
+        return True
+    return True
+
+
+def _remove_orphaned_importing_files(directory: Path) -> None:
+    """Remove importing files that an import on this host left in ``directory`` when its process was killed (SIGKILL,
+    OOM, a CI timeout) before its clean-up ran; each would otherwise stay hidden at the size of a database.
+
+    Files of live processes, and of other hosts sharing the directory, are left alone.
+    """
+    host = socket.gethostname()
+    for path in directory.glob(f".*{_IMPORTING_INFIX}*"):
+        match = _IMPORTING_FILE_RE.match(path.name)
+        if match is not None and match["host"] == host and not _pid_is_alive(int(match["pid"])):
+            path.unlink(missing_ok=True)
+
+
+def _remove_sqlite_sidecars(path: Path) -> None:
+    """Remove the journal files SQLite keeps beside the database at ``path``, such as a crashed writer's."""
+    for suffix in _SQLITE_SIDECAR_SUFFIXES:
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
 
 
 def _stage_file(staged_files: dict[Path, Path], path: Path, text: str) -> bool:
-    """Write ``text`` for ``path`` under its importing name, to be published along with the database.
+    """Write ``text`` for ``path`` under an importing name, to be published along with the database.
 
     The first capture of an import that carries the file wins; returns whether this call wrote it.
     """
     if path in staged_files:
         return False
-    staged_files[path] = _importing_path(path)
+    staged_files[path] = _create_importing_file(path)
     staged_files[path].write_text(text)
     return True
+
+
+def _publish_staged_file(staged: Path, path: Path) -> None:
+    """Move ``staged`` onto ``path``, keeping the permission bits of a file it replaces."""
+    if path.exists():
+        shutil.copymode(path, staged)
+    os.replace(staged, path)
 
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
@@ -2419,24 +2469,31 @@ def import_report(
 
     Each import writes a new database, built beside the target and moved over it only once the import succeeds: a
     finished import holds only these captures, never rows left from an earlier import into the same directory, and a
-    failed one leaves whatever database ``output_dir`` already held as it was. The cluster descriptor and mesh
-    mapping YAMLs are staged and published the same way.
+    failed one leaves whatever file ``output_dir`` already held as it was, whatever its schema, even if it is not a
+    SQLite database. The cluster descriptor and mesh mapping YAMLs are staged and published the same way.
+
+    Replacing the file also drops rows another writer added to it since the previous import: comparison records that
+    ``ttnn.graph.flush_comparison_records_to_db`` wrote come back only from the ``comparison_records.json`` it leaves
+    beside them, which the import reads for a capture without its own comparison sidecar. A replaced file keeps its
+    permission bits; a new one gets the umask's. The temporary files are removed when the import raises; ones left by
+    a process that was killed are removed by the next import into the same directory on the same host.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / db_name
+    db_existed = db_path.exists()
 
-    # Before touching any existing DB, so a bad set of captures leaves the output directory as it was.
+    # Before creating anything in output_dir, so a bad set of captures leaves it as it was.
     try:
         report_files = _discover_report_json_files(report_path)
     except ValueError as e:
-        raise ValueError(f"{e}{_unchanged_database_note(db_path, db_path.exists())}") from e
+        raise ValueError(f"{e}{_unchanged_database_note(db_path, db_existed)}") from e
 
-    db_existed = db_path.exists()
+    for directory in {output_dir, db_path.parent}:
+        _remove_orphaned_importing_files(directory)
     # Built under a temporary name and moved over db_path at the end, so a reader never sees a partial database.
-    importing_db_path = _importing_path(db_path)
-    _unlink_sqlite_database(importing_db_path)
+    importing_db_path = _create_importing_file(db_path)
     # YAMLs that go beside the database (final path -> importing path), published along with it.
     staged_files: dict[Path, Path] = {}
 
@@ -2801,12 +2858,15 @@ def import_report(
             conn.close()
         if imported:
             for path, staged in staged_files.items():
-                os.replace(staged, path)
-            os.replace(importing_db_path, db_path)
+                _publish_staged_file(staged, path)
+            # A journal left beside the old file would otherwise be taken for the new one's.
+            _remove_sqlite_sidecars(db_path)
+            _publish_staged_file(importing_db_path, db_path)
         else:
             for staged in staged_files.values():
                 staged.unlink(missing_ok=True)
-            _unlink_sqlite_database(importing_db_path)
+            importing_db_path.unlink(missing_ok=True)
+            _remove_sqlite_sidecars(importing_db_path)
 
     return db_path
 

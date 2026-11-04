@@ -14,7 +14,10 @@ import contextlib
 import gc
 import hashlib
 import json
+import os
+import socket
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -513,6 +516,41 @@ def _rank_capture(rank, world_size, filename=None):
     return filename or graph_report._rank_capture_name(rank, world_size), report
 
 
+def _write_rank_0_copy_as_rank_1(report_dir, op_name="ttnn.relu"):
+    """Overwrite graph_capture_2_of_2.json with a capture whose metadata says rank 0. import_report rejects it partway
+    through, after rank 0's capture has been imported."""
+    copied = _make_report(_minimal_single_op_graph(op_name), metadata={"rank": 0, "world_size": 2})
+    _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+
+
+_NO_SCHEMA_VERSION_ROW = "<no schema_version row>"
+
+# What an earlier import, or another writer, may have left at db.sqlite. None leaves an imported DB as it is.
+_parametrize_stored_schema = pytest.mark.parametrize(
+    "stored_schema",
+    [None, "1.0", "99.0", _NO_SCHEMA_VERSION_ROW, b"junk"],
+    ids=["current_schema", "older_schema", "newer_schema", "no_schema_version", "not_sqlite"],
+)
+
+
+def _set_stored_schema(db_path, stored_schema):
+    """Rewrite an imported DB's schema_version (or its whole file, for bytes) as ``_parametrize_stored_schema`` says."""
+    if stored_schema is None:
+        return
+    if isinstance(stored_schema, bytes):
+        db_path.write_bytes(stored_schema)
+        return
+    conn = sqlite3.connect(db_path)
+    try:
+        if stored_schema == _NO_SCHEMA_VERSION_ROW:
+            conn.execute("DELETE FROM report_metadata WHERE key = 'schema_version'")
+        else:
+            conn.execute("UPDATE report_metadata SET value = ? WHERE key = 'schema_version'", (stored_schema,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class TestImportReportRankCompleteness:
     """import_report over graph_capture_<r>_of_<N>.json: every rank of one run, each exactly once.
 
@@ -618,15 +656,20 @@ class TestImportReportRankCompleteness:
             graph_report.import_report(report_dir, tmp_path / "output")
         assert not (tmp_path / "output" / "db.sqlite").exists()
 
-    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error):
+    @_parametrize_stored_schema
+    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error, stored_schema):
         """The mismatch is found after the first capture has been imported; none of it reaches the existing DB, which is
-        left as it was, and the error says so."""
+        left as it was, and the error says so.
+
+        Whatever the existing file holds: an older-schema DB used to be deleted, and a file that isn't SQLite at all
+        unlinked, before the import started, so a failed import lost it (tenstorrent/ttnn-visualizer#2148).
+        """
         report_dir = tmp_path / "reports_in"
         _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        _set_stored_schema(db_path, stored_schema)
         before = db_path.read_bytes()
-        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
-        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        _write_rank_0_copy_as_rank_1(report_dir, "ttnn.other")
         with expect_error(ValueError, "according to its metadata") as excinfo:
             graph_report.import_report(report_dir, tmp_path / "output")
         assert f"{db_path} was not updated" in str(excinfo.value)
@@ -685,23 +728,12 @@ class TestImportReportFreshDatabase:
 
     @staticmethod
     def _row_counts(db_path):
-        conn = sqlite3.connect(db_path)
-        try:
-            tables = [
-                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-            ]
-            return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
-        finally:
-            conn.close()
+        tables = _query_db(db_path, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        return {table: _query_db(db_path, f"SELECT COUNT(*) FROM {table}")[0][0] for (table,) in tables}
 
     @staticmethod
-    def _set_schema_version(db_path, version):
-        conn = sqlite3.connect(db_path)
-        try:
-            conn.execute("UPDATE report_metadata SET value = ? WHERE key = 'schema_version'", (version,))
-            conn.commit()
-        finally:
-            conn.close()
+    def _importing_files(directory):
+        return sorted(p.name for p in directory.iterdir() if graph_report._IMPORTING_INFIX in p.name)
 
     def test_importing_again_into_the_same_directory_does_not_duplicate_rows(self, tmp_path):
         """Rerunning a test within the same minute imports into the same report directory again."""
@@ -811,61 +843,141 @@ class TestImportReportFreshDatabase:
             output_dir / f"physical_chip_mesh_coordinate_mapping{suffix}.yaml",
         ]
 
-        def write_run(text, rank_1_metadata_rank=1):
+        def write_run(text):
             name_0, report_0 = _rank_capture(0, 2)
             report_0["cluster_descriptor"] = f"cluster: {text}"
             report_0["mesh_coordinate_mapping"] = f"mesh: {text}"
-            rank_1 = _make_report(_minimal_single_op_graph(), metadata={"rank": rank_1_metadata_rank, "world_size": 2})
-            _write_reports(report_dir, [(name_0, report_0), ("graph_capture_2_of_2.json", rank_1)])
+            _write_reports(report_dir, [(name_0, report_0), _rank_capture(1, 2)])
 
         write_run("first")
         graph_report.import_report(report_dir, output_dir)
         write_run("second")
         graph_report.import_report(report_dir, output_dir)
         assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
-        write_run("third", rank_1_metadata_rank=0)
+        write_run("third")
+        _write_rank_0_copy_as_rank_1(report_dir)
         with expect_error(ValueError, "according to its metadata"):
             graph_report.import_report(report_dir, output_dir)
         assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
-        assert [p.name for p in output_dir.iterdir() if ".importing-" in p.name] == []
+        assert self._importing_files(output_dir) == []
 
-    def test_import_replaces_an_older_schema_db(self, tmp_path):
+    @_parametrize_stored_schema
+    def test_import_replaces_whatever_db_was_there(self, tmp_path, stored_schema):
+        """On main an older schema or a file that isn't SQLite was deleted first, but a newer schema or a DB without a
+        schema_version row was kept and appended to."""
         report_dir = tmp_path / "reports_in"
         _write_reports(report_dir, [_rank_capture(0, 1)])
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
-        self._set_schema_version(db_path, "1.0")
+        _set_stored_schema(db_path, stored_schema)
         graph_report.import_report(report_dir, tmp_path / "output")
         assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'schema_version'") == [
             (graph_report.DATABASE_SCHEMA_VERSION,)
         ]
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
 
-    def test_failed_import_leaves_an_older_schema_db_unchanged(self, tmp_path, expect_error):
-        """An older-schema DB used to be deleted before the import started, so a failed import lost it."""
-        report_dir = tmp_path / "reports_in"
-        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
-        db_path = graph_report.import_report(report_dir, tmp_path / "output")
-        self._set_schema_version(db_path, "1.0")
+    def test_late_runtime_error_leaves_the_existing_db_unchanged(self, tmp_path, monkeypatch, expect_error):
+        """Any exception from anywhere in the import, not only the ValueErrors raised as a capture is read: here after
+        a capture's rows have gone into the temporary DB."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
         before = db_path.read_bytes()
-        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
-        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
-        with expect_error(ValueError, "according to its metadata") as excinfo:
-            graph_report.import_report(report_dir, tmp_path / "output")
-        assert f"{db_path} was not updated" in str(excinfo.value)
-        assert db_path.read_bytes() == before
 
+        def failing_import_metadata(cursor, metadata):
+            assert cursor.execute("SELECT COUNT(*) FROM buffers").fetchone()[0] > 0
+            raise RuntimeError("late failure")
+
+        monkeypatch.setattr(graph_report, "import_metadata", failing_import_metadata)
+        hooks_before = (sys.gettrace(), sys.getprofile())
+        with expect_error(RuntimeError, "late failure"):
+            graph_report.import_report(report_path, output_dir)
+        assert (sys.gettrace(), sys.getprofile()) == hooks_before
+        assert db_path.read_bytes() == before
+        assert self._importing_files(output_dir) == []
+
+    @pytest.mark.parametrize("db_name", ["db.sqlite", "report.db"])
     @pytest.mark.parametrize("succeeds", [True, False], ids=["success", "failure"])
-    def test_no_temporary_database_is_left_behind(self, tmp_path, expect_error, succeeds):
+    def test_no_temporary_file_is_left_behind(self, tmp_path, expect_error, succeeds, db_name):
         report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
         _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
-        graph_report.import_report(report_dir, tmp_path / "output")
+        graph_report.import_report(report_dir, output_dir, db_name=db_name)
         if succeeds:
-            graph_report.import_report(report_dir, tmp_path / "output")
+            graph_report.import_report(report_dir, output_dir, db_name=db_name)
         else:
-            copied = _make_report(_minimal_single_op_graph(), metadata={"rank": 0, "world_size": 2})
-            _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+            _write_rank_0_copy_as_rank_1(report_dir)
             with expect_error(ValueError, "according to its metadata"):
-                graph_report.import_report(report_dir, tmp_path / "output")
-        assert sorted(p.name for p in (tmp_path / "output").iterdir() if "sqlite" in p.name) == ["db.sqlite"]
+                graph_report.import_report(report_dir, output_dir, db_name=db_name)
+        assert (output_dir / db_name).is_file()
+        assert self._importing_files(output_dir) == []
+
+    def test_db_name_in_a_subdirectory(self, tmp_path):
+        """The CLI passes --db-name straight through; a name with a directory part worked on main if it existed."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        _write_reports(report_dir, [_rank_capture(0, 1)])
+        (output_dir / "sub").mkdir(parents=True)
+        for _ in range(2):
+            db_path = graph_report.import_report(report_dir, output_dir, db_name="sub/db.sqlite")
+        assert db_path == output_dir / "sub" / "db.sqlite"
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert self._importing_files(output_dir / "sub") == []
+
+    def test_files_orphaned_by_a_killed_import_are_removed(self, tmp_path):
+        """A killed process never runs its clean-up. Only files of a dead process on this host are removed: a live
+        process may still be importing, and a pid from another host sharing the directory says nothing here."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        exited = subprocess.Popen([sys.executable, "-c", ""])
+        exited.wait()
+        host = socket.gethostname()
+        orphaned = [
+            f".db.sqlite.importing-{host}-{exited.pid}-0123abcd",
+            f".db.sqlite.importing-{host}-{exited.pid}-0123abcd-journal",
+            f".cluster_descriptor.yaml.importing-{host}-{exited.pid}-89ef0123",
+        ]
+        kept = [
+            f".db.sqlite.importing-{host}-{os.getpid()}-0123abcd",
+            f".db.sqlite.importing-other-{host}-{exited.pid}-0123abcd",
+        ]
+        for name in orphaned + kept:
+            (output_dir / name).write_bytes(b"partial")
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert self._importing_files(output_dir) == sorted(kept)
+
+    def test_flushed_comparison_records_come_back_once_from_their_sidecar(self, tmp_path):
+        """flush_comparison_records_to_db writes records into db.sqlite and into comparison_records.json beside it. A
+        later import into the same directory replaces db.sqlite and reads the records back from the JSON, once."""
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        comparison_records = {
+            "version": 1,
+            "local_tensor_comparison_records": [
+                {"tensor_id": 1, "golden_tensor_id": 1001, "matches": True, "desired_pcc": 0.9999, "actual_pcc": 1.0}
+            ],
+            "global_tensor_comparison_records": [],
+            "tensors": [{"tensor_id": 1001, "shape": "torch.Size([1, 32])", "storage_type": "HOST"}],
+        }
+        # What flush_comparison_records_to_db leaves behind.
+        (report_dir / graph_report.COMPARISON_RECORDS_FALLBACK_NAME).write_text(json.dumps(comparison_records))
+        conn = sqlite3.connect(report_dir / "db.sqlite")
+        try:
+            cursor = conn.cursor()
+            graph_report.create_database_schema(cursor)
+            graph_report.save_database_schema_version(cursor)
+            graph_report.import_tensor_comparison_records(cursor, comparison_records, rank=0)
+            conn.commit()
+        finally:
+            conn.close()
+        # The graph report fixture imports a report directory into itself.
+        _write_reports(report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph()))])
+        db_path = graph_report.import_report(report_dir, report_dir)
+        assert _query_db(db_path, "SELECT tensor_id, golden_tensor_id FROM local_tensor_comparison_records") == [
+            (1, 1001)
+        ]
 
 
 class TestGraphReportFixtureMultiRankTeardown:
