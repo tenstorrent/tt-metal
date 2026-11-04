@@ -700,6 +700,61 @@ def test_quasar_reshard_dram_block_sharded_rejected(device, expect_error):
         ttnn.experimental.quasar.reshard(tt_input, out_mc)
 
 
+@pytest.mark.parametrize(
+    "shape, in_mc, out_mc",
+    [
+        # Padded row-major width shards need the L1-only generic factory, so DRAM input must be rejected.
+        (
+            (1, 1, 64, 96),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, 1, 0, (64, 64)),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 2, 0, (64, 32)),
+        ),
+        # ND copy-local copies page N to page N, which is wrong for unequal row-major page widths.
+        (
+            (1, 1, 64, 128),
+            _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, 1, 0, (32, 128)),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 1, 0, (64, 64)),
+        ),
+    ],
+    ids=["padded_dram_width_to_l1_width", "dram_height_to_l1_width"],
+)
+def test_quasar_reshard_row_major_dram_unequal_pages_rejected(device, expect_error, shape, in_mc, out_mc):
+    tt_input = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mc,
+    )
+    with expect_error(RuntimeError, "pages must match|same page size"):
+        ttnn.experimental.quasar.reshard(tt_input, out_mc)
+
+
+@pytest.mark.parametrize(
+    "shape, in_mc, out_mc",
+    [
+        (
+            (1, 1, 64, 128),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, 1, 0, (64, 64)),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 3, 0, (64, 32)),
+        ),
+        (
+            (1, 1, 64, 128),
+            _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, 1, 0, (32, 128)),
+            _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, 3, 0, (16, 128)),
+        ),
+    ],
+    ids=["dram_width_to_l1_width", "dram_height_to_l1_height"],
+)
+def test_quasar_reshard_row_major_dram_to_l1(device, shape, in_mc, out_mc):
+    torch_input = torch.arange(torch.Size(shape).numel(), dtype=torch.float32).reshape(shape).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc
+    )
+    tt_output = ttnn.experimental.quasar.reshard(tt_input, out_mc)
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input)
+
+
 @pytest.mark.parametrize("input_sharded", [False, True], ids=["from_interleaved", "from_sharded"])
 def test_quasar_to_memory_config_dram_block_sharded_rejected(device, expect_error, input_sharded):
     shape = (1, 1, 64, 64)
