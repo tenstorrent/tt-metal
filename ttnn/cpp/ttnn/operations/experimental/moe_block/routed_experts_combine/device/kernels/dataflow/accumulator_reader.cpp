@@ -155,7 +155,8 @@ void kernel_main() {
         cb_push_back(cb_meta, 1);
     };
     uint32_t done = 0, li = 0;
-    // L1 hand-off: local rows land in a ring of QL slots at LB (the y writers, se_yrm.hpp SE_Y_L1), granted from here
+    // L1 hand-off: local rows land in a ring of QL slots at LB (the y writers, y_row_major.hpp SE_Y_L1), granted from
+    // here
     volatile tt_l1_ptr uint32_t* landed = misc + ALAND;
     const uint32_t lbase = misc[ALBASE];
     uint32_t lgranted = 0;

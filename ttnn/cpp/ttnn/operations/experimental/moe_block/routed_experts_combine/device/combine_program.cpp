@@ -458,7 +458,7 @@ CombineHandles add_combine_program(
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
         std::vector<uint32_t> ct = {kCbInj, kCbTab, st.MISC, words_off, r_slot};
-        const auto k = dm_kernel(program, "dataflow/rf_port_reader.cpp", pset, std::move(ct), r_riscv0);
+        const auto k = dm_kernel(program, "dataflow/combine_port_reader.cpp", pset, std::move(ct), r_riscv0);
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             Args a;
             a.buf(CombineBuf::Arena);
@@ -513,7 +513,7 @@ CombineHandles add_combine_program(
             defs["REC_ACC_LUT"] = "1";
         }
         const auto k =
-            dm_kernel(program, "dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
+            dm_kernel(program, "dataflow/combine_port_writer.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
         std::vector<uint32_t> acc_xy;
         for (const auto& c : accs) {
             const auto v = virt(c);
@@ -591,7 +591,7 @@ CombineHandles add_combine_program(
     {
         const auto rd = dm_kernel(
             program,
-            "dataflow/rf_acc_reader.cpp",
+            "dataflow/accumulator_reader.cpp",
             aset,
             {kCbRow,
              kCbMeta,
@@ -621,7 +621,7 @@ CombineHandles add_combine_program(
         u2d[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         const auto cp = tt::tt_metal::CreateKernel(
             program,
-            std::string(kKernelDir) + "compute/rf_acc_compute.cpp",
+            std::string(kKernelDir) + "compute/accumulator_compute.cpp",
             aset,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
@@ -638,7 +638,7 @@ CombineHandles add_combine_program(
         aw_ct.insert(aw_ct.end(), o_ct.begin(), o_ct.end());
         std::optional<tt::tt_metal::KernelHandle> aw;
         if (!aw_cells.empty()) {
-            aw = dm_kernel(program, "dataflow/rf_acc_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0);
+            aw = dm_kernel(program, "dataflow/accumulator_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0);
         }
         for (uint32_t i = 0; i < A; ++i) {
             const auto& core = accs[i];

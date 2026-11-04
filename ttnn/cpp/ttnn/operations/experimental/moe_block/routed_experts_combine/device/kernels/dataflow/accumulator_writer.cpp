@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Accumulator writer (sparse_combine_l1._ACC_WRITER): accumulator `me`'s finished token rows (tokens me, me + A, ...)
+// Accumulator writer: accumulator `me`'s finished token rows (tokens me, me + A, ...)
 // to the output.
 
 #include <cstdint>

@@ -415,9 +415,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::engine_workload(
         auto port_reader =
             kernel("tail_engine/tail_engine_port_reader.cpp", ports, dm(DataMovementProcessor::RISCV_1, NOC::NOC_0));
         port_reader.compile_time_args = pct;
-        auto port_sender =
-            kernel("tail_engine/tail_engine_port_sender.cpp", ports, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
-        port_sender.compile_time_args = pct;
+        auto port_writer =
+            kernel("tail_engine/tail_engine_port_writer.cpp", ports, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
+        port_writer.compile_time_args = pct;
         std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> fabric_args;
         for (const auto& [key, core] : plan.ports) {
             const auto [dd, l] = key;
@@ -472,14 +472,14 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::engine_workload(
             ps.append(xs0);
             ps.append(ys);
             ps.append(tail);
-            port_sender.emplace_runtime_args(core, ps);
+            port_writer.emplace_runtime_args(core, ps);
         }
 
         desc.kernels.push_back(std::move(reader));
         desc.kernels.push_back(std::move(writer));
         desc.kernels.push_back(std::move(compute));
         desc.kernels.push_back(std::move(port_reader));
-        desc.kernels.push_back(std::move(port_sender));
+        desc.kernels.push_back(std::move(port_writer));
         for (uint32_t id = 0; id < 5; ++id) {  // SX, SFREE, SW, SG, SGO
             desc.semaphores.push_back(
                 tt::tt_metal::SemaphoreDescriptor{.id = id, .core_ranges = engine, .initial_value = 0});
@@ -564,7 +564,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
         preader.compile_time_args = pct;
         append_accessor(preader, z);
         auto psender =
-            kernel("tail_a2a/tail_a2a_port_sender.cpp", pcrs, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
+            kernel("tail_a2a/tail_a2a_port_writer.cpp", pcrs, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
         psender.compile_time_args = pct;
         append_accessor(psender, out);
 

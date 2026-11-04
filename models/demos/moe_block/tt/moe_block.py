@@ -38,7 +38,8 @@ class MoEBlockWeights:
 class MoEBlock:
     """One MoE block on ``mesh_device``. ``resources``: the block's MoEBlockResources on it; ``dtypes``: MoEDtypes;
     ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it);
-    ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (se3_compute SE_ACT);
+    ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (gate_up_compute
+    SE_ACT);
     ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
     Capacity and layout default to max(chunk, 256) and FlatLayoutOptions(rows_hint=chunk x top_k / experts) - the flat
     arena then fits next to the combine's in the largest free L1 block (a capacity of 8192, or GLM-5.3's 128-row

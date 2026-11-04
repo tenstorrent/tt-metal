@@ -62,10 +62,11 @@ void bind_routed_experts_combine(nb::module_& mod) {
     export_enum<CombineMode>(mod, "CombineMode");
 
     nb::class_<CombineConfig> cfg(mod, "CombineConfig", R"doc(
-        The combine's op-specific configuration (combine_snap comes from MoEBlockConfig). n_acc / mode pin the accumulator count and mode the fused head planned; arena_bytes is the
-        combine's L1 budget a core (0: the exchange's sizing from the largest free L1 block at the first
-        call, less the flat program's static CBs and the dispatch's); depth is the landing pool's slots per source chip.
-        A row travels as one fabric packet with its 32 B trailer.
+        The combine's op-specific configuration (combine_snap comes from MoEBlockConfig). n_acc / mode pin the
+        accumulator count and mode the fused head planned; arena_bytes is the combine's L1 budget a core (0: the
+        exchange's sizing from the largest free L1 block at the first call, less the flat program's static CBs and the
+        dispatch's); depth is the landing pool's slots per source chip. A row travels as one fabric packet with its
+        32 B trailer.
     )doc");
     cfg.def(nb::init<>())
         .def_rw("n_acc", &CombineConfig::n_acc)
@@ -90,7 +91,7 @@ void bind_routed_experts_combine(nb::module_& mod) {
                 (flat_routed_expert_plan with this op's capacity and layout).
             resources: the block's MoEBlockResources (config, placement, persistent words).
             max_tokens_per_expert: the flat expert's capacity m.
-            activation: the experts' activation (se3_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
+            activation: the experts' activation (gate_up_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
             arena: the block's shared L1 arena (routed_experts_combine_arena_spec; the fused head ran in it first);
                 None: the op allocates one for the call.
             layout: FlatLayoutOptions.

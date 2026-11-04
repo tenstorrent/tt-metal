@@ -15,7 +15,7 @@
 //
 // Zeroing. The arena is allocated per call: every call starts by zeroing the combine's state on its own cores,
 // ordered by a per-chip gate (kernels/dataflow/combine_zero_gate.hpp) and the senders' cross-chip barrier. The flat
-// y writers take part (se_yrm.hpp SE_Y_L1): each zeroes its words, then counts in on the gate (the report's
+// y writers take part (y_row_major.hpp SE_Y_L1): each zeroes its words, then counts in on the gate (the report's
 // l1_args 5..7).
 
 #pragma once
@@ -147,8 +147,8 @@ struct CombineHandles {
     mutable std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> last = filled_unpatched();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
     // The y writers' report (flat_program.hpp FlatCombineReport): the collector (virtual), its counts (arena offset),
-    // and the L1 hand-off args (se_yrm.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y << 16,
-    // bar, words bytes to zero; per destination: noc x, noc y, slot base, slots, landed counter array].
+    // and the L1 hand-off args (y_row_major.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y <<
+    // 16, bar, words bytes to zero; per destination: noc x, noc y, slot base, slots, landed counter array].
     tt::tt_metal::CoreCoord collector;
     uint32_t counts_offset = 0;
     std::vector<CombineArg> l1_args;

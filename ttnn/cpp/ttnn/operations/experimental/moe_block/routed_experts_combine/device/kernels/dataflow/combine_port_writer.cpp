@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Port sender: injects this port's rows (one fabric connection, multi-hop 2D unicasts
+// Combine port writer: injects this port's rows (one fabric connection, multi-hop 2D unicasts
 // straight into the home accumulator's landing ring), returns credits of the rows its chip's accumulators consumed
 // from the sources whose first hop back is this port, and forwards those sources their rings' layouts for the call.
 // Defines: REC_FUSED (a port that is also an
@@ -169,7 +169,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* hland = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC) + 128;
     const uint32_t hbase = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC)[101];
     uint32_t hgranted = 0, hpushed = 0, wr_i = 0;
-    // the hand-off receiver's step (as rf_port_reader): grant ring slots, push rows every writer has landed
+    // the hand-off receiver's step (as combine_port_reader): grant ring slots, push rows every writer has landed
     auto hand_off = [&]() {
         if (hpushed >= n_inj) {
             return;
@@ -195,7 +195,7 @@ void kernel_main() {
             ++hpushed;
         }
     };
-    // the accumulator writer's step (as rf_acc_writer): one finished token row to the output
+    // the accumulator writer's step (as accumulator_writer): one finished token row to the output
     auto write_out = [&]() {
         if (wr_i < n_tok && cb_pages_available_at_front(cb_out, NT_)) {
             noc_async_write(get_read_ptr(cb_out), ob.get_noc_addr(wr_i * A + acc_me), row_bytes);

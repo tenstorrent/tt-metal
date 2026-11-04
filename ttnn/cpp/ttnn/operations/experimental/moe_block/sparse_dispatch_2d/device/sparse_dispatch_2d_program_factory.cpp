@@ -151,7 +151,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_0};
 
         KernelDescriptor sender;
-        sender.kernel_source = std::string(KERNEL_DIR) + "sparse_dispatch_2d_port_sender.cpp";
+        sender.kernel_source = std::string(KERNEL_DIR) + "sparse_dispatch_2d_port_writer.cpp";
         sender.source_type = KernelDescriptor::SourceType::FILE_PATH;
         sender.core_ranges = port_set;
         sender.compile_time_args = sender_ct;

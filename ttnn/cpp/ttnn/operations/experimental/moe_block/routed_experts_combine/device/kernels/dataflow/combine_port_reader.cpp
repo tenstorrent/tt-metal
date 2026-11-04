@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Port reader, L1 hand-off from the flat expert's y writers (se_yrm.hpp SE_Y_L1): the writers put every row of this
-// port straight into its injection ring (cb_inj) in the order they produce them; this reader grants ring slots
-// (grant[d] on every writer, cumulative), and pushes a row once every writer's landed counter here covers it (the
-// column-0 writer also wrote the trailer: header word and flags). Counters are cumulative within a call (misc[101]:
-// this port's rows before this call; the state is zeroed every call). Its row count is the device plan's.
+// Combine port reader: the L1 hand-off from the flat expert's y writers (y_row_major.hpp SE_Y_L1): the writers put
+// every row of this port straight into its injection ring (cb_inj) in the order they produce them; this reader grants
+// ring slots (grant[d] on every writer, cumulative), and pushes a row once every writer's landed counter here covers it
+// (the column-0 writer also wrote the trailer: header word and flags). Counters are cumulative within a call
+// (misc[101]: this port's rows before this call; the state is zeroed every call). Its row count is the device plan's.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

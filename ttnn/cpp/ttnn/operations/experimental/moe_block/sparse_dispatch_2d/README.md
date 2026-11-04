@@ -26,7 +26,7 @@ link's Ethernet core runs two kernels:
   its direction) with up to three input manifest rings (0: rows continuing in its direction; 1 / 2: rows turning
   into its axis that arrived moving + / -), reads each row from `xbuf` and hands rows plus 16-byte entries to the
   sender `group` at a time.
-- sender (RISCV_0, NoC1, `sparse_dispatch_2d_port_sender.cpp`): fences with the neighbour's opposite port, writes each
+- sender (RISCV_0, NoC1, `sparse_dispatch_2d_port_writer.cpp`): fences with the neighbour's opposite port, writes each
   row one fabric hop into the same slot of the neighbour's `xbuf` (two rows a packet when `pack` is 2), and stages
   for the neighbour's ports the entries they need (continue / turn + / turn -), sent `manifest_batch` at a time
   with a fused write + counter increment.

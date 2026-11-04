@@ -33,7 +33,7 @@ every chip, which the fabric writes need. Its first `arena_bytes` a core are the
 arena included) is re-applied to both halves' runtime args, arena CBs and the writers' report.
 
 Each call zeroes the combine's state in-program: the ports' senders (ports apart), the accumulators' readers and the
-flat y writers (their words; se_yrm.hpp SE_Y_L1 args 5..7) zero their own L1 and count in on the chip's gate
+flat y writers (their words; y_row_major.hpp SE_Y_L1 args 5..7) zero their own L1 and count in on the chip's gate
 (accumulator 0), which releases the chip's combine cores; the senders' cross-chip start barrier then orders all chips
 (`kernels/dataflow/combine_zero_gate.hpp`, the persistent `bar` words). At the end, a port drains its credits (every
 row it injected consumed) and waits for every ring-layout packet addressed to it (one from each home chip it returns

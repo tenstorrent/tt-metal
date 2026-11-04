@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The weighted accumulate (sparse_combine_l1._ACC_COMPUTE): each row times its gate weight (HiFi4, scalar broadcast
+// Accumulator compute, the weighted accumulate: each row times its gate weight (HiFi4, scalar broadcast
 // from the weight CB's element 0) into DEST (fp32), packed onto the token's fp32 sum with packer L1 accumulation, then
 // the bf16 sums out. SNAP (combine_snap q): each product first rounded on the SFPU to a multiple of q, so every fp32
 // add is exact while the partial sums stay below 2^24 q - the sum is then the same in any landing order. The reader

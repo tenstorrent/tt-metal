@@ -4,9 +4,9 @@
 """Can a late chip's combine packets reach a chip that already finished the combine?
 
 The combine's home chips forward each source chip's ring layouts to the source's port once per call, whatever rows the
-source sends them (rf_port_sender.cpp send_layouts). A source port with no rows for a home finishes as soon as its own
-work is done, so a late home's layout packet could land in the source's arena after its program ended - in L1 the next
-op owns (the arena is per call). The fix: a port ends only after every layout packet addressed to it has landed.
+source sends them (combine_port_writer.cpp send_layouts). A source port with no rows for a home finishes as soon as its
+own work is done, so a late home's layout packet could land in the source's arena after its program ended - in L1 the
+next op owns (the arena is per call). The fix: a port ends only after every layout packet addressed to it has landed.
 
 LoudBox 2x4 (FABRIC_2D), GLM-5.3-Flash at chunk 1280, combine_snap 2^-14 (the combine's sum is order independent, so
 outputs are bit-comparable across arrival orders). Two neighbouring chips are made cold (their experts get no rows: a
