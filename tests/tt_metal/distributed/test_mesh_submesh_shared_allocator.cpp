@@ -12,13 +12,18 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -215,6 +220,27 @@ TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshRejectsTracesAndSubDeviceManager
     const auto grid = submesh->compute_with_storage_grid_size();
     SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}))});
     EXPECT_THROW(submesh->create_sub_device_manager({sub_device}, 0), std::runtime_error);
+}
+
+TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshUsesParentDriscL1Arena) {
+    if (mesh_device_->num_devices() < 2 || mesh_device_->shape().dims() != 2) {
+        GTEST_SKIP() << "Requires a 2D mesh of at least 2 devices";
+    }
+    const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "Requires programmable DRAM cores";
+    }
+    // DRAM-sender prefetcher pipes keep their sender state in DRISC L1, which is placed per mesh like a buffer. The
+    // control: a submesh without share_allocator hands out the parent's range again.
+    auto own = last_device_submesh(*mesh_device_, /*share_allocator=*/false);
+    auto shared = last_device_submesh(*mesh_device_, /*share_allocator=*/true);
+    const CoreCoord dram_core{0, 0};
+    constexpr uint32_t kRangeSize = 64;
+    auto parent_range = mesh_device_->impl().drisc_l1_arena().allocate_on(dram_core, kRangeSize, kRangeSize);
+    auto own_range = own->impl().drisc_l1_arena().allocate_on(dram_core, kRangeSize, kRangeSize);
+    auto shared_range = shared->impl().drisc_l1_arena().allocate_on(dram_core, kRangeSize, kRangeSize);
+    EXPECT_EQ(own_range->addr(), parent_range->addr());
+    EXPECT_NE(shared_range->addr(), parent_range->addr());
 }
 
 TEST_F(SharedAllocatorSubmeshTest, ClosingParentClosesSharedSubmesh) {

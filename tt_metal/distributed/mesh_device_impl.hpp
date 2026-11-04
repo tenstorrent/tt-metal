@@ -212,7 +212,7 @@ private:
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
     // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
-    // the MeshBuffer / weak_ptr<MeshDevice> pattern).
+    // the MeshBuffer / weak_ptr<MeshDevice> pattern). A shared-allocator submesh holds its parent's arena.
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call

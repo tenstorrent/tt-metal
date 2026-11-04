@@ -1978,7 +1978,10 @@ bool MeshDeviceImpl::initialize_impl(
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
     // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
-    if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    // A shared-allocator submesh places DRISC L1 through its parent's arena, as it does its buffers.
+    if (shares_parent_allocator_) {
+        drisc_l1_arena_ = parent_mesh_->impl().drisc_l1_arena_;
+    } else if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }
 
