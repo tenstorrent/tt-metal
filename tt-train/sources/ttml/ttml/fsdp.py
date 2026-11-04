@@ -217,7 +217,15 @@ class FSDPState:
         explicitly deallocate the gathered value and gathered grad, and
         restore the sharded m_value (in that order, so ``set_grad``'s shape
         check sees the shard-shaped m_value).
+
+        Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
+        ``create_optimizer`` stored from the training config, read here as the
+        DDP sync reads it: this hook first runs in the first backward, after the
+        optimizer exists.
         """
+        reduce_dtype = self.reduce_dtype
+        if reduce_dtype is None:
+            reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
@@ -228,7 +236,7 @@ class FSDPState:
             gathered_grad = param_tensor.get_grad()
             grad_dtype = gathered_grad.dtype
             to_reduce = gathered_grad
-            if self.reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+            if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
                 # The scatter half of core::distributed::synchronize_tensor's fp32 route, written here because FSDP
                 # keeps the shard. Nothing reads the gathered grad after the cast, so it is freed before the
                 # reduce-scatter, the peak of this hook.
@@ -744,9 +752,11 @@ def fully_shard(
             ``GRPOTrainer`` already do.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
             ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype. It
-            needs a transient fp32 copy of each gathered gradient, twice its bf16 size, during backward. Applies to
-            the parameters this call shards; pass it to every ``fully_shard`` call (blocks and root) to cover the
-            whole model.
+            needs a transient fp32 copy of each gathered gradient, twice its bf16 size, during backward. ``None``
+            takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
+            does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to
+            the parameters this call shards and wins over the stored one.
     Returns:
         ``module`` (modified in place).
     """

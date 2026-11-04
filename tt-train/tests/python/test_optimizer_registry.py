@@ -417,6 +417,17 @@ def test_create_optimizer_rejects_an_unknown_master_dtype(expect_error):
         create_optimizer(_ModelWithoutParameters(), config)
 
 
+def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default):
+    """With a full config, create_optimizer also stores precision.reduce_dtype as the default the gradient syncs sum in:
+    ttml.sync_gradients and the FSDP backward hook read it when a call passes none. No parameter is touched, so this
+    needs no device."""
+    config = {"training_config": {"precision": {"reduce_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
+
+    create_optimizer(_ModelWithoutParameters(), config)
+
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+
+
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
     """A typo under precision stops the run instead of training in the model's dtype; checked before any parameter is
     touched, so this needs no device."""

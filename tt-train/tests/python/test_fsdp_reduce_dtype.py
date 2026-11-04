@@ -77,6 +77,24 @@ def test_fp32_reduce_dtype_is_closer_to_the_exact_mean(fsdp_mesh):
     assert fp32_share > np.mean(bf16 == expected)
 
 
+# Without reduce_dtype, backward_post sums in the default create_optimizer stores, as ttml.sync_gradients does; a
+# reduce_dtype given to fully_shard wins over it.
+@pytest.mark.requires_device
+def test_unset_reduce_dtype_takes_the_stored_default_unless_fully_shard_gets_one(fsdp_mesh, gradient_reduce_default):
+    values = make_gradients(64, 128, seed=5)
+    fp32, _ = _reduce_with_backward_post(values, ttnn.DataType.FLOAT32)
+    bf16, _ = _reduce_with_backward_post(values, ttnn.DataType.BFLOAT16)
+    assert not np.array_equal(fp32, bf16)
+
+    ttml.core.apply_precision_config({"precision": {"reduce_dtype": "float32"}}, ttml.NamedParameters())
+    np.testing.assert_array_equal(_reduce_with_backward_post(values, None)[0], fp32)
+    np.testing.assert_array_equal(_reduce_with_backward_post(values, ttnn.DataType.BFLOAT16)[0], bf16)
+
+    gradient_reduce_default(ttnn.DataType.BFLOAT16)
+    np.testing.assert_array_equal(_reduce_with_backward_post(values, None)[0], bf16)
+    np.testing.assert_array_equal(_reduce_with_backward_post(values, ttnn.DataType.FLOAT32)[0], fp32)
+
+
 class _Block(AbstractModuleBase):
     def __init__(self, features: int) -> None:
         super().__init__()
