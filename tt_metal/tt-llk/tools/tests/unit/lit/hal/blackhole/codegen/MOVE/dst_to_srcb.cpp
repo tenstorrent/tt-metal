@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %t/compile_time.cpp -o %t/compile_time.o
+// RUN: %{blackhole_objdump} -d %t/compile_time.o | FileCheck %s
 
+// Compare each runtime HAL function with its adjacent reference_ function.
+// Disable identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instructions.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -14,6 +23,53 @@
 namespace move = hal::move;
 
 using DstToSrcB = move::Transfer<move::Dst, move::SrcB>;
+
+//--- codegen.cpp
+#include "common.h"
+
+// TT_OP_ macros add their fields, but the HAL ORs a runtime row into the
+// encoding, so the references OR it into a zero dst field.
+
+extern "C" __attribute__((noinline, used)) void dst_face_runtime_source(const std::uint32_t source_row)
+{
+    DstToSrcB extract {
+        .source_row         = source_row,
+        .destination_row    = 16,
+        .address_mode       = 0,
+        .number_of_rows     = move::rows::Face,
+        .final_address_mode = 3,
+    };
+    move::run(extract);
+    extract.destination_row  = 0;
+    extract.source_32bit_low = true;
+    move::run(extract);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_dst_face_runtime_source(const std::uint32_t source_row)
+{
+    TT_INSN(TT_OP_MOVD2B(0 /*dest_32b_lo*/, 16 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(0 /*dest_32b_lo*/, 16 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(0 /*dest_32b_lo*/, 16 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(0 /*dest_32b_lo*/, 16 /*src*/, 3 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(1 /*dest_32b_lo*/, 0 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(1 /*dest_32b_lo*/, 0 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(1 /*dest_32b_lo*/, 0 /*src*/, 0 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+    TT_INSN(TT_OP_MOVD2B(1 /*dest_32b_lo*/, 0 /*src*/, 3 /*addr_mode*/, 2 /*instr_mod*/, 0 /*dst*/) | source_row);
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t dst_encode_runtime_source(const std::uint32_t source_row)
+{
+    return DstToSrcB {.source_row = source_row, .destination_row = 16, .address_mode = 3, .number_of_rows = move::rows::One, .source_32bit_low = true}
+        .get_operation();
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_dst_encode_runtime_source(const std::uint32_t source_row)
+{
+    return TT_OP_MOVD2B(1 /*dest_32b_lo*/, 16 /*src*/, 3 /*addr_mode*/, 0 /*instr_mod*/, 0 /*dst*/) | source_row;
+}
+
+//--- compile_time.cpp
+#include "common.h"
 
 constexpr DstToSrcB one_row_low {
     .source_row       = 19,
@@ -68,7 +124,7 @@ extern "C" __attribute__((noinline, used)) void dst_one_row_low()
 }
 
 // CHECK-LABEL: <dst_one_row_low>:
-// CHECK-NEXT: ttmovd2b 1,16,3,0,19
+// CHECK-NEXT: ttmovd2b 1,16,3,0,19{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_four_rows()
@@ -77,7 +133,7 @@ extern "C" __attribute__((noinline, used)) void dst_four_rows()
 }
 
 // CHECK-LABEL: <dst_four_rows>:
-// CHECK-NEXT: ttmovd2b 0,60,1,2,200
+// CHECK-NEXT: ttmovd2b 0,60,1,2,200{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_eight_rows()
@@ -86,8 +142,8 @@ extern "C" __attribute__((noinline, used)) void dst_eight_rows()
 }
 
 // CHECK-LABEL: <dst_eight_rows>:
-// CHECK-NEXT: ttmovd2b 0,0,4,2,8
-// CHECK-NEXT: ttmovd2b 0,0,5,2,8
+// CHECK-NEXT: ttmovd2b 0,0,4,2,8{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,5,2,8{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_face_final_mode()
@@ -96,10 +152,10 @@ extern "C" __attribute__((noinline, used)) void dst_face_final_mode()
 }
 
 // CHECK-LABEL: <dst_face_final_mode>:
-// CHECK-NEXT: ttmovd2b 0,16,0,2,64
-// CHECK-NEXT: ttmovd2b 0,16,0,2,64
-// CHECK-NEXT: ttmovd2b 0,16,0,2,64
-// CHECK-NEXT: ttmovd2b 0,16,3,2,64
+// CHECK-NEXT: ttmovd2b 0,16,0,2,64{{$}}
+// CHECK-NEXT: ttmovd2b 0,16,0,2,64{{$}}
+// CHECK-NEXT: ttmovd2b 0,16,0,2,64{{$}}
+// CHECK-NEXT: ttmovd2b 0,16,3,2,64{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_two_faces()
@@ -108,14 +164,14 @@ extern "C" __attribute__((noinline, used)) void dst_two_faces()
 }
 
 // CHECK-LABEL: <dst_two_faces>:
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,0,2,0
-// CHECK-NEXT: ttmovd2b 0,0,3,2,0
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,0,2,0{{$}}
+// CHECK-NEXT: ttmovd2b 0,0,3,2,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_counter_relative()
@@ -124,7 +180,7 @@ extern "C" __attribute__((noinline, used)) void dst_counter_relative()
 }
 
 // CHECK-LABEL: <dst_counter_relative>:
-// CHECK-NEXT: ttmovd2b 0,4,2,2,512
+// CHECK-NEXT: ttmovd2b 0,4,2,2,512{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void dst_issue_encoded_operations()
@@ -134,57 +190,6 @@ extern "C" __attribute__((noinline, used)) void dst_issue_encoded_operations()
 }
 
 // CHECK-LABEL: <dst_issue_encoded_operations>:
-// CHECK-NEXT: ttmovd2b 1,16,3,0,19
-// CHECK-NEXT: ttmovd2b 0,60,1,2,200
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void dst_face_runtime_source(const std::uint32_t source_row)
-{
-    DstToSrcB extract {
-        .source_row         = source_row,
-        .destination_row    = 16,
-        .address_mode       = 0,
-        .number_of_rows     = move::rows::Face,
-        .final_address_mode = 3,
-    };
-    move::run(extract);
-    extract.destination_row  = 0;
-    extract.source_32bit_low = true;
-    move::run(extract);
-}
-
-// CHECK-LABEL: <dst_face_runtime_source>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa202
-// CHECK-NEXT: lui [[R1:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: mv [[R1]],[[R1]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or [[R0]],a0,[[R0]]
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: lui [[R2:a[0-7]]],0xa20e
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: or [[R2]],a0,[[R2]]
-// CHECK-NEXT: lui [[R0]],0xa802
-// CHECK-NEXT: sw [[R2]],0([[R1]])
-// CHECK-NEXT: or [[R0]],a0,[[R0]]
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: lui [[R2]],0xa80e
-// CHECK-NEXT: sw [[R0]],0([[R1]])
-// CHECK-NEXT: or a0,a0,[[R2]]
-// CHECK-NEXT: sw a0,0([[R1]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t dst_encode_runtime_source(const std::uint32_t source_row)
-{
-    return DstToSrcB {.source_row = source_row, .destination_row = 16, .address_mode = 3, .number_of_rows = move::rows::One, .source_32bit_low = true}
-        .get_operation();
-}
-
-// CHECK-LABEL: <dst_encode_runtime_source>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xaa0c
-// CHECK-NEXT: or a0,a0,[[R0]]
+// CHECK-NEXT: ttmovd2b 1,16,3,0,19{{$}}
+// CHECK-NEXT: ttmovd2b 0,60,1,2,200{{$}}
 // CHECK-NEXT: ret
