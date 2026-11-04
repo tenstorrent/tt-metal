@@ -22,19 +22,23 @@ void bind_concat(nb::module_& mod) {
     const auto* doc = R"doc(
         Concatenates the input tensors along dimension `dim`.
 
-        All input tensors must be on the same device and have the same rank, dtype and layout. Their shapes must
-        match in every dimension except `dim`, and the size of the output along `dim` is the sum of the inputs'
-        sizes along it. The inputs must be either all interleaved or all sharded.
+        All input tensors must be on the same device and have the same rank and dtype. Their shapes must match in
+        every dimension except `dim`, and the size of the output along `dim` is the sum of the inputs' sizes along
+        it. The inputs must be either all interleaved or all sharded.
+
+        Interleaved inputs with different layouts are converted to the first input's layout, or to ROW_MAJOR if a
+        ROW_MAJOR input is not tile-aligned. A TILE input that is padded along `dim` needs every input to be TILE.
+        Sharded inputs must also have the same layout, shard grid, sharding scheme and shard orientation.
 
         Args:
             tensors (List[ttnn.Tensor]): the tensors to concatenate.
-            dim (int, optional): the dimension along which to concatenate. Defaults to `0`.
+            dim (int, optional): the dimension along which to concatenate; negative values count from the last dimension. Defaults to `0`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
-            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which gives a DRAM interleaved output.
+            output_tensor (ttnn.Tensor, optional): Not supported: passing a tensor raises an error. Defaults to `None`.
+            groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for a width concat of two height-sharded tensors in L1.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use when the inputs and the output are interleaved (L1 or DRAM). If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
 
         Note:
             Block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
