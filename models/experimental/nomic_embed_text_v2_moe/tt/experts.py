@@ -93,6 +93,11 @@ _ROUTED_L1_MARGIN = 16 << 10
 # outgrow the gathered rows' slot gets it back with one to three.
 MAX_SPARE_TILE_ROWS = 3
 
+# The windows the generated MoE dispatch and combine take (nomic-opt c04: ttnn.operations.nomic_moe_dispatch and
+# nomic_moe_combine, tt_config.generated_dispatch / generated_combine); others keep routed_combine. Inside it an op may
+# still refuse a call (SupportRefusal), which also keeps routed_combine.
+GENERATED_GLUE_TOKENS = (1000, 4096)
+
 
 def routed_windows(tokens: int, max_tokens: int = ROUTED_MAX_TOKENS) -> list[tuple[int, int]]:
     """(token_start, num_tokens) of each routed pass: as few as max_tokens allows, of one size.
@@ -157,6 +162,22 @@ class TtNomicExperts(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    @property
+    def bias(self) -> ttnn.Tensor:
+        """The experts' shared (1, 1, 1, H) bias, added once per token after the weighted sum."""
+        return self._bias
+
+    @bias.setter
+    def bias(self, value: ttnn.Tensor) -> None:
+        # The generated nomic_moe_combine reads the bias in its own form (tt_config.generated_combine), remade with
+        # every new bias: the tests swap in a zero bias to find where the bias lands.
+        self._bias = value
+        self.bias_generated = None
+        if self.tt_config.generated_combine:
+            from ttnn.operations.nomic_moe_combine import prepare_combine_bias
+
+            self.bias_generated = prepare_combine_bias(value, self.device)
+
     def set_w2(self, w2_per_expert: torch.Tensor, device) -> None:
         """w2 on device from its (1, E, H, F) host form, every expert's (H, F) slab side by side, read transposed."""
         self.w2 = self._chunked(stack_expert_columns(w2_per_expert), device, True, EXPERT_W2_CHUNK_TILES)
@@ -183,6 +204,21 @@ class TtNomicExperts(LightweightModule):
         tiles = tensor.shape[-2] // ttnn.TILE_SIZE * tensor.shape[-1] // ttnn.TILE_SIZE
         return tiles, ttnn.tile_size(tensor.dtype)
 
+    def _core_bytes(self, tensor: ttnn.Tensor) -> int:
+        """The bytes of a bank (interleaved) or of the fullest core (ND-sharded: sharded tensors take one address
+        range on every core) a tile-layout L1 tensor takes: the slot it leaves when freed."""
+        spec = tensor.memory_config().nd_shard_spec
+        if spec is None:
+            return self.bank_bytes(*self._tile_pages(tensor))
+        shard_rows, shard_columns = spec.shard_shape[-2], spec.shard_shape[-1]
+        rows, columns = (
+            tensor.padded_shape[-2] * tensor.padded_shape[0] * tensor.padded_shape[1],
+            tensor.padded_shape[-1],
+        )
+        shards = -(-rows // shard_rows) * -(-columns // shard_columns)
+        shard_bytes = shard_rows // ttnn.TILE_SIZE * (shard_columns // ttnn.TILE_SIZE) * ttnn.tile_size(tensor.dtype)
+        return -(-shards // spec.num_cores()) * shard_bytes
+
     def routed_memory_config(
         self,
         pages: int,
@@ -190,6 +226,7 @@ class TtNomicExperts(LightweightModule):
         live: Sequence[ttnn.Tensor],
         cb_bytes: int,
         freed: tuple[int, int] | None = None,
+        core_bytes: int | None = None,
     ) -> ttnn.MemoryConfig:
         """L1 for a routed-pass intermediate of `pages` pages when its share of each bank fits
         ROUTED_L1_MAX_BANK_BYTES and the op that runs beside it still has cb_bytes for its buffers
@@ -198,8 +235,10 @@ class TtNomicExperts(LightweightModule):
         L1 tensors are allocated from the top down, each in a high gap it fits: in freed, the depth
         (l1_depth) and bank bytes of a slot just freed, when it fits there, and at worst right below
         the deepest live tensor otherwise. Each op below adds its own inputs to the `live` it is given.
+        core_bytes: the fullest core's share when the tensor is not L1 interleaved (an op's own sharded layout).
         """
-        fits = self._fits_l1(self.bank_bytes(pages, page_bytes), l1_floor(live, self.tt_config), cb_bytes, freed)
+        share = self.bank_bytes(pages, page_bytes) if core_bytes is None else core_bytes
+        fits = self._fits_l1(share, l1_floor(live, self.tt_config), cb_bytes, freed)
         return ttnn.L1_MEMORY_CONFIG if fits else ttnn.DRAM_MEMORY_CONFIG
 
     def _fits_l1(self, bank_bytes: int, deepest: int, cb_bytes: int, freed: tuple[int, int] | None = None) -> bool:
@@ -211,7 +250,7 @@ class TtNomicExperts(LightweightModule):
         fits = bank_bytes <= ROUTED_L1_MAX_BANK_BYTES
         return fits and bottom + cb_bytes + _ROUTED_L1_MARGIN <= self.tt_config.l1_cb_bytes
 
-    def _spare_tile_rows(self, rows: int, hidden: int, deepest: int) -> int:
+    def _spare_tile_rows(self, rows: int, hidden: int, deepest: int, tokens: int = 0) -> int:
         """The tile rows the gather writes past routing_metadata's `rows` so that w2's output stays in L1, if any.
 
         w2's output takes the slot the gathered rows free (grouped_w2's freed), but its 1536-byte row pages
@@ -230,7 +269,7 @@ class TtNomicExperts(LightweightModule):
         tile = ttnn.TILE_SIZE
 
         def expert_rows_in_l1(count: int) -> bool:
-            gathered = self.bank_bytes(count // tile * hidden // tile, ttnn.tile_size(ttnn.bfloat16))
+            gathered = self._gathered_core_bytes(count, tokens)
             freed = (deepest + gathered, gathered) if self._fits_l1(gathered, deepest, gather_cb) else None
             below = freed[0] if freed else deepest
             w1_out = self.bank_bytes(count // tile * columns // tile, ttnn.tile_size(dtype))
@@ -254,13 +293,44 @@ class TtNomicExperts(LightweightModule):
             self.num_experts,
         )
 
+    def _gathered_core_bytes(self, rows: int, tokens: int) -> int:
+        """The fullest L1 core's share of the gathered rows, (rows, H) bfloat16 tiles: the generated dispatch's own
+        layout where it runs, L1 interleaved for routed_combine."""
+        tiles = rows // ttnn.TILE_SIZE * self.hidden // ttnn.TILE_SIZE
+        interleaved = self.bank_bytes(tiles, ttnn.tile_size(ttnn.bfloat16))
+        if not (self.tt_config.generated_dispatch and self._generated_glue(tokens)):
+            return interleaved
+        from ttnn.operations.nomic_moe_dispatch import output_memory_config
+
+        spec = output_memory_config(rows, self.device, ttnn.BufferType.L1).nd_shard_spec
+        if spec is None:
+            return interleaved
+        shard_rows, shard_columns = spec.shard_shape[-2], spec.shard_shape[-1]
+        shards = -(-rows // shard_rows) * -(-self.hidden // shard_columns)
+        shard_bytes = shard_rows // ttnn.TILE_SIZE * (shard_columns // ttnn.TILE_SIZE) * ttnn.tile_size(ttnn.bfloat16)
+        return -(-shards // spec.num_cores()) * shard_bytes
+
+    def _generated_glue(self, tokens: int) -> bool:
+        """Whether a window of `tokens` tokens is one the generated dispatch and combine take."""
+        return GENERATED_GLUE_TOKENS[0] <= tokens <= GENERATED_GLUE_TOKENS[1]
+
+    def _gather_cb_bytes(self, tokens: int) -> int:
+        """The circular-buffer bytes a core of the dispatch that gathers a window of `tokens` tokens."""
+        if self.tt_config.generated_dispatch and self._generated_glue(tokens):
+            from ttnn.operations.nomic_moe_dispatch import circular_buffer_bytes
+
+            rows = ttnn.TILE_SIZE * (MAX_SPARE_TILE_ROWS + ttnn.core.divup(self.top_k * tokens, ttnn.TILE_SIZE))
+            rows += ttnn.TILE_SIZE * (self.num_experts - 1)
+            return max(_GATHER_CB_BYTES, circular_buffer_bytes(rows))
+        return _GATHER_CB_BYTES
+
     def dispatch_table_config(self, x: ttnn.Tensor, live: Sequence[ttnn.Tensor] = ()) -> ttnn.MemoryConfig:
         """Where dispatch_table puts x's rows. They live through all the layer's passes, so they take L1
         only when the layer is one pass."""
         tokens, hidden = x.shape[0] * x.shape[-2], x.shape[-1]
         if len(self._windows(tokens)) > 1:
             return ttnn.DRAM_MEMORY_CONFIG
-        return self.routed_memory_config(tokens, hidden * BFLOAT16_BYTES, (*live, x), _GATHER_CB_BYTES)
+        return self.routed_memory_config(tokens, hidden * BFLOAT16_BYTES, (*live, x), self._gather_cb_bytes(tokens))
 
     def dispatch_table(self, x: ttnn.Tensor, live: Sequence[ttnn.Tensor] = ()) -> ttnn.Tensor:
         """(1, 1, T, H) -> the row-major rows every routed pass of the layer gathers from, untilized once a layer:
@@ -282,7 +352,7 @@ class TtNomicExperts(LightweightModule):
         rows, hidden = gather_index.shape[-1], x_rows.shape[-1]
         live = (*live, x_rows, gather_index)
         index = gather_index
-        spare = self._spare_tile_rows(rows, hidden, l1_floor(live, self.tt_config))
+        spare = self._spare_tile_rows(rows, hidden, l1_floor(live, self.tt_config), x_rows.shape[-2])
         if spare:
             # One op, 1.7 us at 8480 rows; ttnn.pad takes 21.
             index = ttnn.concat(
@@ -290,22 +360,42 @@ class TtNomicExperts(LightweightModule):
             )
             rows += spare * ttnn.TILE_SIZE
         tiles = rows // ttnn.TILE_SIZE * hidden // ttnn.TILE_SIZE
-        dispatched = ttnn.experimental.nomic_embed_text_v2_moe.routed_combine(
-            x_rows,
-            index,
-            num_tokens=rows,
-            # grouped_w1 runs beside it; its output plans for itself.
-            memory_config=self.routed_memory_config(
-                tiles,
-                ttnn.tile_size(ttnn.bfloat16),
-                live,
-                self.footprint(self.hidden, self.intermediate, ttnn.bfloat16, self.tt_config.expert_intermediate_dtype),
-            ),
-            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
+        # grouped_w1 runs beside it; its output plans for itself.
+        memory_config = self.routed_memory_config(
+            tiles,
+            ttnn.tile_size(ttnn.bfloat16),
+            live,
+            self.footprint(self.hidden, self.intermediate, ttnn.bfloat16, self.tt_config.expert_intermediate_dtype),
+            core_bytes=self._gathered_core_bytes(rows, x_rows.shape[-2]),
         )
+        dispatched = self._generated_dispatch(x_rows, index, memory_config)
+        if dispatched is None:
+            dispatched = ttnn.experimental.nomic_embed_text_v2_moe.routed_combine(
+                x_rows,
+                index,
+                num_tokens=rows,
+                memory_config=memory_config,
+                compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
+            )
         if index is not gather_index:
             ttnn.deallocate(index)
         return dispatched
+
+    def _generated_dispatch(
+        self, x_rows: ttnn.Tensor, index: ttnn.Tensor, memory_config: ttnn.MemoryConfig
+    ) -> ttnn.Tensor | None:
+        """The gather on the generated nomic_moe_dispatch, Xg in the op's own layout for memory_config's buffer
+        type, where it takes the window; None otherwise (routed_combine gathers). The op writes every row, the spare
+        ones included, bit for bit what routed_combine writes."""
+        if not self.tt_config.generated_dispatch or not self._generated_glue(x_rows.shape[-2]):
+            return None
+        from ttnn.operations._op_contract import SupportRefusal
+        from ttnn.operations.nomic_moe_dispatch import nomic_moe_dispatch
+
+        try:
+            return nomic_moe_dispatch(x_rows, index, memory_config=memory_config)
+        except SupportRefusal:
+            return None
 
     def grouped_w1(
         self,
@@ -451,14 +541,31 @@ class TtNomicExperts(LightweightModule):
         the result holds the bias: it stays finite into the next attention, which non-finite padded
         keys corrupt.
         """
+        # The module's output, placed as the blocks place their activations unless the caller says.
+        memory_config = memory_config or activation_memory_config((1, 1, tokens, expert_rows.shape[-1]))
+        if self.bias_generated is not None and self._generated_glue(tokens):
+            from ttnn.operations._op_contract import SupportRefusal
+            from ttnn.operations.nomic_moe_combine import nomic_moe_combine
+
+            try:
+                return nomic_moe_combine(
+                    expert_rows,
+                    combine_index,
+                    combine_weights,
+                    self.bias_generated,
+                    num_tokens=tokens,
+                    batch=batch,
+                    memory_config=memory_config,
+                )
+            except SupportRefusal:
+                pass
         return ttnn.experimental.nomic_embed_text_v2_moe.routed_combine(
             expert_rows,
             combine_index,
             combine_weights,
             self.bias,
             num_tokens=tokens,
-            # The module's output, placed as the blocks place their activations unless the caller says.
-            memory_config=memory_config or activation_memory_config((1, 1, tokens, expert_rows.shape[-1])),
+            memory_config=memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
             batch=batch,
         )
@@ -526,7 +633,7 @@ class TtNomicExperts(LightweightModule):
             # The expert rows are the gathered rows' size, so they take that slot once it is freed.
             freed = None
             if dispatched.memory_config().buffer_type == ttnn.BufferType.L1:
-                freed = (l1_depth(dispatched, self.tt_config), self.bank_bytes(*self._tile_pages(dispatched)))
+                freed = (l1_depth(dispatched, self.tt_config), self._core_bytes(dispatched))
             ttnn.deallocate(dispatched)
             expert_rows = self.grouped_w2(
                 activated,

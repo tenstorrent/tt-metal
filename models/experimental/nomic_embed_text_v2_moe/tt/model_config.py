@@ -284,6 +284,12 @@ class TtModelConfig:
     # sequence whole tiles (tt/common.py: nd_norm_layout): the norms run nomic_residual_layer_norm, out_proj and fc2
     # write that layout, the MoE reads and writes it unflattened. Off: the split layout and ttnn.layer_norm.
     nd_residual: bool = True
+    # The MoE dispatch (the gather of each slot's token row) and combine (each token's two expert rows weighted, summed
+    # and the shared bias added) on the generated nomic_moe_dispatch and nomic_moe_combine (ttnn.operations) wherever
+    # they take the window: 1000 to 4096 tokens, the combine's output in a layout it writes (tt/experts.py). Off:
+    # routed_combine's gather and combine modes, as before.
+    generated_dispatch: bool = True
+    generated_combine: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     layout: ttnn.Layout = LAYOUT
 
