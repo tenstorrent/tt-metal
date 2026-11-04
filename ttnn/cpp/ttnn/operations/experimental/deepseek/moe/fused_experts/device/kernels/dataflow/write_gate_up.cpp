@@ -125,6 +125,18 @@ void kernel_main() {
     constexpr uint32_t cb_rm_stage_id = get_compile_time_arg_val(kSharedArg + 8);
     constexpr uint32_t stage_chunk_tiles = get_compile_time_arg_val(kSharedArg + 9);
     constexpr auto input_args = TensorAccessorArgs<kSharedArg + 10>();
+#ifdef FE_ALL_REDUCE
+    constexpr uint32_t kArArg = input_args.next_compile_time_args_offset();
+    constexpr uint32_t sem_ar_ready_id = get_compile_time_arg_val(kArArg);
+    constexpr uint32_t cb_ar_scratch_id = get_compile_time_arg_val(kArArg + 1);
+    constexpr uint32_t ar_ring_size = get_compile_time_arg_val(kArArg + 2);
+    static_assert(out_tile_bytes == 64, "fused all-reduce slots are 1x32 bf16 faces");
+    const uint32_t ar_scratch_addr = get_arg_val<uint32_t>(10);
+    const uint32_t ar_slot = get_arg_val<uint32_t>(11);
+    const uint32_t ar_sender_noc_x = get_arg_val<uint32_t>(12);
+    const uint32_t ar_sender_noc_y = get_arg_val<uint32_t>(13);
+    const uint32_t ar_out_ready_addr = get_arg_val<uint32_t>(14);
+#endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_index = get_arg_val<uint32_t>(1);
@@ -348,7 +360,22 @@ void kernel_main() {
         constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
         cb_down_out.wait_front(kLocalTiles);
         if (expert_group == 0) {
+#ifdef FE_ALL_REDUCE
+            // This chip's partial goes to its own slot of the scratch (reduce_noc_* is this core on
+            // group 0), from where the link's sender forwards it to every chip of the ring.
+            noc.async_write(
+                cb_down_out,
+                UnicastEndpoint{},
+                kLocalTiles * out_tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = reduce_noc_x,
+                 .noc_y = reduce_noc_y,
+                 .addr = ar_scratch_addr + ar_slot * kLocalTiles * out_tile_bytes});
+            noc.async_write_barrier();
+            Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+#else
             write_output(kLocalTiles);
+#endif
         } else {
             const uint32_t slot = (expert_group - 1u) * kLocalTiles * out_tile_bytes;
             noc.async_write(
@@ -361,6 +388,16 @@ void kernel_main() {
             Semaphore<>(sem_reduce_id).up(noc, reduce_noc_x, reduce_noc_y, 1);
         }
         cb_down_out.pop_front(kLocalTiles);
+#ifdef FE_ALL_REDUCE
+        if (expert_group == 0) {
+            // Every chip's slot -- this one's too, by the sender's local copy -- bumps out_ready once.
+            // out_ready is a GlobalSemaphore, which Semaphore<> (per-program ids) cannot wrap.
+            auto* out_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addr);
+            noc_semaphore_wait(out_ready, ar_ring_size);
+            CircularBuffer(cb_ar_scratch_id).push_back(ar_ring_size * kLocalTiles);
+            noc_semaphore_set(out_ready, 0);
+        }
+#endif
     } else {
         if (swiglu_core) {
             for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
