@@ -359,6 +359,15 @@ KernelCompileDescriptor build_kernel_descriptor(
                 // header's bare -include resolve here. -MMD (in
                 // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
                 // only after a successful compile (see JitBuildState::write_reuse_cache).
+                //
+                // Processes sharing a TT_METAL_CACHE can preprocess the same kernel at the same time.
+                // The compiler writes into per-process temp files, which are then renamed into place,
+                // so nobody reads a .ii or .d another process is still writing: a torn .ii fails to
+                // compile, and a torn .d builds a sidecar that misses headers. The temp names end in
+                // .tmp, so write_reuse_cache's scan for .d files never picks one up.
+                const std::string d_path = std::filesystem::path(ii_path).replace_extension(".d").string();
+                const std::string tmp_ii = tt::jit_build::utils::FileRenamer::generate_temp_path(ii_path) + ".tmp";
+                const std::string tmp_d = tt::jit_build::utils::FileRenamer::generate_temp_path(d_path) + ".tmp";
                 const auto args = tt::jit_build::utils::build_gpp_argv(
                     desc.request.gpp,
                     target.compiler_opt_level,
@@ -367,11 +376,28 @@ KernelCompileDescriptor build_kernel_descriptor(
                     target.defines,
                     target.srcs[i],
                     tt::jit_build::utils::GppAction::Preprocess,
-                    ii_path);
+                    tmp_ii,
+                    tmp_d);
+                const auto remove_temps = [&] {
+                    std::error_code ec;
+                    std::filesystem::remove(tmp_ii, ec);
+                    std::filesystem::remove(tmp_d, ec);
+                };
                 if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    remove_temps();
                     TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
                 }
-                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                // Read this process's own output before the rename: the final path may be replaced
+                // by another process's (identical) .ii at any time.
+                std::vector<std::uint8_t> bytes;
+                try {
+                    bytes = tt::jit_build::utils::read_file_bytes(tmp_ii);
+                    std::filesystem::rename(tmp_ii, ii_path);
+                    std::filesystem::rename(tmp_d, d_path);
+                } catch (...) {
+                    remove_temps();
+                    throw;
+                }
                 tt::jit_build::GeneratedFile gf;
                 gf.name = ii_name;
                 gf.content.assign(bytes.begin(), bytes.end());
