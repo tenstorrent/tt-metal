@@ -273,3 +273,6 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   (this check), the prefill chain and the served evals; the S = 32 metric's noise band is measured next with the
   composite's own alternative summation (`gate84_B4_ccl`). The device rounds the sums to nearest (unit diagnostic:
   95 % of elements equal the round-to-nearest fp32 sum, the rest differ by summation order).
+* 01:59 **fused DSA decode state on top** (`gate84_B4_dsastate`: fabric gather + all-reduce + `GLM53_DSA_DECODE_STATE=1`):
+  38.27 ms (-0.84 vs the same knobs with the composite state), S = 32 chain pcc 0.891 (0.913 composite: inside the
+  band), prefill chain unchanged. A -0.8 ms rounding-moving candidate for the same eval gate as the combine.
