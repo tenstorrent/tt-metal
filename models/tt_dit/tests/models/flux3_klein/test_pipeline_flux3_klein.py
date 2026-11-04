@@ -21,7 +21,7 @@ PROMPT = "A man in a red jacket walks a golden retriever along a snowy forest pa
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("model", ["distilled"])
 def test_pipeline(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
-    pipeline = Flux3KleinPipeline.create(mesh_device, models=(model,))
+    pipeline = Flux3KleinPipeline.create(mesh_device, models=(model,), upsample=False)
     pipeline.warmup()
 
     reference_path = os.environ.get("FLUX3_KLEIN_REFERENCE_IMAGE")
