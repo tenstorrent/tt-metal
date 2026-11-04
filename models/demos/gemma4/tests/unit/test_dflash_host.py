@@ -107,6 +107,11 @@ def test_declares_the_contract_rail(adapter):
     # Prefix caching is the base's env-driven value: sessions key on slot + generation, not block ids.
     assert caps["supports_prefix_caching"] == adapter.Gemma4ForCausalLM.model_capabilities["supports_prefix_caching"]
     assert adapter.Gemma4MTPContractForCausalLM._SPEC_N == adapter.Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN + 1
+    # GEMMA4_SPEC_SAMPLED_VERIFY: the MTP rail alone declares spec_ids_are_sampled, off by default (the knob is
+    # unset at import), and the instance follows the served knob; dFlash never declares it
+    assert caps["spec_ids_are_sampled"] is False
+    assert "spec_ids_are_sampled" not in adapter.Gemma4DFlashContractForCausalLM.model_capabilities
+    assert "spec_ids_are_sampled" not in adapter.Gemma4ForCausalLM.model_capabilities
     # -- the MTP rail: the deferred-verify declaration is inherited by the composed classes and not by dflash
     for name in (
         "Gemma4MTPContractVisionForConditionalGeneration",
@@ -2131,7 +2136,7 @@ def test_a_greedy_solo_row_under_a_grammar_bitmask_runs_the_plain_decode(model, 
     assert model._spec_pending is None and not model._spec_active
 
 
-def test_a_sampled_solo_row_is_never_proposed_for(model, mtp):
+def test_a_sampled_solo_row_is_never_proposed_for(model, mtp, adapter, monkeypatch, expect_error):
     sampled = _sampling(1, temperature=1.0)
     _prefill(model, prompt_len=2, key=10)
     _ordinary(model, [3], [2], [10], result="device", sampling_params=sampled)
@@ -2163,6 +2168,83 @@ def test_a_sampled_solo_row_is_never_proposed_for(model, mtp):
     assert decoder.readbacks == 1 and mtp._mtp_sessions[1].retained.logits is not None
     proposal = mh._propose(mtp, [[40] + [-1] * 5, [-1] * 6], [[4] + [-1] * 5, [-1] * 6])
     assert proposal.num_valid.tolist() == [0, 0] and decoder.replays == 2
+    # -- GEMMA4_SPEC_SAMPLED_VERIFY: the sampled row IS drafted. The replay's plan carries its parameters on its
+    # P packed rows and the plain path's device seed per column (hash(seed, position + j + 1)); its retained
+    # proposal keeps the (temperature, top_k, top_p, seed) it was drawn with; a device-sampled verify sending the
+    # same parameters answers from it; a penalised row, a logprobs row and a grammar row are still never drafted.
+    from models.common.sampling.generator import _hash_request_seed_to_device_seed
+
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+    assert mtp._mtp_sampled_verify is True and mtp.model_capabilities["spec_ids_are_sampled"] is True
+    assert adapter.Gemma4MTPContractForCausalLM.model_capabilities["spec_ids_are_sampled"] is False  # the import
+    mh._prefill(mtp, rows=2)
+    sampled = _sampling(2, temperature=[0.7, 0.0], top_k=[40, 1], top_p=[0.9, 1.0], seed=[42, None])
+    mh._ordinary(mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]), sampling_params=sampled)
+    proposal = mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    decoder = mtp._mtp_decoder
+    assert proposal.num_valid.tolist() == [5, 5] and decoder.replays == 1 and decoder.readbacks == 0
+    plan = decoder.plans[-1]
+    # the smallest record covering two rows is (5, 5): rows 2-4 are padding, chunk padding past 30 packed rows
+    assert (plan.B, plan.P) == (5, 6) and plan.sampled == [True] * 6 + [False] * 26
+    assert plan.row_params == [(0.7, 40, 0.9, 42), (0.0, 1, 1.0, None)]
+    assert plan.seeds[:6] == [_hash_request_seed_to_device_seed(42, 3 + j + 1, 0) for j in range(6)]
+    assert plan.top_k[:6] == [32] * 6 and plan.temperature[:6] == pytest.approx([1 / 0.7] * 6)
+    assert mtp._mtp_sessions[0].retained.sampling == (0.7, 40, 0.9, 42)
+    assert mtp._mtp_sessions[1].retained.sampling == (0.0, 1, 1.0, None)
+    drafts_a, drafts_b = mtp._mtp_sessions[0].retained.drafts, mtp._mtp_sessions[1].retained.drafts
+    blocks = [mh._block(30, drafts_a), mh._block(31, drafts_b)]
+    decodes = len(_names(mtp, "decode"))
+    out = mh._verify(mtp, blocks, [mh._positions(3, 6)] * 2, [5, 5], [10, 12], sampling_params=sampled)
+    assert out.spec_mode == "argmax_ids" and out.argmax_ids.shape == (2, 6)
+    assert out.argmax_ids[0].tolist() == mtp._mtp_sessions[0].retained.argmax_ids
+    assert len(_names(mtp, "decode")) == decodes and decoder.readbacks == 0, "no plain decode, no logits readback"
+    # the next proposal replays again for both rows (the sampled row keeps drafting)
+    counts = [6, 6]
+    proposal = mh._propose(
+        mtp, [out.argmax_ids[0].tolist(), out.argmax_ids[1].tolist()], [mh._positions(4, 6)] * 2, counts=counts
+    )
+    assert proposal.num_valid.tolist() == [5, 5] and decoder.replays == 2
+    # a verify sending other parameters for the drafted sampled row is refused by name
+    changed = _sampling(2, temperature=[0.9, 0.0], top_k=[40, 1], top_p=[0.9, 1.0], seed=[42, None])
+    drafts_a = mtp._mtp_sessions[0].retained.drafts
+    anchor_a = mtp._mtp_sessions[0].retained.anchor_token
+    drafts_b = mtp._mtp_sessions[1].retained.drafts
+    anchor_b = mtp._mtp_sessions[1].retained.anchor_token
+    blocks = [mh._block(anchor_a, drafts_a), mh._block(anchor_b, drafts_b)]
+    with expect_error(RuntimeError, "constant for its lifetime"):
+        mh._verify(mtp, blocks, [mh._positions(9, 6)] * 2, [5, 5], [10, 12], sampling_params=changed)
+    # ... and so is a host-sampled verify (no device sampling parameters) carrying the drafted sampled row
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+    mh._prefill(mtp, rows=1)
+    sampled1 = _sampling(1, temperature=0.7, seed=42)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([30]), sampling_params=sampled1)
+    proposal = mh._propose(mtp, [[30] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    drafts = mtp._mtp_decoder.results[-1].drafts[0].tolist()
+    with expect_error(RuntimeError, "no device sampling parameters"):
+        mh._verify(mtp, [mh._block(30, drafts)], [mh._positions(3, 6)], [5], [10], sampling=False)
+    # penalties, logprobs and a grammar bitmask still keep a row plain under the knob
+    for values in ({"presence_penalty": 0.5}, {"repetition_penalty": 1.2}, {"enable_log_probs": True}):
+        mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+        mh._prefill(mtp, rows=1)
+        params = _sampling(1, temperature=0.7, **values)
+        mh._ordinary(mtp, [3], [2], [10], result=_tensor([30]), sampling_params=params)
+        proposal = mh._propose(mtp, [[30] + [-1] * 5], [[3] + [-1] * 5])
+        assert proposal.num_valid.tolist() == [0] and mtp._mtp_decoder.replays == 0, values
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+    mh._prefill(mtp, rows=1)
+    bitmask = torch.full((1, 19), -1, dtype=torch.int32)
+    mh._ordinary(
+        mtp,
+        [3],
+        [2],
+        [10],
+        result=_tensor([30]),
+        sampling_params=_sampling(1, temperature=0.7),
+        grammar_bitmask=bitmask,
+    )
+    proposal = mh._propose(mtp, [[30] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and mtp._mtp_decoder.replays == 0
 
 
 @pytest.mark.parametrize(

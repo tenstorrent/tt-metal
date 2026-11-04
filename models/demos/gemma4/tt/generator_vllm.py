@@ -76,6 +76,12 @@ from models.demos.gemma4.tt.spec_policy import (
     cost_at,
     describe_costs,
 )
+from models.demos.gemma4.tt.spec_sampling import (
+    SPEC_SAMPLED_VERIFY_ENV,
+    row_sampling_params,
+    serving_sampling_rows,
+    spec_sampled_verify_enabled,
+)
 from models.demos.gemma4.tt.vision.embedders import (
     Gemma4MultimodalEmbedder,
     Gemma4UnifiedAudioEmbedder,
@@ -5404,6 +5410,24 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
                 return False
         return True
 
+    @classmethod
+    def _spec_row_device_sampled_ok(cls, sampling_params, row, grammar_bitmask=None):
+        """Whether the device sampler's draws answer ``row`` (GEMMA4_SPEC_SAMPLED_VERIFY): the temperature-free
+        ``_spec_row_can_use_argmax``.
+
+        The record draws every candidate column with the row's temperature,
+        top-k and top-p from the verify logits as they are. A penalty reshapes
+        the logits from a per-slot history the record does not carry, a
+        grammar bitmask masks them, and requested logprobs need the ordinary
+        sampler's metadata: those rows stay plain.
+        """
+        if grammar_bitmask is not None or cls._spec_row_requests_logprobs(sampling_params, row):
+            return False
+        for name, neutral in (("presence_penalty", 0.0), ("frequency_penalty", 0.0), ("repetition_penalty", 1.0)):
+            if float(cls._spec_row_value(getattr(sampling_params, name, None), row, neutral)) != neutral:
+                return False
+        return True
+
     # -- the plain decode and what a drafter-served step leaves behind ----------
     def _spec_note_served_step(self):
         """Record that the drafter answered a row this step without the plain decode.
@@ -6845,6 +6869,10 @@ class MTPRetainedRow:
     consumed: bool = False
     verified: int = 0
     overtaken: bool = False
+    # GEMMA4_SPEC_SAMPLED_VERIFY: the (temperature, top_k, top_p, seed) the replay drew this row's columns with;
+    # for a sampled row ``argmax_ids`` are the device sampler's draws, which answer only a device-sampled verify
+    # that sends the same parameters for the row. None when the knob is off.
+    sampling: object = None
 
 
 class MTPRowNeedsLogits:
@@ -7008,6 +7036,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # it, so the runner holds no handle and ``hidden`` is unused.
         "spec_requirements": ("device_propose",),
         "spec_hidden_handoff": ("on_device",),
+        # GEMMA4_SPEC_SAMPLED_VERIFY=1: on a device-sampled step an ``argmax_ids``
+        # verify returns, for every drafted row, the device sampler's draw per
+        # candidate column (the row's temperature / top-k / top-p, a seed per
+        # absolute position) and for an undrafted row the plain decode's own
+        # draw, so the runner's id-equality walk is exact rejection sampling
+        # against the argmax drafts and a sampled request may be drafted
+        # (``_mtp_row_verify_by_ids``). Greedy rows stay the target argmax.
+        # The instance narrows it to the served knob (``_mtp_init_state``).
+        "spec_ids_are_sampled": _dflash_env_flag(SPEC_SAMPLED_VERIFY_ENV, "0"),
     }
 
     # -- plugin speculative contract: the plan ---------------------------------
@@ -7166,10 +7203,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_sessions = {}  # state slot -> MTPSession
         self._mtp_trailing_logged = 0
         # The latest decode step's sampling params and grammar bitmask: a row is drafted only when they
-        # certify its target argmax (``_spec_row_can_use_argmax``); every other row decodes plain.
+        # certify its target argmax (``_spec_row_can_use_argmax``) or, under GEMMA4_SPEC_SAMPLED_VERIFY, when
+        # the device sampler's draws can answer it (``_mtp_row_verify_by_ids``); every other row decodes plain.
         self._mtp_step_sampling = None
         self._mtp_step_bitmask = None
         self._mtp_uncertifiable_logged = 0
+        # GEMMA4_SPEC_SAMPLED_VERIFY: the records draw every candidate column with the row's sampling parameters
+        # (spec_sampling.py), so sampled rows are drafted and verified by id equality. The instance's capability
+        # follows the served knob (the platform snapshots the class dict; the runner reads the instance's).
+        self._mtp_sampled_verify = spec_sampled_verify_enabled()
+        if bool(self.model_capabilities.get("spec_ids_are_sampled", False)) != self._mtp_sampled_verify:
+            self.model_capabilities = {**self.model_capabilities, "spec_ids_are_sampled": self._mtp_sampled_verify}
         # Rows the runner samples on the host: a step without device sampling parameters (logprobs, a grammar,
         # logit bias, min_p, min_tokens). The step flag covers every live row after a host-sampled decode; the
         # slot set holds host-sampled prefills until their first decode step takes over.
@@ -7582,7 +7626,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_step_bitmask = bitmask
         self._mtp_step_host_sampled = sampling is None  # the whole batch samples on the host (contract s.4h)
         self._mtp_host_prefilled.clear()  # a decode step submits every occupant: its route covers them all
-        self._mtp_row_needs_logits = MTPRowNeedsLogits(self._spec_row_can_use_argmax, sampling, bitmask, live_rows)
+        self._mtp_row_needs_logits = MTPRowNeedsLogits(self._mtp_row_verify_by_ids, sampling, bitmask, live_rows)
         if self._mtp_unread_replay_pending() and (sampling is None or self._mtp_row_needs_logits.any()):
             # A request that needs logits reaches a decode step before its own
             # proposal replays, so this is where every greedy-only replay still
@@ -7623,6 +7667,39 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             if retained is not None and not retained.consumed and retained.logits is None and retained.serial == serial:
                 return True
         return False
+
+    def _mtp_row_verify_by_ids(self, sampling_params, row, grammar_bitmask=None):
+        """Whether an ``argmax_ids`` answer serves ``row``: the target argmax certifies a greedy row
+        (``_spec_row_can_use_argmax``); under GEMMA4_SPEC_SAMPLED_VERIFY the device sampler's draws serve a
+        sampled row as well (``_spec_row_device_sampled_ok``)."""
+        if self._spec_row_can_use_argmax(sampling_params, row, grammar_bitmask):
+            return True
+        return bool(self._mtp_sampled_verify) and self._spec_row_device_sampled_ok(
+            sampling_params, row, grammar_bitmask
+        )
+
+    @staticmethod
+    def _mtp_check_retained_sampling(retained, sampling, row, position):
+        """A proposal replayed with a sampled row's parameters (GEMMA4_SPEC_SAMPLED_VERIFY) answers only a
+        device-sampled verify that sends the same ``(temperature, top_k, top_p, seed)`` for the row: its ids are
+        the device sampler's draws under those parameters."""
+        if retained.sampling is None or float(retained.sampling[0]) <= 0.0:
+            return
+        where = f"row {row} at position {position}"
+        if sampling is None:
+            raise RuntimeError(
+                f"Gemma4MTP speculative contract: {where} was drafted as a device-sampled row (temperature "
+                f"{retained.sampling[0]}) but its verify carries no device sampling parameters (a host-sampled "
+                "step, contract s.4h): under spec_ids_are_sampled the runner keeps a drafted sampled request's "
+                "verify on the device sampler"
+            )
+        now = tuple(row_sampling_params(sampling, row))
+        if now != tuple(retained.sampling):
+            raise RuntimeError(
+                f"Gemma4MTP speculative contract: {where} was drafted with sampling (temperature, top_k, top_p, "
+                f"seed) = {tuple(retained.sampling)} but its verify sends {now}; a request's sampling parameters "
+                "are constant for its lifetime"
+            )
 
     def _mtp_retained_for(self, session, anchor, position):
         """The unconsumed retained row that continues ``(anchor, position)``, or None."""
@@ -7666,7 +7743,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 not resident
                 and retained is not None
                 and sampling is not None
-                and self._spec_row_can_use_argmax(sampling, r, kwargs.get("grammar_bitmask"))
+                and self._mtp_row_verify_by_ids(sampling, r, kwargs.get("grammar_bitmask"))
+                # a sampled row's retained draw answers only the parameters it was drawn with (else: plain)
+                and (retained.sampling is None or tuple(row_sampling_params(sampling, r)) == tuple(retained.sampling))
             ):
                 retained.consumed = True
                 answered[r] = retained.argmax_ids[0]
@@ -7764,10 +7843,13 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             position = self._spec_row(start_pos, rows, r)[0] if start_pos is not None else None
             n = int(valid[r]) if r < len(valid) else 0
             if n > 0:
-                answered[r] = self._mtp_take_retained(session, slot, r, block, position, n, width)
+                retained = self._mtp_take_retained(session, slot, r, block, position, n, width)
+                self._mtp_check_retained_sampling(retained, sampling, r, position)
+                answered[r] = retained
                 continue
             retained = self._mtp_retained_for(session, block[0], position)
             if retained is not None:
+                self._mtp_check_retained_sampling(retained, sampling, r, position)
                 retained.consumed = True
                 answered[r] = retained
             elif session is not None:
@@ -8279,9 +8361,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 # Galaxy release of 2026-11-01 failed the penalty case on that variance).
                 hosted.append(r)
                 continue
-            if step_sampling is not None and not self._spec_row_can_use_argmax(step_sampling, r, step_bitmask):
+            if step_sampling is not None and not self._mtp_row_verify_by_ids(step_sampling, r, step_bitmask):
                 # A row whose sampling the runner cannot certify by argmax ids (temperature > 0, seeded or not,
-                # a penalty, logprobs, a grammar) is never drafted either. Drafted, it makes the runner verify
+                # a penalty, logprobs, a grammar) is never drafted either (under GEMMA4_SPEC_SAMPLED_VERIFY a
+                # temperature alone no longer rules a row out: the record draws its columns with it, and the
+                # runner's id walk is exact rejection sampling against the argmax drafts). Drafted, it makes the runner verify
                 # the whole step in logits mode: a host-sampled step (contract s.4h) that reads [B, vocab]
                 # logits back and declines the proposal behind it, so the request alternates host- and
                 # device-sampled steps, slower than plain and not the plain class's answer (fp32 host sampling
@@ -8490,7 +8574,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             )
             self._spec_note_entry(shape, self._spec_last_phase_ms, self._spec_reseed_table_ms(shape, max(posits)))
         flat = self._mtp_record_table(full, shape[0], row_ids)
-        result = self._spec_timed("replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols)
+        # GEMMA4_SPEC_SAMPLED_VERIFY: the replay's sampler plan (row ids index the step's sampling params; the
+        # anchors' positions seed the columns); None keeps the record's argmax ids for every row.
+        plan = serving_sampling_rows(shape, row_ids, posits, step_sampling) if self._mtp_sampled_verify else None
+        result = self._spec_timed(
+            "replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols, plan
+        )
         for name, ms in decoder.serving_step_phases().items():  # the replay's own sub-phases (inside "replay")
             self._spec_policy.calibration.note_phase(name, ms)
         self._mtp_check_result(result, shape, len(drafting))
@@ -8526,6 +8615,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 drafts=row_drafts,
                 argmax_ids=[int(t) for t in argmax[i].tolist()],
                 logits=None if host_logits is None else host_logits[i],
+                sampling=None if plan is None else tuple(plan.row_params[i]),
             )
             out[r, :offer] = torch.tensor(row_drafts[:offer], dtype=torch.int32)
             valid[r] = offer
