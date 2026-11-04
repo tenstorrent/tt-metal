@@ -1633,9 +1633,11 @@ ProgramDescriptor build_program_descriptor(
         ar_cores_per_link = tt::div_up(static_cast<uint32_t>(ar_out_cores.size()), all_reduce->num_links);
         const auto sub_device_cores =
             device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        // Senders run no fused-experts kernel: the first free worker cores from the bottom row up, which
+        // starts next to the output cores at x 0-1 and also covers a 12-wide grid with no column to spare.
         const CoreRangeSet taken = run_router ? all_cores.merge(router_cores) : all_cores;
-        for (uint32_t x = GRID_X; x < grid.x && ar_senders.size() < all_reduce->num_links; ++x) {
-            for (uint32_t y = 0; y < grid.y && ar_senders.size() < all_reduce->num_links; ++y) {
+        for (uint32_t y = grid.y; y-- > 0 && ar_senders.size() < all_reduce->num_links;) {
+            for (uint32_t x = 0; x < grid.x && ar_senders.size() < all_reduce->num_links; ++x) {
                 const CoreCoord c{x, y};
                 if (sub_device_cores.contains(c) && !taken.contains(c)) {
                     ar_senders.push_back(c);
@@ -1644,10 +1646,14 @@ ProgramDescriptor build_program_descriptor(
         }
         TT_FATAL(
             ar_senders.size() == all_reduce->num_links,
-            "fused_experts: all_reduce needs {} free sender cores right of the {}x{} expert grid, found {}",
+            "fused_experts: all_reduce needs {} free sender cores outside the {}x{} expert grid{} on a {}x{} grid, "
+            "found {}",
             all_reduce->num_links,
             GRID_X,
             GRID_Y,
+            run_router ? " and its router row" : "",
+            grid.x,
+            grid.y,
             ar_senders.size());
     }
     // NoC coordinates of the sender an output core reports to; {0, 0} on every other core.
