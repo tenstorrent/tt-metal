@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import pytest
 from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import COMPRESSED_META
 
 SEARCH_DIR_STATE = (
     "EXTRA_INCLUDE_PREPEND",
@@ -76,6 +77,21 @@ def variant_id() -> str:
     configuration = TestConfig(DRIVER, skip_build_header=True)
     configuration.generate_variant_hash()
     return configuration.variant_id
+
+
+def test_compressed_metadata_words_change_the_variant_id():
+    def compressed_variant_id(packed_meta):
+        configuration = TestConfig(
+            DRIVER,
+            templates=[COMPRESSED_META("mixed", packed_meta)],
+            skip_build_header=True,
+        )
+        configuration.generate_variant_hash()
+        return configuration.variant_id
+
+    assert compressed_variant_id(bytes.fromhex("0100000002000000")) != (
+        compressed_variant_id(bytes.fromhex("0300000004000000"))
+    )
 
 
 # Stand-ins for the in-tree ``-I`` flags ``setup_compilation_options`` installs.
