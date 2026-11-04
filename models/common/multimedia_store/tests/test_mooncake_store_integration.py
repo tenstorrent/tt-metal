@@ -12,7 +12,8 @@ allow_evict_soft_pinned_objects=false):
 
 Runs on Linux, after ``uv pip install -r models/common/multimedia_store/requirements.txt`` (the CI job does this);
 127.0.0.2 is a Linux loopback address. There a missing Mooncake client fails the test instead of skipping it, so an
-env that cannot start the store shows up. Skipped on other platforms.
+env that cannot start the store shows up. Skipped on other platforms. Kept out of models/common/tests, whose
+broad CI job does not install Mooncake.
 """
 
 import os

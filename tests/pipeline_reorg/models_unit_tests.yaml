@@ -815,7 +815,7 @@
     pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward"
     # The prefill runner's media embedding store, against a fake client and a local Mooncake master.
     uv pip install -r models/common/multimedia_store/requirements.txt
-    pytest --timeout 120 models/common/tests/host/test_multimedia_store.py models/common/tests/host/test_multimedia_store_mooncake.py
+    pytest --timeout 120 models/common/multimedia_store/tests
   model: minimax-m3
   skus:
     bh_p150:

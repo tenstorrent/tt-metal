@@ -258,7 +258,10 @@ class MooncakeEmbeddingReader:
         it. After the lease it stays only while the writer's soft pin holds it (with allow_evict_soft_pinned_objects
         =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends. A
         value in another host's segment comes back as a copy that the caller owns."""
+        if not requests:
+            return []
         t0 = time.perf_counter()
+        requests = [FetchRequest(*r) for r in requests]
         keys = [_key(r.media_key) for r in requests]
         try:
             located = self._locate(list(dict.fromkeys(keys)))
@@ -366,13 +369,21 @@ class MooncakeEmbeddingReader:
                         results[i] = e
                 return
             keys = list(by_key)
-            got = self._client.get_into_ranges(
-                [self._read_buffer.ctypes.data],
-                [keys],
-                [[[d for _, d, _, _ in by_key[k]] for k in keys]],
-                [[[o for _, _, o, _ in by_key[k]] for k in keys]],
-                [[[n for _, _, _, n in by_key[k]] for k in keys]],
-            )[0]
+            try:
+                got = self._client.get_into_ranges(
+                    [self._read_buffer.ctypes.data],
+                    [keys],
+                    [[[d for _, d, _, _ in by_key[k]] for k in keys]],
+                    [[[o for _, _, o, _ in by_key[k]] for k in keys]],
+                    [[[n for _, _, _, n in by_key[k]] for k in keys]],
+                )[0]
+            except Exception as e:  # the binding raises on RPC failures in some versions
+                got, failure = [], StoreUnavailable(f"reading {len(keys)} values from other hosts: {e}")
+            else:
+                failure = StoreUnavailable(f"Mooncake returned no result for some of {len(keys)} values")
+            for reads in by_key.values():  # anything the result below does not cover fails, rather than staying None
+                for i, *_ in reads:
+                    results[i] = failure
             for key, rcs in zip(keys, got):
                 for rc, (i, d, offset, length) in zip(rcs, by_key[key]):
                     if rc == length:

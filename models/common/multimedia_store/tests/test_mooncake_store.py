@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """MooncakeEmbeddingReader's read logic against a fake Mooncake client: no Mooncake needed. The same paths against a
-real local master are in test_multimedia_store_mooncake.py."""
+real local master are in test_mooncake_store_integration.py."""
 
 import ctypes
 from types import SimpleNamespace
@@ -240,3 +240,22 @@ def test_latency_stats(setup):
         reader.fetch(_key(1))
     s = reader.stats.snapshot()
     assert s["fetch_calls"] == 3 and 0 <= s["fetch_ms_mean"] <= s["fetch_ms_max"]
+
+
+def test_plain_tuples_and_an_empty_batch(setup):
+    client, reader, local, _ = setup
+    (got,) = reader.fetch_batch([(_key(1), 0, 16)])
+    assert bytes(got) == local[:16].tobytes()
+    lookups = client.lookups
+    assert reader.fetch_batch([]) == [] and client.lookups == lookups
+
+
+def test_failed_remote_read_fails_only_remote_requests(setup):
+    client, reader, local, _ = setup
+
+    def broken(*args):
+        raise RuntimeError("transfer failed")
+
+    client.get_into_ranges = broken
+    got = reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])
+    assert bytes(got[0]) == local[:8].tobytes() and isinstance(got[1], StoreUnavailable)
