@@ -44,6 +44,14 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
+from models.demos.gemma4.tt.spec_sampling import (
+    SPEC_SAMPLED_VERIFY_ENV,
+    SamplingRowsPlan,
+    SpecVerifySampler,
+    greedy_sampling_rows,
+    select_verify_ids,
+    spec_sampled_verify_enabled,
+)
 
 # Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
 # so a serving shape packs ``rows * (drafts + 1) <= 32`` verify rows.
@@ -842,6 +850,12 @@ class SpeculativeDecoder:
         # the gathered logits, as before. Per replay this drops the full-vocab all-gather (32 x V bf16 per chip),
         # the full-width publish and the full-width untilize + argmax (_srv_body).
         self._srv_sharded_verify_argmax = os.environ.get(SPEC_SHARDED_VERIFY_ARGMAX_ENV, "0") == "1"
+        # GEMMA4_SPEC_SAMPLED_VERIFY=1: the record body ends with one device-sampler draw per packed row (the row's
+        # temperature / top-k / top-p, a seed per (row, column)); ``serving_step`` hands back those draws for the
+        # rows its plan marks sampled and the argmax ids elsewhere (spec_sampling.py). Off (the default): no
+        # sampler op in the record, ids are the argmax as before. The sampler itself is built by serving_prepare.
+        self._srv_sampled_verify = spec_sampled_verify_enabled()
+        self._srv_sampler = None  # SpecVerifySampler once serving_prepare built it (knob on)
         self._srv_draft_consts = {}  # (gathered width, vocab slice) -> the candidate mask / column iota / slice offsets
         # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record); under the sharded verify
         # argmax each chip holds its [1, 1, 32, V_padded / tp] vocab slice
@@ -2605,6 +2619,14 @@ class SpeculativeDecoder:
                 f"{SPEC_ONE_UPLOAD_ENV}=1 is not available on the lane engine (its record inputs are lane frames, "
                 "uploaded per buffer); unset it"
             )
+        if self._srv_sampled_verify:
+            if self._srv_lanes > 1:
+                raise ValueError(
+                    f"{SPEC_SAMPLED_VERIFY_ENV}=1 is not available on the lane engine (its sampling groups are per "
+                    "lane; the sampled rows of a lane entry decode plain): unset it"
+                )
+            # Raises when the target has no device top-k sampler (fractured meshes, host sampling).
+            self._srv_sampler = SpecVerifySampler(self)
         self._srv_check_steps = int(os.environ.get(SPEC_VERIFY_CHECK_ENV, "0") or 0)
         if self._srv_check_steps > 0 and self._srv_lanes > 1:
             raise ValueError(
@@ -2946,8 +2968,14 @@ class SpeculativeDecoder:
         )
         self._srv_seeded = {int(slot): r for r, slot in enumerate(rows)}
 
-    def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
+    def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols, sampling=None):
         """One fused replay of ``shape`` at the narrowest rung covering max(positions) + P.
+
+        ``sampling`` (GEMMA4_SPEC_SAMPLED_VERIFY only) is the replay's
+        ``SamplingRowsPlan`` (``spec_sampling.serving_sampling_rows``): the
+        result's ``argmax_ids`` then carry the device sampler's draw for every
+        packed row the plan marks sampled, the target argmax for the rest.
+        None is the all-greedy plan.
 
         Per live row r: seed hidden = the previous replay's verify hidden row
         ``r' * P_prev + seed_cols[r]`` (r' = the row's index in that replay) or
@@ -2968,6 +2996,10 @@ class SpeculativeDecoder:
         """
         self._srv_require(captured=True)
         shape = self._srv_shape(shape)
+        if sampling is not None and self._srv_sampler is None:
+            raise ValueError(
+                f"serving_step was handed a sampling plan but {SPEC_SAMPLED_VERIFY_ENV} is off (no sampler in the records)"
+            )
         if self._srv_lanes > 1:
             return self._srv_lane_step(shape, rows, anchors, positions, page_tables, seed_cols)
         B, K = shape
@@ -2975,6 +3007,12 @@ class SpeculativeDecoder:
         live = self._srv_check_rows(shape, rows, anchors, positions)
         if len(seed_cols) != live:
             raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
+        plan = None
+        if self._srv_sampler is not None:
+            plan = sampling if sampling is not None else self._srv_greedy_plan(shape)
+            if not isinstance(plan, SamplingRowsPlan) or (plan.B, plan.P) != (B, P):
+                got = (getattr(plan, "B", None), getattr(plan, "P", None))
+                raise ValueError(f"shape {shape}: the sampling plan is for {got}, not (B, P) = {(B, P)}")
         top = max(int(p) for p in positions)
         width = serving_width_for(self._srv_widths[shape], top, K)
         if width is None:
@@ -2986,13 +3024,17 @@ class SpeculativeDecoder:
         previous = None if self._srv_last is None else (self._srv_last["K"], self._srv_last["rows"])
         seed_idx = serving_seed_index(shape, rows, seed_cols, previous, self._srv_seeded)
         t0 = time.perf_counter()
-        self._srv_upload(rec, rows, live, anchors, positions, page_tables, seed_idx)
+        self._srv_upload(rec, rows, live, anchors, positions, page_tables, seed_idx, plan=plan)
         t1 = time.perf_counter()
         ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=self._srv_replay_blocking)
         t2 = time.perf_counter()
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
         gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        if plan is not None and plan.any_sampled:
+            # the sampler's draws for the sampled packed rows; greedy rows keep the argmax (bit-identical to knob off)
+            draws = self._srv_sampler.read(self._srv_shape_bufs[shape]["sampler"], B * P)
+            gids = select_verify_ids(plan, gids, draws)
         t3 = time.perf_counter()
         self._srv_phase_ms = {
             "replay_upload": (t1 - t0) * 1e3,
@@ -3057,6 +3099,10 @@ class SpeculativeDecoder:
                 "staged",
             ):
                 self._free_tensor_tree(S.get(key))
+        if self._srv_sampler is not None:
+            self._srv_sampler.release([S.get("sampler") for S in self._srv_shape_bufs.values()])
+            self._srv_sampler = None
+        self.__dict__.pop("_srv_greedy_plans", None)
         self._srv_shape_bufs = {}
         self._srv_frozen = False
         for t in (
@@ -3126,6 +3172,8 @@ class SpeculativeDecoder:
             ],
             # GEMMA4_SPEC_ONE_UPLOAD: the two staging tensors the small inputs above go up in (None otherwise)
             "staged": self._srv_alloc_staged(B, P),
+            # GEMMA4_SPEC_SAMPLED_VERIFY: the device sampler's per-chunk parameter rows, seed rows and draw outputs
+            "sampler": self._srv_sampler.alloc(B, P) if self._srv_sampler is not None else None,
         }
 
     def _srv_alloc_staged(self, B, P):
@@ -3448,6 +3496,11 @@ class SpeculativeDecoder:
             )
         else:
             vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
+        # 5b. GEMMA4_SPEC_SAMPLED_VERIFY: one device-sampler draw per packed row into the shape's draw outputs
+        # (the row's parameters and seeds are the sampler's persistent rows, uploaded per replay); the host picks
+        # the draw for the rows its plan marks sampled and the argmax id elsewhere (serving_step).
+        if self._srv_sampler is not None:
+            self._srv_sampler.body(vlogits, S["sampler"], B * P, sharded_verify)
         vlogits.deallocate(True)
         # 6. the outputs into the record's persistent handles (allocated before any capture)
         ttnn.copy(verify_x, rec["verify_x"])
@@ -3804,11 +3857,24 @@ class SpeculativeDecoder:
                 ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32
             )
 
-    def _srv_upload(self, rec, rows, live, anchors, positions, page_tables, seed_idx):
-        """Refresh every persistent input the record's trace reads for one replay."""
+    def _srv_greedy_plan(self, shape):
+        """The all-greedy ``SamplingRowsPlan`` of ``shape`` (one per shape: the sampler stage of a replay without
+        sampled rows runs on the greedy triple and nothing reads its draws)."""
+        plans = self.__dict__.setdefault("_srv_greedy_plans", {})
+        plan = plans.get(shape)
+        if plan is None:
+            plan = greedy_sampling_rows(shape)
+            plans[shape] = plan
+        return plan
+
+    def _srv_upload(self, rec, rows, live, anchors, positions, page_tables, seed_idx, plan=None):
+        """Refresh every persistent input the record's trace reads for one replay (``plan``: the sampler's rows
+        under GEMMA4_SPEC_SAMPLED_VERIFY)."""
         shape = rec["shape"]
         S = self._srv_shape_bufs[shape]
         B, P = S["B"], S["P"]
+        if self._srv_sampler is not None:
+            self._srv_sampler.upload(S["sampler"], plan if plan is not None else self._srv_greedy_plan(shape))
         toks = serving_pad_rows([int(t) for t in anchors], B)
         pos = serving_pad_rows([int(p) for p in positions], B)
         if S.get("staged") is not None:

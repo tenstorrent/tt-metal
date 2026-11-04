@@ -1672,12 +1672,13 @@ def _bare_decoder(n_layers=3):
     spec._srv_uploaded = {}
     spec._srv_last = None
     spec._srv_seeded = {}
+    spec._srv_sampled_verify, spec._srv_sampler = False, None  # GEMMA4_SPEC_SAMPLED_VERIFY off
     spec.target = SimpleNamespace(layers=list(range(n_layers)))
     return spec
 
 
 def _rail_allocates_nothing_after_capture(
-    monkeypatch, expect_error, *, sharded_verify=False, lean_seed=False, one_upload=False
+    monkeypatch, expect_error, *, sharded_verify=False, lean_seed=False, one_upload=False, sampled_verify=False
 ):
     """The serving rail on a recording ttnn: every device buffer a refresh, a reseed or a replay touches exists
     after serving_prepare, for every record and rung, first-time row sets, seed-column patterns and positions
@@ -1691,10 +1692,17 @@ def _rail_allocates_nothing_after_capture(
     ``lean_seed`` runs it under GEMMA4_SPEC_LEAN_SEED: every seed forward (the eager seed of serving_prepare, the
     seed trace's body) asks for the hidden alone, while the verify check's plain forward keeps its logits.
     ``one_upload`` runs it under GEMMA4_SPEC_ONE_UPLOAD: a replay uploads its small inputs as the two staging
-    tensors alone and the body's scatter stage leaves every persistent input holding the replay's values."""
+    tensors alone and the body's scatter stage leaves every persistent input holding the replay's values.
+    ``sampled_verify`` runs it under GEMMA4_SPEC_SAMPLED_VERIFY: every body ends with the device sampler's stage
+    over the verify logits (top-k, the TP gather under ``sharded_verify`` or the split concat otherwise, the
+    chunk's seeds, one sampling into the shape's persistent draw output), a sampled replay uploads only its
+    parameter and seed rows and hands back the draws for its sampled packed rows, and a greedy replay neither
+    uploads seeds nor reads the draws."""
     import weakref
 
     import models.demos.gemma4.tt.spec_decode as spec_decode_module
+    import models.demos.gemma4.tt.spec_sampling as spec_sampling_module
+    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, serving_sampling_rows
 
     class _Buf:
         made = [0]
@@ -1748,6 +1756,36 @@ def _rail_allocates_nothing_after_capture(
         flat = [int(x) for lo_hi in reversed(pads) for x in lo_hi]
         return op(torch.nn.functional.pad(t.host, flat, value=value), t.dtype)
 
+    # the device sampler's stage (GEMMA4_SPEC_SAMPLED_VERIFY): top-k keeps the k highest columns (padded to k when
+    # the row is narrower, as a real vocab slice never is), the draw of a packed row is its first candidate's
+    # global index, written into the preallocated output; every seed / sampling call is recorded
+    seeded, draws = [], []
+    topk_dtype = object()
+
+    def topk(t, k=32, dim=-1, stable=False):
+        width = int(t.host.shape[-1])
+        values, indices = torch.sort(t.host.float(), dim=-1, descending=True)
+        values, indices = values[..., : min(k, width)], indices[..., : min(k, width)]
+        if width < k:
+            values = torch.nn.functional.pad(values, (0, k - width), value=-1e9)
+            indices = torch.nn.functional.pad(indices, (0, k - width), value=0)
+        return op(values, t.dtype), op(indices.to(torch.int64), topk_dtype)
+
+    def manual_seed(seeds, user_ids=None, sub_core_grids=None):
+        assert seeds.on_device and not seeds.freed and seeds.address in prepared, "seeds come from a prepared row"
+        assert user_ids is not None and user_ids.on_device
+        seeded.append((seeds.address, seeds.host.reshape(-1).tolist()))
+
+    def sampling(values, indices, k=None, p=None, temp=None, sub_core_grids=None, output_tensor=None):
+        for t in (k, p, temp):
+            assert t.on_device and not t.freed and t.address in prepared, "parameters come from prepared rows"
+        assert output_tensor is not None and output_tensor.address in prepared, "the draw output is prepared"
+        assert tuple(values.host.shape) == tuple(indices.host.shape) and values.host.shape[2] == 32
+        draw = indices.host[0, 0, :, 0].to(torch.int64).reshape(1, 1, 1, 32)
+        output_tensor.host = draw.clone()
+        draws.append((output_tensor.address, k.host.reshape(-1).tolist(), draw.reshape(-1).tolist()))
+        return output_tensor
+
     tp = 8
     vocab_padded = 128  # the fake lm_head width; vocab (96) columns are read, the padding columns dropped
 
@@ -1791,6 +1829,14 @@ def _rail_allocates_nothing_after_capture(
         concat=lambda ts, dim: op(torch.cat([t.host for t in ts], dim=dim), ts[0].dtype),
         permute=lambda t, dims: op(t.host.permute(*dims).contiguous(), t.dtype),
         slice=lambda t, starts, ends: op(t.host[tuple(slice(a, b) for a, b in zip(starts, ends))].clone(), t.dtype),
+        # the sampler stage's ops (recording fakes; the draw itself is device-tested)
+        topk=topk,
+        typecast=lambda t, dtype: op(t.host.clone(), dtype),
+        add=lambda a, b, dtype=None, **kw: op(a.host + b.host, dtype if dtype is not None else a.dtype),
+        untilize=lambda t, use_multicore=False: op(t.host.clone(), t.dtype),
+        split=lambda t, size, dim: [op(c.clone(), t.dtype) for c in torch.split(t.host, size, dim=dim)],
+        manual_seed=manual_seed,
+        sampling=sampling,
         begin_trace_capture=lambda mesh, cq_id=0: traces.append(len(traces) + 1) or traces[-1],
         end_trace_capture=lambda mesh, tid, cq_id=0: None,
         BufferType=SimpleNamespace(TRACE=object()),
@@ -1800,6 +1846,13 @@ def _rail_allocates_nothing_after_capture(
         },
     )
     monkeypatch.setattr(spec_decode_module, "ttnn", fake)
+    monkeypatch.setattr(spec_sampling_module, "ttnn", fake)
+    # the sharded candidates' TP gather: every chip contributes its (identical, in this fake) slice
+    monkeypatch.setattr(
+        spec_sampling_module,
+        "ccl_allgather",
+        lambda t, mesh_config, ccl_manager, dim=3, memory_config=None: op(torch.cat([t.host] * tp, dim=dim), t.dtype),
+    )
     prepared, copies = set(), []
     shapes = [(1, 5), (5, 5), (8, 3), (16, 1)]
     ladder = [2048, 8192, 32768, 131072, 263168]  # the 12B ladder
@@ -1854,6 +1907,19 @@ def _rail_allocates_nothing_after_capture(
         {},
     )  # the gathered drafter argmax (the sharded one is device-tested)
     spec._srv_sharded_verify_argmax = sharded_verify  # GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX
+    # GEMMA4_SPEC_SAMPLED_VERIFY: the sampler is built from the target's device sampler (its user-id row, its
+    # sub-core grid, its invalid-vocab mask), as serving_prepare builds it
+    spec._srv_sampled_verify = sampled_verify
+    spec.target.sampling = SimpleNamespace(
+        tt_sampling=SimpleNamespace(
+            user_ids_tt_tensor=from_torch(torch.arange(32), device=object(), dtype=fake.uint32),
+            _sampling_sub_core_grids=None,
+            tt_invalid_vocab_mask=None,
+            max_top_k=32,
+            _allow_topk_sampling=True,
+        )
+    )
+    spec._srv_sampler = SpecVerifySampler(spec) if sampled_verify else None
     spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
     spec._srv_measuring = False
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
@@ -1927,6 +1993,20 @@ def _rail_allocates_nothing_after_capture(
         assert sharded_calls == []
     prepared = {buf.address for buf in allocated}
     assert all(gone(ref) for ref in ops), "the eager bodies' transients are freed before they return"
+    if sampled_verify:
+        # every shape's parameter rows, seed rows and draw outputs, and the eager bodies' offset constant,
+        # exist now; every eager body ran its sampler stage (one seed + one sampling per chunk, the greedy rows)
+        for S in spec._srv_shape_bufs.values():
+            samp = S["sampler"]
+            assert samp["chunks"] == (S["B"] * S["P"] + 31) // 32
+            assert all(t.address in prepared for key in ("k", "p", "temp", "seeds", "sidx") for t in samp[key])
+        width = (32 * tp) if sharded_verify else 32
+        assert list(spec._srv_sampler._offsets) == [(width, vocab_padded // tp if sharded_verify else vocab_padded)]
+        assert all(t.address in prepared for t in spec._srv_sampler._offsets.values())
+        assert len(seeded) == len(draws) == n_bodies and all(k == [1] * 32 for _a, k, _d in draws)
+        seeded.clear(), draws.clear()
+    else:
+        assert all(S["sampler"] is None for S in spec._srv_shape_bufs.values()) and seeded == [] and draws == []
     outputs = {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()}
     # the real capture binds only the record's own handles; an allocation inside it would be the one the
     # decode-trace guard counted at the first served request (30 x 128 B + 10 x 64 B on the 12B Galaxy)
@@ -1934,6 +2014,10 @@ def _rail_allocates_nothing_after_capture(
     spec.serving_capture()
     assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    if sampled_verify:
+        # the capture pass ran every body (eagerly, on this fake) with the sampler stage on prepared rows only
+        assert len(seeded) == len(draws) == n_bodies
+        seeded.clear(), draws.clear()
     # the records take the first 20 trace ids, then one seed trace per shape (577308f7637)
     assert [rec["id"] for rec in spec._srv_records.values()] == traces[:20] and len(traces) == 20 + len(shapes)
     assert list(spec._srv_seed_traces) == list(shapes) and list(spec._srv_seed_traces.values()) == traces[20:]
@@ -2029,6 +2113,61 @@ def _rail_allocates_nothing_after_capture(
     partials = [key for key in costs if key[0] == "partial"]
     assert all(costs[key][1] < costs[("step", key[1], key[2])][1] for key in partials)
     assert all(key[1][0] > 1 for key in partials), "a one-row shape has no partial replay"
+    if sampled_verify:
+        # the greedy replays above uploaded the greedy parameter rows once per shape and never a seed row, and
+        # read no draws; a sampled replay uploads its parameter rows and the seed rows of its sampled chunks
+        # into the prepared buffers, the body's seeds are the plan's, and the result hands back the draw on
+        # every sampled packed row and the argmax id (the recording argmax: the packed row index) elsewhere
+        seed_rows = {t.address for S in spec._srv_shape_bufs.values() for t in S["sampler"]["seeds"]}
+        assert seed_rows.isdisjoint(h2d) and draws == [], "greedy replays: no seeds uploaded, no draws read"
+        samp_shape, samp_rows, samp_positions = (5, 5), [3, 9, 14, 20], [40, 7, 1000, 12]
+        samp_rec = spec._srv_records[(samp_shape, ladder[0])]  # positions up to 1000: the 2048 rung
+        sampling_params = SimpleNamespace(
+            temperature=[0.0] * wire_rows, top_k=[1] * wire_rows, top_p=[1.0] * wire_rows, seed=[None] * wire_rows
+        )
+        sampling_params.temperature[9], sampling_params.top_k[9], sampling_params.top_p[9] = 0.7, 40, 0.9
+        sampling_params.seed[9] = 42
+        sampling_params.temperature[20] = 1.0  # unseeded
+        plan = serving_sampling_rows(samp_shape, samp_rows, samp_positions, sampling_params)
+        assert plan.any_sampled and plan.sampled[6:12] == [True] * 6 and plan.sampled[18:24] == [True] * 6
+        assert plan.sampled[:6] == [False] * 6 and plan.sampled[12:18] == [False] * 6
+        samp_table = torch.zeros(5, spec._srv_blocks, dtype=torch.int32)
+        spec.serving_reseed(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table)
+        h2d.clear(), seeded.clear()
+        result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4, plan)
+        samp = spec._srv_shape_bufs[samp_shape]["sampler"]
+        assert samp["chunks"] == 1 and set(h2d) <= prepared and samp["seeds"][0].address in h2d
+        assert samp["seeds"][0].host.reshape(-1).tolist() == plan.seeds
+        assert samp["k"][0].host.reshape(-1).tolist() == plan.top_k
+        # a replay is a trace id on this fake (no body runs): the draws read back are the shape's persistent
+        # draw output, which the last eager body of the record wrote
+        assert draws == [] and seeded == []
+        draw = samp["sidx"][0].host.reshape(-1).tolist()
+        for i in range(4):
+            for j in range(6):
+                r = i * 6 + j
+                expected = draw[r] if plan.sampled[r] else r
+                assert int(result.argmax_ids[i, j]) == expected, (i, j, plan.sampled[r])
+        # the same replay again with no plan: the greedy rows, no seed upload, no draw read
+        h2d.clear(), draws.clear()
+        result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4)
+        assert samp["seeds"][0].address not in h2d and draws == []
+        assert result.argmax_ids.tolist() == [[i * 6 + j for j in range(6)] for i in range(4)]
+        # a plan for another shape is refused before anything is uploaded
+        with expect_error(ValueError, "the sampling plan is for"):
+            spec.serving_step((1, 5), [0], [1], [5], torch.zeros(1, spec._srv_blocks, dtype=torch.int32), [None], plan)
+    else:
+        with expect_error(ValueError, "is off"):
+            spec.serving_step(
+                (1, 5),
+                [0],
+                [1],
+                [5],
+                torch.zeros(1, spec._srv_blocks, dtype=torch.int32),
+                [None],
+                serving_sampling_rows((1, 5), [0], [5], None),
+            )
+    assert allocated == [] and all(gone(ref) for ref in ops)
     forwards.clear()
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
     assert all(
@@ -2061,6 +2200,9 @@ def _rail_allocates_nothing_after_capture(
     assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi", "v_pos", "v_pos_rows"))
     if one_upload:
         assert all(S["staged"][key].freed for S in bufs for key in ("u32", "i32"))
+    if sampled_verify:
+        assert all(t.freed for S in bufs for key in ("k", "p", "temp", "seeds", "sidx") for t in S["sampler"][key])
+        assert spec._srv_sampler is None
     assert not spec._srv_frozen
     assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
 
@@ -2083,6 +2225,9 @@ def test_capture_and_step_refuse_to_run_out_of_order(monkeypatch, expect_error):
     _rail_allocates_nothing_after_capture(
         monkeypatch, expect_error, sharded_verify=True, lean_seed=True, one_upload=True
     )
+    # GEMMA4_SPEC_SAMPLED_VERIFY over the gathered logits (the split top-k) and over the TP shards (the gather)
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error, sampled_verify=True)
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error, sampled_verify=True, sharded_verify=True)
 
 
 def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
@@ -3608,3 +3753,77 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     calib.flush_window()
     assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
     assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 1 clean")
+
+
+# -- GEMMA4_SPEC_SAMPLED_VERIFY: the host plan of a sampled replay (spec_sampling.py) -------------------------------
+
+
+def test_sampling_rows_plan_encodes_the_plain_paths_parameters_and_seeds_per_column():
+    """A sampled row's P packed rows carry its device-encoded parameters (inverse temperature, top-k clamped to
+    [1, 32], top-p) and, seeded, the plain decode's device seed for every absolute position (counter = position
+    + 1, salt 0); an unseeded row draws fresh entropy per column; greedy rows, padding rows and the chunk padding
+    carry the greedy triple (temp 1, k 1, p 0) and the idle seed; the row's own parameters are kept as given."""
+    from models.common.sampling.generator import _hash_request_seed_to_device_seed
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        greedy_sampling_rows,
+        row_is_sampled,
+        row_sampling_params,
+        serving_chunks,
+        serving_sampling_rows,
+    )
+
+    sampling = SimpleNamespace(
+        temperature=torch.tensor([0.0, 0.7, 0.0, 1.0, 0.0]),
+        top_k=torch.tensor([1, 40, 1, 0, 1]),
+        top_p=torch.tensor([1.0, 0.9, 1.0, 1.0, 1.0]),
+        seed=[None, 42, None, -1, None],
+    )
+    assert row_sampling_params(sampling, 1) == pytest.approx((0.7, 40, 0.9, 42))  # float32 on the wire
+    assert row_sampling_params(sampling, 3) == (1.0, 0, 1.0, None)  # the plugin's -1 sentinel reads as unseeded
+    assert row_sampling_params(sampling, 0) == (0.0, 1, 1.0, None)
+    assert row_sampling_params(None, 7) == (0.0, 1, 1.0, None)
+    assert [row_is_sampled(sampling, r) for r in range(5)] == [False, True, False, True, False]
+    fresh = iter(range(700, 800))
+    plan = serving_sampling_rows((5, 5), [1, 0, 3], [10, 20, 30], sampling, fresh_seed=lambda: next(fresh))
+    assert (plan.B, plan.P, plan.chunks, plan.rows) == (5, 6, 1, 32) and serving_chunks(5, 6) == 1
+    assert plan.row_params[0] == pytest.approx((0.7, 40, 0.9, 42))
+    assert plan.row_params[1:] == [(0.0, 1, 1.0, None), (1.0, 0, 1.0, None)]
+    assert plan.sampled == [True] * 6 + [False] * 6 + [True] * 6 + [False] * 14
+    # row 0 (slot 1): 1 / 0.7, k 40 -> 32, p 0.9, seeds hash(42, 10 + j + 1)
+    assert plan.temperature[:6] == pytest.approx([1 / 0.7] * 6, rel=1e-6) and plan.top_k[:6] == [32] * 6
+    assert plan.top_p[:6] == pytest.approx([0.9] * 6, rel=1e-6)
+    assert plan.seeds[:6] == [_hash_request_seed_to_device_seed(42, 11 + j, 0) for j in range(6)]
+    # row 1 (slot 0, greedy): the greedy triple, the idle seed
+    assert plan.temperature[6:12] == [1.0] * 6 and plan.top_k[6:12] == [1] * 6 and plan.top_p[6:12] == [0.0] * 6
+    assert plan.seeds[6:12] == [SPEC_SAMPLED_IDLE_SEED] * 6
+    # row 2 (slot 3, unseeded): temperature 1, k 0 -> 32 (no restriction), fresh seeds per column
+    assert plan.temperature[12:18] == [1.0] * 6 and plan.top_k[12:18] == [32] * 6
+    assert plan.seeds[12:18] == list(range(700, 706))
+    # the chunk padding past the shape's rows
+    assert plan.temperature[18:] == [1.0] * 14 and plan.top_k[18:] == [1] * 14 and plan.seeds[18:] == [1] * 14
+    k, p, temp, seeds = plan.chunk(0)
+    assert (k, p, temp, seeds) == (plan.top_k, plan.top_p, plan.temperature, plan.seeds)
+    assert plan.params_key(0) == (tuple(plan.top_k), tuple(plan.top_p), tuple(plan.temperature))
+    # a greedy plan has no sampled row and one chunk per 32 packed rows
+    greedy = greedy_sampling_rows((16, 1))
+    assert not greedy.any_sampled and greedy.chunks == 1 and greedy.rows == 32 and greedy.row_params == []
+    assert greedy_sampling_rows((16, 3)).chunks == 2
+    # more live rows than the shape holds, or positions out of step with the rows, are refused
+    with pytest.raises(ValueError, match="exceed B"):  # allow-pytest.raises (pure)
+        serving_sampling_rows((2, 5), [0, 1, 2], [1, 2, 3], sampling)
+    with pytest.raises(ValueError, match="positions for"):  # allow-pytest.raises (pure)
+        serving_sampling_rows((2, 5), [0, 1], [1], sampling)
+
+
+def test_select_verify_ids_takes_the_draw_on_sampled_rows_and_the_argmax_elsewhere():
+    from models.demos.gemma4.tt.spec_sampling import greedy_sampling_rows, select_verify_ids, serving_sampling_rows
+
+    sampling = SimpleNamespace(temperature=[0.0, 0.9], top_k=[1, 5], top_p=[1.0, 0.8], seed=[None, 3])
+    plan = serving_sampling_rows((2, 2), [0, 1], [4, 9], sampling)
+    argmax = torch.tensor([[10, 11, 12], [13, 14, 15]])
+    draws = [100 + r for r in range(32)]
+    assert select_verify_ids(plan, argmax, draws).tolist() == [[10, 11, 12], [103, 104, 105]]
+    # an all-greedy plan hands the argmax back untouched (and never reads the draws)
+    assert select_verify_ids(greedy_sampling_rows((2, 2)), argmax, None).tolist() == argmax.tolist()
+    assert select_verify_ids(plan, argmax.reshape(-1).tolist(), draws).shape == (2, 3)
