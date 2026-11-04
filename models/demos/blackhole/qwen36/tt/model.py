@@ -532,6 +532,10 @@ class Qwen36Model:
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
         EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        ternary = getattr(self, "ternary_lm_head", None)
+        if ternary is not None and out_dtype is None and x.shape[-2] <= 32:
+            # Bonsai one-token decode: its own ternary output weights (models/demos/blackhole/bonsai2/tt/ternary/mlp.py).
+            return ternary(x)
         kw, ccl_kw = {}, {}
         if out_dtype is not None:
             # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the

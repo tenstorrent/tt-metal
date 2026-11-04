@@ -28,6 +28,32 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/addcmul.h"  // SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS
+
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// silu on face rows 0-3 of faces 0 and 1 (SFPU rows 0, 1, 8, 9: row 0 is all a row tile holds) of DEST tiles 0..N-1:
+// 4 SFPU rows per tile instead of 32. Needs silu_tile_init (Prgm0 = 2.0 for the reciprocal).
+template <int N>
+inline void silu_row0(uint32_t, uint32_t, uint32_t, uint32_t) {
+    constexpr uint32_t OFF[4] = {0, 1, 8, 9};
+#pragma GCC unroll 8
+    for (int t = 0; t < N; ++t) {
+#pragma GCC unroll 4
+        for (int h = 0; h < 4; ++h) {
+            sfpi::vFloat x = sfpi::dst_reg[t * 32 + OFF[h]];
+            sfpi::dst_reg[t * 32 + OFF[h]] = x * _sfpu_sigmoid_<true>(x);
+        }
+    }
+}
+inline void silu_row0_4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { silu_row0<4>(a, b, c, d); }
+inline void silu_row0_8(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { silu_row0<8>(a, b, c, d); }
+}  // namespace ckernel::sfpu
+#endif
+// clang-format off
+#define SILU_ROW0(FN) MATH((SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, FN, 0, 0, 0, 0, VectorMode::None)))
+// clang-format on
+
 #ifdef STEP_ZONES
 #include "api/debug/kernel_profiler.hpp"
 #define ZONE(n) DeviceZoneScopedN(n)
@@ -114,9 +140,7 @@ void kernel_main() {
             copy_tile(cb_z, i, i);
         }
         silu_tile_init();
-        for (uint32_t i = 0; i < HT; ++i) {
-            silu_tile(i);
-        }
+        SILU_ROW0(silu_row0_4);
         pack_n(HT, cb_zs, 0);
         cb_push_back(cb_zs, HT);
         cb_pop_front(cb_z, HT);
@@ -152,8 +176,10 @@ void kernel_main() {
                 matmul_tiles(cb_e, cb_p, 0, b + i, i);
             }
             silu_tile_init();
-            for (uint32_t i = 0; i < n; ++i) {
-                silu_tile(i);
+            if (n == 8) {
+                SILU_ROW0(silu_row0_8);
+            } else {
+                SILU_ROW0(silu_row0_4);
             }
             pack_n(n, cb_conv, b);
         }

@@ -98,4 +98,37 @@ def swap_in_ternary_mlp(model) -> None:
             ),
             os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
         )
+    if os.environ.get("BONSAI_TERNARY_HEAD") == "1":
+        model.ternary_lm_head = TernaryLMHead(device, pack_lm_head(), rotations[5120])
     print(f"BONSAI_TERNARY_MLP_SWAP_S={time.time() - t0:.1f}", flush=True)
+
+
+class TernaryLMHead:
+    """The output projection (Bonsai's lm_head, ternary like every linear) for one-token decode."""
+
+    def __init__(self, device, packed, rotation: DecodeRotation):
+        rec, ppr, K, N = packed
+        self.lin = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
+        self.rot = rotation
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        lead = tuple(list(x.shape)[:-1])
+        xr = self.rot(x)
+        y = self.lin(xr, lead=lead)
+        ttnn.deallocate(xr)
+        return y
+
+
+def pack_lm_head():
+    cache = Path(os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"))
+    f = cache / "output.decode_inline.npz"
+    if f.exists():
+        z = np.load(f)
+        return z["rec"], int(z["ppr"]), int(z["K"]), int(z["N"])
+    gguf = BonsaiGGUF(
+        os.environ.get("BONSAI_GGUF", "/local/ttuser/jerrywang/bonsai/gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf")
+    )
+    t, s = gguf.ternary("output.weight")
+    rec, ppr = pack_records_inline(t, s)
+    np.savez(f, rec=rec, ppr=ppr, K=t.shape[0], N=t.shape[1])
+    return rec, ppr, t.shape[0], t.shape[1]
