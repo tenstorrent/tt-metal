@@ -256,8 +256,9 @@ def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages
     assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
     assert all(
-        layer.mlp.experts.fused_all_reduce_axes is not None for layer in model.layers
-    ), "every MoE layer must all-reduce its TP partial inside fused_experts (DEEPSEEK_V4_FUSE_ALL_REDUCE=1)"
+        (layer.mlp.experts.fused_all_reduce_axes is not None) == (len(layer.mlp.experts.tp_axes) > 1)
+        for layer in model.layers
+    ), "only multi-axis TP all-reduces its MoE partial inside fused_experts (DEEPSEEK_V4_FUSE_ALL_REDUCE=1)"
     attn = model.layers[0].self_attn
     assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
     assert not attn.q_a_proj.partial_width_sharded
