@@ -7,7 +7,7 @@ from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
-from helpers.perf.blaze import PERF_MEASUREMENT_AXES
+from helpers.perf.blaze import PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE
 from test_sfpu_logit_softcap import (
     CAPS,
     FORMATS,
@@ -24,7 +24,7 @@ from test_sfpu_logit_softcap import test_sfpu_logit_softcap as _test_sfpu_logit_
     # input_range is stimulus-only; value_bits already records cap.
     input_range=[INPUT_RANGES[0]],
     cap=CAPS,
-    **PERF_MEASUREMENT_AXES,
+    **PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE,
 )
 def test_perf_sfpu_logit_softcap(
     perf_report, formats, dest_acc, input_range, cap, run_types, loop_factor, is_perf

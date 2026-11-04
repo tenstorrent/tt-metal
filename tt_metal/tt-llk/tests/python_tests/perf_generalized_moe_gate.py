@@ -249,7 +249,7 @@ def test_perf_generalized_moe_gate_copy4rows_back_to_back(
 
 
 @pytest.mark.perf
-@parametrize(knobs=[(0, 8), (4, 0), (4, 8)])
+@parametrize(knobs=[(0, 0), (0, 8), (4, 0), (4, 8)])
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_generalized_moe_gate_step1_hi(
     perf_report, knobs, run_types, loop_factor, is_perf
