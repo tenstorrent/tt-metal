@@ -20,20 +20,17 @@ def test_reduce_auxiliary_host_rounding(dtype, scenario):
     scalar = 1 / 41 if scenario == "explicit_scale" else None
     sequence = planner.make_reduce_sequence_plan(
         reductions=[
-            (
-                0,
-                planner.ReduceCallConfig(
-                    block=planner.ReduceBlockSpec(32, width, dtype, dtype, input_cb_tiles=(width + 31) // 32),
-                    reduce_math=planner.ReduceMath.SUM if scalar is not None else planner.ReduceMath.AVG,
-                    reduce_dim=planner.ReduceDimension.ROW,
-                    scalar=scalar,
-                    fp32_mode=planner.ReduceFp32Mode.FAST,
-                    input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
-                ),
+            planner.ReduceCallConfig(
+                block=planner.ReduceBlockSpec(32, width, dtype, dtype, input_cb_tiles=(width + 31) // 32),
+                reduce_math=planner.ReduceMath.SUM if scalar is not None else planner.ReduceMath.AVG,
+                reduce_dim=planner.ReduceDimension.ROW,
+                scalar=scalar,
+                fp32_mode=planner.ReduceFp32Mode.FAST,
+                input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
             )
             for width in widths
         ],
-        cb_ids=planner.ReduceSequenceCbIds(1, 2, 16, accumulator_cb_tiles=1),
+        accumulator_cb_tiles=1,
         hardware=planner.ReduceHardwareConfig(
             arch=ttnn.device.Arch.BLACKHOLE,
             fp32_dest_acc_en=dtype == ttnn.float32,
@@ -48,7 +45,7 @@ def test_reduce_auxiliary_host_rounding(dtype, scenario):
         assert tile.value == expected
     # The existing device-side truncation must preserve the host-rounded value;
     # FP32 recipes must instead retain the original float's lower mantissa bits.
-    encoded_values = sequence.auxiliary_compile_time_args[2::2]
+    encoded_values = sequence.auxiliary_compile_time_args(1)[2::2]
     expected_bits = struct.unpack("I", struct.pack("f", expected))[0]
     assert all(bits == expected_bits for bits in encoded_values)
     if dtype == ttnn.bfloat16:

@@ -52,17 +52,16 @@
  *   3. Derive the hardware view from the compute kernel's own config:
  *      make_reduce_hardware_config(arch, compute_hardware). Do not restate its fields by hand.
  *   4. Plan. One reduction: make_reduce_plan(). Several inputs accumulated into one result, e.g. a mean over two
- *      tensors without concatenating them: make_reduce_sequence_plan(), one ReduceCbConfig per call in the order
+ *      tensors without concatenating them: make_reduce_sequence_plan(), one ReduceCallConfig per call in the order
  *      compute issues them. Leave the scalar absent for a mean; pass one only for an explicit scale.
  *   5. Allocate CBs. The auxiliary CB comes from the plan (plan.auxiliary_cb, or sequence.auxiliary.cb) and every
  *      plan needs one, including SFPU plans. Input, output and accumulator CBs are yours; reduce() pushes one
  *      output tile at a time. A sequence's accumulator must hold one call's complete per-core output
- *      (ReduceSequenceCbIds::accumulator_cb_tiles).
- *   6. Serialize and append after each kernel's own compile-time arguments:
+ *      (make_reduce_sequence_plan()'s accumulator_cb_tiles).
+ *   6. Serialize, binding the plan to CB IDs, and append after each kernel's own compile-time arguments:
  *      - Compute: ReduceCallArgs(plan, {input, auxiliary, output}) for a single plan, or
- *        sequence.append_to() / get_compile_time_args() for a sequence.
- *      - Writer: ReduceAuxiliaryArgs(plan, auxiliary) for a single plan, or
- *        sequence.append_auxiliary_to() / get_auxiliary_compile_time_args() for a sequence.
+ *        ReduceSequenceArgs(sequence, {{inputs...}, auxiliary, accumulator, output}) for a sequence.
+ *      - Writer: ReduceAuxiliaryArgs(plan, auxiliary) or ReduceAuxiliaryArgs(sequence, auxiliary).
  *      - Tails: plan.append_runtime_args() or sequence.append_runtime_args() on every core, with use_tail
  *        selecting the tail. The returned base is the device view's RTA_OFFSET.
  *
@@ -95,11 +94,11 @@
  * Serialized layout
  *
  * @code{.cpp}
- * auto unit = make_reduce_sequence_plan(reductions, cb_ids, hardware);
- * unit.append_to(compute_compile_time_args);
+ * auto unit = make_reduce_sequence_plan(reductions, accumulator_cb_tiles, hardware);
+ * ReduceSequenceArgs(unit, cb_ids).append_to(compute_compile_time_args);
  * // compute suffix: [call_count][call_0]...[call_(call_count - 1)]
  *
- * unit.append_auxiliary_to(dataflow_compile_time_args);
+ * ReduceAuxiliaryArgs(unit, cb_ids.auxiliary_cb_id).append_to(dataflow_compile_time_args);
  * // dataflow suffix: [one aggregate auxiliary descriptor]
  * @endcode
  *
@@ -169,11 +168,10 @@ struct ReduceAuxiliaryTileSpec {
 // BF16 values are rounded to nearest-even and widened; FP32 values are unchanged.
 float round_reduce_auxiliary_value(float value, tt::DataFormat data_format);
 
-// The one shared auxiliary CB recipe for a complete planning unit. It carries
-// the CB ID as well as the physical tiles to materialize. Calls refer to
-// contiguous slices of `tiles`; equal call recipes share the same slice.
+// The one shared auxiliary CB recipe for a complete planning unit: the physical
+// tiles to materialize. Calls refer to contiguous slices of `tiles`; equal call
+// recipes share the same slice.
 struct ReduceAuxiliaryPlan {
-    std::uint32_t cb_id = no_cb_id;
     std::vector<ReduceAuxiliaryTileSpec> tiles;
     ReduceAuxiliaryCb cb;
 };
@@ -277,7 +275,6 @@ struct ReduceBlockSpec {
 };
 
 // Per-input configuration for one call in a cross-call reduction sequence.
-// Multiple entries may name the same input CB when the kernel refills or reuses that CB between calls.
 struct ReduceCallConfig {
     ReduceBlockSpec block;
     tt::tt_metal::ReduceOpMath reduce_math;
@@ -290,24 +287,20 @@ struct ReduceCallConfig {
     compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
 };
 
-using ReduceCbConfig = std::pair<std::uint32_t, ReduceCallConfig>;
-
-// These IDs bind planner roles into the caller's kernel CB namespace. They are explicit because only the
-// caller knows which IDs are already occupied by the rest of a fused kernel.
-struct ReduceSequenceCbIds {
-    std::uint32_t auxiliary_cb_id;
-    std::uint32_t accumulator_cb_id;
-    std::uint32_t output_cb_id;
-    // Capacity of the accumulator CB in tiles; read only when the sequence accumulates. Every call
-    // packs all of its partials before the next call reloads any, so it must hold one call's
-    // complete per-core output.
-    std::uint32_t accumulator_cb_tiles = 0;
-};
-
-// CB binding for serializing an existing single-call ReducePlan.
+// CB IDs that bind a plan's roles into the caller's kernel CB namespace at serialization. They are explicit
+// because only the caller knows which IDs are already occupied by the rest of a fused kernel.
 struct ReduceCallCbIds {
     std::uint32_t input_cb_id;
     std::uint32_t auxiliary_cb_id;
+    std::uint32_t output_cb_id;
+};
+
+struct ReduceSequenceCbIds {
+    // One per call, in call order. Entries may repeat when the kernel refills or reuses a CB between calls.
+    std::vector<std::uint32_t> input_cb_ids;
+    std::uint32_t auxiliary_cb_id;
+    // Read only when the sequence accumulates.
+    std::uint32_t accumulator_cb_id = no_cb_id;
     std::uint32_t output_cb_id;
 };
 
@@ -317,11 +310,7 @@ struct ReduceCallCbIds {
 // from the auxiliary recipe. `plan` is the complete existing single-CB plan for
 // this input.
 struct ReduceCallPlan {
-    std::uint32_t input_cb_id;
-    std::uint32_t auxiliary_cb_id;
     std::uint32_t auxiliary_tile_offset = 0;
-    std::uint32_t output_cb_id;
-    std::optional<std::uint32_t> accumulator_cb_id;
     ReduceAccumulationMode accumulation_mode = ReduceAccumulationMode::None;
     std::uint32_t accumulation_index = 0;
     ReducePlan plan;
@@ -338,24 +327,12 @@ struct ReduceSequencePlan {
     std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
     // Append after caller-owned arguments and return the section base for RTA_OFFSET.
     std::uint32_t append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail = true) const;
-
-    // Append the compute-kernel suffix: call count followed by every call in
-    // execution order. Existing caller-owned arguments remain at the front.
-    // The count describes this unit only; it carries no call semantics.
-    void append_to(std::vector<std::uint32_t>& compile_time_args) const;
-    std::vector<std::uint32_t> get_compile_time_args() const;
-
-    // Append the independent dataflow-kernel suffix: one shared auxiliary CB
-    // description for this complete planning unit, regardless of call count.
-    void append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const;
-    std::vector<std::uint32_t> get_auxiliary_compile_time_args() const;
 };
 
 // Host serializer for one independently decodable call. Its matching device
 // view is ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
 class ReduceCallArgs {
 public:
-    explicit ReduceCallArgs(const ReduceCallPlan& call);
     ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids);
 
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
@@ -365,12 +342,28 @@ private:
     std::vector<std::uint32_t> compile_time_args_;
 };
 
-// Host serializer for one sequence-level auxiliary CB description. Its
-// matching device view is ttnn::kernel_lib::ReduceAuxiliaryArgs<CTA_OFFSET>.
+// Host serializer for the compute-kernel suffix of a sequence: the call count
+// followed by every call in execution order. The count describes this unit
+// only; it carries no call semantics. Its matching device view is
+// ttnn::kernel_lib::ReduceCallAtT<CTA_OFFSET, I>.
+class ReduceSequenceArgs {
+public:
+    ReduceSequenceArgs(const ReduceSequencePlan& sequence, const ReduceSequenceCbIds& cb_ids);
+
+    void append_to(std::vector<std::uint32_t>& compile_time_args) const;
+    std::vector<std::uint32_t> get_compile_time_args() const;
+
+private:
+    std::vector<std::uint32_t> compile_time_args_;
+};
+
+// Host serializer for one planning unit's auxiliary CB description, regardless
+// of call count. Its matching device view is ttnn::kernel_lib::ReduceAuxiliaryArgs<CTA_OFFSET>.
 class ReduceAuxiliaryArgs {
 public:
-    explicit ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary);
+    ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary, std::uint32_t auxiliary_cb_id);
     ReduceAuxiliaryArgs(const ReducePlan& plan, std::uint32_t auxiliary_cb_id);
+    ReduceAuxiliaryArgs(const ReduceSequencePlan& sequence, std::uint32_t auxiliary_cb_id);
 
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_compile_time_args() const;
@@ -406,13 +399,15 @@ ReducePlan make_reduce_plan(
 
 // Plan a kernel-ordered sequence of reductions whose results are accumulated
 // together. The returned call vector has exactly the same order and length as
-// `reductions`; callers decide when to issue each reduce() call. Input CB IDs
-// need not be unique. An explicit algorithm retains the corresponding
-// accumulation order when a fused operation requires it for numerical accuracy.
-// All calls must either omit scalar or supply the same explicit scalar.
+// `reductions`; callers decide when to issue each reduce() call. An explicit
+// algorithm retains the corresponding accumulation order when a fused operation
+// requires it for numerical accuracy. All calls must either omit scalar or
+// supply the same explicit scalar.
+// accumulator_cb_tiles is the accumulator CB capacity, read only when the sequence accumulates. Every call
+// packs all of its partials before the next call reloads any, so it must hold one call's complete per-core output.
 ReduceSequencePlan make_reduce_sequence_plan(
-    const std::vector<ReduceCbConfig>& reductions,
-    const ReduceSequenceCbIds& cb_ids,
+    const std::vector<ReduceCallConfig>& reductions,
+    std::uint32_t accumulator_cb_tiles,
     const ReduceHardwareConfig& hardware,
     std::optional<compute_kernel_lib::ReduceAlgorithm> algorithm = std::nullopt);
 

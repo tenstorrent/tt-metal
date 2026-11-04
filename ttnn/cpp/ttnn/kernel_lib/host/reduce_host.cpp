@@ -610,9 +610,7 @@ ReducePlan make_reduce_plan(
     ReduceInputPolicy input_policy) {
     if (block.tail) {
         return make_reduce_sequence_plan(
-                   {{0, {block, reduce_math, reduce_dim, scalar, fp32_mode, input_policy}}},
-                   {.auxiliary_cb_id = 1, .accumulator_cb_id = 2, .output_cb_id = 3},
-                   hardware)
+                   {ReduceCallConfig{block, reduce_math, reduce_dim, scalar, fp32_mode, input_policy}}, 0, hardware)
             .calls.front()
             .plan;
     }
@@ -673,26 +671,13 @@ std::uint32_t append_auxiliary_recipe(
 }  // namespace
 
 static ReduceSequencePlan make_fixed_reduce_sequence_plan(
-    const std::vector<ReduceCbConfig>& reductions,
-    const ReduceSequenceCbIds& cb_ids,
+    const std::vector<ReduceCallConfig>& reductions,
     const ReduceHardwareConfig& hardware,
     std::optional<ReduceAlgorithm> algorithm) {
-    TT_FATAL(!reductions.empty(), "Reduce sequence planner: at least one input CB is required");
+    TT_FATAL(!reductions.empty(), "Reduce sequence planner: at least one reduction is required");
 
     const bool accumulates = reductions.size() > 1;
-    TT_FATAL(
-        cb_ids.auxiliary_cb_id < reduce_plan_args::no_cb_id,
-        "Reduce sequence planner: every reduction requires an auxiliary CB ID that fits in one byte");
-    TT_FATAL(
-        cb_ids.auxiliary_cb_id != cb_ids.output_cb_id,
-        "Reduce sequence planner: auxiliary and final output CB IDs must differ");
-    if (accumulates) {
-        TT_FATAL(
-            cb_ids.accumulator_cb_id != cb_ids.auxiliary_cb_id && cb_ids.accumulator_cb_id != cb_ids.output_cb_id,
-            "Reduce sequence planner: accumulator, auxiliary, and final output CB IDs must be distinct");
-    }
-
-    const auto& first_config = reductions.front().second;
+    const auto& first_config = reductions.front();
     std::vector<ReducePlan> plans;
     plans.reserve(reductions.size());
 
@@ -700,19 +685,12 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
     // normalization — once, at the Final call, while its cheaper per-tile fold applies to every call. The
     // break-even threshold therefore tests the whole sequence's reduction axis, not one call's.
     std::uint32_t threshold_axis_tiles = 0;
-    for (const auto& [input_cb_id, config] : reductions) {
-        (void)input_cb_id;
+    for (const auto& config : reductions) {
         validate_block(config.block, config.reduce_dim, config.input_policy);
         threshold_axis_tiles += threshold_axis_tiles_of(config.block, config.reduce_dim);
     }
 
-    for (const auto& [input_cb_id, config] : reductions) {
-        TT_FATAL(
-            input_cb_id != cb_ids.auxiliary_cb_id && input_cb_id != cb_ids.output_cb_id &&
-                (!accumulates || input_cb_id != cb_ids.accumulator_cb_id),
-            "Reduce sequence planner: input CB {} collides with a shared reduction CB",
-            input_cb_id);
-
+    for (const auto& config : reductions) {
         if (accumulates) {
             TT_FATAL(
                 same_output_description(config, first_config),
@@ -746,8 +724,7 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
         plans.begin(), plans.end(), [&](const ReducePlan& plan) { return plan.algorithm != sequence_algorithm; });
     if (mixed_algorithms) {
         plans.clear();
-        for (const auto& [input_cb_id, config] : reductions) {
-            (void)input_cb_id;
+        for (const auto& config : reductions) {
             plans.push_back(make_reduce_plan_impl(
                 config.block,
                 config.reduce_math,
@@ -774,7 +751,7 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
     const auto expected_outputs = output_count(plans.front(), first_config.reduce_dim);
     for (std::size_t i = 1; i < plans.size(); ++i) {
         TT_FATAL(
-            output_count(plans[i], reductions[i].second.reduce_dim) == expected_outputs,
+            output_count(plans[i], reductions[i].reduce_dim) == expected_outputs,
             "Reduce sequence planner: every accumulated call must produce the same number of output tiles");
     }
 
@@ -782,8 +759,7 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
     // Explicit scalars have already been lowered unchanged into each plan.
     if (accumulates && first_config.reduce_math == ReduceOpMath::AVG && !first_config.scalar.has_value()) {
         std::uint32_t grand_factor = 0;
-        for (const auto& [input_cb_id, config] : reductions) {
-            (void)input_cb_id;
+        for (const auto& config : reductions) {
             const auto shape = valid_shape(config.block);
             grand_factor += config.reduce_dim == ReduceOpDim::W
                                 ? shape.width
@@ -822,7 +798,6 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
     }
 
     ReduceSequencePlan sequence;
-    sequence.auxiliary.cb_id = cb_ids.auxiliary_cb_id;
     std::vector<std::uint32_t> auxiliary_tile_offsets;
     auxiliary_tile_offsets.reserve(plans.size());
     for (const auto& plan : plans) {
@@ -839,11 +814,7 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
     for (std::size_t i = 0; i < reductions.size(); ++i) {
         const bool is_last = i + 1 == reductions.size();
         sequence.calls.push_back(
-            {.input_cb_id = reductions[i].first,
-             .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
-             .auxiliary_tile_offset = auxiliary_tile_offsets[i],
-             .output_cb_id = accumulates && !is_last ? cb_ids.accumulator_cb_id : cb_ids.output_cb_id,
-             .accumulator_cb_id = accumulates ? std::optional<std::uint32_t>{cb_ids.accumulator_cb_id} : std::nullopt,
+            {.auxiliary_tile_offset = auxiliary_tile_offsets[i],
              .accumulation_mode = !accumulates ? ReduceAccumulationMode::None
                                   : is_last    ? ReduceAccumulationMode::Final
                                                : ReduceAccumulationMode::Intermediate,
@@ -902,7 +873,7 @@ std::uint32_t produced_output_tiles(const ReducePlan& plan) {
     return tiles;
 }
 
-void check_accumulator_capacity(const ReduceSequencePlan& sequence, const ReduceSequenceCbIds& cb_ids) {
+void check_accumulator_capacity(const ReduceSequencePlan& sequence, std::uint32_t accumulator_cb_tiles) {
     if (sequence.calls.size() < 2) {
         return;
     }
@@ -911,42 +882,40 @@ void check_accumulator_capacity(const ReduceSequencePlan& sequence, const Reduce
         outputs = std::max(outputs, produced_output_tiles(call.plan));
     }
     TT_FATAL(
-        cb_ids.accumulator_cb_tiles >= outputs,
-        "Reduce sequence planner: accumulator CB {} holds {} tiles, but each call writes {} partial tiles before the "
+        accumulator_cb_tiles >= outputs,
+        "Reduce sequence planner: the accumulator CB holds {} tiles, but each call writes {} partial tiles before the "
         "next call reloads them",
-        cb_ids.accumulator_cb_id,
-        cb_ids.accumulator_cb_tiles,
+        accumulator_cb_tiles,
         outputs);
 }
 
 }  // namespace
 
 ReduceSequencePlan make_reduce_sequence_plan(
-    const std::vector<ReduceCbConfig>& reductions,
-    const ReduceSequenceCbIds& cb_ids,
+    const std::vector<ReduceCallConfig>& reductions,
+    std::uint32_t accumulator_cb_tiles,
     const ReduceHardwareConfig& hardware,
     std::optional<ReduceAlgorithm> algorithm) {
-    const auto first_tail = std::find_if(reductions.begin(), reductions.end(), [](const auto& reduction) {
-        return reduction.second.block.tail.has_value();
-    });
+    const auto first_tail = std::find_if(
+        reductions.begin(), reductions.end(), [](const auto& reduction) { return reduction.block.tail.has_value(); });
     if (first_tail == reductions.end()) {
-        auto sequence = make_fixed_reduce_sequence_plan(reductions, cb_ids, hardware, algorithm);
+        auto sequence = make_fixed_reduce_sequence_plan(reductions, hardware, algorithm);
         for (const auto& call : sequence.calls) {
             check_bulk_capacity(call.plan);
         }
-        check_accumulator_capacity(sequence, cb_ids);
+        check_accumulator_capacity(sequence, accumulator_cb_tiles);
         return sequence;
     }
-    const auto selector = *first_tail->second.block.tail;
+    const auto selector = *first_tail->block.tail;
     auto full_reductions = reductions;
     for (std::size_t i = 0; i < reductions.size(); ++i) {
-        const auto& config = reductions[i].second;
+        const auto& config = reductions[i];
         validate_block(config.block, config.reduce_dim, config.input_policy);
-        full_reductions[i].second.block.tail.reset();
+        full_reductions[i].block.tail.reset();
     }
 
-    auto full = make_fixed_reduce_sequence_plan(full_reductions, cb_ids, hardware, algorithm);
-    auto tail = make_fixed_reduce_sequence_plan(reductions, cb_ids, hardware, algorithm);
+    auto full = make_fixed_reduce_sequence_plan(full_reductions, hardware, algorithm);
+    auto tail = make_fixed_reduce_sequence_plan(reductions, hardware, algorithm);
     for (std::size_t i = 0; i < full.calls.size(); ++i) {
         share_tail_input_packets(full.calls[i].plan, tail.calls[i].plan);
     }
@@ -972,22 +941,20 @@ ReduceSequencePlan make_reduce_sequence_plan(
         }
         plan.full_auxiliary_tile_count = auxiliary_tile_count(plan);
         plan.tail_auxiliary_tile_offset = append_auxiliary_recipe(plan.auxiliary_tiles, alternative.auxiliary_tiles);
-        plan.tail = reductions[i].second.block.tail.value_or(selector);
+        plan.tail = reductions[i].block.tail.value_or(selector);
         // The first tail record selects full/tail work for the whole accumulated sequence.
         plan.tail_runtime_arg_offset = 0;
         plan.tail_plan = std::make_shared<ReducePlan>(std::move(alternative));
         call.auxiliary_tile_offset = append_auxiliary_recipe(full.auxiliary.tiles, plan.auxiliary_tiles);
-        call.auxiliary_cb_id = cb_ids.auxiliary_cb_id;
     }
     TT_FATAL(
         full.auxiliary.tiles.size() <= reduce_plan_args::auxiliary_header::tile_count_mask,
         "Reduce planner: combined full/tail auxiliary recipe exceeds the encodable tile count");
-    full.auxiliary.cb_id = cb_ids.auxiliary_cb_id;
     for (auto& call : full.calls) {
         merge_tail_auxiliary(call.plan, *call.plan.tail_plan, full.auxiliary.tiles.size());
     }
     full.auxiliary.cb = full.calls.front().plan.auxiliary_cb;
-    check_accumulator_capacity(full, cb_ids);
+    check_accumulator_capacity(full, accumulator_cb_tiles);
     return full;
 }
 
@@ -1063,21 +1030,47 @@ std::uint32_t encode_configuration(const ReduceCallPlan& call) {
                plan.tail.has_value() && !plan.tail_plan, config::uses_tail_shape_shift, config::uses_tail_shape_mask);
 }
 
-std::uint32_t encode_circular_buffers(const ReduceCallPlan& call) {
+// The CB IDs one serialized call reads and writes.
+struct CallCbIds {
+    std::uint32_t input_cb_id;
+    std::uint32_t auxiliary_cb_id;
+    std::uint32_t output_cb_id;
+    std::optional<std::uint32_t> accumulator_cb_id;
+};
+
+void check_cb_roles(
+    const std::vector<std::uint32_t>& input_cb_ids,
+    std::uint32_t auxiliary_cb_id,
+    std::uint32_t output_cb_id,
+    std::optional<std::uint32_t> accumulator_cb_id) {
+    TT_FATAL(
+        auxiliary_cb_id < reduce_plan_args::no_cb_id,
+        "Reduce plan args: every reduction requires an auxiliary CB ID that fits in one byte");
+    TT_FATAL(auxiliary_cb_id != output_cb_id, "Reduce plan args: auxiliary and output CB IDs must differ");
+    TT_FATAL(
+        !accumulator_cb_id.has_value() || (*accumulator_cb_id != auxiliary_cb_id && *accumulator_cb_id != output_cb_id),
+        "Reduce plan args: accumulator, auxiliary, and output CB IDs must be distinct");
+    for (const auto input_cb_id : input_cb_ids) {
+        TT_FATAL(
+            input_cb_id != auxiliary_cb_id && input_cb_id != output_cb_id && input_cb_id != accumulator_cb_id,
+            "Reduce plan args: input CB {} collides with a shared reduction CB",
+            input_cb_id);
+    }
+}
+
+std::uint32_t encode_circular_buffers(const ReduceCallPlan& call, const CallCbIds& cb_ids) {
     using namespace reduce_plan_args;
-    const auto accumulator_cb_id = call.accumulator_cb_id.value_or(reduce_plan_args::no_cb_id);
-    const auto auxiliary_cb_id = call.plan.auxiliary_tiles.empty() ? reduce_plan_args::no_cb_id : call.auxiliary_cb_id;
+    const auto accumulator_cb_id = cb_ids.accumulator_cb_id.value_or(reduce_plan_args::no_cb_id);
+    const auto auxiliary_cb_id =
+        call.plan.auxiliary_tiles.empty() ? reduce_plan_args::no_cb_id : cb_ids.auxiliary_cb_id;
     TT_FATAL(
-        call.input_cb_id < reduce_plan_args::no_cb_id && call.auxiliary_cb_id <= reduce_plan_args::no_cb_id &&
-            call.output_cb_id < reduce_plan_args::no_cb_id &&
-            (!call.accumulator_cb_id.has_value() || *call.accumulator_cb_id < reduce_plan_args::no_cb_id),
+        cb_ids.input_cb_id < reduce_plan_args::no_cb_id && cb_ids.auxiliary_cb_id < reduce_plan_args::no_cb_id &&
+            cb_ids.output_cb_id < reduce_plan_args::no_cb_id &&
+            (!cb_ids.accumulator_cb_id.has_value() || *cb_ids.accumulator_cb_id < reduce_plan_args::no_cb_id),
         "Reduce plan args: CB IDs must fit in one byte; 255 denotes an absent optional CB");
-    TT_FATAL(
-        call.plan.auxiliary_tiles.empty() || auxiliary_cb_id != reduce_plan_args::no_cb_id,
-        "Reduce plan args: a non-empty auxiliary recipe requires a valid auxiliary CB ID");
-    return insert(call.input_cb_id, circular_buffers::input_shift, circular_buffers::id_mask) |
+    return insert(cb_ids.input_cb_id, circular_buffers::input_shift, circular_buffers::id_mask) |
            insert(auxiliary_cb_id, circular_buffers::auxiliary_shift, circular_buffers::id_mask) |
-           insert(call.output_cb_id, circular_buffers::output_shift, circular_buffers::id_mask) |
+           insert(cb_ids.output_cb_id, circular_buffers::output_shift, circular_buffers::id_mask) |
            insert(accumulator_cb_id, circular_buffers::accumulator_shift, circular_buffers::id_mask);
 }
 
@@ -1103,14 +1096,14 @@ std::uint32_t encode_chunk_and_auxiliary(const ReduceCallPlan& call) {
                chunk_and_auxiliary::auxiliary_tile_count_mask);
 }
 
-std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary) {
+std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary, std::uint32_t auxiliary_cb_id) {
     using namespace reduce_plan_args;
     TT_FATAL(
-        !auxiliary.tiles.empty() && auxiliary.cb_id < reduce_plan_args::no_cb_id,
+        !auxiliary.tiles.empty() && auxiliary_cb_id < reduce_plan_args::no_cb_id,
         "Reduce plan args: an auxiliary recipe requires tiles and a valid auxiliary CB ID");
     const auto tile_count = static_cast<std::uint32_t>(auxiliary.tiles.size());
     check_fits(tile_count, auxiliary_header::tile_count_mask, "aggregate auxiliary tile count");
-    return insert(auxiliary.cb_id, auxiliary_header::cb_id_shift, auxiliary_header::cb_id_mask) |
+    return insert(auxiliary_cb_id, auxiliary_header::cb_id_shift, auxiliary_header::cb_id_mask) |
            insert(tile_count, auxiliary_header::tile_count_shift, auxiliary_header::tile_count_mask);
 }
 
@@ -1134,36 +1127,23 @@ std::uint32_t encode_auxiliary_tile_configuration(const ReduceAuxiliaryTileSpec&
                auxiliary_configuration::valid_elements_mask);
 }
 
-}  // namespace
-
-ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
+void append_call_args(
+    const ReduceCallPlan& call, const CallCbIds& cb_ids, std::vector<std::uint32_t>& compile_time_args) {
     using reduce_plan_args::CallWord;
     const auto& plan = call.plan;
-    const bool accumulates = call.accumulation_mode != ReduceAccumulationMode::None;
-    TT_FATAL(
-        accumulates == call.accumulator_cb_id.has_value(),
-        "Reduce plan args: accumulation mode and accumulator CB presence disagree");
     TT_FATAL(
         call.accumulation_mode != ReduceAccumulationMode::None || call.accumulation_index == 0,
         "Reduce plan args: a non-accumulating call must use accumulation index zero");
-    TT_FATAL(
-        call.accumulation_mode != ReduceAccumulationMode::Intermediate || call.output_cb_id == call.accumulator_cb_id,
-        "Reduce plan args: an intermediate call must write to its accumulator CB");
-    TT_FATAL(
-        call.accumulation_mode != ReduceAccumulationMode::Final || call.output_cb_id != call.accumulator_cb_id,
-        "Reduce plan args: a final call must write outside its accumulator CB");
     TT_FATAL(
         plan.partial_mode == compute_kernel_lib::ReducePartialMode::None ||
             plan.partial_mode == compute_kernel_lib::ReducePartialMode::Scaler ||
             plan.partial_mode == compute_kernel_lib::ReducePartialMode::Mask,
         "Reduce plan args: call contains an unknown partial mode");
     TT_FATAL(
-        plan.partial_mode != compute_kernel_lib::ReducePartialMode::Scaler ||
-            plan.algorithm == ReduceAlgorithm::Native,
+        plan.partial_mode != compute_kernel_lib::ReducePartialMode::Scaler || plan.algorithm == ReduceAlgorithm::Native,
         "Reduce plan args: a partial-scaler call must use Native");
     TT_FATAL(
-        plan.partial_mode != compute_kernel_lib::ReducePartialMode::Mask ||
-            plan.algorithm == ReduceAlgorithm::TileSum,
+        plan.partial_mode != compute_kernel_lib::ReducePartialMode::Mask || plan.algorithm == ReduceAlgorithm::TileSum,
         "Reduce plan args: a partial-mask call must use TileSum");
     TT_FATAL(
         plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.chunk.output_tiles > 0,
@@ -1173,10 +1153,9 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         "Reduce plan args: a Native call carries its scale in the scaler tile");
     TT_FATAL(!plan.auxiliary_tiles.empty(), "Reduce plan args: every planned reduction reads an auxiliary recipe");
 
-    compile_time_args_.reserve(reduce_plan_args::call_compile_time_arg_count());
     const std::uint32_t record[] = {
         encode_configuration(call),
-        encode_circular_buffers(call),
+        encode_circular_buffers(call, cb_ids),
         plan.Ht,
         plan.Wt,
         plan.batches,
@@ -1189,27 +1168,28 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         plan.logical_w,
     };
     static_assert(std::size(record) == static_cast<std::size_t>(CallWord::Count));
-    compile_time_args_.insert(compile_time_args_.end(), std::begin(record), std::end(record));
+    compile_time_args.insert(compile_time_args.end(), std::begin(record), std::end(record));
     if (plan.tail_plan) {
         auto tail_call = call;
         tail_call.plan = *plan.tail_plan;
         tail_call.auxiliary_tile_offset =
             tail_call.plan.auxiliary_tiles.empty() ? 0 : call.auxiliary_tile_offset + plan.tail_auxiliary_tile_offset;
-        ReduceCallArgs(tail_call).append_to(compile_time_args_);
+        append_call_args(tail_call, cb_ids, compile_time_args);
     }
 }
 
-ReduceCallArgs::ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids) :
-    ReduceCallArgs(ReduceCallPlan{
-        .input_cb_id = cb_ids.input_cb_id,
-        .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
-        .auxiliary_tile_offset = 0,
-        .output_cb_id = cb_ids.output_cb_id,
-        .accumulator_cb_id = std::nullopt,
-        .accumulation_mode = ReduceAccumulationMode::None,
-        .accumulation_index = 0,
-        .plan = plan,
-    }) {}
+}  // namespace
+
+ReduceCallArgs::ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids) {
+    check_cb_roles({cb_ids.input_cb_id}, cb_ids.auxiliary_cb_id, cb_ids.output_cb_id, std::nullopt);
+    append_call_args(
+        ReduceCallPlan{.plan = plan},
+        {.input_cb_id = cb_ids.input_cb_id,
+         .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
+         .output_cb_id = cb_ids.output_cb_id,
+         .accumulator_cb_id = std::nullopt},
+        compile_time_args_);
+}
 
 void ReduceCallArgs::append_to(std::vector<std::uint32_t>& compile_time_args) const {
     compile_time_args.insert(compile_time_args.end(), compile_time_args_.begin(), compile_time_args_.end());
@@ -1217,9 +1197,40 @@ void ReduceCallArgs::append_to(std::vector<std::uint32_t>& compile_time_args) co
 
 std::vector<std::uint32_t> ReduceCallArgs::get_compile_time_args() const { return compile_time_args_; }
 
-ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
+ReduceSequenceArgs::ReduceSequenceArgs(const ReduceSequencePlan& sequence, const ReduceSequenceCbIds& cb_ids) {
+    TT_FATAL(!sequence.calls.empty(), "Reduce plan args: a call sequence must not be empty");
+    TT_FATAL(
+        cb_ids.input_cb_ids.size() == sequence.calls.size(),
+        "Reduce plan args: {} input CB IDs cannot bind a sequence of {} calls",
+        cb_ids.input_cb_ids.size(),
+        sequence.calls.size());
+    const bool accumulates = sequence.calls.front().accumulation_mode != ReduceAccumulationMode::None;
+    const auto accumulator_cb_id = accumulates ? std::optional<std::uint32_t>{cb_ids.accumulator_cb_id} : std::nullopt;
+    check_cb_roles(cb_ids.input_cb_ids, cb_ids.auxiliary_cb_id, cb_ids.output_cb_id, accumulator_cb_id);
+
+    compile_time_args_.push_back(static_cast<std::uint32_t>(sequence.calls.size()));
+    for (std::size_t i = 0; i < sequence.calls.size(); ++i) {
+        const auto& call = sequence.calls[i];
+        append_call_args(
+            call,
+            {.input_cb_id = cb_ids.input_cb_ids[i],
+             .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
+             .output_cb_id = call.accumulation_mode == ReduceAccumulationMode::Intermediate ? cb_ids.accumulator_cb_id
+                                                                                            : cb_ids.output_cb_id,
+             .accumulator_cb_id = accumulator_cb_id},
+            compile_time_args_);
+    }
+}
+
+void ReduceSequenceArgs::append_to(std::vector<std::uint32_t>& compile_time_args) const {
+    compile_time_args.insert(compile_time_args.end(), compile_time_args_.begin(), compile_time_args_.end());
+}
+
+std::vector<std::uint32_t> ReduceSequenceArgs::get_compile_time_args() const { return compile_time_args_; }
+
+ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary, std::uint32_t auxiliary_cb_id) {
     compile_time_args_.reserve(reduce_plan_args::auxiliary_compile_time_arg_count(auxiliary.tiles.size()));
-    compile_time_args_.push_back(encode_auxiliary_header(auxiliary));
+    compile_time_args_.push_back(encode_auxiliary_header(auxiliary, auxiliary_cb_id));
     for (const auto& tile : auxiliary.tiles) {
         compile_time_args_.push_back(encode_auxiliary_tile_configuration(tile));
         compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
@@ -1227,28 +1238,16 @@ ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
 }
 
 ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReducePlan& plan, std::uint32_t auxiliary_cb_id) :
-    ReduceAuxiliaryArgs(
-        ReduceAuxiliaryPlan{.cb_id = auxiliary_cb_id, .tiles = plan.auxiliary_tiles, .cb = plan.auxiliary_cb}) {}
+    ReduceAuxiliaryArgs(ReduceAuxiliaryPlan{.tiles = plan.auxiliary_tiles, .cb = plan.auxiliary_cb}, auxiliary_cb_id) {}
+
+ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceSequencePlan& sequence, std::uint32_t auxiliary_cb_id) :
+    ReduceAuxiliaryArgs(sequence.auxiliary, auxiliary_cb_id) {}
 
 void ReduceAuxiliaryArgs::append_to(std::vector<std::uint32_t>& compile_time_args) const {
     compile_time_args.insert(compile_time_args.end(), compile_time_args_.begin(), compile_time_args_.end());
 }
 
 std::vector<std::uint32_t> ReduceAuxiliaryArgs::get_compile_time_args() const { return compile_time_args_; }
-
-void ReduceSequencePlan::append_to(std::vector<std::uint32_t>& compile_time_args) const {
-    TT_FATAL(!calls.empty(), "Reduce plan args: a call sequence must not be empty");
-    compile_time_args.push_back(static_cast<std::uint32_t>(calls.size()));
-    for (const auto& call : calls) {
-        ReduceCallArgs(call).append_to(compile_time_args);
-    }
-}
-
-std::vector<std::uint32_t> ReduceSequencePlan::get_compile_time_args() const {
-    std::vector<std::uint32_t> compile_time_args;
-    append_to(compile_time_args);
-    return compile_time_args;
-}
 
 std::vector<std::uint32_t> ReduceSequencePlan::get_runtime_shape_args(bool use_tail) const {
     if (tail_runtime_args.empty()) {
@@ -1262,16 +1261,6 @@ std::uint32_t ReduceSequencePlan::append_runtime_args(std::vector<std::uint32_t>
     const auto shapes = get_runtime_shape_args(use_tail);
     runtime_args.insert(runtime_args.end(), shapes.begin(), shapes.end());
     return offset;
-}
-
-void ReduceSequencePlan::append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const {
-    ReduceAuxiliaryArgs(auxiliary).append_to(compile_time_args);
-}
-
-std::vector<std::uint32_t> ReduceSequencePlan::get_auxiliary_compile_time_args() const {
-    std::vector<std::uint32_t> compile_time_args;
-    append_auxiliary_to(compile_time_args);
-    return compile_time_args;
 }
 
 }  // namespace ttnn::kernel_lib::host

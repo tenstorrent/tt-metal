@@ -565,17 +565,22 @@ def _memory_strategy(case: ReduceCase) -> ttnn.ShardStrategy:
     return ttnn.ShardStrategy.WIDTH if case.dim == "REDUCE_COL" else ttnn.ShardStrategy.HEIGHT
 
 
-def _serialize_plan(plan) -> tuple[list[int], list[int]]:
+def _sequence_cb_ids(input_cb_ids: list[int]):
+    return _PLANNER.ReduceSequenceCbIds(input_cb_ids, CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT)
+
+
+def _serialize_plan(plan, cb_ids) -> tuple[list[int], list[int]]:
     compute_compile_time_args = [17]
-    plan.append_to(compute_compile_time_args)
+    plan.append_to(compute_compile_time_args, cb_ids)
     assert compute_compile_time_args[0] == 17
     assert compute_compile_time_args[1] == plan.call_count
-    assert compute_compile_time_args[1:] == plan.compile_time_args
+    assert compute_compile_time_args[1:] == plan.compile_time_args(cb_ids)
 
     auxiliary_compile_time_args = [23]
-    plan.auxiliary.append_to(auxiliary_compile_time_args)
+    plan.append_auxiliary_to(auxiliary_compile_time_args, cb_ids.auxiliary_cb_id)
     assert auxiliary_compile_time_args[0] == 23
-    assert auxiliary_compile_time_args[1:] == plan.auxiliary_compile_time_args
+    assert auxiliary_compile_time_args[1:] == plan.auxiliary_compile_time_args(cb_ids.auxiliary_cb_id)
+    assert auxiliary_compile_time_args[1:] == plan.auxiliary.compile_time_args(cb_ids.auxiliary_cb_id)
     return compute_compile_time_args, auxiliary_compile_time_args
 
 
@@ -584,7 +589,6 @@ def _make_plan(
     case: ReduceCase,
     input_dtype: ttnn.DataType,
     output_dtype: ttnn.DataType,
-    input_cb_ids: list[int],
 ):
     hardware = _PLANNER.ReduceHardwareConfig(
         arch=device.arch(),
@@ -603,37 +607,25 @@ def _make_plan(
         input_cb_tiles=case.rows * case.cols * case.batches,
         output_group=case.output_group_for(hardware, input_dtype),
     )
-    reductions = [
-        (
-            cb_id,
-            _PLANNER.ReduceCallConfig(
-                block=block,
-                reduce_math=_REDUCE_MATH[case.pool],
-                reduce_dim=_REDUCE_DIM[case.dim],
-                scalar=case.planner_scalar,
-                fp32_mode=_FP32_MODE[case.fp32_mode],
-                input_policy=_INPUT_POLICY[case.input_mode],
-            ),
-        )
-        for cb_id in input_cb_ids
-    ]
+    config = _PLANNER.ReduceCallConfig(
+        block=block,
+        reduce_math=_REDUCE_MATH[case.pool],
+        reduce_dim=_REDUCE_DIM[case.dim],
+        scalar=case.planner_scalar,
+        fp32_mode=_FP32_MODE[case.fp32_mode],
+        input_policy=_INPUT_POLICY[case.input_mode],
+    )
     plan = _PLANNER.make_reduce_sequence_plan(
-        reductions=reductions,
-        cb_ids=_PLANNER.ReduceSequenceCbIds(
-            auxiliary_cb_id=CB_SCALER,
-            accumulator_cb_id=CB_ACCUMULATOR,
-            output_cb_id=CB_OUTPUT,
-            accumulator_cb_tiles=case.output_tiles,
-        ),
+        reductions=[config] * case.calls,
+        accumulator_cb_tiles=case.output_tiles,
         hardware=hardware,
     )
-    _assert_plan(case, plan, input_cb_ids, device.arch())
+    _assert_plan(case, plan, device.arch())
     return plan
 
 
-def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
+def _assert_plan(case: ReduceCase, plan, arch) -> None:
     assert len(plan) == plan.call_count == len(plan.calls) == case.calls
-    assert plan.auxiliary.cb_id == CB_SCALER
     assert plan.auxiliary.tiles
     assert plan.auxiliary.cb.page_count == len(plan.auxiliary.tiles)
     if case.family == "sfpu-placeholder":
@@ -659,9 +651,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
     elif case.partial_elements and case.pool == "MAX":
         expected_partial = _PLANNER.ReducePartialMode.SCALER
 
-    for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
-        assert call.input_cb_id == input_cb_id
-        assert call.auxiliary_cb_id == CB_SCALER
+    for index, call in enumerate(plan.calls):
         expected_policy = _INPUT_POLICY[case.input_mode]
         assert call.plan.input_policy == expected_policy
         assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm(arch)]
@@ -674,8 +664,6 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
 
         if case.calls == 1:
             assert call.accumulation_mode == _PLANNER.ReduceAccumulationMode.NONE
-            assert call.accumulator_cb_id is None
-            assert call.output_cb_id == CB_OUTPUT
         else:
             expected_mode = (
                 _PLANNER.ReduceAccumulationMode.FINAL
@@ -684,8 +672,6 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
             )
             assert call.accumulation_mode == expected_mode
             assert call.accumulation_index == index
-            assert call.accumulator_cb_id == CB_ACCUMULATOR
-            assert call.output_cb_id == (CB_OUTPUT if index + 1 == case.calls else CB_ACCUMULATOR)
 
 
 def _repeated_input_cb_plan(input_tensor, output):
@@ -697,38 +683,26 @@ def _repeated_input_cb_plan(input_tensor, output):
         dst_full_sync_en=False,
         math_fidelity=ttnn.MathFidelity.HiFi3,
     )
-    configs = [
-        (
-            CB_INPUT,
-            planner.ReduceCallConfig(
-                block=planner.ReduceBlockSpec(
-                    input_tensor.shape[-2],
-                    input_tensor.shape[-1],
-                    input_tensor.dtype,
-                    output.dtype,
-                    input_cb_tiles=input_tensor.buffer_num_pages(),
-                ),
-                reduce_math=planner.ReduceMath.SUM,
-                reduce_dim=planner.ReduceDimension.ROW,
-                scalar=1.0,
-                fp32_mode=planner.ReduceFp32Mode.FAST,
-                input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
-            ),
-        )
-        for _ in range(2)
-    ]
-    plan = planner.make_reduce_sequence_plan(
-        reductions=configs,
-        cb_ids=planner.ReduceSequenceCbIds(
-            auxiliary_cb_id=CB_SCALER,
-            accumulator_cb_id=CB_ACCUMULATOR,
-            output_cb_id=CB_OUTPUT,
-            accumulator_cb_tiles=1,
+    config = planner.ReduceCallConfig(
+        block=planner.ReduceBlockSpec(
+            input_tensor.shape[-2],
+            input_tensor.shape[-1],
+            input_tensor.dtype,
+            output.dtype,
+            input_cb_tiles=input_tensor.buffer_num_pages(),
         ),
+        reduce_math=planner.ReduceMath.SUM,
+        reduce_dim=planner.ReduceDimension.ROW,
+        scalar=1.0,
+        fp32_mode=planner.ReduceFp32Mode.FAST,
+        input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
+    )
+    plan = planner.make_reduce_sequence_plan(
+        reductions=[config, config],
+        accumulator_cb_tiles=1,
         hardware=hardware,
     )
     assert len(plan) == plan.call_count == len(plan.calls) == 2
-    assert plan.calls[0].input_cb_id == plan.calls[1].input_cb_id == CB_INPUT
     # Two odd nine-tile calls clear Blackhole's HiFi3 row cutoff of 16 tiles.
     assert plan.calls[0].plan.algorithm == planner.ReduceAlgorithm.TILE_SUM
     assert plan.calls[0].accumulation_mode == planner.ReduceAccumulationMode.INTERMEDIATE
@@ -736,7 +710,6 @@ def _repeated_input_cb_plan(input_tensor, output):
     assert plan.calls[0].auxiliary_tile_offset == 0
     # Both odd calls share the same zero-pair recipe.
     assert plan.calls[1].auxiliary_tile_offset == 0
-    assert plan.auxiliary.cb_id == CB_SCALER
     assert len(plan.auxiliary.tiles) == 1
     assert plan.auxiliary.tiles[0].type == planner.ReduceAuxiliaryTileType.ZERO
 
@@ -914,9 +887,8 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         case,
         input_dtype,
         output_dtype,
-        input_cb_ids,
     )
-    compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(plan)
+    compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(plan, _sequence_cb_ids(input_cb_ids))
 
     logical_chunks = _make_logical_chunks(case)
     device_inputs = [
@@ -990,7 +962,7 @@ def test_reduce_auxiliary_scalers_and_masks_over_dirty_memory(device, dtype):
         memory_config=_sharded_memory_config(shape),
     )
     compile_args = [23]
-    _PLANNER.ReduceAuxiliaryPlan(CB_SCALER, recipes).append_to(compile_args)
+    _PLANNER.ReduceAuxiliaryPlan(recipes).append_to(compile_args, CB_SCALER)
     # generic_op requires an input and an output; the auxiliary CB tensor is both.
     result = ttnn.generic_op(
         [auxiliary, auxiliary],
@@ -1061,25 +1033,22 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
         expected.append(torch.stack(core_expected))
         sequence = _PLANNER.make_reduce_sequence_plan(
             reductions=[
-                (
-                    CB_INPUT,
-                    _PLANNER.ReduceCallConfig(
-                        block,
-                        _REDUCE_MATH[pool],
-                        _REDUCE_DIM[dim],
-                        scalar,
-                        _PLANNER.ReduceFp32Mode.FAST,
-                        input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
-                    ),
+                _PLANNER.ReduceCallConfig(
+                    block,
+                    _REDUCE_MATH[pool],
+                    _REDUCE_DIM[dim],
+                    scalar,
+                    _PLANNER.ReduceFp32Mode.FAST,
+                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
                 )
             ],
-            cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+            accumulator_cb_tiles=0,
             hardware=hardware,
         )
         assert sequence.calls[0].plan.batches == batches
         assert sequence.calls[0].plan.input_row_stride_tiles == row_stride
         plans.append(sequence)
-        compute_args, auxiliary_args = _serialize_plan(sequence)
+        compute_args, auxiliary_args = _serialize_plan(sequence, _sequence_cb_ids([CB_INPUT]))
         core = ttnn.CoreCoord(core_index, 0)
         core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
         kernels.extend(
@@ -1217,22 +1186,17 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         )
         sequence = _PLANNER.make_reduce_sequence_plan(
             reductions=[
-                (
-                    CB_INPUT,
-                    _PLANNER.ReduceCallConfig(
-                        block,
-                        _REDUCE_MATH[pool],
-                        _REDUCE_DIM[dim],
-                        scalar,
-                        _PLANNER.ReduceFp32Mode.FAST,
-                        input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
-                    ),
+                _PLANNER.ReduceCallConfig(
+                    block,
+                    _REDUCE_MATH[pool],
+                    _REDUCE_DIM[dim],
+                    scalar,
+                    _PLANNER.ReduceFp32Mode.FAST,
+                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
                 )
-                for _ in range(calls)
-            ],
-            cb_ids=_PLANNER.ReduceSequenceCbIds(
-                CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT, accumulator_cb_tiles=output_capacity
-            ),
+            ]
+            * calls,
+            accumulator_cb_tiles=output_capacity,
             hardware=hardware,
             algorithm=_ALGORITHM[algorithm],
         )
@@ -1242,7 +1206,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         assert plan.get_runtime_shape_args(True) == list(tail_shape)
         auxiliary_tiles = len(sequence.auxiliary.tiles)
 
-        compute_args, auxiliary_args = _serialize_plan(sequence)
+        compute_args, auxiliary_args = _serialize_plan(sequence, _sequence_cb_ids([CB_INPUT] * calls))
 
         physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
         expected = []
@@ -1387,19 +1351,16 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             )
             return _PLANNER.make_reduce_sequence_plan(
                 reductions=[
-                    (
-                        CB_INPUT,
-                        _PLANNER.ReduceCallConfig(
-                            block,
-                            _REDUCE_MATH[pool],
-                            _REDUCE_DIM[dim],
-                            scalar,
-                            _PLANNER.ReduceFp32Mode.FAST,
-                            input_policy=policy,
-                        ),
+                    _PLANNER.ReduceCallConfig(
+                        block,
+                        _REDUCE_MATH[pool],
+                        _REDUCE_DIM[dim],
+                        scalar,
+                        _PLANNER.ReduceFp32Mode.FAST,
+                        input_policy=policy,
                     )
                 ],
-                cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+                accumulator_cb_tiles=0,
                 hardware=_PLANNER.ReduceHardwareConfig(
                     arch=device.arch(),
                     fp32_dest_acc_en=True,
@@ -1427,9 +1388,10 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             for variant_height, variant_width in ((256, 256), (height, width)):
                 axis = ((variant_width if dim == "REDUCE_ROW" else variant_height) + 31) // TILE
                 assert capacity % (axis * plan.chunk.output_tiles) == 0
-        compute_args, auxiliary_args = _serialize_plan(sequence)
+        cb_ids = _sequence_cb_ids([CB_INPUT])
+        compute_args, auxiliary_args = _serialize_plan(sequence, cb_ids)
         # The test reader uses the same call metadata to count the planned packets.
-        auxiliary_args += sequence.calls[0].compile_time_args
+        auxiliary_args += sequence.compile_time_args(cb_ids)[1:]
         for use_tail in (False, True):
             variant = plan.tail_plan if use_tail else plan
             group = variant.chunk.output_tiles
@@ -1565,11 +1527,11 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
         assert config.scalar is None
         if scalar is not None:
             config.scalar = scalar
-        reductions.append((input_ids[index], config))
+        reductions.append(config)
         sums.append(values.float().sum(-1 if dim == "REDUCE_ROW" else -2))
     sequence = _PLANNER.make_reduce_sequence_plan(
         reductions=reductions,
-        cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT, accumulator_cb_tiles=output_tiles),
+        accumulator_cb_tiles=output_tiles,
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,
@@ -1577,7 +1539,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
         ),
         algorithm=_ALGORITHM[algorithm],
     )
-    compute_args, auxiliary_args = _serialize_plan(sequence)
+    compute_args, auxiliary_args = _serialize_plan(sequence, _sequence_cb_ids(input_ids))
     runtime_args = [999] * 4
     runtime_arg_offset = sequence.append_runtime_args(runtime_args, use_tail=use_tail)
     assert runtime_arg_offset == 4
@@ -1642,17 +1604,14 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
     )
     sequence = _PLANNER.make_reduce_sequence_plan(
         reductions=[
-            (
-                0,
-                _PLANNER.ReduceCallConfig(
-                    block,
-                    _PLANNER.ReduceMath.AVG,
-                    _PLANNER.ReduceDimension.ROW,
-                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
-                ),
+            _PLANNER.ReduceCallConfig(
+                block,
+                _PLANNER.ReduceMath.AVG,
+                _PLANNER.ReduceDimension.ROW,
+                input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
             )
         ],
-        cb_ids=_PLANNER.ReduceSequenceCbIds(1, 16, 2),
+        accumulator_cb_tiles=0,
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,
@@ -1664,7 +1623,7 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
     assert plan.auxiliary_tiles[0].type == _PLANNER.ReduceAuxiliaryTileType.ZERO
     assert plan.tail_plan.algorithm == _PLANNER.ReduceAlgorithm.NATIVE
     assert plan.algorithm == _PLANNER.ReduceAlgorithm.TILE_SUM
-    compute_args, auxiliary_args = _serialize_plan(sequence)
+    compute_args, auxiliary_args = _serialize_plan(sequence, _PLANNER.ReduceSequenceCbIds([0], 1, 16, 2))
     for use_tail in (False, True):
         runtime_args = plan.get_runtime_shape_args(use_tail)
         assert runtime_args == ([32, 17, 1] if use_tail else [0, 0, 0])
@@ -1739,17 +1698,14 @@ def test_reduce_retained_hw_row_tail(device, algorithm):
     )
     sequence = _PLANNER.make_reduce_sequence_plan(
         reductions=[
-            (
-                CB_INPUT,
-                _PLANNER.ReduceCallConfig(
-                    block,
-                    _PLANNER.ReduceMath.AVG,
-                    _PLANNER.ReduceDimension.SCALAR,
-                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
-                ),
+            _PLANNER.ReduceCallConfig(
+                block,
+                _PLANNER.ReduceMath.AVG,
+                _PLANNER.ReduceDimension.SCALAR,
+                input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
             )
         ],
-        cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+        accumulator_cb_tiles=0,
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,
@@ -1757,7 +1713,7 @@ def test_reduce_retained_hw_row_tail(device, algorithm):
         ),
         algorithm=_ALGORITHM[algorithm],
     )
-    compute_args, auxiliary_args = _serialize_plan(sequence)
+    compute_args, auxiliary_args = _serialize_plan(sequence, _sequence_cb_ids([CB_INPUT]))
     for use_tail in (False, True):
         height = 64 if use_tail else 160
         values = (torch.arange(height * 64).reshape(height, 64) % 7).to(torch.bfloat16)
@@ -1825,7 +1781,9 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
     )
 
     plan = _repeated_input_cb_plan(input_tensor, output)
-    compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(plan)
+    compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(
+        plan, _sequence_cb_ids([CB_INPUT, CB_INPUT])
+    )
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_tensor),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),

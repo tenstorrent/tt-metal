@@ -13,7 +13,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/kernel_lib/host/reduce_host.hpp"
@@ -31,6 +30,12 @@ std::uint32_t append_runtime_args(const Plan& plan, nb::list runtime_args, bool 
         runtime_args.append(nb::cast(args[i]));
     }
     return offset;
+}
+
+void append_args(nb::list compile_time_args, const std::vector<std::uint32_t>& args) {
+    for (const auto arg : args) {
+        compile_time_args.append(nb::cast(arg));
+    }
 }
 
 }  // namespace
@@ -134,24 +139,29 @@ void py_module(nb::module_& planner) {
         .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements);
 
     nb::class_<host::ReduceAuxiliaryPlan>(planner, "ReduceAuxiliaryPlan")
-        .def(nb::init<uint32_t, std::vector<host::ReduceAuxiliaryTileSpec>>(), nb::arg("cb_id"), nb::arg("tiles"))
-        .def_ro("cb_id", &host::ReduceAuxiliaryPlan::cb_id)
+        .def(
+            "__init__",
+            [](host::ReduceAuxiliaryPlan* self, std::vector<host::ReduceAuxiliaryTileSpec> tiles) {
+                new (self) host::ReduceAuxiliaryPlan{.tiles = std::move(tiles)};
+            },
+            nb::arg("tiles"))
         .def_ro("tiles", &host::ReduceAuxiliaryPlan::tiles)
         .def_ro("cb", &host::ReduceAuxiliaryPlan::cb)
-        .def_prop_ro(
+        .def(
             "compile_time_args",
-            [](const host::ReduceAuxiliaryPlan& self) {
-                return host::ReduceAuxiliaryArgs(self).get_compile_time_args();
+            [](const host::ReduceAuxiliaryPlan& self, std::uint32_t auxiliary_cb_id) {
+                return host::ReduceAuxiliaryArgs(self, auxiliary_cb_id).get_compile_time_args();
             },
+            nb::arg("auxiliary_cb_id"),
             "One aggregate auxiliary-CB record for a complete planning unit.")
         .def(
             "append_to",
-            [](const host::ReduceAuxiliaryPlan& self, nb::list compile_time_args) {
-                for (const auto arg : host::ReduceAuxiliaryArgs(self).get_compile_time_args()) {
-                    compile_time_args.append(nb::cast(arg));
-                }
+            [](const host::ReduceAuxiliaryPlan& self, nb::list compile_time_args, std::uint32_t auxiliary_cb_id) {
+                append_args(
+                    compile_time_args, host::ReduceAuxiliaryArgs(self, auxiliary_cb_id).get_compile_time_args());
             },
             nb::arg("compile_time_args"),
+            nb::arg("auxiliary_cb_id"),
             "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.");
 
     nb::class_<host::ReduceValidShape>(planner, "ReduceValidShape")
@@ -223,9 +233,7 @@ void py_module(nb::module_& planner) {
         .def(
             "auxiliary_compile_time_args",
             [](const host::ReducePlan& self, std::uint32_t auxiliary_cb_id) {
-                return host::ReduceAuxiliaryArgs(
-                           host::ReduceAuxiliaryPlan{.cb_id = auxiliary_cb_id, .tiles = self.auxiliary_tiles})
-                    .get_compile_time_args();
+                return host::ReduceAuxiliaryArgs(self, auxiliary_cb_id).get_compile_time_args();
             },
             nb::arg("auxiliary_cb_id"),
             "Serialize this single call's independent auxiliary-CB record.");
@@ -318,38 +326,30 @@ void py_module(nb::module_& planner) {
         .def(
             "__init__",
             [](host::ReduceSequenceCbIds* self,
+               std::vector<std::uint32_t> input_cb_ids,
                std::uint32_t auxiliary_cb_id,
                std::uint32_t accumulator_cb_id,
-               std::uint32_t output_cb_id,
-               std::uint32_t accumulator_cb_tiles) {
+               std::uint32_t output_cb_id) {
                 new (self) host::ReduceSequenceCbIds{
+                    .input_cb_ids = std::move(input_cb_ids),
                     .auxiliary_cb_id = auxiliary_cb_id,
                     .accumulator_cb_id = accumulator_cb_id,
-                    .output_cb_id = output_cb_id,
-                    .accumulator_cb_tiles = accumulator_cb_tiles};
+                    .output_cb_id = output_cb_id};
             },
+            nb::arg("input_cb_ids"),
             nb::arg("auxiliary_cb_id"),
             nb::arg("accumulator_cb_id"),
-            nb::arg("output_cb_id"),
-            nb::arg("accumulator_cb_tiles") = 0)
+            nb::arg("output_cb_id"))
+        .def_rw("input_cb_ids", &host::ReduceSequenceCbIds::input_cb_ids)
         .def_rw("auxiliary_cb_id", &host::ReduceSequenceCbIds::auxiliary_cb_id)
         .def_rw("accumulator_cb_id", &host::ReduceSequenceCbIds::accumulator_cb_id)
-        .def_rw("output_cb_id", &host::ReduceSequenceCbIds::output_cb_id)
-        .def_rw("accumulator_cb_tiles", &host::ReduceSequenceCbIds::accumulator_cb_tiles);
+        .def_rw("output_cb_id", &host::ReduceSequenceCbIds::output_cb_id);
 
     nb::class_<host::ReduceCallPlan>(planner, "ReduceCallPlan")
-        .def_ro("input_cb_id", &host::ReduceCallPlan::input_cb_id)
-        .def_ro("auxiliary_cb_id", &host::ReduceCallPlan::auxiliary_cb_id)
         .def_ro("auxiliary_tile_offset", &host::ReduceCallPlan::auxiliary_tile_offset)
-        .def_ro("output_cb_id", &host::ReduceCallPlan::output_cb_id)
-        .def_ro("accumulator_cb_id", &host::ReduceCallPlan::accumulator_cb_id)
         .def_ro("accumulation_mode", &host::ReduceCallPlan::accumulation_mode)
         .def_ro("accumulation_index", &host::ReduceCallPlan::accumulation_index)
-        .def_ro("plan", &host::ReduceCallPlan::plan)
-        .def_prop_ro(
-            "compile_time_args",
-            [](const host::ReduceCallPlan& self) { return host::ReduceCallArgs(self).get_compile_time_args(); },
-            "One independently decodable compute call, including its optional runtime tail alternative.");
+        .def_ro("plan", &host::ReduceCallPlan::plan);
 
     nb::class_<host::ReduceSequencePlan>(planner, "ReduceSequencePlan")
         .def_ro("calls", &host::ReduceSequencePlan::calls)
@@ -361,31 +361,38 @@ void py_module(nb::module_& planner) {
             nb::arg("runtime_args"),
             nb::arg("use_tail") = true)
         .def_prop_ro("call_count", [](const host::ReduceSequencePlan& self) { return self.calls.size(); })
-        .def_prop_ro(
+        .def(
             "compile_time_args",
-            &host::ReduceSequencePlan::get_compile_time_args,
+            [](const host::ReduceSequencePlan& self, const host::ReduceSequenceCbIds& cb_ids) {
+                return host::ReduceSequenceArgs(self, cb_ids).get_compile_time_args();
+            },
+            nb::arg("cb_ids"),
             "The compute-kernel call-count-plus-fixed-calls suffix without any kernel-owned prefix.")
-        .def_prop_ro(
+        .def(
             "auxiliary_compile_time_args",
-            &host::ReduceSequencePlan::get_auxiliary_compile_time_args,
+            [](const host::ReduceSequencePlan& self, std::uint32_t auxiliary_cb_id) {
+                return host::ReduceAuxiliaryArgs(self, auxiliary_cb_id).get_compile_time_args();
+            },
+            nb::arg("auxiliary_cb_id"),
             "The independent aggregate auxiliary-CB suffix without any kernel-owned prefix.")
         .def(
             "append_to",
-            [](const host::ReduceSequencePlan& self, nb::list compile_time_args) {
-                for (const auto arg : self.get_compile_time_args()) {
-                    compile_time_args.append(nb::cast(arg));
-                }
+            [](const host::ReduceSequencePlan& self,
+               nb::list compile_time_args,
+               const host::ReduceSequenceCbIds& cb_ids) {
+                append_args(compile_time_args, host::ReduceSequenceArgs(self, cb_ids).get_compile_time_args());
             },
             nb::arg("compile_time_args"),
+            nb::arg("cb_ids"),
             "Append call count and fixed compute calls to a caller-owned compile-time argument list.")
         .def(
             "append_auxiliary_to",
-            [](const host::ReduceSequencePlan& self, nb::list compile_time_args) {
-                for (const auto arg : self.get_auxiliary_compile_time_args()) {
-                    compile_time_args.append(nb::cast(arg));
-                }
+            [](const host::ReduceSequencePlan& self, nb::list compile_time_args, std::uint32_t auxiliary_cb_id) {
+                append_args(
+                    compile_time_args, host::ReduceAuxiliaryArgs(self, auxiliary_cb_id).get_compile_time_args());
             },
             nb::arg("compile_time_args"),
+            nb::arg("auxiliary_cb_id"),
             "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.")
         .def("__len__", [](const host::ReduceSequencePlan& self) { return self.calls.size(); });
 
@@ -410,16 +417,12 @@ void py_module(nb::module_& planner) {
         "Plan one reduction. An explicit scalar overrides normalization; None derives AVG scaling from geometry.");
     planner.def(
         "make_reduce_sequence_plan",
-        nb::overload_cast<
-            const std::vector<host::ReduceCbConfig>&,
-            const host::ReduceSequenceCbIds&,
-            const host::ReduceHardwareConfig&,
-            std::optional<compute_kernel_lib::ReduceAlgorithm>>(&host::make_reduce_sequence_plan),
+        &host::make_reduce_sequence_plan,
         nb::arg("reductions"),
-        nb::arg("cb_ids"),
+        nb::arg("accumulator_cb_tiles"),
         nb::arg("hardware"),
         nb::arg("algorithm") = nb::none(),
-        "Plan an explicitly ordered sequence of reductions; input descriptions may reuse a CB ID.");
+        "Plan an explicitly ordered sequence of reductions. Bind CB IDs when serializing.");
 }
 
 }  // namespace ttnn::reduce_planner

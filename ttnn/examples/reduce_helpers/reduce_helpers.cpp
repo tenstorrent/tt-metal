@@ -181,8 +181,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     const uint32_t Ht = a.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t accumulator_tiles = Ht;
 
-    // 2. Factory: describe each call's block, the DFBs the sequence uses and the compute kernel's hardware
-    //    configuration.
+    // 2. Factory: describe each call's block and the compute kernel's hardware configuration.
     auto describe = [&](const ttnn::Tensor& input) {
         auto block = reduce_host::ReduceBlockSpec::tiled(
             input.logical_shape()[-2], input.logical_shape()[-1], input.dtype(), output.dtype());
@@ -194,18 +193,11 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
             .fp32_mode = ReduceFp32Mode::Fast,
         };
     };
-    enum LogicalDfb : uint32_t { InputA, InputB, Auxiliary, Accumulator, Output };
-    const reduce_host::ReduceSequenceCbIds sequence_dfbs{
-        .auxiliary_cb_id = Auxiliary,
-        .accumulator_cb_id = Accumulator,
-        .output_cb_id = Output,
-        .accumulator_cb_tiles = accumulator_tiles,
-    };
     const auto hardware = reduce_host::make_reduce_hardware_config(a.device()->arch(), compute_hardware);
 
     // 3. Planner. AVG divides by the combined logical width of both calls.
     const reduce_host::ReduceSequencePlan plan =
-        reduce_host::make_reduce_sequence_plan({{InputA, describe(a)}, {InputB, describe(b)}}, sequence_dfbs, hardware);
+        reduce_host::make_reduce_sequence_plan({describe(a), describe(b)}, accumulator_tiles, hardware);
 
     ProgramSpec spec{.name = "reduce_helpers_row_mean_of_two_inputs"};
 
@@ -222,8 +214,15 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
 
     // 5. Factory: serialize. The compute kernel binds the logical IDs, in LogicalDfb order, to
     //    dfb::in_a, dfb::in_b, dfb::auxiliary, dfb::accumulator and dfb::out.
-    const auto compute_args = plan.get_compile_time_args();
-    const auto writer_args = plan.get_auxiliary_compile_time_args();
+    enum LogicalDfb : uint32_t { InputA, InputB, Auxiliary, Accumulator, Output };
+    const auto compute_args = reduce_host::ReduceSequenceArgs(
+                                  plan,
+                                  {.input_cb_ids = {InputA, InputB},
+                                   .auxiliary_cb_id = Auxiliary,
+                                   .accumulator_cb_id = Accumulator,
+                                   .output_cb_id = Output})
+                                  .get_compile_time_args();
+    const auto writer_args = reduce_host::ReduceAuxiliaryArgs(plan, Auxiliary).get_compile_time_args();
 
     // 6. Factory: kernels and the work unit. Compute both produces and consumes the accumulator.
     spec.tensor_parameters = {
