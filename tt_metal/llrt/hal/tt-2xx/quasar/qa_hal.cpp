@@ -680,7 +680,8 @@ void Hal::initialize_qa(
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return true;
+            // Linked Ethernet cores are Keraunos CCEs, with no base firmware to take mailbox messages.
+            case DispatchFeature::ETH_MAILBOX_API: return false;
             // Active eth kernel config buffer is not needed until 2 ERISCs
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             // Idle ethernet text is linked at MEM_IERISC_KERNEL_BASE. The firmware jumps to
