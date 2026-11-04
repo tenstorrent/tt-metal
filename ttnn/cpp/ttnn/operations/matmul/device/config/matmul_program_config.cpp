@@ -936,6 +936,11 @@ MatmulProgramConfig get_matmul_program_config(
         output_dtype);
 }
 
+// Tile equality ignores the transpose flags, so check them separately.
+inline bool is_plain_tile(const tt::tt_metal::Tile& tile) {
+    return tile == tt::tt_metal::Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
+}
+
 // The simple config splits one batch's output over the cores and loops over the batches, so a small output leaves
 // most cores idle. The batched branch of create_matmul_program_config gives each core whole batches instead.
 inline bool should_split_by_batch(
@@ -957,16 +962,21 @@ inline bool should_split_by_batch(
                                       is_dram_interleaved(mem_config);
     // untilize_out is only supported by the 1D mcast config.
     const bool plain_matmul = bias_single_tile_size == 0 && !fused_activation.has_value() && !untilize_out &&
-                              input_tensor_a.tensor_spec().tile() == tt::tt_metal::Tile() &&
-                              input_tensor_b.tensor_spec().tile() == tt::tt_metal::Tile();
-    if (!all_dram_interleaved || !plain_matmul) {
+                              is_plain_tile(input_tensor_a.tensor_spec().tile()) &&
+                              is_plain_tile(input_tensor_b.tensor_spec().tile());
+    // The batched factory places work on the full grid, outside a loaded sub-device's cores.
+    const auto* device = input_tensor_a.device();
+    const bool default_sub_devices =
+        device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id();
+    if (!all_dram_interleaved || !plain_matmul || !default_sub_devices) {
         return false;
     }
 
     const auto& a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
     const uint32_t num_batches = get_batch_size(a_shape);
-    const uint32_t tiles_per_batch = (a_shape[-2] / ttnn::TILE_SIZE) * (b_shape[-1] / ttnn::TILE_SIZE);
+    const uint32_t n_tiles = b_shape[-1] / ttnn::TILE_SIZE;
+    const uint32_t tiles_per_batch = (a_shape[-2] / ttnn::TILE_SIZE) * n_tiles;
     const uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     // The batched branch needs a batched B.
@@ -975,7 +985,10 @@ inline bool should_split_by_batch(
     const bool small_output_many_batches = tiles_per_batch < num_cores && num_batches >= tiles_per_batch;
     // Wormhole sweep: with K > 1024 and more than 8 tiles per batch, splitting by batch was up to 31% slower.
     const bool long_k_slowdown = a_shape[-1] > 1024 && tiles_per_batch > 8;
-    return both_batched && small_output_many_batches && !long_k_slowdown;
+    // Wormhole sweep: with more than 16 output tiles per row, splitting by batch was up to 2.3x slower than the
+    // 1D mcast config.
+    const bool wide_output_slowdown = n_tiles > 16;
+    return both_batched && small_output_many_batches && !long_k_slowdown && !wide_output_slowdown;
 }
 
 inline MatmulProgramConfig generate_matmul_program_config(

@@ -2313,6 +2313,21 @@ def test_matmul_with_core_grid(device, batch_size):
     )
 
 
+def _run_and_check_split(a, b, expect_split, **kwargs):
+    """Runs ttnn.matmul once and asserts whether it ran the batched config's reuse-optimized factory."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        output = ttnn.matmul(a, b, **kwargs)
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    # Only the batched config (MatmulMultiCoreReuseProgramConfig) runs the reuse-optimized factory.
+    factories = [
+        node["params"].get("program_factory_type") for node in captured if node["node_type"] == "function_start"
+    ]
+    assert ("ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory" in factories) == expect_split, factories
+    return output
+
+
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize(
     "a_shape, b_shape, memory_config, expect_split",
@@ -2321,6 +2336,8 @@ def test_matmul_with_core_grid(device, batch_size):
         ((16, 64, 4096), (16, 4096, 64), ttnn.DRAM_MEMORY_CONFIG, True),  # long K
         ((32, 64, 96), (32, 96, 32), ttnn.DRAM_MEMORY_CONFIG, True),  # odd K tile count
         ((16, 128, 64), (16, 64, 128), ttnn.DRAM_MEMORY_CONFIG, True),  # batches == tiles per batch
+        ((64, 32, 64), (64, 64, 512), ttnn.DRAM_MEMORY_CONFIG, True),  # 16 output tiles per row
+        ((64, 32, 128), (64, 128, 1024), ttnn.DRAM_MEMORY_CONFIG, False),  # > 16 output tiles per row
         ((32, 64, 2048), (32, 2048, 160), ttnn.DRAM_MEMORY_CONFIG, False),  # K > 1024 with > 8 tiles per batch
         ((64, 64, 64), (64, 64, 64), ttnn.L1_MEMORY_CONFIG, False),  # L1 inputs
         ((64, 64, 64), (64, 64), ttnn.DRAM_MEMORY_CONFIG, False),  # B broadcast over the batch
@@ -2337,18 +2354,32 @@ def test_matmul_split_by_batch(device, a_shape, b_shape, memory_config, expect_s
     b_input = torch_b.transpose(-1, -2).contiguous() if transpose_b else torch_b
     b = ttnn.from_torch(b_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-    try:
-        output = ttnn.matmul(a, b, transpose_b=transpose_b)
-    finally:
-        captured = ttnn.graph.end_graph_capture()
-    # Only the batched config (MatmulMultiCoreReuseProgramConfig) runs the reuse-optimized factory.
-    factories = [
-        node["params"].get("program_factory_type") for node in captured if node["node_type"] == "function_start"
-    ]
-    assert ("ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory" in factories) == expect_split, factories
-
+    output = _run_and_check_split(a, b, expect_split, transpose_b=transpose_b)
     assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
+@pytest.mark.parametrize("case", ["transposed_tile", "sub_device"])
+def test_matmul_split_by_batch_excluded(device, case):
+    """A matmul that would split by batch keeps the simple config with a transposed A tile or a loaded sub-device."""
+    torch.manual_seed(0)
+    torch_a = torch.randn((4, 64, 96), dtype=torch.bfloat16)
+    torch_b = torch.randn((4, 96, 64), dtype=torch.bfloat16)
+    a_tile = ttnn.Tile((32, 32), transpose_tile=True) if case == "transposed_tile" else None
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, tile=a_tile)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    if case == "sub_device":
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        manager = device.create_sub_device_manager([ttnn.SubDevice([cores])], 0)
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+    try:
+        output = _run_and_check_split(a, b, expect_split=False)
+        assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(output).float(), 0.999)
+    finally:
+        if case == "sub_device":
+            device.reset_sub_device_stall_group()
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
