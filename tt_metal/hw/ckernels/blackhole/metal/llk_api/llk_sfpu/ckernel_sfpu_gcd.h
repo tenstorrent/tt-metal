@@ -68,18 +68,28 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
 }
 
 inline void calculate_sfpu_gcd_init() {
-    TTI_REPLAY(0, 7 * 4, 0, 1);
-    #pragma GCC unroll 4
-    for (int i = 0; i < 4; ++i) {
-        // We store {-a, a} in {LREG0, LREG2}, which is convenient for isolating the LSB of a.
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // LREG2 = +a
-        TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0); // LREG0 &= a (isolate LSB and overwrite -a)
-        TTI_SFPLZ(0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0); // LREG0 = clz(LREG0), disable lanes where a == 0
-        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE); // LREG0 += d
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, SFPSHFT2_MOD1_SHFT_LREG); // LREG0 = a >> -LREG0, making a definitely odd (now both a and b are odd)
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX); // ensure b < a
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = b - a (now a is even)
-    }
+    load_replay_buf(0, 7 * 4, [] {
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; ++i) {
+            // We store {-a, a} in {LREG0, LREG2}, which is convenient for isolating the LSB of a.
+            TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // LREG2 = +a
+            TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // LREG0 &= a (isolate LSB and overwrite -a)
+            TTI_SFPLZ(
+                0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0);  // LREG0 = clz(LREG0), disable lanes where a == 0
+            TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);  // LREG0 += d
+            TTI_SFPSHFT2(
+                p_sfpu::LREG2,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                SFPSHFT2_MOD1_SHFT_LREG);  // LREG0 = a >> -LREG0, making a definitely odd (now both a and b are odd)
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX);  // ensure b < a
+            TTI_SFPIADD(
+                0,
+                p_sfpu::LREG1,
+                p_sfpu::LREG0,
+                SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // a = b - a (now a is even)
+        }
+    });
 }
 
 }  // namespace sfpu
