@@ -22,7 +22,7 @@ import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, load_hf_text_config
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import MkStack
 from models.autoports.zai_org_glm_5_3_flash.tt.optimized_decoder import OptimizedDecoderConfig
-from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import layer_kind
+from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import layer_kind, set_knobs
 from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import TPDenseKDALayer
 from models.autoports.zai_org_glm_5_3_flash.tt.tp_stack import TPStack
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
@@ -56,6 +56,8 @@ def test_mk_stack_probe(mesh_device):
     ocfg = OptimizedDecoderConfig()
     kinds = {L: layer_kind(cfg, L) for L in LAYERS}
     assert all(k == DENSE_KDA for k in kinds.values()), f"this probe stacks dense KDA layers only: {kinds}"
+    if os.environ.get("GLM53_MK_KNOBS", "1") == "1":  # the reference's dense-kind knob set (GLM53_STACK_KNOBS)
+        set_knobs(False, VTP, T)
     source = RawHFSource(snapshot, LAYERS)
     t0 = time.perf_counter()
     tps = []
@@ -85,9 +87,10 @@ def test_mk_stack_probe(mesh_device):
     stack(hists, active, ss)  # builds the stack program (eager launch)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"first stack launch (build + run) {time.perf_counter() - t0:.1f} s")
-    for L in range(len(tps)):
-        _, marks = stack.probe_marks(L)
-        logger.info(f"MK_STACK_PROBE marks layer {LAYERS[L]}: {marks}")
+    if one_chip:
+        for L in range(len(tps)):
+            _, marks = stack.probe_marks(L)
+            logger.info(f"MK_STACK_PROBE marks layer {LAYERS[L]}: {marks}")
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for _ in range(N_TRACE):
         stack(hists, active, ss)

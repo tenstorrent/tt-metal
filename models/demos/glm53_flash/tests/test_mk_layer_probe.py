@@ -22,10 +22,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_KDA, load_hf_text_config
+from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_DSA, SPARSE_KDA, load_hf_text_config
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_layer import decode_probe
 from models.autoports.zai_org_glm_5_3_flash.tt.optimized_decoder import OptimizedDecoderConfig
-from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import layer_kind
+from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import layer_kind, set_knobs
 from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import TPDenseKDALayer
 from models.autoports.zai_org_glm_5_3_flash.tt.weights import WeightSource, cache_dtype
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
@@ -123,6 +123,16 @@ def test_mk_layer_probe(mesh_device):
     cfg = load_hf_text_config(str(snapshot))
     ocfg = OptimizedDecoderConfig()
     kind = layer_kind(cfg, LAYER)
+    if os.environ.get("GLM53_MK_KNOBS", "1") == "1":  # the reference's per-kind knob set (GLM53_STACK_KNOBS, s7a283)
+        set_knobs("dsa" if kind == SPARSE_DSA else kind == SPARSE_KDA, VTP, T)
+        logger.info(
+            "knobs: "
+            + " ".join(
+                f"{k}={v}"
+                for k, v in sorted(os.environ.items())
+                if k.startswith(("GLM53_MK", "GLM53_REC", "GLM53_MHC", "GLM53_TP_", "GLM53_MKX"))
+            )
+        )
     source = RawHFSource(snapshot, [LAYER])
     t0 = time.perf_counter()
     layer = _build_layer(mesh_device, cfg, ocfg, source, kind)
@@ -143,7 +153,10 @@ def test_mk_layer_probe(mesh_device):
     ttnn.synchronize_device(mesh_device)
     eager_us = (time.perf_counter() - t0) / 3 * 1e6
     # the probe of the last eager call
-    marks = decode_probe(ttnn.to_torch(layer.mk.probe), layer.mk.readers.assign) if layer.mk.probe is not None else {}
+    marks = {}
+    if layer.mk.probe is not None:  # chip 0's shard of the (replicated) probe page
+        probe0 = ttnn.get_device_tensors(layer.mk.probe)[0]
+        marks = decode_probe(ttnn.to_torch(probe0), layer.mk.readers.assign)
     # traced: N calls in one trace, replayed
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for _ in range(N_TRACE):
