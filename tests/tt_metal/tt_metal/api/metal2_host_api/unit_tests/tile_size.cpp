@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "impl/data_format/tile_size.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -51,6 +52,20 @@ TEST(TileStorageBytes, RawUInt32StorageSize) {
 TEST(TileStorageBytes, RejectsTf32Storage) {
     const Tile tile;
     EXPECT_THROW(detail::tile_size_bytes(tile, tt::DataFormat::Tf32, 16), std::invalid_argument);
+}
+
+// Binding metadata resolves tile bytes with the supplied target alignment.
+TEST(TileStorageBytes, BindingMetadataUsesTargetAlignment) {
+    const LLKMetadata metadata =
+        resolve_llk_metadata_tile_size(LLKMetadata{.format = tt::DataFormat::Bfp8_b, .tile = Tile({1, 16})}, 64);
+    EXPECT_EQ(metadata.tile_size_bytes, 80u);
+}
+
+// Binding metadata preserves TF32 format queries without inventing an unsupported storage size.
+TEST(TileStorageBytes, Tf32BindingHasNoStorageSize) {
+    const LLKMetadata metadata =
+        resolve_llk_metadata_tile_size(LLKMetadata{.format = tt::DataFormat::Tf32, .tile = Tile{}}, 16);
+    EXPECT_EQ(metadata.tile_size_bytes, 0u);
 }
 
 }  // namespace

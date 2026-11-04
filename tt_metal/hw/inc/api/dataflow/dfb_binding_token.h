@@ -56,6 +56,8 @@ private:
     template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token);
     template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend constexpr uint32_t get_tile_size(const DFBBindingToken<P, C>& token);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token);
     template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token);
@@ -127,6 +129,17 @@ constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token) {
 template <dfb::AccessPattern P, dfb::AccessPattern C>
 constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token) {
     return token.llk_metadata_.num_faces_c_dim;
+}
+
+// Returns the tile storage size in bytes.
+// precondition: The token has format metadata and a supported tile storage size.
+template <dfb::AccessPattern P, dfb::AccessPattern C>
+constexpr uint32_t get_tile_size(const DFBBindingToken<P, C>& token) {
+    (void)get_dataformat(token);
+    if (token.llk_metadata_.tile_size_bytes == 0) {
+        binding_details::tile_size_metadata_not_set();
+    }
+    return token.llk_metadata_.tile_size_bytes;
 }
 
 // Returns the tile height in elements.

@@ -715,6 +715,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(metadata.tile.get_width()));
         hasher.update(static_cast<uint64_t>(metadata.tile.get_face_shape()[0]));
         hasher.update(static_cast<uint64_t>(metadata.tile.get_num_faces()));
+        hasher.update(static_cast<uint64_t>(metadata.tile_size_bytes));
     };
     auto hash_llk_metadata = [&hasher, &hash_llk_fields](const std::optional<LLKMetadata>& metadata) {
         hasher.update(static_cast<uint64_t>(metadata.has_value()));
