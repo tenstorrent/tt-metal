@@ -78,7 +78,6 @@ void kernel_main() {
             cb_wait_front(cb_d, 1);
             cb_wait_front(cb_recv, 2 * groups);
         }
-        EX_ZONE("GU_C_OWNER");
         tile_regs_acquire();
         reconfig_data_format_srca(cb_w, cb_recv);  // fp32 partials (the unpacker held the weight CB's format)
         copy_init(cb_recv);
