@@ -187,7 +187,7 @@ until rank 0 pushes its weights as version 0, before the first batch.
 
 | Field | Description |
 | ----- | ----------- |
-| `training_config.model_source` | HuggingFace Hub id. Rank 0 loads its weights from it and rank 1 reads its config and tokenizer; a local path is rejected in `ttt_remote_sync`. |
+| `training_config.model_source` | HuggingFace Hub id. Rank 0 loads its weights from it and rank 1 reads its config and tokenizer (or the config that tt-transformers bundles for the model name); a local path is rejected in `ttt_remote_sync`. |
 | `grpo_config.rollout_backend` | `"ttt_remote_sync"`. |
 | `grpo_config.weight_sync_every` | Push the policy weights to rank 1 at a generation-batch boundary once *N* optimizer steps have passed since the last push (default 1). |
 | `remote_rollout_config.mesh_shape` | Rank 1's parent mesh `[rows, cols]`, split into `rows * cols` `[1, 1]` submeshes that generate data-parallel. |
