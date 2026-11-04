@@ -123,6 +123,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     # TtPrefillRuntime.prefill_forward runs PREFILL_FORWARD_TOKENS_BUDGET / PREFILL_CHUNK_SIZE chunks per forward.
     supports_packed_forward = True
+    supports_media = True
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
