@@ -896,6 +896,10 @@ class WanPipeline(PipelineAPIMixin):
         latents = torch.randn(shape, dtype=torch.float32, device=torch.device(device))
         return latents, None
 
+    # Per-expert CFG scales used when a call does not pass them (Wan2.2 T2V A14B: high 4.0, low 3.0).
+    DEFAULT_GUIDANCE_SCALE: float = 4.0
+    DEFAULT_GUIDANCE_SCALE_2: float | None = 3.0
+
     DEFAULT_NEGATIVE_PROMPT = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"  # noqa: E501, RUF001
 
     @torch.no_grad()
@@ -907,8 +911,8 @@ class WanPipeline(PipelineAPIMixin):
         negative_prompts: Sequence[str] | None = None,
         image_prompt=None,
         num_inference_steps: int,
-        guidance_scale: float = 4.0,
-        guidance_scale_2: float | None = 3.0,
+        guidance_scale: float | None = None,
+        guidance_scale_2: float | None = _UNSET,
         flow_shift: float | None = None,
         boundary_ratio: float | None = None,
         num_videos_per_prompt: int | None = 1,
@@ -923,9 +927,14 @@ class WanPipeline(PipelineAPIMixin):
         """Generates a video from the prompt.
 
         ``width`` and ``height`` must be one of the configured resolutions, and default to the
-        first.
+        first. Omitted guidance scales default to ``DEFAULT_GUIDANCE_SCALE``/``DEFAULT_GUIDANCE_SCALE_2``;
+        ``guidance_scale_2=None`` reuses ``guidance_scale``.
         """
         on_event = on_event if on_event is not None else null_callback
+        if guidance_scale is None:
+            guidance_scale = self.DEFAULT_GUIDANCE_SCALE
+        if guidance_scale_2 is _UNSET:
+            guidance_scale_2 = self.DEFAULT_GUIDANCE_SCALE_2
 
         width, height = self._resolve_size(width, height, image_prompt)
         padded_sequence_length = self._padded_sequence_lengths[width, height]
