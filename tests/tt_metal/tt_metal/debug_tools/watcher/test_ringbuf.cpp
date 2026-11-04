@@ -39,6 +39,8 @@ using namespace tt::tt_metal;
 
 // 22 Quasar writers x 5 = 110 entries, within the 128-entry buffer so nothing is evicted
 constexpr uint32_t NUM_PUSHES_MULTI = 5;
+// 6 dispatch-engine writers x 21 = 126 entries: as many as fit, so the writers overlap.
+constexpr uint32_t num_pushes_multi_dispatch_engine = 21;
 
 // Newest-first, limited to buffer capacity.
 std::vector<std::string> get_expected_single_processor(
@@ -68,10 +70,11 @@ void append_expected_writers(
     std::vector<std::string>& expected,
     const std::function<std::string(uint32_t)>& prefix_for_thread,
     uint32_t num_threads,
-    uint32_t hw_id_offset = 0) {
+    uint32_t hw_id_offset = 0,
+    uint32_t num_pushes = NUM_PUSHES_MULTI) {
     for (uint32_t local_idx = 0; local_idx < num_threads; local_idx++) {
         uint32_t hw_id = local_idx + hw_id_offset;
-        for (uint32_t seq = 0; seq < NUM_PUSHES_MULTI; seq++) {
+        for (uint32_t seq = 0; seq < num_pushes; seq++) {
             expected.push_back(fmt::format("[{}]0x{:08x}", prefix_for_thread(hw_id), (hw_id << 16) | seq));
         }
     }
@@ -82,12 +85,8 @@ namespace {
 constexpr const char* kernel_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
 
 bool dispatch_engine_unavailable(const distributed::MeshDevice& mesh_device) {
-    if (detail::sd_cq_kernel_tests_should_skip(mesh_device)) {
-        log_info(LogTest, "Skipping: soc descriptor has no dispatch-engine cores.");
-        return true;
-    }
-    if (MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores()) {
-        log_info(LogTest, "Skipping: requires the dispatch-engine path (unset TT_METAL_TENSIX_DISPATCH_CORES).");
+    if (detail::resolve_sd_cq_kernel_core_type(mesh_device) != CoreType::DISPATCH) {
+        log_info(LogTest, "Skipping: needs dispatch-engine cores (none here, or TT_METAL_TENSIX_DISPATCH_CORES set).");
         return true;
     }
     return false;
@@ -112,9 +111,8 @@ void RunTest(
     // and set up the kernel on the correct risc
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
-    // Push past capacity so the oldest entries are overwritten, whatever the buffer size. A multiple of 8 so a
-    // dispatch engine's last push flushes its head (ring_buffer.h).
-    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 16;
+    // Push past capacity so the oldest entries are overwritten, whatever the buffer size.
+    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;
     constexpr const char* kernel_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
     const experimental::KernelSpecName kRingbufKernelName{"ringbuf_kernel"};
 
@@ -381,7 +379,7 @@ void RunDispatchEngineMultiWriterTest(
             kernel_legacy,
             logical_core,
             static_cast<DataMovementProcessor>(dm),
-            dispatch_engine_config(NUM_PUSHES_MULTI));
+            dispatch_engine_config(num_pushes_multi_dispatch_engine));
     }
     std::vector<std::string> expected = {"debug_ring_buffer="};
     append_expected_writers(
@@ -390,7 +388,8 @@ void RunDispatchEngineMultiWriterTest(
             return hal.get_processor_class_name(HalProgrammableCoreType::DISPATCH, hw_id, false);
         },
         num_dms - first_user_dm,
-        first_user_dm);
+        first_user_dm,
+        num_pushes_multi_dispatch_engine);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
