@@ -3,23 +3,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve the runner pool and weights cache for a model trace, and check weights coverage.
+"""Resolve the runner pool and weights cache for a model trace.
 
 The trace runs on the same runner pools and weights mounts as the model e2e pipeline
 (``.github/sku_config.yaml``), so a model finds its weights wherever CI already runs it.
-Shared caches are read-only and offline, so a model only has weights there if some CI test
-uses it on a SKU with the same mount; per-runner caches download from HF on first use.
-
-The coverage check is advisory: it reads CI test YAML, which can miss how a model reaches
-its weights, so it only warns. The trace step's check against the mounted cache decides.
+Shared caches are read-only and offline; per-runner caches download from HF on first use.
 """
 
 import argparse
 import json
 import os
-import re
 import sys
-from pathlib import Path
 
 import yaml
 
@@ -40,21 +34,6 @@ RETIRED_LABELS = {
 }
 
 ONLINE_MODES = ("local-disk", "lfc")
-# lfc is online too, but on those CIv2 runners model code fetches weights from the large-file
-# cache instead of HF, so only local-disk SKUs can trace a model no CI test uses.
-HF_DOWNLOAD_MODES = ("local-disk",)
-
-_HF_MODEL_RE = re.compile(r"""\bHF_MODEL[ \t]*[=:][ \t]*["']?([A-Za-z0-9_.\-/]+)""")
-_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*(/[\w.-]+)?$")
-
-
-def is_hub_id(model, repo_root="."):
-    """True for an HF hub id (org/name, or a legacy bare name such as gpt2); False for a local path.
-
-    ttnn-run-model-trace.yaml calls this through --is-hub-id, so the workflow and the coverage
-    check classify HF_MODEL the same way.
-    """
-    return bool(_HUB_ID_RE.match(model)) and not (Path(repo_root) / model).is_dir()
 
 
 def resolve_sku(label, skus):
@@ -106,92 +85,11 @@ def weights_mount(mode):
     return "/mnt/MLPerf:/mnt/MLPerf:ro", "1"
 
 
-def _hf_models_in(node):
-    """HF_MODEL values set anywhere in a test entry: shell assignments in strings, env keys."""
-    found = set()
-    if isinstance(node, str):
-        found.update(_HF_MODEL_RE.findall(node))
-    elif isinstance(node, dict):
-        for key, value in node.items():
-            if key in ("HF_MODEL", "hf_model") and isinstance(value, str):
-                found.add(value.strip())
-            else:
-                found |= _hf_models_in(value)
-    elif isinstance(node, list):
-        for item in node:
-            found |= _hf_models_in(item)
-    # Template placeholders and shell expansions are not model names; real ones are an
-    # org/name hub id or a path, so both contain a slash.
-    return {m for m in found if "/" in m and m.strip("/") and re.fullmatch(r"[A-Za-z0-9_.\-/]+", m)}
-
-
-def hf_model_coverage(test_yaml_dir):
-    """Map each HF_MODEL named by a CI test to the SKUs that run it."""
-    coverage = {}
-    for path in sorted(Path(test_yaml_dir).glob("*.yaml")):
-        try:
-            entries = yaml.safe_load(path.read_text())
-        except yaml.YAMLError:
-            continue
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("skus"), dict):
-                continue
-            shared = {k: v for k, v in entry.items() if k != "skus"}
-            for model in _hf_models_in(shared):
-                coverage.setdefault(model, set()).update(entry["skus"])
-            # A per-SKU block can pick its own model, which only that SKU runs.
-            for sku, sku_entry in entry["skus"].items():
-                for model in _hf_models_in(sku_entry):
-                    coverage.setdefault(model, set()).add(sku)
-    return coverage
-
-
-def check_models(hf_models, sku, skus, coverage, repo_root="."):
-    """Return warnings for hub models whose weights the SKU's cache likely lacks."""
-    mode = skus[sku].get("weights-cache-mode", "")
-    if mode in HF_DOWNLOAD_MODES:
-        return []
-    mount = weights_mount(mode)[0]
-    online = sorted(s for s, e in skus.items() if e.get("weights-cache-mode") in HF_DOWNLOAD_MODES)
-    warnings = []
-    for model in hf_models:
-        if not model or not is_hub_id(model, repo_root):
-            continue
-        covered = coverage.get(model, set())
-        if sku in covered:
-            continue
-        same_mount = sorted(
-            s for s in covered if s in skus and weights_mount(skus[s].get("weights-cache-mode", ""))[0] == mount
-        )
-        if same_mount:
-            warnings.append(
-                f"{model} has no CI test on {sku}, but {', '.join(same_mount)} share its weights mount; "
-                "assuming the weights are there"
-            )
-            continue
-        where = f"CI runs it on: {', '.join(sorted(covered))}" if covered else "no CI test uses it"
-        warnings.append(
-            f"{model} is likely not in the {sku} weights cache ({where}). "
-            f"Use one of those SKUs, or a SKU that downloads from HF: {', '.join(online)}"
-        )
-    return warnings
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--runner-label")
-    parser.add_argument("--is-hub-id", metavar="HF_MODEL", help="print hub or path for HF_MODEL and exit")
-    parser.add_argument("--matrix", default='{"include": []}', help="trace matrix JSON (entries with hf_model)")
+    parser.add_argument("--runner-label", required=True)
     parser.add_argument("--sku-config", default=".github/sku_config.yaml")
-    parser.add_argument("--test-yaml-dir", default="tests/pipeline_reorg")
     args = parser.parse_args()
-    if args.is_hub_id is not None:
-        print("hub" if is_hub_id(args.is_hub_id) else "path")
-        return 0
-    if not args.runner_label:
-        parser.error("--runner-label is required")
 
     with open(args.sku_config) as f:
         skus = yaml.safe_load(f)["skus"]
@@ -203,10 +101,6 @@ def main():
     except ValueError as e:
         print(f"::error::{e}")
         return 1
-
-    hf_models = [item.get("hf_model", "") for item in json.loads(args.matrix).get("include", [])]
-    for w in check_models(hf_models, sku, skus, hf_model_coverage(args.test_yaml_dir)):
-        print(f"::warning::{w}")
 
     outputs = {
         "arch": arch,

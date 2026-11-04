@@ -193,8 +193,7 @@ jobs:
         id: derive
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
-          MATRIX: ${{ steps.parse.outputs.matrix }}
-        run: python3 model_tracer/resolve_trace_runner.py --runner-label "$RUNNER_LABEL" --matrix "$MATRIX"
+        run: python3 model_tracer/resolve_trace_runner.py --runner-label "$RUNNER_LABEL"
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -320,9 +319,10 @@ jobs:
 
           # After the per-model env, so a cache override covers both the download and the test.
           if [[ -n "$HF_MODEL" ]]; then
-            # The resolver's coverage check classifies HF_MODEL with the same function.
-            HF_MODEL_KIND=$(python3 model_tracer/resolve_trace_runner.py --is-hub-id "$HF_MODEL")
-            if [[ "$HF_MODEL_KIND" == path ]]; then
+            # A hub id is org/name or a bare legacy name; an absolute path, a deeper path or a
+            # directory in the checkout is local weights.
+            SLASHES="${HF_MODEL//[^\/]/}"
+            if [[ "$HF_MODEL" == /* || -d "$HF_MODEL" || ${#SLASHES} -gt 1 ]]; then
               if [[ -d "$HF_MODEL" ]]; then
                 echo "Using local weights at $HF_MODEL"
               else
@@ -332,7 +332,13 @@ jobs:
             elif [[ -n "${TT_GH_CI_INFRA+set}" ]]; then
               # CIv2 runners, with or without a weights-cache-mode: model code sees TT_GH_CI_INFRA
               # (conftest.is_ci_v2_env), fetches from the large-file cache and ignores the HF cache.
-              echo "CIv2: $HF_MODEL comes from the large-file cache; it fails there if the cache lacks it"
+              LFC_URL="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface/$HF_MODEL/config.json"
+              if ! curl -sSf -o /dev/null --max-time 30 "$LFC_URL"; then
+                echo "::error::The CIv2 large-file cache does not serve $HF_MODEL ($LFC_URL)."
+                echo "::error::Trace it on a CIv1 SKU instead, e.g. wh_n150 or bh_p150 (shared /mnt/MLPerf weights)."
+                exit 1
+              fi
+              echo "CIv2: $HF_MODEL comes from the large-file cache"
             elif [[ "$HF_HUB_OFFLINE" == "0" ]]; then
               # Model code passes local_files_only=True whenever CI=true, so it never downloads
               # by itself; fill the per-runner cache before the test runs.
