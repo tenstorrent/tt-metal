@@ -1,22 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MooncakeEmbeddingReader's read logic against a fake Mooncake client: no Mooncake needed. The same paths against a
-real local master are in test_mooncake_store_integration.py."""
+"""MooncakeEmbeddingReader's read logic against a fake Mooncake client. The module imports Mooncake, so this needs the
+wheel (models/common/multimedia_store/requirements.txt); the same paths against a real local master are in
+test_mooncake_store_integration.py."""
 
 import ctypes
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from models.common.multimedia_store.mooncake_store import (
-    OBJECT_NOT_FOUND,
-    MediaEmbeddingStoreConfig,
-    MooncakeEmbeddingReader,
-    parse_bytes,
-)
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
+
+if not sys.platform.startswith("linux"):
+    pytest.skip("Mooncake publishes Linux wheels only", allow_module_level=True)
+try:
+    from models.common.multimedia_store.mooncake_store import OBJECT_NOT_FOUND, MooncakeEmbeddingReader
+except ImportError as e:  # a broken env, so it fails rather than skips
+    pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
 
 ME, OTHER = "10.0.0.1:17800", "10.0.0.2:17800"
 
@@ -105,46 +108,6 @@ def test_key_must_be_ascii(setup):
     for bad in ("media-\u00e9", b"media-1"):
         with pytest.raises(ValueError, match="not an ASCII str"):
             reader.fetch(bad)
-
-
-@pytest.mark.parametrize(
-    "text, want", [("1G", 1 << 30), ("2GiB", 2 << 30), ("512M", 512 << 20), ("4096", 4096), ("1t", 1 << 40)]
-)
-def test_parse_bytes(text, want):
-    assert parse_bytes(text) == want
-
-
-def test_config_off_without_master():
-    assert MediaEmbeddingStoreConfig.from_env({}) is None
-
-
-def test_config_from_env():
-    env = {
-        "PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051",
-        "PREFILL_MEDIA_STORE_SEGMENT": ME,
-        "PREFILL_MEDIA_STORE_METADATA": "http://10.0.0.9:9000/metadata",
-        "PREFILL_MEDIA_STORE_DEVICE": "rocep201s0f0",
-    }
-    c = MediaEmbeddingStoreConfig.from_env(env)
-    assert (c.master, c.segment, c.segment_bytes, c.device) == ("10.0.0.9:50051", ME, 1 << 30, "rocep201s0f0")
-    env["PREFILL_MEDIA_STORE_BYTES"] = "2G"
-    assert MediaEmbeddingStoreConfig.from_env(env).segment_bytes == 2 << 30
-    assert (c.metadata, c.protocol) == ("http://10.0.0.9:9000/metadata", "rdma")
-
-
-def test_config_pull_mode_has_no_store():
-    env = {
-        "PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051",
-        "PREFILL_MEDIA_STORE_SEGMENT": ME,
-        "PREFILL_MEDIA_STORE_METADATA": "http://10.0.0.9:9000/metadata",
-        "PREFILL_MEDIA_STORE_BYTES": "0",
-    }
-    assert MediaEmbeddingStoreConfig.from_env(env).segment_bytes == 0
-
-
-def test_config_needs_segment_and_metadata():
-    with pytest.raises(ValueError, match="SEGMENT and PREFILL_MEDIA_STORE_METADATA must be set"):
-        MediaEmbeddingStoreConfig.from_env({"PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051"})
 
 
 def test_local_value_is_read_in_place_with_one_lookup(setup):

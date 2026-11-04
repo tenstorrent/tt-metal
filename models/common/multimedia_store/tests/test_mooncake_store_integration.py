@@ -29,7 +29,7 @@ import urllib.request
 import numpy as np
 import pytest
 
-from models.common.multimedia_store.mooncake_store import MediaEmbeddingStoreConfig, MooncakeEmbeddingReader
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing
 
 if not sys.platform.startswith("linux"):
@@ -37,6 +37,8 @@ if not sys.platform.startswith("linux"):
 try:
     import mooncake
     import mooncake.store as mooncake_store
+
+    from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
 except ImportError as e:  # a broken env, so it fails rather than skips
     pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
 

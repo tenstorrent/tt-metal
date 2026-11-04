@@ -18,16 +18,14 @@
   ``ValueError``.
 - ``stats`` counts hits, misses, errors, bytes read, fetch latency and the read buffer's size.
 
-Media keys are ASCII strings, stored as they are. ``open_media_embedding_reader_from_env`` starts the store from the
-``PREFILL_MEDIA_STORE_*`` variables that ``MediaEmbeddingStoreConfig.from_env`` lists.
+Media keys are ASCII strings, stored as they are. ``MooncakeEmbeddingReader.open(config)`` starts the store from a
+``MediaEmbeddingStoreConfig`` (config.py), read from the ``PREFILL_MEDIA_STORE_*`` variables.
 """
 
 from __future__ import annotations
 
 import atexit
 import ctypes
-import os
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -35,14 +33,13 @@ from typing import Mapping, Optional, Sequence
 
 import numpy as np
 from loguru import logger
+from mooncake.store import MooncakeDistributedStore
 
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 # Mooncake ErrorCode the reader tells apart from other failures (mooncake-store/include/types.h).
 OBJECT_NOT_FOUND = -704
-
-_ENV_PREFIX = "PREFILL_MEDIA_STORE_"
-_DEFAULT_SEGMENT_BYTES = "1G"
 
 
 def _check_key(media_key: str) -> str:
@@ -52,64 +49,6 @@ def _check_key(media_key: str) -> str:
     if not isinstance(media_key, str) or not media_key.isascii():
         raise ValueError(f"media key {media_key!r} is not an ASCII str")
     return media_key
-
-
-def parse_bytes(text: str) -> int:
-    """'1G', '1GiB', '512M', '1048576' -> bytes. Suffixes are binary (G = GiB)."""
-    m = re.fullmatch(r"\s*(\d+)\s*([KMGT]?)(?:i?B)?\s*", text, re.IGNORECASE)
-    if not m:
-        raise ValueError(f"not a byte size: {text!r} (examples: 1G, 512M, 1048576)")
-    return int(m.group(1)) << {"": 0, "K": 10, "M": 20, "G": 30, "T": 40}[m.group(2).upper()]
-
-
-@dataclass(frozen=True)
-class MediaEmbeddingStoreConfig:
-    master: str
-    """Mooncake master address, host:port."""
-    segment: str
-    """This host's segment name, 'host:port', which writers pass as preferred_segment. A bare 'host' gets a port
-    Mooncake picks, so the full name is known only once the store starts (MooncakeEmbeddingReader.segment)."""
-    segment_bytes: int
-    """Host memory this host gives the store. More than 0 is push mode: writers put values here, read in place. 0 is
-    pull mode: this host holds nothing and reads every value from the host that does, such as the encoder's."""
-    metadata: str
-    """Mooncake metadata server."""
-    protocol: str = "rdma"
-    device: str = ""
-    """RDMA device(s), e.g. 'rocep201s0f0'; empty lets Mooncake pick."""
-
-    @classmethod
-    def from_env(cls, environ: Mapping[str, str] = os.environ) -> Optional["MediaEmbeddingStoreConfig"]:
-        """The store's config from PREFILL_MEDIA_STORE_*, or None when PREFILL_MEDIA_STORE_MASTER is unset.
-
-        PREFILL_MEDIA_STORE_MASTER    master address, host:port (turns the store on)
-        PREFILL_MEDIA_STORE_SEGMENT   this host's address, host:port or host (required)
-        PREFILL_MEDIA_STORE_BYTES     segment size (default 1G); 0 for pull mode, with no store on this host
-        PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
-        PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
-        PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
-        """
-
-        def get(name: str, default: Optional[str] = None) -> Optional[str]:
-            value = environ.get(_ENV_PREFIX + name, "").strip()
-            return value or default
-
-        master = get("MASTER")
-        if master is None:
-            return None
-        if ":" not in master:
-            raise ValueError(f"{_ENV_PREFIX}MASTER={master!r}: want host:port")
-        missing = [_ENV_PREFIX + n for n in ("SEGMENT", "METADATA") if get(n) is None]
-        if missing:
-            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
-        return cls(
-            master=master,
-            segment=get("SEGMENT"),
-            segment_bytes=parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES)),
-            metadata=get("METADATA"),
-            protocol=get("PROTOCOL", "rdma"),
-            device=get("DEVICE", ""),
-        )
 
 
 class MediaEmbeddingReaderStats:
@@ -187,10 +126,6 @@ class MooncakeEmbeddingReader:
     @classmethod
     def open(cls, config: MediaEmbeddingStoreConfig) -> "MooncakeEmbeddingReader":
         """Start this host's store: join the master and mount config.segment_bytes of host memory as its segment."""
-        try:
-            from mooncake.store import MooncakeDistributedStore
-        except ImportError as e:
-            raise StoreUnavailable(f"{_ENV_PREFIX}MASTER is set but this Python env has no Mooncake client") from e
         client = MooncakeDistributedStore()
         t0 = time.perf_counter()
         # local_buffer_size 0: reads from other hosts land in this reader's own registered read buffer.
@@ -347,11 +282,3 @@ class MooncakeEmbeddingReader:
                     if rc != length:
                         raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
                     results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()
-
-
-def open_media_embedding_reader_from_env(
-    environ: Mapping[str, str] = os.environ,
-) -> Optional[MooncakeEmbeddingReader]:
-    """This host's media embedding reader when PREFILL_MEDIA_STORE_MASTER is set, else None."""
-    config = MediaEmbeddingStoreConfig.from_env(environ)
-    return MooncakeEmbeddingReader.open(config) if config is not None else None
