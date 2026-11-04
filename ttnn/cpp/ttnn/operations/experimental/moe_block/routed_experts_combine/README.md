@@ -41,7 +41,7 @@ credits to, whatever rows it sends that home), so no packet of the call reaches 
 (`models/demos/moe_block/tests/test_moe_block_skew.py`).
 
 The combine's L1 per core comes from `combine_auto` on its budget: by default `exchange_arena_bytes`, from the largest
-free L1 block at the first call less the flat program's static CBs and the dispatch's.
+free L1 block at the first call less the flat program's static CBs (the dispatch's CBs are in the arena).
 
 ## Resources (`MoEBlockResources`)
 

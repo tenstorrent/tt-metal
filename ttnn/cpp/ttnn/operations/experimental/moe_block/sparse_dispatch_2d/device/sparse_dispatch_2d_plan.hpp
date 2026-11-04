@@ -53,6 +53,14 @@ inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
 struct CbSizes {
     uint32_t rows = 0, meta = 0, plan = 0, stage = 0, manifest = 0;
     uint32_t total() const { return rows + meta + plan + stage + manifest; }
+    // In the block's arena: each CB at a 64 B aligned offset, the manifest at 0 (the same address on every port core of
+    // every chip, which the remote senders write at); arena_offsets() = {manifest, rows, meta, plan, stage}.
+    std::array<uint32_t, 5> arena_offsets() const {
+        const auto a = [](uint32_t v) { return (v + 63u) / 64u * 64u; };
+        const uint32_t o_rows = a(manifest), o_meta = o_rows + a(rows), o_plan = o_meta + a(meta), o_stage = o_plan + a(plan);
+        return {0u, o_rows, o_meta, o_plan, o_stage};
+    }
+    uint32_t arena_bytes() const { return arena_offsets()[4] + (stage + 63u) / 64u * 64u; }
 };
 CbSizes cb_sizes(
     const MeshTopology& topo,

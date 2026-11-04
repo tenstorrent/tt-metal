@@ -62,16 +62,10 @@ fre::FlatRoutedExpertConfig base_flat_config(
     return cfg;
 }
 
-// L1 a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts + the
-// combine) take for their static circular buffers: the larger of the flat program's and the dispatch's (its manifest
-// rings and CBs on the port cores).
-uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp) {
-    const auto& topo = res.topology();
-    const uint32_t N = topo.num_chips(), S = res.config().chunk_tokens / N, W = res.dims().routed_width();
-    const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
-    return std::max(
-        align64(fp.static_l1_bytes),
-        align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, sparse_dispatch_2d::default_group(W)));
+// L1 a core the block's own programs that run while its arena is allocated take for static circular buffers: the
+// flat program's only (the head's and the dispatch's CBs are in the arena - MoEBlock passes it to both).
+uint32_t static_cb_bytes(MoEBlockResources& /*res*/, const fre::FlatRoutedExpertPlan& fp) {
+    return align64(fp.static_l1_bytes);
 }
 
 CombineState make_state(

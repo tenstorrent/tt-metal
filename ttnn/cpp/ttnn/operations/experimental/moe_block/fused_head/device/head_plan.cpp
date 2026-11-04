@@ -331,7 +331,8 @@ std::optional<HeadPlanned> legacy(const HeadShape& shape, const ArenaMax& arena_
 using namespace head_plan_detail;
 
 ArenaMax arena_max_of(int64_t l1_free, uint32_t payload) {
-    return [l1_free, payload](uint32_t kb) { return arena_cap_of(l1_free, kb, payload); };
+    (void)payload;
+    return [l1_free](uint32_t) { return arena_cap_of(l1_free); };
 }
 
 ArenaMax arena_max_fixed(int64_t bytes) {

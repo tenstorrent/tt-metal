@@ -244,6 +244,7 @@ public:
     int64_t pl_step = 0, plan_l1 = 0, HBP = 0, BB = 0, BBP = 0, PCAP = 0, MAXP = 0;
     std::vector<int64_t> pbases_off;  // the planner instances' regions, arena offsets
     int64_t xbase_off = 0, fbase_off = 0;
+    int64_t xg_off = 0, xg_bytes = 0;  // the x-gather packet staging on the port cores (kXgCb), arena offset / bytes
     uint32_t nx = 0, ny = 0;
     PortLuts luts;
     std::vector<SendKey> fkeys;
@@ -636,7 +637,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     if (lay.on_engine) {
         ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);
     }
-    ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload);
+    ea.arena_max = arena_cap_of(config.l1_free);
     ea.w_dtype = sh.w_dtype;
     ea.xring = lay.xdram ? 2 : 0;
     h.eng.emplace(ea);
@@ -910,6 +911,19 @@ std::shared_ptr<const HeadModel> make_head_model(
     }
     TT_FATAL(
         h.xbase_off + int64_t(h.nx + nf) * h.PCAP <= h.arena_bytes, "fused_head: ports: no L1 for the routing buffers");
+    // the x-gather's packet staging (kXgCb): an arena region on the port cores, after their routing buffers (the
+    // ports hold nothing else in the arena: logits partials [0, pbuf_sub), routing [xbase_off, + (nx + nf) PCAP))
+    h.xg_bytes = 2 * int64_t(h.group) * h.rp * 2048;
+    h.xg_off = al64(h.xbase_off + int64_t(h.nx + nf) * h.PCAP);
+    if (h.arena_bytes < h.xg_off + h.xg_bytes && h.xg_off + h.xg_bytes <= e.args.arena_max) {
+        h.arena_bytes = al64(h.xg_off + h.xg_bytes);
+    }
+    TT_FATAL(
+        h.xg_off + h.xg_bytes <= h.arena_bytes,
+        "fused_head: ports: no L1 for the x-gather staging ({} B at {} of the arena's {})",
+        h.xg_bytes,
+        h.xg_off,
+        h.arena_bytes);
     TT_FATAL(2 * int64_t(h.ny) * h.PCAP <= h.arena_bytes, "fused_head: the watcher core: no L1 for the Y buffers");
     return m;
 }
@@ -1971,11 +1985,8 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         pcores.push_back(c);
     }
     const auto pset = cells(pcores);
-    cbs.push_back(CBDescriptor{
-        .total_size = 2 * h.group * h.rp * 2048,
-        .core_ranges = pset,
-        .format_descriptors = {
-            CBFormatDescriptor{.buffer_index = kXgCb, .data_format = tt::DataFormat::Float16_b, .page_size = 2048}}});
+    // (in the arena, as every head CB: no static CB under the arena)
+    cbs.push_back(arena_cb(kXgCb, h.xg_off, u32(h.xg_bytes), tt::DataFormat::Float16_b, 2048, pset));
     const std::vector<uint32_t> ct = {
         e.KB, e.MT, h.sps, h.rp, e.CR, e.NCH, h.L, h.group, kIncEvery, e.GX, e.GY, e.S0, e.S1, h.G};
     const uint32_t npass = rs.pm ? rs.npass : 1;

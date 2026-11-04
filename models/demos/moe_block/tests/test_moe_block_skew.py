@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Can a late chip's combine packets reach a chip that already finished the combine?
+"""Can a late chip's combine (or dispatch) packets reach a chip that already finished, or not yet started, that op?
 
 The combine's home chips forward each source chip's ring layouts to the source's port once per call, whatever rows the
 source sends them (combine_port_writer.cpp send_layouts). A source port with no rows for a home finishes as soon as its
@@ -171,11 +171,20 @@ class _Skew:
         self.layout_words = layout_words  # (LAYR offset, words)
         self.block = None  # (its arena_address: this forward's arena)
         self.delay = {}  # {coord: cycles} before the combine
+        self.delay_dispatch = {}  # {coord: cycles} before the dispatch (its CBs are in the arena the head just used)
         self.watch = False
         self.y_own = None
 
     def __getattr__(self, k):
         f = getattr(self._inner, k)
+        if k == "sparse_dispatch_2d":
+
+            def dispatch(*a, **kw):
+                if self.delay_dispatch:
+                    _delay_op(self.mesh, self.dummy, self.delay_dispatch)
+                return f(*a, **kw)
+
+            return dispatch
         if k == "routed_experts_combine":
 
             def combine(*a, **kw):
@@ -312,6 +321,38 @@ def test_skewed_combine(setup):
         if worst_out or any(worst_late):
             bad.append((name, worst_out, worst_late))
     assert not bad, f"the combine under skew: {bad}"
+
+
+def test_skewed_dispatch(setup):
+    """The dispatch's CBs live in the call's arena (manifest, rows, meta, plan, stage on the port cores), the L1 the
+    head has just used on the same chip and the combine uses next. A chip made late before the dispatch is still in
+    the head while its neighbours enter the dispatch: they may write its manifest / rows only after its port fenced (its
+    head done). A chip made early reaches the combine while a neighbour still dispatches: the combine's start barrier
+    holds its packets. Either way the outputs are bit-identical to the unskewed forward's."""
+    s = setup
+    skew = s["skew"]
+    _forward(s)
+    ref = _forward(s)
+    skews = {
+        "late 5 us": {LATE: 5 * US},
+        "late 200 us": {LATE: 200 * US},
+        "late 1 ms": {LATE: 1000 * US},
+        "all but late 300 us": {(r, c): 300 * US for r in range(R) for c in range(C) if (r, c) != LATE},
+    }
+    bad = []
+    for name, delay in skews.items():
+        skew.delay_dispatch = delay
+        worst = 0
+        try:
+            for _ in range(ITERS):
+                o = _forward(s)
+                worst = max(worst, int((o["y_own"] != ref["y_own"]).sum()), int((o["out"] != ref["out"]).sum()))
+        finally:
+            skew.delay_dispatch = {}
+        logger.info(f"dispatch skew {name:22s} x{ITERS}: output mismatches {worst}")
+        if worst:
+            bad.append((name, worst))
+    assert not bad, f"the dispatch (CBs in the arena) under skew: {bad}"
 
 
 def test_sentinel_positive_control(setup):

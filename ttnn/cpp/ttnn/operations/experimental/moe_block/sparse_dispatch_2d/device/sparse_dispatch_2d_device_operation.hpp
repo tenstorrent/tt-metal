@@ -40,6 +40,7 @@ Tensor moe_block_sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     const Tensor& sems,
-    const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params);
+    const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params,
+    const std::optional<Tensor>& arena = std::nullopt);
 
 }  // namespace ttnn::prim

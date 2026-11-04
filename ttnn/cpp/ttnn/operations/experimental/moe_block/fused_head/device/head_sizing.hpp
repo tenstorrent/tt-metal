@@ -50,10 +50,10 @@ using Regions = std::vector<std::pair<std::string, int64_t>>;
 inline constexpr int64_t kArenaMax = 1344 * 1024;  // se_engine3.ARENA_MAX
 inline constexpr uint32_t kDestTiles = 8;          // se_engine3.dest_tiles()
 
-// x_gather3.port_cb_bytes: a port core's static packet CB at K step kb.
+// x_gather3.port_cb_bytes: a port core's packet CB at K step kb (an arena region on the port cores).
 int64_t port_cb_bytes(uint32_t kb, uint32_t payload, uint32_t group = 4);
-// se_engine3.arena_cap_of: L1 the arena may take from a free-L1 figure.
-int64_t arena_cap_of(int64_t l1_free, uint32_t kb, uint32_t payload);
+// se_engine3.arena_cap_of: L1 the arena may take from a free-L1 figure (every head CB is in the arena).
+int64_t arena_cap_of(int64_t l1_free);
 
 // lin2d.column_split
 std::vector<uint32_t> column_split(uint32_t n, uint32_t parts, uint32_t unit);
