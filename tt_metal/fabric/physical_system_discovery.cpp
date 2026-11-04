@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include <tt-logger/tt-logger.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <climits>
 #include <cstdlib>
@@ -893,6 +894,14 @@ LocalEthernetMetrics query_local_ethernet_metrics(
         local_asics.push_back(AsicID{unique_id});
     }
     std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> local_ethernet_metrics;
+    // These counters are kept by base Ethernet firmware.
+    if (!hal->has_eth_base_firmware()) {
+        log_info(
+            tt::LogFabric,
+            "No Ethernet link metrics: {} has no base Ethernet firmware to keep them",
+            enchantum::to_string(hal->get_arch()));
+        return local_ethernet_metrics;
+    }
 
     auto retrain_count_addr = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
