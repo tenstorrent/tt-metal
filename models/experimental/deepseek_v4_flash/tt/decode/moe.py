@@ -1426,36 +1426,12 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         x_flat = ttnn.reshape(hidden, [1, 1, t, h])
         rows = x_flat
         fuse_router = self.fused_router and t == 1
-        dest = self.experts.core_grid(router=fuse_router)
-
-        def _l1(tag):  # TEMP probe
-            if t > 1:
-                import os
-
-                if os.environ.get("DSV_SYNC"):
-                    ttnn.synchronize_device(self.device)
-                v = ttnn.get_memory_view(self.device, ttnn.BufferType.L1)
-                lo = sorted((int(b["address"]), int(b["size"])) for b in v.block_table if b["allocated"] == "yes")[:4]
-                logger.error(f"L1 probe {tag}: {lo}")
-
-        _l1("enter")
-        mem = x_flat.memory_config()
-        already_replica = (
-            x_flat.is_sharded()
-            and mem.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and mem.shard_spec is not None
-            and _core_grid_contains(mem.shard_spec.grid, dest)
-        )
-        if not already_replica:
-            # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode RMSNorm
-            # already leaves that; an interleaved tensor is width-sharded over one tile row
-            # first, and h must be tile-aligned for that.
-            if not x_flat.is_sharded():
-                x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(t, h, self.device))
-                x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, dest)
-            else:
-                x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, dest)
-        _l1("gather")
+        # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode RMSNorm already
+        # leaves that; an interleaved tensor is width-sharded over one tile row first, and h must
+        # be tile-aligned for that.
+        if not x_flat.is_sharded():
+            x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(t, h, self.device))
+        x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, self.experts.core_grid(router=fuse_router))
         # The learned router has no separate trace-safe variant: it allocates every operand
         # it uses, so :meth:`DeepSeekV4TopKRouter.forward` is already capture-safe.
         if self.is_hash:
@@ -1467,16 +1443,18 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             )
         else:
             routing = self.gate(x_flat, image_mask)
-        _l1("router")
-        if self.fused_shared is not None and t == 1:
+        if t == 1 and self.fused_shared is not None:
             combined = self.experts.decode_static(x_flat, routing, self.fused_shared)  # [1, 1, 1, D]
-        elif t > 1 and not already_replica:
+        elif t == 1:
+            routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
+            shared = self.shared_experts(x_flat)  # [1, 1, 1, D]
+            combined = ttnn.add(routed, shared)
+        else:
             assert self.shared_rows is not None, f"a {t}-row step needs the block built with verify_rows >= {t}"
             # The op's CBs at T > 1 (8-row tiles, the input restriped into its own CB) reach past the
             # replica's L1, so the replica is freed first and the op reads the rows from DRAM. Nothing it
             # leaves in L1 may sit below the CBs, so the shared expert's output goes to DRAM too.
             shared = self.shared_rows(x_flat)  # [1, 1, T, D]
-            _l1("shared")
             if shared.memory_config().buffer_type == ttnn.BufferType.L1:
                 shared_l1 = shared
                 shared = ttnn.to_memory_config(shared_l1, ttnn.DRAM_MEMORY_CONFIG)
@@ -1485,15 +1463,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             if rows_in_l1:
                 rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(x_flat)
-            _l1("freed")
             routed = self.experts.decode_static(rows, routing)  # [1, 1, T, D]
             if rows_in_l1:
                 ttnn.deallocate(rows)
-            combined = ttnn.add(routed, shared)
-        else:
-            assert self.shared_rows is not None, f"a {t}-row step needs the block built with verify_rows >= {t}"
-            routed = self.experts.decode_static(x_flat, routing)  # [1, 1, T, D]
-            shared = self.shared_rows(x_flat)  # [1, 1, T, D]
             combined = ttnn.add(routed, shared)
         if fuse_router and routing.bias is not self.gate.e_score_correction_bias:
             ttnn.deallocate(routing.bias)
