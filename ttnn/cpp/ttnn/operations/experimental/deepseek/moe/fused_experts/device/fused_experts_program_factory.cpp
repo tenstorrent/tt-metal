@@ -61,19 +61,27 @@ uint32_t swiglu_tiles_per_shard_for(uint32_t i_tiles, uint32_t num_weight_shards
 
 uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 
+// One fabric multicast out of a chip: through the neighbour `first_hop`, over `hops` chips per
+// physical direction (indexed by eth_chan_directions E, W, N, S). A line has one nonzero entry; a
+// 2D branch is a N or S spine with E/W teeth, landing on every chip of the rows it passes.
+struct AllReduceBranch {
+    ttnn::MeshCoordinate first_hop;
+    std::array<uint32_t, 4> hops;
+};
+
 // Everything the all-reduce epilogue adds to one chip's program; built per mesh coordinate by
 // MultiCoreAllReduce::create_workload_descriptor.
 struct AllReduceEpilogue {
-    uint32_t device_index;  // this chip's position on the ring (its scratch slot)
+    uint32_t device_index;  // this chip's place among the reduced chips (its scratch slot)
     uint32_t ring_size;
     uint32_t num_links;
-    tt::tt_metal::Buffer* scratch;  // [ring_size * 1, H/16] per output core, L1 / L1_SMALL
-    uint32_t out_ready_sem_addr;    // GlobalSemaphore on the output cores + senders
+    // Per output core, ring_size slots of its [1, H/16] shard; on a sender, the same range stages
+    // the slots of its link's output cores. L1 / L1_SMALL.
+    tt::tt_metal::Buffer* scratch;
+    uint32_t out_ready_sem_addr;  // GlobalSemaphore on the output cores
     ttnn::MeshCoordinate coord;
-    std::optional<ttnn::MeshCoordinate> forward_coord;
-    std::optional<ttnn::MeshCoordinate> backward_coord;
-    std::vector<uint32_t> forward_mcast_args;  // get_forward_backward_line_mcast_configuration
-    std::vector<uint32_t> backward_mcast_args;
+    // Together they reach every other reduced chip exactly once.
+    std::vector<AllReduceBranch> branches;
 };
 }  // namespace
 
@@ -1610,15 +1618,14 @@ ProgramDescriptor build_program_descriptor(
 
     // ---- Fused TP all-reduce (MultiCoreAllReduce only). ----
     // Group 0's down cores -- the output cores -- write their partial into this chip's slot of the
-    // scratch and bump their link's sender; each sender (outside the expert grid) line-multicasts its
-    // cores' slots to every chip of the ring (ar_sender.cpp); the group-0
-    // writer then waits for all ring_size slots and the group-0 compute sums them into the output.
+    // scratch and into their place in their link's sender's staging, then bump that sender; each
+    // sender (outside the expert grid) multicasts its cores' slots to every other reduced chip in
+    // one pass (ar_sender.cpp). The group-0 writer then waits for the other ring_size - 1 slots and
+    // the group-0 compute sums all of them into the output.
     const bool fuse_ar = all_reduce != nullptr;
     constexpr uint32_t sem_ar_ready_id = 6;  // senders: one bump per output core of the link
     constexpr uint32_t cb_ar_scratch = CBIndex::c_19;
     constexpr uint32_t cb_ar_out = CBIndex::c_20;
-    constexpr uint32_t cb_ar_src = CBIndex::c_21;
-    constexpr uint32_t cb_ar_headers = CBIndex::c_22;
     // The output cores in width_sharded_all_reduce's (row-wise) order, split into num_links runs of
     // ar_cores_per_link, one run per sender.
     std::vector<CoreCoord> ar_out_cores;
@@ -1657,14 +1664,15 @@ ProgramDescriptor build_program_descriptor(
             grid.y,
             ar_senders.size());
     }
-    // NoC coordinates of the sender an output core reports to; {0, 0} on every other core.
-    auto ar_sender_noc_for = [&](const CoreCoord& core) -> CoreCoord {
+    // NoC coordinates of the sender an output core reports to and the core's place in that link's run
+    // (its staging slot there); {0, 0} and 0 on every other core.
+    auto ar_sender_for = [&](const CoreCoord& core) -> std::pair<CoreCoord, uint32_t> {
         const auto it = std::find(ar_out_cores.begin(), ar_out_cores.end(), core);
         if (it == ar_out_cores.end()) {
-            return CoreCoord{0, 0};
+            return {CoreCoord{0, 0}, 0u};
         }
-        const auto link = static_cast<uint32_t>(it - ar_out_cores.begin()) / ar_cores_per_link;
-        return device->worker_core_from_logical_core(ar_senders[link]);
+        const auto pos = static_cast<uint32_t>(it - ar_out_cores.begin());
+        return {device->worker_core_from_logical_core(ar_senders[pos / ar_cores_per_link]), pos % ar_cores_per_link};
     };
 
     // ---- Compute (gate_up matmul) kernel on all 64 cores. ----
@@ -1809,14 +1817,15 @@ ProgramDescriptor build_program_descriptor(
                     down_local_for(core),
                     input_buffer};
                 if (fuse_ar) {
-                    const auto ar_sender = ar_sender_noc_for(core);
+                    const auto [ar_sender, ar_staging_slot] = ar_sender_for(core);
                     writer_args.insert(
                         writer_args.end(),
                         {all_reduce->scratch,
                          all_reduce->device_index,
                          static_cast<uint32_t>(ar_sender.x),
                          static_cast<uint32_t>(ar_sender.y),
-                         all_reduce->out_ready_sem_addr});
+                         all_reduce->out_ready_sem_addr,
+                         ar_staging_slot});
                 }
                 writer_desc.emplace_runtime_args(core, writer_args);
             }
@@ -1906,10 +1915,24 @@ ProgramDescriptor build_program_descriptor(
             .core_ranges = ar_sender_set,
             .initial_value = 0,
         });
-        // The senders take the scratch base from their own cb_ar_scratch, so they declare it too.
+        // The output cores push exactly their ring_size slots, which the compute pops in one go. The
+        // senders take the scratch base -- their staging -- from their own cb_ar_scratch, so they
+        // declare it too, over their link's run of slots.
+        const uint32_t core_bytes = shard_pages * out_tile_bytes;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = all_reduce->ring_size * shard_pages * out_tile_bytes,
-            .core_ranges = ar_out_set.merge(ar_sender_set),
+            .total_size = all_reduce->ring_size * core_bytes,
+            .core_ranges = ar_out_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_ar_scratch,
+                .data_format = out_df,
+                .page_size = out_tile_bytes,
+                .tile = input_tile_desc,
+            }}},
+            .buffer = all_reduce->scratch,
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = ar_cores_per_link * core_bytes,
+            .core_ranges = ar_sender_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = cb_ar_scratch,
                 .data_format = out_df,
@@ -1929,90 +1952,58 @@ ProgramDescriptor build_program_descriptor(
             }}},
             .buffer = out_buffer,
         });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = ar_cores_per_link * shard_pages * out_tile_bytes,
-            .core_ranges = ar_sender_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = cb_ar_src,
-                .data_format = out_df,
-                .page_size = out_tile_bytes,
-                .tile = input_tile_desc,
-            }}},
-        });
-        constexpr uint32_t kPacketHeaders = 8;
-        const uint32_t header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kPacketHeaders * header_bytes * 2,
-            .core_ranges = ar_sender_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = cb_ar_headers,
-                .data_format = tt::DataFormat::RawUInt32,
-                .page_size = header_bytes,
-            }}},
-        });
+        // Each output core's slot goes out as a single packet.
+        TT_FATAL(
+            core_bytes <= tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
+            "fused_experts: an all_reduce slot of {} B exceeds the {} B fabric packet",
+            core_bytes,
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device));
 
-        std::vector<uint32_t> ar_sender_ct_args = {
-            all_reduce->device_index,
-            cb_ar_headers,
-            cb_ar_src,
-            cb_ar_scratch,
-            std::max<uint32_t>(1, tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device) / out_tile_bytes),
-            out_tile_bytes,
-            sem_ar_ready_id,
-        };
-        ar_sender_ct_args.insert(
-            ar_sender_ct_args.end(), all_reduce->forward_mcast_args.begin(), all_reduce->forward_mcast_args.end());
-        ar_sender_ct_args.insert(
-            ar_sender_ct_args.end(), all_reduce->backward_mcast_args.begin(), all_reduce->backward_mcast_args.end());
         // RISCV_1: the one DM processor a router core leaves free (its router_topk reader is RISCV_0).
+        // Pushed before its runtime args, which the fabric connections append to it by kernel index.
         KernelDescriptor ar_sender;
         ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
         ar_sender.source_type = KernelDescriptor::SourceType::FILE_PATH;
         ar_sender.core_ranges = ar_sender_set;
-        ar_sender.compile_time_args = std::move(ar_sender_ct_args);
+        ar_sender.compile_time_args = {
+            all_reduce->device_index,
+            static_cast<uint32_t>(all_reduce->branches.size()),
+            core_bytes,
+            sem_ar_ready_id,
+            cb_ar_scratch,
+        };
         ar_sender.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
         ar_sender.common_runtime_args = {all_reduce->out_ready_sem_addr};
+        tt::tt_metal::KernelHandle ar_sender_id = desc.kernels.size();
+        desc.kernels.push_back(std::move(ar_sender));
 
+        const auto src_node = device->get_fabric_node_id(all_reduce->coord);
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+        for (const auto& branch : all_reduce->branches) {
+            dst_nodes.push_back(device->get_fabric_node_id(branch.first_hop));
+        }
+        const auto api_type = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())
+                                  ? tt::tt_fabric::FabricApiType::Mesh
+                                  : tt::tt_fabric::FabricApiType::Linear;
         for (uint32_t link = 0; link < all_reduce->num_links; ++link) {
             const uint32_t first = link * ar_cores_per_link;
             const uint32_t count =
                 std::min<uint32_t>(ar_cores_per_link, static_cast<uint32_t>(ar_out_cores.size()) - first);
-            std::vector<uint32_t> xs;
-            std::vector<uint32_t> ys;
+            std::vector<uint32_t> sender_args = {count};
             for (uint32_t i = first; i < first + count; ++i) {
-                const auto noc = device->worker_core_from_logical_core(ar_out_cores[i]);
-                xs.push_back(noc.x);
-                ys.push_back(noc.y);
+                sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).x);
             }
-            const CoreCoord sender = ar_senders[link];
-
-            std::vector<uint32_t> fabric_args = {shard_pages, count};
-            fabric_args.insert(fabric_args.end(), xs.begin(), xs.end());
-            fabric_args.insert(fabric_args.end(), ys.begin(), ys.end());
-            fabric_args.push_back(all_reduce->forward_coord.has_value());
-            if (all_reduce->forward_coord.has_value()) {
-                tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                    device->get_fabric_node_id(all_reduce->coord),
-                    device->get_fabric_node_id(*all_reduce->forward_coord),
-                    link,
-                    desc,
-                    sender,
-                    fabric_args);
+            for (uint32_t i = first; i < first + count; ++i) {
+                sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).y);
             }
-            fabric_args.push_back(all_reduce->backward_coord.has_value());
-            if (all_reduce->backward_coord.has_value()) {
-                tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                    device->get_fabric_node_id(all_reduce->coord),
-                    device->get_fabric_node_id(*all_reduce->backward_coord),
-                    link,
-                    desc,
-                    sender,
-                    fabric_args);
+            for (const auto& branch : all_reduce->branches) {
+                sender_args.insert(sender_args.end(), branch.hops.begin(), branch.hops.end());
             }
-            ar_sender.runtime_args.emplace_back(
-                sender, KernelDescriptor::CoreRuntimeArgs(fabric_args.begin(), fabric_args.end()));
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src_node, dst_nodes, {link}, desc, ar_sender_id, ar_senders[link], sender_args, api_type);
+            desc.kernels[ar_sender_id].runtime_args.emplace_back(
+                ar_senders[link], KernelDescriptor::CoreRuntimeArgs(sender_args.begin(), sender_args.end()));
         }
-        desc.kernels.push_back(std::move(ar_sender));
     }
 
     return desc;
@@ -2037,13 +2028,16 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     auto* mesh_device = input.device();
     tt::tt_metal::WorkloadDescriptor workload;
 
-    // The scratch: ring_size slots of the output shard on every output core. It lives as long as the
-    // cached workload, so it goes in L1_SMALL when it fits there and, like the semaphore, does not
-    // fragment L1.
+    // The scratch: ring_size slots of the output shard on every output core. Its address range is
+    // reserved in every L1 bank, and a sender stages its link's run of output shards in it, so it
+    // has at least that many slots. It lives as long as the cached workload, so it goes in L1_SMALL
+    // when it fits there and, like the semaphore, does not fragment L1.
     const auto& shard = output.shard_spec().value();
+    const uint32_t scratch_slots =
+        std::max(ar.ring_size, tt::div_up(static_cast<uint32_t>(shard.grid.num_cores()), ar.num_links));
     auto scratch_shape = output.logical_shape();
-    scratch_shape[-2] *= ar.ring_size;
-    const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * ar.ring_size, shard.shape[1]}, shard.orientation};
+    scratch_shape[-2] *= scratch_slots;
+    const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * scratch_slots, shard.shape[1]}, shard.orientation};
     const auto& allocator = mesh_device->allocator();
     const uint64_t bytes_per_bank = tt::align(
         static_cast<uint64_t>(scratch_shard.shape[0]) * scratch_shard.shape[1] * output.element_size(),
@@ -2069,29 +2063,78 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
         mesh_device, mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_devices[0]), 0, sem_type));
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, sub_devices);
 
+    // The branches out of each chip: a line both ways along `line_axis` and, over a 2D mesh, a spine
+    // both ways along axis 0 whose teeth repeat the line on every row it passes.
+    const uint32_t line_axis = ar.cluster_axis.value_or(1);
+    const bool whole_mesh = !ar.cluster_axis.has_value();
     workload.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
-        const uint32_t device_index =
-            ttnn::ccl::get_linearized_index_from_physical_coord(input, coord, ar.cluster_axis);
-        const auto forward =
-            ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, 1, ar.topology, ar.cluster_axis);
-        const auto backward =
-            ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, -1, ar.topology, ar.cluster_axis);
-        const auto [num_forward, num_backward] =
-            ttnn::ccl::get_forward_backward_line_mcast_distance(ar.ring_size, device_index, ar.topology, true);
-        const auto [forward_args, backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            coord, forward, backward, num_forward, num_backward, mesh_device);
+        const auto fabric_node = mesh_device->get_fabric_node_id(coord);
+        // Toward the +1 and the -1 neighbour on `axis`: the neighbour, the chips past it (it included)
+        // and the physical direction it lies in.
+        struct Leg {
+            std::optional<ttnn::MeshCoordinate> neighbour;
+            uint32_t hops;
+            uint32_t dir;
+        };
+        auto legs = [&](uint32_t axis) {
+            const auto topology = ttnn::ccl::get_usable_topology(input, ar.topology, axis);
+            const auto [forward_hops, backward_hops] = ttnn::ccl::get_forward_backward_line_mcast_distance(
+                ttnn::ccl::get_topological_dimension(input, axis), coord[axis], topology, false);
+            std::array<Leg, 2> result{
+                Leg{ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, 1, topology, axis),
+                    forward_hops,
+                    0},
+                Leg{ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, -1, topology, axis),
+                    backward_hops,
+                    0}};
+            for (auto& leg : result) {
+                if (leg.hops == 0 || !leg.neighbour.has_value()) {
+                    leg.hops = 0;
+                    continue;
+                }
+                const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
+                    fabric_node, mesh_device->get_fabric_node_id(*leg.neighbour));
+                TT_FATAL(
+                    dir.has_value() && static_cast<uint32_t>(*dir) < tt::tt_fabric::eth_chan_directions::Z,
+                    "fused_experts: all_reduce expected a cardinal fabric direction from {} to {}",
+                    coord,
+                    *leg.neighbour);
+                leg.dir = static_cast<uint32_t>(*dir);
+            }
+            return result;
+        };
+        const auto line = legs(line_axis);
+        std::vector<AllReduceBranch> branches;
+        for (const auto& leg : line) {
+            if (leg.hops > 0) {
+                AllReduceBranch branch{*leg.neighbour, {}};
+                branch.hops[leg.dir] = leg.hops;
+                branches.push_back(branch);
+            }
+        }
+        if (whole_mesh) {
+            for (const auto& leg : legs(0)) {
+                if (leg.hops > 0) {
+                    AllReduceBranch branch{*leg.neighbour, {}};
+                    for (const auto& tooth : line) {
+                        if (tooth.hops > 0) {
+                            branch.hops[tooth.dir] = tooth.hops;
+                        }
+                    }
+                    branch.hops[leg.dir] = leg.hops;
+                    branches.push_back(branch);
+                }
+            }
+        }
         const AllReduceEpilogue epilogue{
-            .device_index = device_index,
+            .device_index = ttnn::ccl::get_linearized_index_from_physical_coord(input, coord, ar.cluster_axis),
             .ring_size = ar.ring_size,
             .num_links = ar.num_links,
             .scratch = scratch->buffer(),
             .out_ready_sem_addr = static_cast<uint32_t>(workload.semaphores[0].address()),
             .coord = coord,
-            .forward_coord = forward,
-            .backward_coord = backward,
-            .forward_mcast_args = {forward_args.begin(), forward_args.end()},
-            .backward_mcast_args = {backward_args.begin(), backward_args.end()},
+            .branches = std::move(branches),
         };
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),

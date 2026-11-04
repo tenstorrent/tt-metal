@@ -29,7 +29,7 @@ Tensor fused_experts(
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
     const std::optional<Tensor>& router_bias,
-    std::optional<uint32_t> all_reduce_cluster_axis,
+    const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
     tt::tt_fabric::Topology all_reduce_topology) {
     return ttnn::prim::fused_experts(
@@ -53,7 +53,7 @@ Tensor fused_experts(
         shared_swiglu_limit,
         router_weight,
         router_bias,
-        all_reduce_cluster_axis,
+        all_reduce_cluster_axes,
         all_reduce_num_links,
         all_reduce_topology);
 }

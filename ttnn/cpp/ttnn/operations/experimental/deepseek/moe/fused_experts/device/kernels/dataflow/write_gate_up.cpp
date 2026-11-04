@@ -136,6 +136,7 @@ void kernel_main() {
     const uint32_t ar_sender_noc_x = get_arg_val<uint32_t>(12);
     const uint32_t ar_sender_noc_y = get_arg_val<uint32_t>(13);
     const uint32_t ar_out_ready_addr = get_arg_val<uint32_t>(14);
+    const uint32_t ar_staging_slot = get_arg_val<uint32_t>(15);
 #endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -362,7 +363,8 @@ void kernel_main() {
         if (expert_group == 0) {
 #ifdef FE_ALL_REDUCE
             // This chip's partial goes to its own slot of the scratch (reduce_noc_* is this core on
-            // group 0), from where the link's sender forwards it to every chip of the ring.
+            // group 0) and to this core's place in the link's sender's staging (the same address
+            // range there), which the sender multicasts to every other reduced chip.
             noc.async_write(
                 cb_down_out,
                 UnicastEndpoint{},
@@ -371,6 +373,14 @@ void kernel_main() {
                 {.noc_x = reduce_noc_x,
                  .noc_y = reduce_noc_y,
                  .addr = ar_scratch_addr + ar_slot * kLocalTiles * out_tile_bytes});
+            noc.async_write(
+                cb_down_out,
+                UnicastEndpoint{},
+                kLocalTiles * out_tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = ar_sender_noc_x,
+                 .noc_y = ar_sender_noc_y,
+                 .addr = ar_scratch_addr + ar_staging_slot * kLocalTiles * out_tile_bytes});
             noc.async_write_barrier();
             Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
 #else
@@ -390,10 +400,10 @@ void kernel_main() {
         cb_down_out.pop_front(kLocalTiles);
 #ifdef FE_ALL_REDUCE
         if (expert_group == 0) {
-            // Every chip's slot -- this one's too, by the sender's local copy -- bumps out_ready once.
+            // Every other chip's slot bumps out_ready once; this chip's own slot was written above.
             // out_ready is a GlobalSemaphore, which Semaphore<> (per-program ids) cannot wrap.
             auto* out_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ar_out_ready_addr);
-            noc_semaphore_wait(out_ready, ar_ring_size);
+            noc_semaphore_wait(out_ready, ar_ring_size - 1);
             CircularBuffer(cb_ar_scratch_id).push_back(ar_ring_size * kLocalTiles);
             noc_semaphore_set(out_ready, 0);
         }

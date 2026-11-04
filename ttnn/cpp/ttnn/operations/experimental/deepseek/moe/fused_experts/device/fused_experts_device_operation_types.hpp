@@ -15,13 +15,14 @@
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
 
 // The TP all-reduce fused onto the end of the op: each chip's [1, H] partial is summed over
-// `cluster_axis` of the mesh, and every chip on that axis ends with the same sum.
+// `cluster_axis` of the mesh, or over every chip of a 2D mesh when it is unset, and every chip
+// reduced over ends with the same sum.
 //
 // Plain aggregate, reflected member by member like operation_attributes_t. Declaring
 // attribute_names / attribute_values() as well makes ttsl's to_json_t ambiguous for it.
 struct FusedAllReduceParams {
-    uint32_t cluster_axis{};
-    // Chips on `cluster_axis`, resolved from the input's mesh in `invoke`.
+    std::optional<uint32_t> cluster_axis;
+    // Chips reduced over, resolved from the input's mesh in `invoke`.
     uint32_t ring_size{};
     uint32_t num_links = 1;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
