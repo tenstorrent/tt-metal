@@ -27,18 +27,18 @@ def _q_proj_program_config(x, q_w):
 
     def _linear(a, b, *args, **kwargs):
         if b is q_w and kwargs.get("program_config") is None:
-            kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
-                in0_block_w=1,
-                out_subblock_h=4,
-                out_subblock_w=1,
-                out_block_h=64,
-                out_block_w=3,
-                per_core_M=64,
-                per_core_N=3,
-                fuse_batch=True,
+                in0_block_w=10,
+                out_subblock_h=1,
+                out_subblock_w=3,
+                out_block_h=7,
+                out_block_w=15,
+                per_core_M=7,
+                per_core_N=30,
+                transpose_mcast=False,
                 fused_activation=None,
-                mcast_in0=True,
+                fuse_batch=True,
             )
         return orig_linear(a, b, *args, **kwargs)
 
