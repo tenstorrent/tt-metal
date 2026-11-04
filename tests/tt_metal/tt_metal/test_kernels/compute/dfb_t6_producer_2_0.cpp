@@ -67,7 +67,10 @@ void kernel_main() {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(share_base + j * stride_tiles * entry_bytes) =
                     producer_stamp_base + producer_trisc;
             }
-            asm volatile("fence" ::: "memory");  // the stamps land before push_back posts the credit
+#if defined(ARCH_QUASAR)
+            // WH/BH order the stores on their own, and the wormhole simulator rejects fence.
+            asm volatile("fence" ::: "memory");
+#endif
         }
         dfb.push_back(share);
     }
