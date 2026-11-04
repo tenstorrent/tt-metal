@@ -6,7 +6,8 @@
 Every device of a group along cluster_axis holds a K-slice A[g] (..., M, K) and W[g] (K, N); the output is the group
 sum of A[g] @ W[g], scattered along scatter_dim. Shapes are per-device prefill shapes of the row-parallel linears of
 DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x, MiniMax-M3 and MiMo-V2 at TP=4, at each model's production precision, plus
-decode rows (M = 32) of Kimi K2.7 and Llama-70B, which take the folded 1D grid.
+decode rows (M = 32) of Kimi K2.7 and Llama-70B on the folded 1D grid their callers ask for (the op never picks a
+fold: the grid is the caller's, 2D by default).
 
 The Ring cases need the whole box as one ring: a QuietBox 2 opened as 1x4 under FABRIC_2D_TORUS_XY closes its snake
 cycle. The Linear cases run on the whole box as a 1x2 (p300) or 1x4 (QuietBox 2) line; other machines skip.
@@ -114,7 +115,7 @@ def run_case(
     a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     w_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     l1_headroom=None,
-    grid=None,
+    grid=ttnn.MatmulReduceScatterPrefillGrid.GRID_2D,
 ):
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, a_shape, seed=0)
@@ -160,22 +161,35 @@ MODEL_CASES = {
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
     # fits L1 unchunked only with a 2-tile K-block: the cost model picks 3 x 1 chunks instead
     "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
-    # decode (one tile row): the folded 1D grid (56, 16 and 30 cores), and a block too narrow for it (2D, 4 cores)
+    # decode (one tile row), on the fold along N its caller asks for (56, 16 and 30 cores; FOLDED_N_CASES), and a block
+    # too narrow for it (2D, 4 cores)
     "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "llama_70b_w2_decode": ((1, 1, 32, 3584), (3584, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "llama_70b_ff1_decode_bf4b": ((1, 1, 32, 2048), (2048, 3840), -1, ttnn.bfloat16, ttnn.bfloat4_b),
     "decode_narrow_n": ((1, 1, 32, 1024), (1024, 512), -1, ttnn.bfloat16, ttnn.bfloat8_b),
-    # batched decode (four tile rows): the folded grid, taken without weighing chunk splits
+    # batched decode (four tile rows), on the fold along N
     "kimi_k27_o_proj_decode_m128": ((1, 1, 128, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
+# the decode cases a caller runs on the fold along N (the rest take the default 2D grid)
+FOLDED_N_CASES = {
+    "kimi_k27_o_proj_decode",
+    "llama_70b_w2_decode",
+    "llama_70b_ff1_decode_bf4b",
+    "kimi_k27_o_proj_decode_m128",
+}
+
+
+def grid_of(name):
+    G = ttnn.MatmulReduceScatterPrefillGrid
+    return G.FOLDED_N if name in FOLDED_N_CASES else G.GRID_2D
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("case", MODEL_CASES.values(), ids=MODEL_CASES.keys())
-def test_ring_model_shapes(mesh_device, case):
-    a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
+@pytest.mark.parametrize("name", MODEL_CASES.keys())
+def test_ring_model_shapes(mesh_device, name):
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = MODEL_CASES[name]
     run_case(
         mesh_device,
         a_shape,
@@ -186,6 +200,7 @@ def test_ring_model_shapes(mesh_device, case):
         dtype=dtype,
         weight_dtype=weight_dtype,
         num_links=2,
+        grid=grid_of(name),
     )
 
 
@@ -245,8 +260,8 @@ def dram_width_sharded(mesh_device, K, N):
     )
 
 
-# The caller's grid (grid=): every grid on a block that can take it, against the planner's choice. The transposed decode
-# block (56 x 1 tiles) is where the fold along M wins: the 2D grid gives it one line of cores.
+# The caller's grid (grid=): every grid on a block that can take it, the folds also on blocks their callers would not
+# fold (prefill, a chunked block, a narrow N).
 GRID = ttnn.MatmulReduceScatterPrefillGrid
 FORCED_GRID_CASES = [
     pytest.param(MODEL_CASES["kimi_k27_o_proj_decode"], GRID.GRID_2D, id="decode-grid_2d"),
@@ -281,9 +296,9 @@ def test_forced_grid(mesh_device, case, grid):
     )
 
 
-# W DRAM width-sharded (the layout of a model that keeps one weight copy for decode and prefill): every flow the
-# planner picks - unchunked resident and stream, chunks that miss L1, chunks the cost model picks, scatter on M, the
-# folded 1D grid - and a width that leaves banks with a partial or no shard.
+# W DRAM width-sharded (the layout of a model that keeps one weight copy for decode and prefill): every flow - unchunked
+# resident and stream, chunks that miss L1, chunks the cost model picks, scatter on M, the folded 1D grid of a decode
+# row - and a width that leaves banks with a partial or no shard.
 DRAM_SHARDED_W_CASES = [
     "kimi_k27_o_proj",
     "kimi_k3_dense_ffn_stream",
@@ -314,6 +329,7 @@ def test_dram_sharded_weight(mesh_device, name):
             weight_dtype=weight_dtype,
             num_links=2,
             w_memory_config=dram_width_sharded(mesh_device, *w_shape),
+            grid=grid_of(name),
         )
 
 
@@ -348,6 +364,7 @@ def test_line_decode(mesh_device, num_links):
         scatter_dim=-1,
         topology=ttnn.Topology.Linear,
         num_links=num_links,
+        grid=ttnn.MatmulReduceScatterPrefillGrid.FOLDED_N,
     )
 
 
@@ -437,7 +454,7 @@ def test_staging_tensor(mesh_device, expect_error):
         # a one-tile-row block folded along M is one core, and a balanced ring needs two
         (
             dict(a_shape=(1, 1, 32, 2048), grid=ttnn.MatmulReduceScatterPrefillGrid.FOLDED_M),
-            "the grid the call forces",
+            "the call's grid",
         ),
     ],
     ids=[

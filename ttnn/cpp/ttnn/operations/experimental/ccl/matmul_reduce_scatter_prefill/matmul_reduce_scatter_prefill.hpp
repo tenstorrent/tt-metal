@@ -14,7 +14,7 @@
 
 namespace ttnn::experimental {
 
-// The matmul grid a call may force (grid = std::nullopt: the planner picks per shape). GRID_2D: a 2D split of the
+// The matmul grid of a call, the caller's choice (the op never picks one; default GRID_2D). GRID_2D: a 2D split of the
 // output block over the matmul area. FOLDED_N: one line of cores along N, folded into a rectangle (every core holds all
 // the block's rows, A is multicast to all). FOLDED_M: the same along M (every core holds all the block's columns, W is
 // multicast to all).
@@ -40,8 +40,8 @@ enum class MatmulReduceScatterPrefillGrid : uint8_t { GRID_2D, FOLDED_N, FOLDED_
 //                          may pick smaller K blocks or more chunks). Other stagings the caller holds are L1 the op
 //                          does not see (l1_headroom). The caller keeps it alive while calls that use it run (a trace
 //                          replays into it).
-//   grid                   forces the matmul grid on every plan the planner weighs; a shape that cannot take it (no
-//                          layout, or no plan on it fits L1) is refused. Default: the planner's choice
+//   grid                   the matmul grid every plan the planner weighs uses; a shape that cannot take it (no layout,
+//                          or no plan on it fits L1) is refused. Default: GRID_2D
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -54,7 +54,7 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
     const std::optional<Tensor>& staging_tensor = std::nullopt,
-    const std::optional<MatmulReduceScatterPrefillGrid>& grid = std::nullopt);
+    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D);
 
 // A staging tensor for calls with these arguments (L1, height-sharded bf16 tiles over the full grid, replicated on the
 // mesh), to pass as staging_tensor; the same arguments resolve the same plan as the op.
@@ -66,6 +66,6 @@ Tensor matmul_reduce_scatter_prefill_staging(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<int32_t>& num_links = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
-    const std::optional<MatmulReduceScatterPrefillGrid>& grid = std::nullopt);
+    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D);
 
 }  // namespace ttnn::experimental

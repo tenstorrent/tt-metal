@@ -14,8 +14,9 @@
 // super_block_plan) and the output-chunk search (chunk_candidates, plan_chunk_geometry, chunk_cost_us). Integers in,
 // integers out: no device, no tensors. Fixed policy: lag a relay's finish only when its arrival is produced late,
 // model-based chunk choice, staging sized exactly, one entry per block, one arrival increment per wave, mirrored half
-// orders, resident stream depths {3, 2}, 2 zone sets, kb <= 16 (32 when chunked), 4 chunks per port batch, the
-// folded 1D grid for a one-tile-row block whenever it has more cores than the 2D grid.
+// orders, resident stream depths {3, 2}, 2 zone sets, kb <= 24 (16 for a DRAM width-sharded W or a compute-bound
+// resident plan, 32 when chunked), 4 chunks per port batch, the caller's grid flow (2D unless the call asks for a
+// fold).
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::detail {
 
 // The schedule kind: "line", "ring_unbalanced" (odd G >= 3), "ring_balanced" (even G >= 4).
@@ -126,8 +127,8 @@ struct PlanInputs {
     // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
     // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
     uint64_t staging_floor = 0;
-    std::optional<Flow> forced_flow;  // the caller's grid: the only one every plan may take
-    bool w_dram_sharded = false;      // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
+    Flow flow = Flow::Grid2D;     // the caller's grid: every plan takes it
+    bool w_dram_sharded = false;  // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
 };
 
 // Planner constants the factory needs too.

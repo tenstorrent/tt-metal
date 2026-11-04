@@ -5,7 +5,7 @@
 
 A representative set of per-device prefill shapes (TP=4 row-parallel linears of DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x,
 MiniMax-M3 and MiMo-V2, two output-chunked shapes that miss L1, Llama-70B WO and Flux2 FF2 chunked by the cost model, and
-three Kimi decode shapes (M = 32 and 96) on the folded 1D grid) runs traced on the whole box as a 1x4 ring, and one
+three Kimi decode shapes (M = 32 and 96) on the folded 1D grid their callers ask for) runs traced on the whole box as a 1x4 ring, and one
 shape as a 1x4 line. Each case: an eager call (compile), one traced call, one discarded replay, then REPLAYS
 back-to-back replays in one real-time profiler window; the gate is the median device time of the op's program (the
 slowest chip per replay) within +/- MARGIN of the case's expected time. A case faster than the band fails too: update
@@ -52,11 +52,13 @@ PERF_CASES = {
     # chunked although the block fits L1 unchunked (with a 1-2 tile K-block): 3 x 1 and 3 x 2 chunks
     "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "flux2_ff2": ((1, 1, 4224, 2304), (2304, 6144), -1, ttnn.bfloat16, ttnn.bfloat16),
-    # decode (M = 32 and a batch of 96 rows): the folded 1D grid (56 cores)
+    # decode (M = 32 and a batch of 96 rows), on the fold along N its caller asks for (56 cores; FOLDED_N_CASES)
     "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "kimi_k3_dense_ffn_decode": ((1, 1, 32, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "kimi_k3_dense_ffn_decode_m96": ((1, 1, 96, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
+# the cases run on the fold along N (the rest take the default 2D grid)
+FOLDED_N_CASES = {"kimi_k27_o_proj_decode", "kimi_k3_dense_ffn_decode", "kimi_k3_dense_ffn_decode_m96"}
 
 # Expected device time [ns] per (topology, case): QuietBox 2 (1x4, 2 links), medians of back-to-back traced replays.
 EXPECTED_NS = {
@@ -119,6 +121,8 @@ def run_perf_case(mesh_device, case_name, *, cluster_axis, topology, expected_ns
     expected = group * (a.float() @ w.float())
     ta = replicated(mesh_device, a, dtype)
     tw = replicated(mesh_device, w, weight_dtype)
+    G = ttnn.MatmulReduceScatterPrefillGrid
+    grid = G.FOLDED_N if case_name in FOLDED_N_CASES else G.GRID_2D
 
     def run_once():
         return ttnn.experimental.matmul_reduce_scatter_prefill(
@@ -129,6 +133,7 @@ def run_perf_case(mesh_device, case_name, *, cluster_axis, topology, expected_ns
             topology=topology,
             num_links=2,
             compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
+            grid=grid,
         )
 
     eager = run_once()  # compile + program cache

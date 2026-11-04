@@ -347,42 +347,22 @@ std::optional<GridChoice> choose_grid_folded(
     return std::nullopt;
 }
 
-// The grids a block can take, best first. The caller's forced grid is the only one. Otherwise an unchunked block
-// (`unchunked`) takes the fold along N ahead of the 2D grid when it gives each core fewer output tiles. Scatter on N
-// keeps A resident and streams W once per output block, so the fold along N spreads the stream that moves; the fold
-// along M spreads A, read once, and is left to the caller's grid (measured, QB2 1x4 ring: against an unchunked 2D plan
-// it ran 0.99-1.04x the time). Chunk splits keep the 2D grid: chunk_cost_us charges a cross-chip handoff per core, so a
-// fold's many cores misrank them (a thin-chunk fold ran 1.34x slower on a large prefill shape).
-std::vector<GridChoice> grid_candidates(
-    uint32_t gx,
-    uint32_t gy,
-    uint32_t block_m,
-    uint32_t block_n,
-    uint32_t L,
-    std::optional<Flow> forced,
-    bool unchunked) {
-    const GridChoice grid_2d = choose_grid(gx, gy, block_m, block_n, L);
-    if (forced.has_value()) {  // the caller's grid only
-        if (*forced == Flow::Grid2D) {
-            return {grid_2d};
-        }
-        if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, *forced)) {
-            return {*folded};
-        }
-        throw GeometryMiss(fmt::format(
-            "matmul_reduce_scatter_prefill: no {} grid of the {}x{}-tile block fits the matmul area",
-            *forced == Flow::FoldedN ? "FOLDED_N" : "FOLDED_M",
-            block_m,
-            block_n));
+// The block's grid of the caller's flow. The op never picks the flow: which of the 2D grid and a fold wins depends on
+// the shape, the device and the read NoCs in ways no simple rule tracked (measured, QB2 1x4 ring: the fold along N won
+// 1.1-4x on decode rows, lost 13% on Kimi K3 dense M=128 against a 2D grid reading W on NoC0, and a per-core tile
+// count rule missed folds worth 1.2-1.6x), so a caller that wants a fold asks for it.
+GridChoice grid_of_flow(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, Flow flow) {
+    if (flow == Flow::Grid2D) {
+        return choose_grid(gx, gy, block_m, block_n, L);
     }
-    const auto tiles = [](const GridChoice& c) { return uint64_t{c.core_m} * c.core_n; };
-    if (unchunked) {
-        if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, Flow::FoldedN);
-            folded.has_value() && tiles(*folded) < tiles(grid_2d)) {
-            return {*folded, grid_2d};
-        }
+    if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, flow)) {
+        return *folded;
     }
-    return {grid_2d};
+    throw GeometryMiss(fmt::format(
+        "matmul_reduce_scatter_prefill: no {} grid of the {}x{}-tile block fits the matmul area",
+        flow == Flow::FoldedN ? "FOLDED_N" : "FOLDED_M",
+        block_m,
+        block_n));
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, uint32_t block_n, int32_t scatter_dim) {
@@ -481,24 +461,13 @@ Plan plan_on_grid(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in, cons
     return pl;
 }
 
-// The chunk split's plan on the best grid that fits L1 and lays out (grid_candidates order); the last miss throws.
+// The chunk split's plan on the caller's grid; a miss throws.
 Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in) {
-    const auto grids = grid_candidates(
-        in.gx,
-        in.gy,
-        tt::div_up(in.block_m, n_m_req),
-        tt::div_up(in.block_n, n_n_req),
-        in.L,
-        in.forced_flow,
-        n_m_req * n_n_req == 1);
-    for (size_t i = 0; i + 1 < grids.size(); ++i) {
-        try {
-            return plan_on_grid(n_m_req, n_n_req, in, grids[i]);
-        } catch (const L1Miss&) {
-        } catch (const GeometryMiss&) {
-        }
-    }
-    return plan_on_grid(n_m_req, n_n_req, in, grids.back());
+    return plan_on_grid(
+        n_m_req,
+        n_n_req,
+        in,
+        grid_of_flow(in.gx, in.gy, tt::div_up(in.block_m, n_m_req), tt::div_up(in.block_n, n_n_req), in.L, in.flow));
 }
 
 double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
@@ -684,11 +653,10 @@ Plan solve_plan_uncached(const PlanInputs& in) {
     // Scatter on N: the unchunked plan (when it fits) competes with the chunk splits in chunk_cost_us (measured on 50
     // prefill shapes, QB2 1x4 ring: an unchunked plan whose K-block shrank to fit loses to a chunked one by up to 1.8x,
     // and the model never picked a split slower than the unchunked plan). Scatter on M keeps whatever fits unchunked:
-    // the model misranks it there. A folded unchunked plan is taken too: chunk_cost_us misranks the fold's many cores
-    // (measured: Kimi K3 dense FFN at M = 96 / 128 lost 9% to a 2D chunk split, where the fold wins by 27% / 12%).
+    // the model misranks it there.
     std::optional<std::pair<double, Plan>> best;
     if (auto unchunked = plan_if_fits(in)) {
-        if (in.scatter_dim == -2 || (unchunked->grid.flow != Flow::Grid2D && !in.forced_flow.has_value())) {
+        if (in.scatter_dim == -2) {
             return std::move(*unchunked);
         }
         const double cost = chunk_cost_us(*unchunked, in);
@@ -741,7 +709,7 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.scatter_dim,
         in.budget,
         in.staging_floor,
-        in.forced_flow,
+        in.flow,
         in.w_dram_sharded);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
@@ -751,9 +719,9 @@ const Plan& solve_plan(const PlanInputs& in) {
         try {
             it = solved.emplace(key, solve_plan_uncached(in)).first;  // a refusal throws and caches nothing
         } catch (const L1Miss& miss) {
-            TT_THROW("{}{}", miss.what(), in.forced_flow.has_value() ? " (on the grid the call forces)" : "");
+            TT_THROW("{} (on the call's grid)", miss.what());
         } catch (const GeometryMiss& miss) {
-            TT_THROW("{}{}", miss.what(), in.forced_flow.has_value() ? " (on the grid the call forces)" : "");
+            TT_THROW("{} (on the call's grid)", miss.what());
         }
     }
     return it->second;
