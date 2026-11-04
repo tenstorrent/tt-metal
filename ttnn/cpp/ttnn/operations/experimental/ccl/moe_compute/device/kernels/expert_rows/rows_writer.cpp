@@ -133,6 +133,7 @@ struct XStream {
     uint32_t group_mask_arg;
 
     // The piece of chunk `chunk` for every row of a job, as tiles [piece tile][row tile] at piece_tiles_addr.
+    // TODO: try tilizing the staged rows on the compute kernel instead of with these NoC copies.
     __attribute__((noinline)) void build_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk) const {
         const Noc noc;
         const uint32_t first_row = jobs.first_row(job), rows = jobs.rows(job);

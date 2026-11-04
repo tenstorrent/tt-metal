@@ -89,6 +89,8 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const CoreRangeSet core_set = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
     // place.cpp
+    // TODO: with a combine no caller reads outputs 0-4; skip place.cpp then, once moe_compute's outputs and
+    // test_moe_compute_6U.py no longer include them.
     create_cb(desc, core_set, kPlaceScratchCb, place.scratch_bytes, tt::DataFormat::UInt32, place.scratch_bytes);
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs place_ct = {
         {"cb_scratch", kPlaceScratchCb},
