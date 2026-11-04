@@ -14,6 +14,7 @@ import math
 import re
 from pathlib import Path
 
+from overlay import HARNESS_PYTHON
 from perf import DEVICE_COMPUTED_OPERAND, ROWS_PER_TILE
 
 COMMENT_MARKER = "<!-- llk-sfpu-report -->"
@@ -373,7 +374,7 @@ def accuracy_section(summaries):
         "### Accuracy",
         "",
         "ULP steps against the correctly rounded reference (the golden of the functional tests). "
-        "Unary ops: every finite input of the format (fp32: every 65,536th value). Binary ops: "
+        "Unary ops: every normal input of the format, and zero (fp32: every 65,536th value). Binary ops: "
         "the operand pairs of the op's functional test (random over its domain; crafted pairs, "
         "ties included, for comparisons), the same on both sides. "
         "Lanes a step count cannot describe (NaN, subnormal input, padding) are left out here and "
@@ -417,17 +418,21 @@ def accuracy_section(summaries):
     return lines + [""]
 
 
+def _perf_only(family, row):
+    """Whether accuracy does not run this perf variant: fast mode on, or a binary op's approx Yes."""
+    return row.get("fast_mode") == "Yes" or (family == "binary" and row["approx"] != "No")
+
+
 def _perf_only_variants(summaries):
-    """Perf variants accuracy does not run: fast mode on, or a binary op's approx Yes."""
+    """The perf variants accuracy does not run."""
     out = []
     for s in summaries:
         for family, by_schedule in s["perf"].items():
             for row in by_schedule.get("loadmacro", []):
-                op = row["op"].split(" (", 1)[0]
-                if row.get("fast_mode") == "Yes":
-                    out.append(f"`{op}` fast mode")
-                elif family == "binary" and row["approx"] != "No":
-                    out.append(f"`{op}` approx={row['approx']}")
+                if _perf_only(family, row):
+                    op = row["op"].split(" (", 1)[0]
+                    mode = "fast mode" if row.get("fast_mode") == "Yes" else f"approx={row['approx']}"
+                    out.append(f"`{op}` {mode}")
     return list(dict.fromkeys(out))
 
 
@@ -555,12 +560,164 @@ def cross_arch_section(summaries):
     return ["### Wormhole vs Blackhole", "", text, ""]
 
 
+#: A kernel that runs over the tile takes at least a cycle per row. An op under that,
+#: and this many times faster than before, did not run. (A kernel that touches a few
+#: rows only, like SfpuAddTopRow's, takes ~15 cycles on both sides.)
+NOT_RUN_SPEEDUP = 10
+
+
+def _not_run(s):
+    """{op: evidence} for the ops that did not run on ``s``'s PR side, so its numbers
+    there are not the PR's kernel: main's harness asked for something the PR's device
+    code no longer runs (#54080), or the PR's kernel stopped computing.
+
+    Accuracy decides: every variant hands back an input unchanged on the PR side, and
+    none did before. The perf variants accuracy does not run, and an op without
+    accuracy results, go by their cycles: under a cycle per row, and NOT_RUN_SPEEDUP
+    times faster than before.
+    """
+    returns, cycles, perf_only = {}, {}, {}
+    for rec in s["accuracy"]:
+        if "base" in rec and "returns_input" in rec:
+            returns.setdefault(rec["key"][0], []).append(rec["returns_input"])
+    for family, by_schedule in s["perf"].items():
+        for row in by_schedule.get("loadmacro", []):
+            m = row.get("MATH_ISOLATE", {})
+            if m.get("base") is not None and m.get("head") is not None:
+                op = row["op"].split(" (", 1)[0]
+                cycles.setdefault(op, []).append((m["base"], m["head"]))
+                if _perf_only(family, row):
+                    perf_only.setdefault(op, []).append((m["base"], m["head"]))
+
+    def collapsed(timed):
+        return all(head < ROWS_PER_TILE and base >= NOT_RUN_SPEEDUP * head for base, head in timed)
+
+    out = {}
+    for op in s["ops"]["measured"]:
+        sides, timed = returns.get(op), cycles.get(op, [])
+        if sides:
+            if all(r["head"] and not r["base"] for r in sides) and collapsed(perf_only.get(op, [])):
+                out[op] = {"returns": sides[0]["head"], "cycles": timed}
+        elif timed and collapsed(timed):
+            out[op] = {"returns": None, "cycles": timed}
+    return out
+
+
+def _without_not_run(s):
+    """``s`` without the results of the ops that did not run on its PR side."""
+    gone = _not_run(s)
+    if not gone:
+        return s
+    keep = lambda label: label.split(" (", 1)[0] not in gone  # noqa: E731
+    return dict(
+        s,
+        ops=dict(s["ops"], measured=[o for o in s["ops"]["measured"] if keep(o)]),
+        perf={
+            family: {schedule: [r for r in rows if keep(r["op"])] for schedule, rows in by_schedule.items()}
+            for family, by_schedule in s["perf"].items()
+        },
+        accuracy=[r for r in s["accuracy"] if keep(r["key"][0])],
+    )
+
+
+def _span(values):
+    lo, hi = min(values), max(values)
+    return _num(lo) if round(lo) == round(hi) else f"{_num(lo)}–{_num(hi)}"
+
+
+def _evidence(ev, short=False):
+    """What shows that an op did not run: clauses whose subject is the op."""
+    out = []
+    if ev["returns"]:
+        out.append(f"returns its {ev['returns']} input unchanged" + ("" if short else " on every lane"))
+    if ev["cycles"]:
+        new, old = _span([h for _, h in ev["cycles"]]), _span([b for b, _ in ev["cycles"]])
+        out.append(f"takes {new} math cycles" + ("/tile" if short else " per tile") + f" ({old} before)")
+    return out
+
+
+def _harness_changed(summaries):
+    """{op: [files]}: the harness Python the PR changes for each measured op."""
+    out = {}
+    for s in summaries:
+        for op, files in s.get("harness_changed", {}).items():
+            out.setdefault(op, list(files))
+    return out
+
+
+def _harness_files(files):
+    """The op's registration first, then the tests, then what they import."""
+    rank = lambda p: (p != "helpers/llk_params.py", p.count("/"), p)  # noqa: E731
+    names = sorted((p.removeprefix(HARNESS_PYTHON) for p in files), key=rank)
+    return ", ".join(code(p) for p in names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+
+
+def not_run_section(summaries):
+    """The ops that did not run on the PR side: what shows it, the likely cause, and
+    that their numbers are left out of the report."""
+    by_op = {}
+    for s in summaries:
+        for op, ev in _not_run(s).items():
+            entry = by_op.setdefault(op, {"archs": [], "returns": None, "cycles": []})
+            entry["archs"].append(_ARCH[s["arch"]])
+            entry["returns"] = entry["returns"] or ev["returns"]
+            entry["cycles"] += ev["cycles"]
+    harness = _harness_changed(summaries)
+    python = any(p.startswith(HARNESS_PYTHON) for s in summaries for p in s.get("not_applied", []))
+    kernel = (
+        "the PR's kernel, or its dispatch in the device test code (`sfpu_operations.h`), no longer computes "
+        "it: a regression, unless the PR meant that."
+    )
+    lines = []
+    for op, ev in by_op.items():
+        if op in harness:
+            cause = (
+                f"This PR also changes `{op}` in the test harness's Python ({_harness_files(harness[op])}), "
+                "which the report runs from main: main's harness most likely asks for the op in a way "
+                "the PR's device code no longer runs. Measure it with the PR's own tests."
+            )
+        elif python:
+            cause = (
+                "This PR also changes the test harness's Python (see the notes), which the report runs "
+                f"from main. If that is not why, {kernel}"
+            )
+        else:
+            cause = kernel[0].upper() + kernel[1:]
+        lines += [
+            f"**⚠️ `{op}` did not run on the PR side** ({', '.join(ev['archs'])}). There it "
+            f"{' and '.join(_evidence(ev))}. {cause} Its numbers are left out of this report.",
+            "",
+        ]
+    return lines
+
+
 def findings(summaries):
     """Every ⚠️ of the report, one line each: the top of the comment, and ``--check``.
 
-    Returns dicts with ``kind`` (perf / accuracy / edge), ``arch``, ``op``, ``fmt`` (the
-    input format, for a narrowed re-run) and ``text``.
+    Returns dicts with ``kind`` (not run / perf / accuracy / edge), ``arch``, ``op``,
+    ``fmt`` (the input format, for a narrowed re-run) and ``text``. An op that did not
+    run on the PR side is one ``not run`` finding, and nothing else: its numbers are not
+    the PR's.
     """
+    not_run = []
+    for s in summaries:
+        for op, ev in _not_run(s).items():
+            fmts = [r["key"][1] for r in s["accuracy"] if r["key"][0] == op] + [
+                row["formats"].split("->")[0]
+                for by_schedule in s["perf"].values()
+                for row in by_schedule.get("loadmacro", [])
+                if row["op"].split(" (", 1)[0] == op
+            ]
+            not_run.append(
+                {
+                    "kind": "not run",
+                    "arch": s["arch"],
+                    "op": op,
+                    "fmt": ",".join(dict.fromkeys(fmts)),
+                    "text": f"{_ARCH[s['arch']]} `{op}` on the PR side: {'; '.join(_evidence(ev, short=True))}",
+                }
+            )
+    summaries = [_without_not_run(s) for s in summaries]
     grouped = {}
 
     def add(kind, arch, op, fmt, where, what, approx):
@@ -650,7 +807,7 @@ def findings(summaries):
                         "a NaN input no longer returns NaN",
                         approx,
                     )
-    out = []
+    out = not_run
     order = {"perf": 0, "accuracy": 1, "edge": 2}
     for (kind, arch, op, rest, what), e in sorted(grouped.items(), key=lambda kv: (order[kv[0][0]], kv[0][1:])):
         approx = "/".join(sorted(e["approx"], reverse=True))
@@ -666,13 +823,16 @@ def findings(summaries):
     return out
 
 
-def glance_section(summaries, not_measured=()):
+def glance_section(summaries, not_measured=(), other_ops=False):
+    """The verdict. ``other_ops``: some ops did not run on the PR side and are named
+    above, so a clean verdict is about the other ops."""
     found = findings(summaries)
     if not found:
+        clean = "No regressions in the other ops" if other_ops else "No regressions"
         if not_measured:
             missing = ", ".join(_ARCH[x["arch"]] for x in not_measured)
             return [
-                f"**No regressions on {', '.join(_ARCH[x['arch']] for x in summaries)}.** "
+                f"**{clean} on {', '.join(_ARCH[x['arch']] for x in summaries)}.** "
                 f"{missing} was not measured: see the notes.",
                 "",
             ]
@@ -680,13 +840,13 @@ def glance_section(summaries, not_measured=()):
         if lacking:
             compared = any("base" in r or "specials" in r for s in summaries for r in s["accuracy"])
             return [
-                "**No regressions.** Nothing is slower beyond the thresholds"
+                f"**{clean}.** Nothing is slower beyond the thresholds"
                 + (", and no accuracy or edge-case result got worse" if compared else "")
                 + f". Accuracy was not measured for {', '.join(lacking)}: see the notes.",
                 "",
             ]
         return [
-            "**No regressions.** Nothing is slower beyond the thresholds, and no accuracy or "
+            f"**{clean}.** Nothing is slower beyond the thresholds, and no accuracy or "
             "edge-case result got worse. Details below.",
             "",
         ]
@@ -739,6 +899,17 @@ def header(summaries):
         lines += ["", "**Ops measured:** none."]
     if not_covered:
         lines.append(f"**Changed but not measured:** {', '.join(f'`{o}`' for o in not_covered)}.")
+    # The ops that did not run name their harness changes where they are reported.
+    gone = {op for x in summaries for op in _not_run(x)}
+    harness = {op: files for op, files in _harness_changed(summaries).items() if op not in gone}
+    if harness:
+        lines.append(
+            "**Harness changes left out:** this PR also changes the test harness's Python for "
+            + ", ".join(f"`{op}` ({_harness_files(files)})" for op, files in harness.items())
+            + ", which the report runs from main: the numbers for "
+            + ("that op" if len(harness) == 1 else "those ops")
+            + " use main's tests and reference, not the PR's."
+        )
     lines += [""]
     return lines
 
@@ -877,12 +1048,16 @@ def render(summaries, expected=(), run_url=None, skipped=()):
     if not any(s["ops"]["measured"] for s in summaries):
         # Empty tables and "no regressions" say nothing here; the notes say why.
         return _fit("\n".join(header(summaries) + notes + footer(summaries)) + "\n")
-    parts = header(summaries)
-    parts += glance_section(summaries, not_measured)
-    parts += perf_section(summaries)
-    parts += accuracy_section(summaries)
-    parts += edge_section(summaries)
-    parts += cross_arch_section(summaries)
+    not_run = not_run_section(summaries)
+    parts = header(summaries) + not_run
+    # The rest is about the ops that ran: what ran in place of the others is not the PR's.
+    shown = [_without_not_run(s) for s in summaries]
+    if any(s["ops"]["measured"] for s in shown):
+        parts += glance_section(shown, not_measured, other_ops=bool(not_run))
+        parts += perf_section(shown)
+        parts += accuracy_section(shown)
+        parts += edge_section(shown)
+        parts += cross_arch_section(shown)
     parts += notes
     parts += footer(summaries)
     return _fit("\n".join(parts) + "\n")

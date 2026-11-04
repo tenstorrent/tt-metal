@@ -17,7 +17,7 @@ import ttnn
 
 from _completer_utils import as_update_input, open_completer, to_torch_2d
 
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 TARGET_TOKEN_ID = 16000
 PROMPT = "Explain a tensor in a paragraph."
 

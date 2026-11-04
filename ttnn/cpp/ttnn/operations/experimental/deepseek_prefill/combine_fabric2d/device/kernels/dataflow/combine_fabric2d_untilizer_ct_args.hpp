@@ -23,7 +23,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the destinations start at. Asserted
 // against the field list below, so it cannot drift out of step with it.
-constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 20;
+constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 21;
 
 struct UntilizerCtArgs {
     uint32_t token_size_bytes;
@@ -52,6 +52,8 @@ struct UntilizerCtArgs {
     uint32_t expert_table_page_base;
     // The routed expert's per-expert readiness count on this core.
     uint32_t ready_sem;
+    // Pages in the dispatched buffer, as in the reader's arguments: both walk the same clamped runs.
+    uint32_t dispatch_capacity;
 
 #ifndef KERNEL_BUILD
     UntilizerCtArgs(
@@ -78,7 +80,8 @@ struct UntilizerCtArgs {
         block_tiles(op::untilize_block_tiles(tensor_args)),
         expert_threshold(args.hybrid_token_threshold),
         expert_table_page_base(plan.expert_table_page_base),
-        ready_sem(plan.ready_sem) {
+        ready_sem(plan.ready_sem),
+        dispatch_capacity(op::dispatch_capacity(tensor_args)) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
         for (const auto& w : work) {
@@ -114,7 +117,8 @@ struct UntilizerCtArgs {
                                        block_tiles,
                                        expert_threshold,
                                        expert_table_page_base,
-                                       ready_sem};
+                                       ready_sem,
+                                       dispatch_capacity};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -139,7 +143,8 @@ struct UntilizerCtArgs {
         block_tiles(get_compile_time_arg_val(16)),
         expert_threshold(get_compile_time_arg_val(17)),
         expert_table_page_base(get_compile_time_arg_val(18)),
-        ready_sem(get_compile_time_arg_val(19)) {}
+        ready_sem(get_compile_time_arg_val(19)),
+        dispatch_capacity(get_compile_time_arg_val(20)) {}
 
     // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
     // standalone op places its ring counters in. The framework re-initialises those every launch; the
