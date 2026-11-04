@@ -969,6 +969,52 @@ def test_sparse_mla_rotated_chunked(
     )
 
 
+# Chunk size must not change the answer. One sequence prefilled at two chunk sizes, each against the same
+# single-shot CPU reference: the 4x4 stage (SP on the axis-1 ring) at its production 2,560 vs 5,120 (640 vs 1,280
+# query rows per chip), and LoudBox 2x4 at 1,280 vs 2,560. The GLM-5.3 workload's KV diverges between chunk sizes
+# after the first MoE layer; this isolates the sparse MLA. The total is a whole number of chunks at both sizes.
+_CHUNK_SIZE_CASES = [
+    ((4, 4), 1, torus_x_device_params, 10240, [2560, 5120]),
+    ((2, 4), 0, fabric2d_device_params, 7680, [1280, 2560]),
+]
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, device_params, sp_axis, total, chunk",
+    [
+        pytest.param(
+            "glm_5_3",
+            mesh,
+            params(worker_l1_size=_worker_l1_size()),
+            sp_axis,
+            total,
+            chunk,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=f"mesh-{mesh[0]}x{mesh[1]}"),
+            id=f"glm_5_3-shape-{mesh[0]}x{mesh[1]}{'-sp1' if sp_axis else ''}-c{chunk}",
+        )
+        for mesh, sp_axis, params, total, chunks in _CHUNK_SIZE_CASES
+        for chunk in chunks
+    ],
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_chunk_size_vs_reference(
+    mesh_device, sp_axis, total, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    run_sparse_mla_rotated_case(
+        variant,
+        config_only,
+        mesh_device,
+        [chunk] * (total // chunk),
+        chunk,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        sp_axis=sp_axis,
+    )
+
+
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
 # both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
 @pytest.mark.parametrize(
