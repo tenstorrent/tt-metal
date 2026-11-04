@@ -24,6 +24,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 #include <ranges>
 #include <utility>
@@ -94,7 +95,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
 }
 
 MassagedConcat build_untilize_rm_retilize_concat(
-    const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
+    const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape, ttnn::DataType input_dtype) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
@@ -121,15 +122,26 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     ttsl::SmallVector<uint32_t> ends(
                         input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
                     std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
+                    // Block-float has no row-major form, so untilize it as bfloat16 and restore the
+                    // dtype in post_transform; bfloat4_b would otherwise fail validation.
+                    if (tt::tt_metal::is_block_float(input_tensor.dtype())) {
+                        return ttnn::untilize_with_unpadding(
+                            ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16), ttnn::Shape(ends), std::nullopt);
+                    }
                     return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(ends), std::nullopt);
                 });
             return std::make_tuple(itensors, dim, groups);
         },
-        .post_transform = [&logical_output_shape](const ttnn::Tensor& output) -> ttnn::Tensor {
+        .post_transform = [&logical_output_shape, input_dtype](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need to re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
+                // Re-tilize to the concat input dtype: block-float inputs were untilized as
+                // bfloat16, so leave the dtype unset for everything else.
+                std::optional<ttnn::DataType> output_dtype = tt::tt_metal::is_block_float(input_dtype)
+                                                                 ? std::optional<ttnn::DataType>(input_dtype)
+                                                                 : std::nullopt;
                 return ttnn::tilize_with_val_padding(
-                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config());
+                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config(), output_dtype);
             }
             concat_db_print(true, "[DEBUG] already tilized");
             return output;
@@ -399,8 +411,9 @@ ttnn::Tensor concat_native(
         }
     }
 
-    auto untilize_rm_retilize_concat =
-        ttnn::operations::data_movement::build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
+    // All inputs share a dtype (validated by the device op), so the first one is the concat dtype.
+    auto untilize_rm_retilize_concat = ttnn::operations::data_movement::build_untilize_rm_retilize_concat(
+        mem_config, logical_output_shape, input_tensors[0].dtype());
     auto non_aligned_last_dim_concat =
         ttnn::operations::data_movement::build_non_aligned_last_dim_concat(input_tensors, mem_config);
     auto unsqueeze_squeeze_1D_concat =
