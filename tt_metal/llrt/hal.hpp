@@ -9,7 +9,6 @@
 // level APIs
 //
 
-#include <sys/types.h>
 #include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -21,8 +20,6 @@
 #include <optional>
 #include <ostream>
 #include <string_view>
-#include <tt-umd/types/xy_pair.hpp>
-#include <tt-umd/types/cluster_types.hpp>
 #include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
@@ -98,6 +95,7 @@ enum class HalL1MemAddrType : uint8_t {
     ROUTER_STATE,
     ROUTER_COMMAND,
     ETH_FW_MAILBOX,
+    FW_STAGE,  // Always-on ethernet firmware execution-stage breadcrumb (eth_status_t.eth_fw_stage)
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
     ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
