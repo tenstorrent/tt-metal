@@ -472,3 +472,24 @@ The focus is **1.45x faster on every chip (76.48 → 52.69 ms)**, with no guard 
   NoC0 on Blackhole), which is now explicit. The profiler zone-hash collision is described above.
 - Tests added: `tests/ttnn/unit_tests/operations/ring_joint_scaled_dot_product_attention/test_ring_joint_scaled_dot_product_attention_kv_mcast.py`
   (R2 vs R1 bit-identical + torch PCC, asserts the row groups were used; 5 cases, ring and line).
+
+## Refinement 6 — Perf-flagged case: OVERLAP — exposed transport per chip (first-wave landing, landing notification, tail chain)
+- Date: 2026-11-04
+- What was done: measured the exposed transport on the perf-flagged Wan2.2 case (bf16, 1×4 ring, 2 links, R2 on).
+  It is within noise of zero, so per the verifier note the op is unchanged. Kernels, host and SUPPORTED are untouched.
+  - Added: `EXPOSURE=1` host-side mode of `probes/perf_breakdown.py`. Per chip and per call it reports the
+    `reader_landing_wait` total per core (mean / max), the first-unit share, the latest-ending core's wait, and the
+    last landing against the op end.
+  - Measured (3 calls × 4 chips, device profiler): op span fastest chip 42 585–42 621 us, slowest chip
+    42 718–42 748 us. Landing wait per core: mean 4.2–5.8 us, max 16–30 us. First-unit share ≤ 3 us. Latest-ending
+    core 11–28 us. Last landing at 4.03–4.12 ms, ≈ 38.5 ms before the op end, so the tail chain contains no transport.
+    Launch skew (`port_ready_fence`) ≤ 46 us, absorbed in the first 4 ms.
+  - Finding: the bound on every OVERLAP lever (head-ordered waves, multicast landing notification, `inc_every`,
+    skew tolerance) is ≤ 30 us of 42.7 ms (0.07 %). That is below the ≈ 150 us call-to-call noise, so no lever was
+    built: its win is unmeasurable. The span is set by local compute plus the work-split tail (core end median
+    40.94 ms vs max 42.6–42.7 ms, so ≈ 1.7 ms of last-wave imbalance). Next: key-split tail or the subblock row-pair
+    pipeline (local compute).
+- Accuracy achieved: unchanged from Refinement 5 (no kernel / host change).
+- Golden test progress: unchanged (no code path touched; not re-run).
+- Issues encountered: None.
+- Tests added: none (probe mode only).

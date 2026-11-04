@@ -6,6 +6,8 @@ logical_n = 32760), from the device profiler's KERNEL spans and the op's MaybeDe
 
   TT_METAL_DEVICE_PROFILER=1 scripts/run_safe_pytest.sh tests/.../probes/perf_breakdown.py -s
   python tests/.../probes/perf_breakdown.py [out.json]     # host-side analysis (the CSV is flushed at mesh close)
+  SPANS=1 python tests/.../probes/perf_breakdown.py        # op span per call per chip (ccl_perf fastest/slowest)
+  EXPOSURE=1 python tests/.../probes/perf_breakdown.py     # OVERLAP: exposed transport per chip per call
 
 Env: FOCUS_HEADS (40), FOCUS_N (8192 rows per device), FOCUS_LINKS (2), FOCUS_FP32 (0), FOCUS_FID (HiFi2; fidelity
 ablation only), FOCUS_KV_MCAST (R2 row-group cap; 1 = off), PERF_OUT (json path).
@@ -179,8 +181,52 @@ def spans():
     return out
 
 
+def exposure():
+    """OVERLAP (Refinement 6): the transport time the op leaves exposed, per chip and per measured call. Exposed
+    transport = the compute readers' `reader_landing_wait` zones (await_landing on remote segments; R2 members never
+    wait, their injector does), summed per core. Reports the per-core mean / max, the part spent in the core's first
+    unit (first-wave landing), the wait on the latest-ending core (the one that sets the op span), and the last
+    landing (port_send end) against the op end (the tail chain from the last landing to the output write)."""
+    df = pd.read_csv(LOG, skiprows=1, skipinitialspace=True)
+    df.columns = [c.strip() for c in df.columns]
+    run_col = "run host ID" if "run host ID" in df.columns else "run ID"
+    tcol = "time[cycles since reset]"
+    for dev, d in df.groupby("PCIe slot"):
+        runs = [r for r, g in d.groupby(run_col) if (g["zone name"] == "compute_unit").any()][1:]
+        for r in runs:
+            g = d[d[run_col] == r]
+            k = g[g["zone name"].astype(str).str.contains("KERNEL")]
+            t0 = k[tcol].min()
+            per, first = {}, {}
+            z = g[g["zone name"] == "reader_landing_wait"].sort_values(tcol)
+            for c, gc in z.groupby(["core_x", "core_y"]):
+                st = gc[gc["type"] == "ZONE_START"][tcol].values
+                en = gc[gc["type"] == "ZONE_END"][tcol].values
+                n = min(len(st), len(en))
+                dur = (en[:n] - st[:n]) / FREQ_GHZ
+                per[c] = float(dur.sum())
+                us = g[(g["zone name"] == "reader_unit") & (g["core_x"] == c[0]) & (g["core_y"] == c[1])]
+                u_end = us[us["type"] == "ZONE_END"][tcol].min()
+                first[c] = float(dur[en[:n] <= u_end].sum())
+            ps = g[(g["zone name"] == "port_send") & (g["type"] == "ZONE_END")][tcol]
+            last_landing = (ps.max() - t0) / FREQ_GHZ / 1e3 if len(ps) else float("nan")
+            span = (k[tcol].max() - t0) / FREQ_GHZ / 1e3
+            late = k.groupby(["core_x", "core_y"])[tcol].max().idxmax()
+            s = pd.Series(per) if per else pd.Series([0.0])
+            print(
+                f"chip {int(dev)} run {r}: span {span:.1f} us | landing wait per core mean {s.mean()/1e3:.2f} "
+                f"max {s.max()/1e3:.2f} us (first unit max {max(first.values(), default=0)/1e3:.2f}) | latest-ending "
+                f"core {late} waited {per.get(late, 0.0)/1e3:.2f} us | last landing {last_landing:.1f} us -> op end "
+                f"{span:.1f} us | waiting cores {len(per)}"
+            )
+
+
 if __name__ == "__main__":
     import sys
+
+    if os.environ.get("EXPOSURE"):
+        exposure()
+        sys.exit(0)
 
     if os.environ.get("SPANS"):
         sp = spans()

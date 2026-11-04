@@ -168,7 +168,7 @@ No SUPPORTED change.
 
 **Outcome**: R2 built and on by default (`KV_MCAST_GROUP = None`; 1 = R1). Focus (Wan2.2, bf16, 1×4 ring, 3 calls each, A/B in one session): slowest chip 42 770 → 42 765 us, fastest 42 611 → 42 585 us. That is flat, because the focus is compute-bound: before R2 the reader already sat in `kv cb_reserve_back` for 46 of every ~53 us key block. R2 does remove the DRAM pressure: compute K/V reads ≈ 10.7 → 3.25 GB per call, per-block K/V barrier 4.9 → 0.85 us, transport `port_send` 5.5–8.5 → 3.0–4.1 ms (back at the link roofline), worst landing wait 330–460 → 12–15 us. Guard set (slowest-chip median of 8 calls, R1 → R2): joint L128 bf16 1063.9 → 562.2 us (1.89×), joint L128 fp32 963.7 → 832.6 (1.16×), (1,10,512,128) bf16 662.2 → 489.5 (1.35×), (1,8,1024,128) fp32 Linear 1531.8 → 1003.3 (1.53×), GQA 16/4 (1,16,2048,64) 1506.9 → 1469.4 (−2.5 %), (1,2,128,64) 61.5 → 61.7 (no row group forms, so it is R1; noise). Causal runs R1 by construction. The binding resource at the focus is still the per-block compute: MATH / PACK / UNPACK are balanced, ~53 us per 16×8 block. Next lever: the `matmul_output_subblock` row-pair pipeline that Refinement 3 named. It was not tried here because it is a compute-kernel rewrite, outside this dataflow topology change.
 
-### [ ] Refinement 6 — Perf-flagged case: OVERLAP — exposed transport per chip (first-wave landing, landing notification, tail chain)
+### [x] Refinement 6 — Perf-flagged case: OVERLAP — exposed transport per chip (first-wave landing, landing notification, tail chain)
 
 **Type**: perf
 
@@ -183,3 +183,12 @@ No SUPPORTED change.
 **Verifier notes**: measured today (fp32 proxy) the transport is done by 2.3–4.5 ms of a 198 ms call, so exposure is unobservable until the local work shrinks. Measure first, with a per-chip breakdown via device-profiler zones around the landing waits. If the measured exposure is within noise of zero, record the measurement and close with no change. TRANSPORT itself (link rate, ring balance split, packet size) is not queued: the port readers already finish at the 3.46 ms link roofline (`fabric_all_gather` measured 35.9 GB/s busiest link at 2 links).
 
 **Done when**: the exposed transport per chip on the perf-flagged case is measured and reported; any change lands only with a measured device-time win (fastest chip; slowest chip and spread guarded), the golden suite green, and no regression across the guard set.
+
+**Outcome**: the exposed transport was measured and is within noise of zero, so this closes with no kernel change (verifier note). Measurement: focus, 3 calls × 4 chips, device-profiler `reader_landing_wait` zones; `EXPOSURE=1 probes/perf_breakdown.py`. Op span: fastest chip 42 585–42 621 us, slowest chip 42 718–42 748 us. Call-to-call and chip-to-chip spread is ≈ 100–160 us. Exposed transport per chip:
+- Landing wait summed per core: mean 4.2–5.8 us, max 16–30 us (≤ 0.07 % of the call). Only the 52 injector / single cores wait; R2 members never poll.
+- First-unit (first-wave) share per core: ≤ 3 us. The rest is spread over later units while transport is still running.
+- The latest-ending core (the one that sets the span) waited 11–28 us.
+- Tail chain: the last landing (`port_send` end) is at 4.03–4.12 ms, ≈ 38.5 ms before the op end, so transport is not on the chain to the output write.
+- Launch skew (`port_ready_fence`): ≤ 46 us, also absorbed inside the first 4 ms.
+
+The bound on every lever (head ordering, multicast landing notification, `inc_every`, skew tolerance) is ≤ 30 us of 42.7 ms, below the ≈ 150 us noise floor. None was built because its win cannot be measured, and the Done-when gate requires one. What binds the span now is local: per-block compute (Refinement 3 / 5 outcomes) plus the work-split tail. Core end times are median 40.94 ms against max 42.6–42.7 ms, so ≈ 1.7 ms (4 %) of last-wave imbalance. Next lever: a key-split tail or the `matmul_output_subblock` row-pair pipeline, both local-compute and out of OVERLAP scope.
