@@ -1484,8 +1484,9 @@ def test_mla_chunked_prefill(
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():
         pytest.skip("mistral_small_4 is validated on Blackhole only")
-    if tp_shard_kv and variant.name == "mistral_small_4":
-        pytest.skip("a TP-deduped cache runs expanded K/V only, which mistral_small_4 has no schedule for")
+    # Expanded K/V has measured schedules for Kimi on 8x4 only (_EXPANDED_K_SDPA_CHUNKS).
+    if tp_shard_kv and (variant.name == "mistral_small_4" or tuple(mesh_device.shape) != (8, 4)):
+        pytest.skip("a TP-deduped cache runs expanded K/V only, which has no schedule for this model and mesh")
     # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
     # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
     # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
@@ -2345,7 +2346,8 @@ _DISTINCT_WEIGHTS_STEPS = [(0, 0, 5120), (1, 0, 2560), (0, 5120, 5120), (1, 2560
 def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_params, variant):
     """Expanded K/V's W_UK and W_UV^T are runtime-patched buffers. Each layer's kv_b is rotated by one head against the
     previous layer's, so a program reading another layer's weights would use a neighbouring head's: expanded vs
-    ring_mla must agree per layer and step (TP-sharded cache, metadata path). On sp_only and one cache
+    ring_mla must agree per layer and step (expanded K/V on the TP-sharded cache, ring_mla on the replicated one,
+    metadata path). On sp_only and one cache
     layer, layers that differ only in their weights must share every program (no new program-cache entry)."""
     config, weights = request.getfixturevalue("random_weights")
     sp_axis, tp_axis = 0, 1
@@ -2432,9 +2434,13 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
 
     outputs = {}
     for expanded in (False, True):
+        # ring_mla runs on the TP-replicated cache, expanded K/V on the TP-deduped one.
         for mla_layer in layers:
             mla_layer._expanded_k = expanded
-        cache = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
+            mla_layer.set_tp_shard_kv(expanded)
+        cache = _new_layered_kv_cache(
+            config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=expanded
+        )
         outputs[expanded] = []
         for step in range(len(_DISTINCT_WEIGHTS_STEPS)):
             set_step(step)

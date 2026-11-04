@@ -41,8 +41,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 TP = 4
 # Rows each chip stores per chunk: ttMLA's stripe, 640 Q rows per SP row over TP.
 REGION = 160
-# Gather scratch and cache rows the op must not read as data: the scratch keeps its poison past the transferred
-# slabs, and the cache's own poison would wreck any output that attended to it.
+# Per-head output norm against the reference's (bf8 noise moves it ~2%): PCC alone would pass a uniformly mis-scaled
+# (mis-normalized) output.
+NORM_RATIO_TOLERANCE = 0.05
+# Gather scratch poison: past each source's transferred slabs it must stay untouched, and a replay that read stale
+# scratch instead of gathering would attend to it.
 SCRATCH_POISON = 13.0
 MODELS = ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"]
 MODEL_IDS = ["k3", "k2_7"]
@@ -228,6 +231,10 @@ class SplitKV:
                 for h in range(self.heads):
                     passed, pcc = comp_pcc(expected[h], actual[h], EXPANDED_K_MIN_HEAD_PCC)
                     assert passed, f"chip ({q_rank}, {lane}) head {h}: PCC {pcc} < {EXPANDED_K_MIN_HEAD_PCC}"
+                    ratio = (actual[h].norm() / expected[h].norm()).item()
+                    assert (
+                        abs(ratio - 1) <= NORM_RATIO_TOLERANCE
+                    ), f"chip ({q_rank}, {lane}) head {h}: output norm {ratio:.4f}x the reference's"
 
     def check_scratch_tail(self, end):
         """Every source keeps its stride in the scratch: the first tile past its transferred slabs stays poison."""
@@ -244,7 +251,8 @@ class SplitKV:
 
 # (prefix chunks, row offset, metadata, logical rows): first chunk, a deeper prefix on the metadata path, a prefix
 # ending inside a chip's region (rotation within the stripe), one crossing a Q slab, and a short prompt that leaves most
-# sources without valid KV (their ring iterations go inactive).
+# sources without valid KV, so their ring iterations go inactive (the op promises nothing for Q rows past logical_n,
+# so only the rows below it are checked).
 ACCURACY_CASES = [
     pytest.param(0, 0, False, None, id="first-scalar"),
     pytest.param(3, 0, True, None, id="deep-metadata"),

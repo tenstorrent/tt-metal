@@ -1216,6 +1216,7 @@ class ttMLA:
         """ring_mla over the latent kvpe cache: K and V (its first kv_lora_rank columns, materialized in-op) both come
         from it, so wkv_b2 is applied to the compact (kv_lora_rank-wide) attention output afterwards. TP-replicated
         cache only: a TP-deduped cache runs expanded K and V (set_tp_shard_kv)."""
+        assert not self.tp_shard_kv, "ring_mla reads a TP-replicated cache; a TP-deduped one runs expanded K/V"
         if metadata is not None:
             meta_slot_kwargs = {
                 "slot_id": metadata[0],
@@ -2484,7 +2485,7 @@ class ttMLA:
             # The op's split KV (the TP-deduped cache gathered over the full mesh) runs expanded K and V only.
             assert self._expanded_k, (
                 f"dense tp_shard_kv needs expanded K and V, which do not apply to MLA layer {self.layer_idx} "
-                "(see _expanded_k_supported); use a TP-replicated cache"
+                "(see _expanded_k_supported); use a TP-replicated cache (runners: PREFILL_TP_SHARD_KV=0)"
             )
             assert self.sp_axis == 0 and self.tp_axis == 1, (
                 f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (the split-KV cache layout), got "
