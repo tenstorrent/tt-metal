@@ -1524,6 +1524,11 @@ class ttMLA:
         cache writes. Sparse attention consumes the written cache; dense attention consumes packed values.
         """
         tt_kv = self._kv_a_proj(hidden_states, seq_len_local) if kv_a is None else None
+        # Sparse path: the fields feed only the cache write, which frees them right away
+        # (_prepare_sparse_kv_prefix, _forward_kv_only), so they fit in L1 (~6 KB/core at 640 rows).
+        kv_mem = ttnn.L1_MEMORY_CONFIG if self._has_indexer and not return_kv_intermediates else ttnn.DRAM_MEMORY_CONFIG
+        # per_token_cast_to_fp8 reads and writes DRAM only, so a SCALED_FP8 cache keeps the normed latent there.
+        latent_mem = ttnn.DRAM_MEMORY_CONFIG if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8 else kv_mem
         if kv_a is not None:
             tt_kv_nope, tt_kv_rope = kv_a
             kv_intermediates = (
@@ -1547,7 +1552,7 @@ class ttMLA:
                 tt_kv,
                 dim=1,
                 split_output_width=self.kv_lora_rank,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=kv_mem,
                 compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
             # tt_kv aliases model-owned gather scratch; keep that buffer alive.
@@ -1567,7 +1572,7 @@ class ttMLA:
             tt_kv_nope,
             weight=self.kv_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=latent_mem,
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
@@ -2014,7 +2019,6 @@ class ttMLA:
         )
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
-            tt_kvpe=tt_kvpe,
             kvpe_dev=kvpe_dev,
             indices=indices,
             kvpe_cache=kvpe_cache,
@@ -2047,6 +2051,9 @@ class ttMLA:
             # captured kv_actual_isl (None -> 0), stacking all chunks on top of chunk 0's KV region.
             metadata=metadata,
         )
+        # Dead once written: free them before the gather / top-k region (_kv_stem may place them in L1).
+        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+            ttnn.deallocate(value)
         # The write above is clamped to the chunk's real tokens, so on the last chunk KV is populated to
         # ceil32(actual_end), not the padded window. The gather needs only that prefix — top-k indices never
         # address the unwritten suffix, the indexer being bounded by the same prefix.
@@ -2066,16 +2073,12 @@ class ttMLA:
         self,
         *,
         tt_q,
-        tt_kvpe,
         kvpe_dev,
         indices,
         kvpe_cache,
         seq_len_local,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
-        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
-            ttnn.deallocate(value)
-
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
@@ -2187,7 +2190,6 @@ class ttMLA:
         )
         output = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
-            tt_kvpe=tt_kvpe,
             kvpe_dev=kvpe_dev,
             indices=indices,
             kvpe_cache=kvpe_cache,
