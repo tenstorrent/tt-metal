@@ -370,7 +370,7 @@ std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const
 
 }  // namespace
 
-TEST(MeshPinningFileTest, ParsesFlatPinningList) {
+TEST(MeshPinningFileTest, ParsesExactAndAnyOfPinnings) {
     const auto dir = make_temp_dir("pin_flat");
     const auto path = write_pinning_file(dir, R"(mesh_host_rank_pinnings:
   - mesh_id: 0
@@ -379,24 +379,27 @@ TEST(MeshPinningFileTest, ParsesFlatPinningList) {
     TT_VISIBLE_DEVICES: "3,1"
   - mesh_id: 0
     mesh_host_rank: 1
-    hostname: host-B
-    TT_VISIBLE_DEVICES: "1,3"
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "1,3"}
+      - {hostname: host-C, TT_VISIBLE_DEVICES: "0, 2"}
   - mesh_id: 2
     mesh_host_rank: 0
-    hostname: host-A
-    TT_VISIBLE_DEVICES: "0, 2"
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "1,3"}
 )");
 
     const auto pinnings = parse_mesh_pinning_file(path.string());
     ASSERT_EQ(pinnings.size(), 3u);
     EXPECT_EQ(*pinnings[0].mesh_id, 0u);
     EXPECT_EQ(*pinnings[0].mesh_host_rank, 0u);
-    EXPECT_EQ(pinnings[0].hostname, "host-A");
-    EXPECT_EQ(pinnings[0].tt_visible_devices, std::vector<int>({1, 3}));  // sorted
-    EXPECT_EQ(*pinnings[1].mesh_host_rank, 1u);
-    EXPECT_EQ(pinnings[1].hostname, "host-B");
+    ASSERT_EQ(pinnings[0].candidates.size(), 1u);
+    EXPECT_EQ(pinnings[0].candidates[0].hostname, "host-A");
+    EXPECT_EQ(pinnings[0].candidates[0].tt_visible_devices, std::vector<int>({1, 3}));  // sorted
+    ASSERT_EQ(pinnings[1].candidates.size(), 2u);
+    EXPECT_EQ(pinnings[1].candidates[1].hostname, "host-C");
+    EXPECT_EQ(pinnings[1].candidates[1].tt_visible_devices, std::vector<int>({0, 2}));  // whitespace tolerated
     EXPECT_EQ(*pinnings[2].mesh_id, 2u);
-    EXPECT_EQ(pinnings[2].tt_visible_devices, std::vector<int>({0, 2}));  // whitespace tolerated
+    EXPECT_EQ(pinnings[2].candidates[0], pinnings[1].candidates[0]);  // candidates may repeat across ranks
 
     const auto empty_path = write_pinning_file(dir, "mesh_host_rank_pinnings: []\n");
     EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
@@ -412,6 +415,19 @@ TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
         {"missing TT_VISIBLE_DEVICES", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h}\n"},
         {"missing mesh_host_rank",
          "mesh_host_rank_pinnings:\n  - {mesh_id: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"neither exact nor any_of", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0}\n"},
+        {"both exact and any_of",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\", "
+         "any_of: [{hostname: h, TT_VISIBLE_DEVICES: \"1\"}]}\n"},
+        {"empty any_of", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: []}\n"},
+        {"any_of item missing TT_VISIBLE_DEVICES",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h}]}\n"},
+        {"any_of item unknown key",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0\", slot: 1}]}\n"},
+        {"duplicate any_of placement",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0,1\"}, {hostname: h, TT_VISIBLE_DEVICES: \"1,0\"}]}\n"},
         {"unknown key",
          "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\", "
          "rank: 3}\n"},
@@ -423,7 +439,7 @@ TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
          "mesh_host_rank_pinnings:\n"
          "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h0, TT_VISIBLE_DEVICES: \"0\"}\n"
          "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h1, TT_VISIBLE_DEVICES: \"0\"}\n"},
-        {"same device used twice on one host",
+        {"same device used by two exact pins on one host",
          "mesh_host_rank_pinnings:\n"
          "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0,1\"}\n"
          "  - {mesh_id: 0, mesh_host_rank: 1, hostname: h, TT_VISIBLE_DEVICES: \"1,2\"}\n"},

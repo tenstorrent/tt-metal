@@ -434,7 +434,7 @@ TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4T3kDualHostControlPlaneInit");
 }
 
-// tt-run --mesh-pinning-file end to end: each rank checks TT_METAL_CLUSTER_ID / TT_VISIBLE_DEVICES against the file.
+// tt-run --mesh-pinning-file end to end: each rank checks its placement against the file; all ranks must be distinct.
 TEST(MultiHost, MeshPinningFileHonored) {
     const char* pinning_file_env = std::getenv("TT_METAL_TEST_MESH_PINNING_FILE");
     if (pinning_file_env == nullptr) {
@@ -471,6 +471,31 @@ TEST(MultiHost, MeshPinningFileHonored) {
         std::sort(devices.begin(), devices.end());
         return devices;
     };
+    const std::vector<int> my_devices = parse_devices(visible_devices_env);
+
+    // Every rank's (hostname, devices) must be pairwise disjoint: no ASIC may back two host ranks.
+    {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+        const std::size_t world_size = *distributed_context.size();
+        constexpr std::size_t record_size = 512;
+        std::vector<std::byte> send(record_size, std::byte{0});
+        const std::string record = hostname_env + "|" + visible_devices_env;
+        ASSERT_LT(record.size(), record_size);
+        std::memcpy(send.data(), record.data(), record.size());
+        std::vector<std::byte> recv(record_size * world_size, std::byte{0});
+        distributed_context.all_gather(ttsl::Span<std::byte>(send), ttsl::Span<std::byte>(recv));
+        std::map<std::string, std::set<int>> devices_by_host;
+        for (std::size_t rank = 0; rank < world_size; ++rank) {
+            const std::string other(reinterpret_cast<const char*>(recv.data() + rank * record_size));
+            const std::size_t bar = other.find('|');
+            ASSERT_NE(bar, std::string::npos) << "malformed placement record from rank " << rank;
+            auto& used = devices_by_host[other.substr(0, bar)];
+            for (const int device : parse_devices(other.substr(bar + 1))) {
+                EXPECT_TRUE(used.insert(device).second)
+                    << "device " << device << " on " << other.substr(0, bar) << " is used by two ranks";
+            }
+        }
+    }
 
     std::filesystem::path pinning_file(pinning_file_env);
     if (pinning_file.is_relative()) {
@@ -482,32 +507,39 @@ TEST(MultiHost, MeshPinningFileHonored) {
     const YAML::Node entries = root["mesh_host_rank_pinnings"];
     ASSERT_TRUE(entries && entries.IsSequence()) << "expected a mesh_host_rank_pinnings sequence in " << pinning_file;
 
-    bool found = false;
     for (const YAML::Node& entry : entries) {
         if (entry["mesh_id"].as<int>() != mesh_id || entry["mesh_host_rank"].as<int>() != mesh_host_rank) {
             continue;
         }
-        ASSERT_FALSE(found) << "duplicate pin for mesh " << mesh_id << " host rank " << mesh_host_rank;
-        found = true;
-        const std::string pinned_hostname = entry["hostname"].as<std::string>();
-        const std::vector<int> pinned_devices = parse_devices(entry["TT_VISIBLE_DEVICES"].as<std::string>());
-        log_info(
-            tt::LogTest,
-            "mesh {} host rank {}: pinned to {} devices {}; running on {} devices {}",
-            mesh_id,
-            mesh_host_rank,
-            pinned_hostname,
-            entry["TT_VISIBLE_DEVICES"].as<std::string>(),
-            hostname_env,
-            visible_devices_env);
-        EXPECT_EQ(hostname_env, pinned_hostname)
-            << "mesh " << mesh_id << " host rank " << mesh_host_rank << " was launched on the wrong host";
-        EXPECT_EQ(parse_devices(visible_devices_env), pinned_devices)
-            << "mesh " << mesh_id << " host rank " << mesh_host_rank << " was launched with the wrong devices";
+        std::vector<YAML::Node> candidates;
+        if (entry["any_of"]) {
+            for (const YAML::Node& candidate : entry["any_of"]) {
+                candidates.push_back(candidate);
+            }
+        } else {
+            candidates.push_back(entry);
+        }
+        std::string allowed;
+        for (const YAML::Node& candidate : candidates) {
+            const std::string hostname = candidate["hostname"].as<std::string>();
+            const std::string devices = candidate["TT_VISIBLE_DEVICES"].as<std::string>();
+            allowed += " [" + hostname + " " + devices + "]";
+            if (hostname == hostname_env && parse_devices(devices) == my_devices) {
+                log_info(
+                    tt::LogTest,
+                    "mesh {} host rank {}: running on {} devices {}, one of {} allowed placement(s)",
+                    mesh_id,
+                    mesh_host_rank,
+                    hostname_env,
+                    visible_devices_env,
+                    candidates.size());
+                return;
+            }
+        }
+        FAIL() << "mesh " << mesh_id << " host rank " << mesh_host_rank << " runs on " << hostname_env << " devices "
+               << visible_devices_env << " but the pinning file allows only" << allowed;
     }
-    if (!found) {
-        GTEST_SKIP() << "mesh " << mesh_id << " host rank " << mesh_host_rank << " is not pinned in " << pinning_file;
-    }
+    GTEST_SKIP() << "mesh " << mesh_id << " host rank " << mesh_host_rank << " is not pinned in " << pinning_file;
 }
 
 // Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in

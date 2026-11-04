@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <optional>
@@ -52,8 +53,18 @@ using MeshHostRankKey = std::pair<MeshId, MeshHostRankId>;
 
 struct TopologyMappingParts {
     std::vector<TopologyMappingResult> parts;
-    // --mesh-pinning-file entries by (mesh_id, mesh_host_rank); empty without a pinning file.
-    std::map<MeshHostRankKey, MeshHostRankPinning> mesh_host_rank_pinnings;
+    // Placement chosen for each pinned (mesh_id, mesh_host_rank); empty without a pinning file.
+    std::map<MeshHostRankKey, HostPlacement> mesh_host_rank_pinnings;
+};
+
+struct ResolvedCandidate {
+    HostPlacement placement;
+    std::set<tt::tt_metal::experimental::PhysicalNodeId> asics;
+};
+
+struct ResolvedMeshHostRankPinning {
+    MeshHostRankKey key;
+    std::vector<ResolvedCandidate> candidates;
 };
 
 std::string format_visible_devices(const std::vector<int>& devices) {
@@ -77,15 +88,16 @@ std::map<std::string, std::set<tt::tt_metal::experimental::PhysicalNodeId>> host
     return hostname_to_asics;
 }
 
-// Resolve each pin to its physical-node pool and validate mesh, host rank, host, devices and pool size.
-std::map<MeshHostRankKey, std::set<tt::tt_metal::experimental::PhysicalNodeId>> resolve_mesh_host_rank_pinnings(
+// Resolve every candidate of every pin to its physical-node pool; validates mesh, host rank, host, devices, size.
+std::vector<ResolvedMeshHostRankPinning> resolve_mesh_host_rank_pinnings(
     const PhysicalSystemDescriptor& psd,
     const MeshGraph& mesh_graph,
     const std::map<std::string, std::set<tt::tt_metal::experimental::PhysicalNodeId>>& hostname_to_asics,
     const std::vector<MeshHostRankPinning>& pinnings) {
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto all_mesh_ids = mesh_graph.get_all_mesh_ids();
-    std::map<MeshHostRankKey, std::set<tt::tt_metal::experimental::PhysicalNodeId>> resolved;
+    std::vector<ResolvedMeshHostRankPinning> resolved;
+    resolved.reserve(pinnings.size());
 
     for (const MeshHostRankPinning& pinning : pinnings) {
         if (std::find(all_mesh_ids.begin(), all_mesh_ids.end(), pinning.mesh_id) == all_mesh_ids.end()) {
@@ -106,57 +118,68 @@ std::map<MeshHostRankKey, std::set<tt::tt_metal::experimental::PhysicalNodeId>> 
                 pinning.mesh_host_rank.get()));
         }
 
-        const auto host_it = hostname_to_asics.find(pinning.hostname);
-        if (host_it == hostname_to_asics.end()) {
-            std::string discovered_hosts;
-            for (const auto& [hostname, _] : hostname_to_asics) {
-                if (!discovered_hosts.empty()) {
-                    discovered_hosts += ", ";
+        ResolvedMeshHostRankPinning resolved_pinning{{pinning.mesh_id, pinning.mesh_host_rank}, {}};
+        for (const HostPlacement& placement : pinning.candidates) {
+            const auto host_it = hostname_to_asics.find(placement.hostname);
+            if (host_it == hostname_to_asics.end()) {
+                std::string discovered_hosts;
+                for (const auto& [hostname, _] : hostname_to_asics) {
+                    if (!discovered_hosts.empty()) {
+                        discovered_hosts += ", ";
+                    }
+                    discovered_hosts += hostname;
                 }
-                discovered_hosts += hostname;
-            }
-            throw std::runtime_error(fmt::format(
-                "Mesh pinning file references host '{}', which physical discovery did not find. Discovered "
-                "hosts: [{}]",
-                pinning.hostname,
-                discovered_hosts));
-        }
-
-        const std::set<int> requested_devices(pinning.tt_visible_devices.begin(), pinning.tt_visible_devices.end());
-        std::set<int> discovered_devices;
-        std::set<tt::tt_metal::experimental::PhysicalNodeId> asics;
-        for (const auto& physical_node_id : host_it->second) {
-            const tt::ChipId chip_id = psd.get_umd_unique_id(psd.get_asic_id(physical_node_id));
-            const int mmio_device = static_cast<int>(cluster.get_associated_mmio_device(chip_id));
-            discovered_devices.insert(mmio_device);
-            if (requested_devices.contains(mmio_device)) {
-                asics.insert(physical_node_id);
-            }
-        }
-        for (const int requested_device : requested_devices) {
-            if (!discovered_devices.contains(requested_device)) {
                 throw std::runtime_error(fmt::format(
-                    "Mesh pinning file requests TT_VISIBLE_DEVICES={} on host '{}', but device {} was not found "
-                    "there",
-                    format_visible_devices(pinning.tt_visible_devices),
-                    pinning.hostname,
-                    requested_device));
+                    "Mesh pinning file references host '{}', which physical discovery did not find. Discovered "
+                    "hosts: [{}]",
+                    placement.hostname,
+                    discovered_hosts));
             }
+
+            const std::set<int> requested_devices(
+                placement.tt_visible_devices.begin(), placement.tt_visible_devices.end());
+            std::set<int> discovered_devices;
+            ResolvedCandidate candidate{placement, {}};
+            for (const auto& physical_node_id : host_it->second) {
+                const tt::ChipId chip_id = psd.get_umd_unique_id(psd.get_asic_id(physical_node_id));
+                const int mmio_device = static_cast<int>(cluster.get_associated_mmio_device(chip_id));
+                discovered_devices.insert(mmio_device);
+                if (requested_devices.contains(mmio_device)) {
+                    candidate.asics.insert(physical_node_id);
+                }
+            }
+            for (const int requested_device : requested_devices) {
+                if (!discovered_devices.contains(requested_device)) {
+                    throw std::runtime_error(fmt::format(
+                        "Mesh pinning file requests TT_VISIBLE_DEVICES={} on host '{}', but device {} was not found "
+                        "there",
+                        format_visible_devices(placement.tt_visible_devices),
+                        placement.hostname,
+                        requested_device));
+                }
+            }
+            if (candidate.asics.size() != logical_node_count) {
+                throw std::runtime_error(fmt::format(
+                    "Constraint validation failed: mesh {} host rank {} has {} logical nodes, but host '{}' with "
+                    "TT_VISIBLE_DEVICES={} exposes {} ASICs",
+                    pinning.mesh_id.get(),
+                    pinning.mesh_host_rank.get(),
+                    logical_node_count,
+                    placement.hostname,
+                    format_visible_devices(placement.tt_visible_devices),
+                    candidate.asics.size()));
+            }
+            resolved_pinning.candidates.push_back(std::move(candidate));
         }
-        if (asics.size() != logical_node_count) {
-            throw std::runtime_error(fmt::format(
-                "Constraint validation failed: mesh {} host rank {} has {} logical nodes, but host '{}' with "
-                "TT_VISIBLE_DEVICES={} exposes {} ASICs",
-                pinning.mesh_id.get(),
-                pinning.mesh_host_rank.get(),
-                logical_node_count,
-                pinning.hostname,
-                format_visible_devices(pinning.tt_visible_devices),
-                asics.size()));
-        }
-        resolved[{pinning.mesh_id, pinning.mesh_host_rank}] = std::move(asics);
+        resolved.push_back(std::move(resolved_pinning));
     }
     return resolved;
+}
+
+bool pools_overlap(
+    const std::set<tt::tt_metal::experimental::PhysicalNodeId>& a,
+    const std::set<tt::tt_metal::experimental::PhysicalNodeId>& b) {
+    return std::any_of(a.begin(), a.end(), [&b](const auto& node) { return b.contains(node); });
 }
 
 // OpenMPI rankfile `slot` counts per physical host. After merging several MGD extracts, each extract used its own
@@ -343,41 +366,94 @@ TopologyMappingParts run_topology_mapping(
         throw std::runtime_error("Mesh-host-rank pinning currently supports exactly one MGD");
     }
     const MeshGraph mesh_graph(MetalContext::instance().get_cluster(), mgd_paths_in_order.front().string());
-    const auto mesh_host_rank_pools =
+    std::vector<ResolvedMeshHostRankPinning> resolved =
         resolve_mesh_host_rank_pinnings(psd, mesh_graph, hostname_to_physical_nodes(psd), mesh_pinnings);
-    for (const MeshHostRankPinning& pinning : mesh_pinnings) {
-        log_info(
-            tt::LogFabric,
-            "Pinning mesh {} host rank {} -> {} with TT_VISIBLE_DEVICES={}",
-            pinning.mesh_id.get(),
-            pinning.mesh_host_rank.get(),
-            pinning.hostname,
-            format_visible_devices(pinning.tt_visible_devices));
-        out.mesh_host_rank_pinnings[{pinning.mesh_id, pinning.mesh_host_rank}] = pinning;
+
+    // Depth-first over candidate choices, fewest candidates first; chosen pools must be pairwise disjoint.
+    std::stable_sort(resolved.begin(), resolved.end(), [](const auto& a, const auto& b) {
+        return a.candidates.size() < b.candidates.size();
+    });
+    std::size_t max_assignments = 1;
+    for (const auto& pinning : resolved) {
+        max_assignments *= pinning.candidates.size();
+    }
+    if (max_assignments > 1) {
+        log_info(tt::LogFabric, "Mesh-host-rank pinning: up to {} candidate assignment(s) to try", max_assignments);
     }
 
-    // Pools are hard intra-mesh constraints; a seating that cannot honour them is forbidden and retried.
-    MultiMeshSolutionEnumerator enumerator = make_topology_mapping_enumerator(
-        psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false, mesh_host_rank_pools);
-    out.parts = enumerator.next();
-    if (out.parts.empty() || !out.parts.front().success) {
-        if (out.parts.empty()) {
-            out.parts.emplace_back();
+    std::map<MeshHostRankKey, std::set<tt::tt_metal::experimental::PhysicalNodeId>> chosen_pools;
+    std::map<MeshHostRankKey, HostPlacement> chosen_placements;
+    std::size_t attempts = 0;
+    std::string last_error;
+    std::function<bool(std::size_t)> assign = [&](std::size_t index) -> bool {
+        if (index == resolved.size()) {
+            ++attempts;
+            try {
+                MultiMeshSolutionEnumerator enumerator = make_topology_mapping_enumerator(
+                    psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false, chosen_pools);
+                out.parts = enumerator.next();
+            } catch (const std::exception& e) {
+                out.parts.clear();
+                last_error = e.what();
+            }
+            if (!out.parts.empty() && out.parts.front().success) {
+                out.mesh_host_rank_pinnings = chosen_placements;
+                return true;
+            }
+            if (!out.parts.empty()) {
+                last_error = out.parts.front().error_message;
+            }
+            return false;
         }
-        out.parts.front().success = false;
-        out.parts.front().error_message = fmt::format(
-            "No valid topology mapping satisfied the --mesh-pinning-file constraints: {}",
-            out.parts.front().error_message.empty() ? std::string("no valid placement found")
-                                                    : out.parts.front().error_message);
-        out.mesh_host_rank_pinnings.clear();
+        const ResolvedMeshHostRankPinning& pinning = resolved[index];
+        for (const ResolvedCandidate& candidate : pinning.candidates) {
+            const bool taken = std::any_of(chosen_pools.begin(), chosen_pools.end(), [&candidate](const auto& chosen) {
+                return pools_overlap(chosen.second, candidate.asics);
+            });
+            if (taken) {
+                continue;
+            }
+            chosen_pools[pinning.key] = candidate.asics;
+            chosen_placements[pinning.key] = candidate.placement;
+            if (assign(index + 1)) {
+                return true;
+            }
+            chosen_pools.erase(pinning.key);
+            chosen_placements.erase(pinning.key);
+        }
+        return false;
+    };
+
+    if (!assign(0)) {
+        TopologyMappingResult failed;
+        failed.success = false;
+        failed.stats.failure_stage = "mesh_host_rank_pinning";
+        failed.error_message = fmt::format(
+            "No valid topology mapping satisfied the --mesh-pinning-file after {} candidate assignment(s). Last "
+            "solver error: {}",
+            attempts,
+            last_error.empty() ? std::string("none") : last_error);
+        out.parts = {failed};
+        return out;
+    }
+    log_info(tt::LogFabric, "Mesh-host-rank pinning satisfied after {} candidate assignment(s)", attempts);
+    for (const auto& pinning : resolved) {
+        const HostPlacement& placement = out.mesh_host_rank_pinnings.at(pinning.key);
+        log_info(
+            tt::LogFabric,
+            "Mesh {} host rank {} -> {} with TT_VISIBLE_DEVICES={} ({} candidate(s))",
+            pinning.key.first.get(),
+            pinning.key.second.get(),
+            placement.hostname,
+            format_visible_devices(placement.tt_visible_devices),
+            pinning.candidates.size());
     }
     return out;
 }
 
 // Post-solve verification; also makes the selected placement explicit in rank_bindings.yaml.
 void validate_selected_mesh_host_rank_pinnings(
-    const std::map<MeshHostRankKey, MeshHostRankPinning>& selected_pinnings,
-    std::vector<RankBindingConfig>& rank_bindings) {
+    const std::map<MeshHostRankKey, HostPlacement>& selected_pinnings, std::vector<RankBindingConfig>& rank_bindings) {
     for (const auto& [mesh_host_rank, placement] : selected_pinnings) {
         auto binding_it = std::find_if(
             rank_bindings.begin(), rank_bindings.end(), [&mesh_host_rank](const RankBindingConfig& binding) {

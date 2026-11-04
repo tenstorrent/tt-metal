@@ -60,14 +60,15 @@ constrain selected `(mesh_id, mesh_host_rank)` pairs to exact `(hostname, TT_VIS
 ```yaml
 # pinned_meshes.yaml
 mesh_host_rank_pinnings:
-  - mesh_id: 0
+  - mesh_id: 0                     # exact pin
     mesh_host_rank: 0
     hostname: nodeA
     TT_VISIBLE_DEVICES: "0,1,2,3"
-  - mesh_id: 0
+  - mesh_id: 0                     # any_of pin: exactly one of these placements
     mesh_host_rank: 1
-    hostname: nodeB
-    TT_VISIBLE_DEVICES: "0,1,2,3"
+    any_of:
+      - {hostname: nodeB, TT_VISIBLE_DEVICES: "0,1,2,3"}
+      - {hostname: nodeC, TT_VISIBLE_DEVICES: "0,1,2,3"}
 ```
 
 ```bash
@@ -77,9 +78,10 @@ tt-run --mesh-graph-descriptor path/to/mgd.textproto \
   ./my_app
 ```
 
-Each entry pins one logical host rank to one host. Pins are hard constraints: `TT_VISIBLE_DEVICES` defines the
-exact ASIC pool, unlisted host ranks stay automatic, and Phase 1 halts before launch when the pins cannot be
-satisfied. Pinning currently supports a single MGD (`-m`) — see
+Each entry pins one logical host rank to one placement, or with `any_of` to exactly one of several candidates
+(several host ranks may share candidates; chosen placements never overlap). Pins are hard constraints:
+`TT_VISIBLE_DEVICES` defines the exact ASIC pool, unlisted host ranks stay automatic, and Phase 1 halts before
+launch when no candidate assignment satisfies the topology. Pinning currently supports a single MGD (`-m`) — see
 [`README_generate_rank_bindings.md`](../../../tools/scaleout/README_generate_rank_bindings.md) for details.
 
 The pinning file's contents feed the Phase 1 cache fingerprint, so editing it forces a fresh Phase 1 run; a
