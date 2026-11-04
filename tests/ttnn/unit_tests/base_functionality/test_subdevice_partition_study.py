@@ -455,8 +455,9 @@ def test_a_overlap_dram_bound(device, request, page_size, total_mb, passes):
         ttnn.synchronize_device(device)
         for b in bufs:
             s = _u32_read(b["stats"])
-            assert np.array_equal(s[:, 4], b["sum"]) and np.array_equal(s[:, 5], b["wsum"]), _desc(b["cores"])
-            assert np.all(s[:, 6] == b["pages_per_core"])
+            assert np.array_equal(s[:, 4], b["sum"]), f"{_desc(b['cores'])}: streamed word sum does not match"
+            assert np.array_equal(s[:, 5], b["wsum"]), f"{_desc(b['cores'])}: streamed words are out of place"
+            assert np.all(s[:, 6] == b["pages_per_core"]), f"{_desc(b['cores'])}: pages seen {s[:, 6]}"
 
         runs = [lambda b=b: ttnn.generic_op([b["src"], b["stats"]], b["timed"]) for b in bufs]
         runs[0]()
@@ -467,7 +468,7 @@ def test_a_overlap_dram_bound(device, request, page_size, total_mb, passes):
         for b in bufs:
             s = _u32_read(b["stats"])
             assert np.array_equal(s[:, 4], b["word0"]), f"{_desc(b['cores'])}: stream checksum mismatch"
-            assert np.all(s[:, 6] == b["pages_per_core"] * passes)
+            assert np.all(s[:, 6] == b["pages_per_core"] * passes), f"{_desc(b['cores'])}: pages seen {s[:, 6]}"
             ref = int(s[0, 0]) if ref is None else ref
             intervals.append((int(_ticks(s, 0, ref).min()), int(_ticks(s, 2, ref).max())))
     # The same bytes as sub-device 1 streams, on the full grid without sub-devices: is DRAM the cap?
@@ -580,7 +581,7 @@ def test_b_global_semaphore_handoff(device, request, pair, with_payload):
                 exp = np.array([_expected_payload(int(i), seed) for i in idx])
                 assert np.array_equal(got[:, 1:3], exp), "payload does not match its iteration"
             s = _u32_read(pstats)[0]
-            assert s[8] == n_iter and s[9] == n_iter
+            assert s[8] == n_iter and s[9] == n_iter, f"producer ran {s[8]} iterations, ack ended at {s[9]}"
             results.append(
                 {
                     "seed": seed,
@@ -735,7 +736,7 @@ def test_c_global_cb_streaming(device, request, num_pairs, page_size):
             host_s = time.perf_counter() - t0
             ss, rs = _u32_read(sstats), _u32_read(rstats)
             assert np.all(rs[:, 4] == bw_pages) and np.all(rs[:, 5] == 0), "receiver saw missing or overrun pages"
-            assert np.all(ss[:, 4] == bw_pages)
+            assert np.all(ss[:, 4] == bw_pages), f"senders pushed {ss[:, 4]} pages, expected {bw_pages}"
             last = _u32_read(out)[: num_pairs * ring]
             assert np.array_equal(last, tagged & 0xFFFFFFFF), "last pages through the global CB are not byte-exact"
             # Receiver side: first page arrival to last pop; sender side: first push to last ack.
@@ -905,7 +906,8 @@ def test_d_cohosted_matmuls(device, request, n, speech_m, split):
         pairs = [(speech(cfg_s), decode(cfg_d)) for _ in range(4)]
         sync()
         for s_t, d_t in pairs:
-            assert torch.equal(ttnn.to_torch(s_t), s_sub_host) and torch.equal(ttnn.to_torch(d_t), d_sub_host)
+            assert torch.equal(ttnn.to_torch(s_t), s_sub_host), "interleaved enqueue changed the compute-heavy matmul"
+            assert torch.equal(ttnn.to_torch(d_t), d_sub_host), "interleaved enqueue changed the decode matmul"
         del pairs
 
         eager["speech_sub_ms"] = _timed(lambda: [speech(cfg_s) for _ in range(n)], sync, reps)[0] * 1e3 / n
