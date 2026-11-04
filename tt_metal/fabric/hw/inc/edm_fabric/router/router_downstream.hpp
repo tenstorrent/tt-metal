@@ -45,6 +45,53 @@ namespace fabric_router {
 // (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
 constexpr std::array<size_t, 2> DOWNSTREAM_EDM_COUNT_BY_VC = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
 
+// The downstreams a router can forward to on VC, one bit per name. In 2D, the directions with an entry (the host lists
+// DOWNSTREAM_EDM_COUNT_BY_VC[VC] of them); an E/W-facing router inside a mesh never turns a packet onto N/S (packets
+// travel Y first), so its N/S downstreams are not live. Intermesh routers (a landing decodes Y first) and routers on a
+// mesh's edge (an exit may leave in any direction) can turn onto N/S. In 1D, downstream 0.
+template <size_t VC>
+constexpr uint32_t live_downstreams() {
+    constexpr bool east_west =
+        is_2d && (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST);
+    constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
+    uint32_t live = 0;
+    for (size_t entry = 0; entry < DOWNSTREAM_EDM_COUNT_BY_VC[VC]; entry++) {
+        const size_t name = downstream_name(entry);
+        if (!(east_west && !turns && (name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH))) {
+            live |= 1u << name;
+        }
+    }
+    return live;
+}
+
+// Whether VC's forwards can use the destination preset of their forward buffer pair: no receiver channel here
+// forwards on VC (any_forwards_on_vc), or VC goes to the same downstreams as the VC that presets the pair (the lowest
+// VC forwarded on it, CommandBuffers::presets_forward_pair).
+template <size_t VC>
+constexpr bool shares_pair_destination() {
+    if constexpr (!any_forwards_on_vc(VC)) {
+        return true;
+    } else {
+        constexpr size_t owner = lowest_bit(CommandBuffers::vcs_on_forward_pair(VC));
+        return live_downstreams<VC>() == live_downstreams<owner>();
+    }
+}
+// Whether VC's forwards go to one live downstream, the one its pair's preset holds (true where nothing forwards on VC).
+template <size_t VC>
+constexpr bool has_one_destination() {
+    if constexpr (!any_forwards_on_vc(VC)) {
+        return true;
+    } else {
+        return popcount(live_downstreams<VC>()) == 1 && shares_pair_destination<VC>();
+    }
+}
+// Whether every VC forwarded on VC's forward buffer pair has one destination, the same (has_one_destination).
+template <size_t VC, size_t... VCs>
+constexpr bool pair_has_one_destination(std::index_sequence<VCs...>) {
+    constexpr uint32_t pair = CommandBuffers::vcs_on_forward_pair(VC);
+    return ((((pair >> VCs) & 1u) == 0 || has_one_destination<VCs>()) && ...);
+}
+
 // The downstream routers of VC, as the host sets them.
 template <size_t VC>
 struct DownstreamTraits {
@@ -77,70 +124,25 @@ struct DownstreamTraits {
     template <size_t ENTRY>
     static constexpr uint32_t remote_credit_stream = sender_free_slots_streams[forwarding_position<ENTRY>()];
 
+    // Whether VC's forwards go to one destination for the whole run, which its forward buffer pair then keeps
+    // (FullPresetForwards): the router picks no downstream at run time (not intermesh, not on a mesh's edge), and every
+    // VC forwarded on the pair has one live downstream (every 1D router; an E/W-facing 2D router inside a mesh), the
+    // same. Otherwise the pair is partially preset, so no VC's commands overwrite another's preset.
+    static constexpr bool one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
+                                            !is_intramesh_router_on_edge &&
+                                            pair_has_one_destination<VC>(std::make_index_sequence<MAX_NUM_VCS>{});
+
     static_assert(count > 0 && count <= max_downstreams);
     static_assert(num_slots <= stream_count_mask);
 };
-
-// The downstreams a router can forward to, one bit per name. In 2D, the directions with an entry (the host lists
-// DownstreamTraits::count of them); an E/W-facing router inside a mesh never turns a packet onto N/S (packets travel Y
-// first), so its N/S downstreams are not live. Intermesh routers (a landing decodes Y first) and routers on a mesh's
-// edge (an exit may leave in any direction) can turn onto N/S. In 1D, downstream 0.
-template <size_t VC>
-constexpr uint32_t live_downstreams() {
-    constexpr bool east_west =
-        is_2d && (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST);
-    constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
-    uint32_t live = 0;
-    for (size_t entry = 0; entry < DownstreamTraits<VC>::count; entry++) {
-        const size_t name = downstream_name(entry);
-        if (!(east_west && !turns && (name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH))) {
-            live |= 1u << name;
-        }
-    }
-    return live;
-}
 
 // Forward command buffers. Every forward to a router is two commands on its VC's forwarding command buffers
 // (CommandBuffers: the host's RX_CH_<n>_FWD_DATA_ / FWD_SYNC_CMD_BUF_ID): the packet on the data buffer, then -1 on the
 // destination's free-slots register (its doorbell) on the credit buffer. Which fields stay programmed between forwards
 // is decided at compile time, per VC (ForwardCommands, below):
-//   - one destination for the whole run (forwards_have_one_destination): the buffers keep it (FullPresetForwards);
+//   - one destination for the whole run (DownstreamTraits::one_destination): the buffers keep it (FullPresetForwards);
 //   - several destinations: the buffers keep only what no forward changes (PartialPresetForwards);
 //   - no presets (CommandBuffers::forward_presets false): every forward writes its whole commands (StatelessForwards).
-
-// Whether VC's forwards can use the destination preset of their forward buffer pair: no receiver channel here
-// forwards on VC (any_forwards_on_vc), or VC goes to the same downstreams as the VC that presets the pair (the lowest
-// VC forwarded on it, CommandBuffers::presets_forward_pair).
-template <size_t VC>
-constexpr bool shares_pair_destination() {
-    if constexpr (!any_forwards_on_vc(VC)) {
-        return true;
-    } else {
-        constexpr size_t owner = lowest_bit(CommandBuffers::vcs_on_forward_pair(VC));
-        return live_downstreams<VC>() == live_downstreams<owner>();
-    }
-}
-// Whether VC's forwards go to one live downstream, the one its pair's preset holds (true where nothing forwards on VC).
-template <size_t VC>
-constexpr bool has_one_destination() {
-    if constexpr (!any_forwards_on_vc(VC)) {
-        return true;
-    } else {
-        return popcount(live_downstreams<VC>()) == 1 && shares_pair_destination<VC>();
-    }
-}
-template <size_t... VCs>
-constexpr bool all_have_one_destination(std::index_sequence<VCs...>) {
-    return (has_one_destination<VCs>() && ...);
-}
-
-// Whether every forward here goes to one destination for the whole run: the router picks no downstream at run time
-// (not intermesh, not on a mesh's edge), and every VC forwarded on has one live downstream (every 1D router; an
-// E/W-facing 2D router inside a mesh), the same as its forward buffer pair's preset. Otherwise every forwarding VC is
-// partially preset, so no VC's commands overwrite another's preset.
-constexpr bool forwards_have_one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
-                                               !is_intramesh_router_on_edge &&
-                                               all_have_one_destination(std::make_index_sequence<MAX_NUM_VCS>{});
 
 // Set once at init from the runtime args.
 struct DownstreamLink {
@@ -368,7 +370,7 @@ template <size_t VC>
 using ForwardCommands = std::conditional_t<
     !CommandBuffers::forward_presets,
     StatelessForwards<VC>,
-    std::conditional_t<forwards_have_one_destination, FullPresetForwards<VC>, PartialPresetForwards<VC>>>;
+    std::conditional_t<DownstreamTraits<VC>::one_destination, FullPresetForwards<VC>, PartialPresetForwards<VC>>>;
 
 // UDM's relay: a ring of LOCAL_RELAY_NUM_BUFFERS slots in the relay's L1 that takes the whole packet, and a free-slots
 // register the relay increments as it frees slots, of which this router keeps a local copy. Its forwards are stateless,

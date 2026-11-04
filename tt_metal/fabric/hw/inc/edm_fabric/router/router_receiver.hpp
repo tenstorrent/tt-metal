@@ -809,15 +809,20 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     }
 }
 
-// After every connection is open: the forwards' command buffers preset (ForwardCommands), each pair of buffers by the
-// lowest VC whose downstream connections a receiver channel forwards on (any_forwards_on_vc).
+// VC's forward buffer pair preset (ForwardCommands), where VC presets it. (A template on VC, so the forward commands of a
+// VC nothing forwards on are named only in template-dependent code.)
+template <size_t VC>
+FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
+    if constexpr (CommandBuffers::presets_forward_pair(VC)) {
+        ForwardCommands<VC>::preset(VC == 0 ? args.vc0() : args.vc1());
+    }
+}
+
+// After every connection is open: the forwards' command buffers preset, each pair of buffers by the lowest VC whose
+// downstream connections a receiver channel forwards on (any_forwards_on_vc).
 FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
-    if constexpr (CommandBuffers::presets_forward_pair(0)) {
-        ForwardCommands<0>::preset(args.vc0());
-    }
-    if constexpr (CommandBuffers::presets_forward_pair(1)) {
-        ForwardCommands<1>::preset(args.vc1());
-    }
+    preset_forward_pair<0>(args);
+    preset_forward_pair<1>(args);
     static_assert(!any_forwards_on_vc(2), "the runtime args list downstream routers for VC0 and VC1");
 }
 
