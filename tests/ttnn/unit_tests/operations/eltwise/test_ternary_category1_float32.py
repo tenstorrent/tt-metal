@@ -27,16 +27,19 @@ Category 1: fused multiply-add family, plus select
 | 1 | ttnn.mac     | a * b + c            | exact (grid), 1.5 ULP of the larger term (full mantissa) |
 | 2 | ttnn.lerp    | a + weight * (b - a) | 2.5 ULP of the larger term                               |
 | 3 | ttnn.where   | predicate ? a : b    | bitwise                                                  |
-| 4 | ttnn.addcmul | a + value * b * c    | exact (grid, value a power of two), else 1.5 / 3 ULP of  |
-|   |              |                      | the larger term                                          |
-| 5 | ttnn.addcdiv | a + value * b / c    | 3 / 4 ULP of the larger term                             |
+| 4 | ttnn.addcmul | a + value * b * c    | exact (grid, value a power of two), else 1.5 / 2.5 ULP   |
+|   |              |                      | of the larger term                                       |
+| 5 | ttnn.addcdiv | a + value * b / c    | 3 / 3.5 ULP of the larger term                           |
 
 Working range. "Full grid" is the 256-value ternary grid at float32 (finite
 bfloat16 values, no -0, inf or NaN) swept as a full outer product, 256^3 =
 16,777,216 triples; where uses the 2048-value binary grid pairwise instead,
 since its predicate carries one bit per element. The grid only carries
 bfloat16 mantissas, so every op is also swept on random full-mantissa inputs
-(test_full_mantissa, test_where_full_mantissa).
+(test_full_mantissa, test_where_full_mantissa). The scalar overloads run
+their own kernels, so lerp's scalar weight and where's scalar branch have
+their own tests (test_lerp_scalar_weight, test_where_scalar_branch); mac's
+scalar overloads are not covered.
 
 | Op      | a, b                            | c, weight or predicate | value                |
 |---------|---------------------------------|------------------------|----------------------|
@@ -83,13 +86,14 @@ RECIPROCAL_FLUSH_DIVISOR = 2.0**126
 # Bounds in ULP of the larger term of the final add, measured worst case over
 # 4 x 4,194,304 random full-mantissa triples, exponents in [-20, 20] and
 # [-60, 60], rounded up. "rounded value" is a value whose product with b is
-# not exact in float32 (0.3 here), which adds one rounded step.
+# not exact in float32 (0.3 here), which adds one rounded step. The golden
+# uses the value as float32, which is what the device receives.
 MAC_TERM_ULP = 1.5  # measured 1.24
 LERP_TERM_ULP = 2.5  # measured 2.10
 ADDCMUL_TERM_ULP = 1.5  # measured 1.23
-ADDCMUL_ROUNDED_VALUE_TERM_ULP = 3.0  # measured 2.76
+ADDCMUL_ROUNDED_VALUE_TERM_ULP = 2.5  # measured 2.09 (Wormhole)
 ADDCDIV_TERM_ULP = 3.0  # measured 2.95 (Blackhole), 2.42 (Wormhole)
-ADDCDIV_ROUNDED_VALUE_TERM_ULP = 4.0  # measured 3.80 (Blackhole), 3.19 (Wormhole)
+ADDCDIV_ROUNDED_VALUE_TERM_ULP = 3.5  # measured 2.64 (Wormhole)
 
 ADDC_VALUES = [1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 0.0, 0.3]
 
@@ -99,10 +103,22 @@ def _is_exact_scale(value):
     return value == 0.0 or torch.frexp(torch.tensor(value, dtype=torch.float64)).mantissa.abs().item() == 0.5
 
 
+def _float32_scalar(value):
+    """The scalar as the device receives it: the op takes a C++ float, so
+    0.3 arrives as 0.30000001192..."""
+    return float(torch.tensor(value, dtype=torch.float32))
+
+
 def _ulp_f32(magnitude):
-    """Spacing of float32 at ``magnitude`` (float64 in, float64 out)."""
+    """Spacing of float32 at ``magnitude`` (float64 in, float64 out).
+
+    At float32 max the next value up is inf, so the spacing below is used
+    there; an infinite spacing would make every error measure as 0.
+    """
     x = magnitude.abs().clamp(max=FLOAT32_MAX).to(torch.float32)
-    return (torch.nextafter(x, torch.full_like(x, float("inf"))) - x).to(torch.float64)
+    above = torch.nextafter(x, torch.full_like(x, float("inf"))) - x
+    below = x - torch.nextafter(x, torch.zeros_like(x))
+    return torch.where(torch.isinf(above), below, above).to(torch.float64)
 
 
 def _golden(exact):
@@ -183,7 +199,9 @@ def apply_exceptions(golden, result, stages):
 def intermediate_overflow_exception(golden, intermediates, zero_multiplier=None, saturates=False):
     """An intermediate past float32 max overflows on the device, which then
     returns ±inf where the float64 result is still finite (a = 2, b = 1.7014e38,
-    c = -6.49e32: a * b = 3.4028e38 overflows, a * b + c does not).
+    c = -6.49e32: a * b = 3.4028e38 overflows, a * b + c does not). The
+    infinity must carry the sign of the last of ``intermediates``, the term
+    that reaches the final add.
 
     Where the overflowed intermediate next meets a zero multiplier
     (``zero_multiplier``) the device computes inf * 0 and returns NaN instead,
@@ -197,15 +215,20 @@ def intermediate_overflow_exception(golden, intermediates, zero_multiplier=None,
     for intermediate in intermediates[1:]:
         region = region | (intermediate.abs() > FLOAT32_MAX)
     nan_allowed = torch.zeros_like(region) if zero_multiplier is None else zero_multiplier.expand_as(region)
+    overflow_sign = torch.signbit(intermediates[-1]).expand_as(region)
 
     def build_mask(result):
         mask = region & nonfinite_disagreement(golden, result)
-        expected = torch.isinf(result) | (nan_allowed & torch.isnan(result))
+        expected = (torch.isinf(result) & (torch.signbit(result) == overflow_sign)) | (
+            nan_allowed & torch.isnan(result)
+        )
         if saturates:
             expected = expected | (
                 torch.isinf(golden) & (result.abs() == FLOAT32_MAX) & (torch.signbit(result) == torch.signbit(golden))
             )
-        assert expected[mask].all(), "device is expected to overflow to ±inf, or NaN against a zero multiplier" + (
+        assert expected[
+            mask
+        ].all(), "device is expected to overflow to an inf of the term's sign, or NaN against a zero multiplier" + (
             ", or ±float32 max where the golden is ±inf" if saturates else ""
         )
         return mask
@@ -338,7 +361,7 @@ def test_addcmul(device, value):
     Both sides form value * b first. With a power-of-two value that product
     is exact, so is (value * b) * c on the grid, and the device must match
     the correctly rounded result; with value = 0.3 the first product rounds
-    and the bound is 3 ULP of the larger term. value = 0 has to return a.
+    and the bound is 2.5 ULP of the larger term. value = 0 has to return a.
 
     | # | Stage                    | Range                            | Device returns        |
     |---|--------------------------|----------------------------------|-----------------------|
@@ -356,7 +379,7 @@ def test_addcmul(device, value):
         return
 
     a64 = input_a.double()
-    scaled_b = value * input_b.double()
+    scaled_b = _float32_scalar(value) * input_b.double()
     term = scaled_b * input_c.double()
     exact = a64 + term
     golden = _golden(exact)
@@ -400,7 +423,7 @@ def test_addcdiv(device, value):
     """ttnn.addcdiv over the full 3-way grid: a + value * b / c, c nonzero.
 
     The device multiplies value * b by recip(c), two Newton steps, so even on
-    the grid the quotient rounds; the bound is 3 ULP of the larger term, 4
+    the grid the quotient rounds; the bound is 3 ULP of the larger term, 3.5
     with value = 0.3. value = 0 has to return a. Zero divisors are excluded,
     as in the binary divide sweep.
 
@@ -438,7 +461,7 @@ def test_addcdiv(device, value):
         return
 
     a64 = input_a.double()
-    scaled_b = value * input_b.double()
+    scaled_b = _float32_scalar(value) * input_b.double()
     term = scaled_b / input_c.double()
     exact = a64 + term
     golden = _golden(exact)
@@ -531,8 +554,8 @@ def test_full_mantissa(device, op_name, value):
     |---------|------------------------|----------------------------------------|
     | mac     | a * b, c               | 1.5                                    |
     | lerp    | a, weight * (b - a)    | 2.5                                    |
-    | addcmul | a, value * b * c       | 1.5, 3 for value = 0.3                 |
-    | addcdiv | a, value * b / c       | 3, 4 for value = 0.3                   |
+    | addcmul | a, value * b * c       | 1.5, 2.5 for value = 0.3               |
+    | addcdiv | a, value * b / c       | 3, 3.5 for value = 0.3                 |
     """
     generator = torch.Generator().manual_seed(4)
     input_a = _random_full_mantissa(generator, -60, 60)
@@ -551,16 +574,41 @@ def test_full_mantissa(device, op_name, value):
     elif op_name == "addcmul":
         result = _run(device, ttnn.addcmul, input_a, input_b, input_c, value=value)
         exact_scale = _is_exact_scale(value)
-        term1, term2 = a64, value * b64 * c64
+        term1, term2 = a64, _float32_scalar(value) * b64 * c64
         bound = ADDCMUL_TERM_ULP if exact_scale else ADDCMUL_ROUNDED_VALUE_TERM_ULP
     else:
         result = _run(device, ttnn.addcdiv, input_a, input_b, input_c, value=value)
         exact_scale = _is_exact_scale(value)
-        term1, term2 = a64, value * b64 / c64
+        term1, term2 = a64, _float32_scalar(value) * b64 / c64
         bound = ADDCDIV_TERM_ULP if exact_scale else ADDCDIV_ROUNDED_VALUE_TERM_ULP
 
     exact = term1 + term2
     assert_term_scaled(exact, _golden(exact), result, term1, term2, bound, op_name)
+
+
+@pytest.mark.parametrize("weight", [0.0, 0.5, 1.0, -2.75, 0.3, 1.2345678])
+def test_lerp_scalar_weight(device, weight):
+    """ttnn.lerp with a scalar weight, on random full-mantissa a and b.
+
+    The scalar overload packs the weight into the kernel instead of reading
+    a tensor, so it gets its own case. 0.3 and 1.2345678 use all 23 mantissa
+    bits, so a weight packed through bfloat16 would lose them and fail the
+    bound. The golden uses the weight as float32, which is what the device
+    receives, and the bound is the tensor-weight one, 2.5 ULP of the larger
+    term (measured 1.69).
+    """
+    generator = torch.Generator().manual_seed(4)
+    input_a = _random_full_mantissa(generator, -60, 60)
+    input_b = _random_full_mantissa(generator, -60, 60)
+    result = flush_subnormal_values_to_zero(
+        ttnn.to_torch(ttnn.lerp(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(input_b, device), weight))
+    )
+    assert result.dtype == torch.float32, f"expected float32 output, got {result.dtype}"
+
+    a64 = input_a.double()
+    term = _float32_scalar(weight) * (input_b.double() - a64)
+    exact = a64 + term
+    assert_term_scaled(exact, _golden(exact), result, a64, term, LERP_TERM_ULP, "lerp, scalar weight")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -672,4 +720,32 @@ def test_where_predicate_special_values(device, predicate_value):
     input_false = _random_full_mantissa(generator, -20, 20, shape)
     predicate = torch.full(shape, predicate_value, dtype=torch.float32)
     result = _run_where(device, predicate, input_true, input_false)
+    _assert_bitwise_selection(predicate, input_true, input_false, result)
+
+
+@pytest.mark.parametrize("scalar", [1.2345678, -0.0, float("nan"), float("inf"), 3.0], ids=str)
+@pytest.mark.parametrize("scalar_branch", ["false", "true"])
+def test_where_scalar_branch(device, scalar_branch, scalar):
+    """ttnn.where with one branch a scalar (TTS and TST), bitwise.
+
+    The scalar branches run their own kernels, which pack the scalar instead
+    of reading a tile. 1.2345678 uses all 23 mantissa bits, so a scalar packed
+    through bfloat16 would come back altered; -0.0 and NaN check that the
+    packing keeps the encoding. The tensor branch is random full mantissa and
+    the predicate a checkerboard, so each tile selects both.
+    """
+    generator = torch.Generator().manual_seed(4)
+    shape = (ttnn.TILE_SIZE * 2, ttnn.TILE_SIZE * 2)
+    tensor_branch = _random_full_mantissa(generator, -20, 20, shape)
+    scalar_tensor = torch.full(shape, scalar, dtype=torch.float32)
+    predicate = build_predicate("checkerboard", shape)
+    predicate_tt = to_float32_tt_tensor(predicate, device)
+    tensor_tt = to_float32_tt_tensor(tensor_branch, device)
+    if scalar_branch == "false":
+        result = ttnn.to_torch(ttnn.where(predicate_tt, tensor_tt, scalar))
+        input_true, input_false = tensor_branch, scalar_tensor
+    else:
+        result = ttnn.to_torch(ttnn.where(predicate_tt, scalar, tensor_tt))
+        input_true, input_false = scalar_tensor, tensor_branch
+    assert result.dtype == torch.float32, f"expected float32 output, got {result.dtype}"
     _assert_bitwise_selection(predicate, input_true, input_false, result)
