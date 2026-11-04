@@ -856,6 +856,7 @@ class SpeculativeDecoder:
         # sampler op in the record, ids are the argmax as before. The sampler itself is built by serving_prepare.
         self._srv_sampled_verify = spec_sampled_verify_enabled()
         self._srv_sampler = None  # SpecVerifySampler once serving_prepare built it (knob on)
+        self._srv_greedy_plans = {}  # shape -> the all-greedy SamplingRowsPlan a replay without sampled rows uploads
         self._srv_draft_consts = {}  # (gathered width, vocab slice) -> the candidate mask / column iota / slice offsets
         # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record); under the sharded verify
         # argmax each chip holds its [1, 1, 32, V_padded / tp] vocab slice
@@ -3104,7 +3105,7 @@ class SpeculativeDecoder:
         if self._srv_sampler is not None:
             self._srv_sampler.release([S.get("sampler") for S in self._srv_shape_bufs.values()])
             self._srv_sampler = None
-        self.__dict__.pop("_srv_greedy_plans", None)
+        self._srv_greedy_plans = {}
         self._srv_shape_bufs = {}
         self._srv_frozen = False
         for t in (
@@ -3862,11 +3863,10 @@ class SpeculativeDecoder:
     def _srv_greedy_plan(self, shape):
         """The all-greedy ``SamplingRowsPlan`` of ``shape`` (one per shape: the sampler stage of a replay without
         sampled rows runs on the greedy triple and nothing reads its draws)."""
-        plans = self.__dict__.setdefault("_srv_greedy_plans", {})
-        plan = plans.get(shape)
+        plan = self._srv_greedy_plans.get(shape)
         if plan is None:
             plan = greedy_sampling_rows(shape)
-            plans[shape] = plan
+            self._srv_greedy_plans[shape] = plan
         return plan
 
     def _srv_upload(self, rec, rows, live, anchors, positions, page_tables, seed_idx, plan=None):

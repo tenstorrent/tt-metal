@@ -3874,8 +3874,11 @@ def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, s
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
     indirect=True,
 )
-def test_serving_record_draws_match_the_device_sampler(mesh_device, device_params, reset_seeds, monkeypatch):
-    """GEMMA4_SPEC_SAMPLED_VERIFY on the (5, 5) record over the TP-sharded verify logits: a replay with a sampling
+@pytest.mark.parametrize("sharded", [True, False], ids=["sharded", "gathered"])
+def test_serving_record_draws_match_the_device_sampler(mesh_device, device_params, reset_seeds, monkeypatch, sharded):
+    """GEMMA4_SPEC_SAMPLED_VERIFY on the (5, 5) record over the verify logits, published as the TP shards
+    (``sharded``: GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX=1, the record's per-chip top-k + TP gather) or as the gathered
+    vocabulary (the record's split top-k over 64K chunks and the concat): a replay with a sampling
     plan (two seeded rows at different temperatures / top-k / top-p, one greedy row, one unseeded row) hands back,
     on every sampled packed row, the SAME id the target's own device sampler draws from the record's published
     logits with the plan's parameters and seeds (the oracle: ``tt_sampling.forward`` on the shared verify-logits
@@ -3888,13 +3891,13 @@ def test_serving_record_draws_match_the_device_sampler(mesh_device, device_param
     from models.demos.gemma4.tt.spec_sampling import serving_sampling_rows
 
     monkeypatch.setenv("GEMMA4_SPEC_SAMPLED_VERIFY", "1")
-    monkeypatch.setenv("GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX", "1")  # the oracle takes the chip's vocab slice
+    monkeypatch.setenv("GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX", "1" if sharded else "0")
     shape, max_seq_len, widths = (5, 5), 4096, [2048]
     B, K = shape
     P = K + 1
     n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
     generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
-    assert spec._srv_sampled_verify and spec._srv_sharded_verify_argmax
+    assert spec._srv_sampled_verify and spec._srv_sharded_verify_argmax == sharded
     spec.serving_prepare([shape], {shape: widths}, max_rows=_SERVING_MAX_ROWS)
     assert spec._srv_sampler is not None and spec._srv_shape_bufs[shape]["sampler"]["chunks"] == 1
     spec.serving_capture()
@@ -3925,10 +3928,24 @@ def test_serving_record_draws_match_the_device_sampler(mesh_device, device_param
     # the oracle: the target's device sampler over the same published logits, the plan's parameters and seeds
     tt_sampling = spec.target.sampling.tt_sampling
     seed_manager = spec.target.sampling.seed_manager
+    if sharded:
+        oracle_logits = spec._srv_logits  # the shared buffer holds each chip's vocab slice
+    else:
+        # the shared buffer holds the gathered vocabulary on every chip; the plain sampler draws over per-chip
+        # slices, so the same logits go back up sharded over the TP axis (rows past the live ones are zeros)
+        full = torch.zeros(1, 1, 32, lh.shape[-1], dtype=torch.bfloat16)
+        full[0, 0, : live * P] = lh.reshape(live * P, -1).to(torch.bfloat16)
+        oracle_logits = ttnn.from_torch(
+            full,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape)),
+        )
     k, p, temp, seeds = plan.chunk(0)
     tt_sampling.reset_params(k, p, temp)
     seed_manager.write_device_seed_values(seeds)
-    tok, _ = tt_sampling.forward(spec._srv_logits)
+    tok, _ = tt_sampling.forward(oracle_logits)
     oracle = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).to(torch.int64).reshape(-1)[: B * P]
     for b in (0, 2, 3):
         for j in range(P):
@@ -3945,7 +3962,31 @@ def test_serving_record_draws_match_the_device_sampler(mesh_device, device_param
     res2 = spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
     assert res2.argmax_ids[0].tolist() == ids[0].tolist() and res2.argmax_ids[2].tolist() == ids[2].tolist()
     assert res2.argmax_ids[1].tolist() == ids[1].tolist()
-    # the serving loop under sampled plans: coherent, converging; the accepted counts are the sampled acceptance
+    # A replay re-seeds only the cores of its sampled packed rows; every other packed row carries the device SKIP
+    # seed, so those cores' PRNG advances through the replay's draw instead of being reset to one fixed seed.
+    # Observable on the plain sampler: over a flat distribution (1/T = 0.01, k 32, p 1) the unseeded draw that
+    # follows each of three replays keeps changing on the untouched users; a reset would repeat it every time.
+    from models.common.sampling.generator import MAX_UINT32
+
+    tt_sampling.reset_params([32] * 32, [1.0] * 32, [0.01] * 32)
+
+    def plain_draw(seed_values):
+        seed_manager.write_device_seed_values(seed_values)
+        t, _ = tt_sampling.forward(oracle_logits)
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).to(torch.int64).reshape(-1)[:32].tolist()
+
+    plain_draw([1000 + u for u in range(32)])  # a known state on every core
+    draws_after_replays = []
+    for _ in range(3):
+        spec.serving_reseed(shape, users, anchors, positions, page_tables)
+        spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+        draws_after_replays.append(plain_draw([MAX_UINT32] * 32))
+    untouched = [r for r in range(32) if not plan.sampled[r]]  # the greedy row's packed rows and the padding rows
+    constant = [u for u in untouched if len({d[u] for d in draws_after_replays}) == 1]
+    assert len(constant) <= 2, (
+        f"a replay resets the PRNG of users {constant} outside its sampled rows: the unseeded draw after each of "
+        f"three replays repeated ({draws_after_replays})"
+    )
     anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
     spec.serving_reseed(shape, users, anchors, positions, page_tables)
     outs = [[] for _ in users]

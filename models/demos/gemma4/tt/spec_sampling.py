@@ -32,9 +32,10 @@ top-k -> (TP gather | split concat) -> global indices -> manual_seed ->
 sampling. Greedy rows keep the record's argmax ids by selection on the host
 (``select_verify_ids``), so an all-greedy step is bit-identical to the knob off.
 
-Not available on the lane engine (per-lane sampling groups) or on a target
-without the device top-k sampler (fractured meshes): ``serving_prepare``
-refuses the knob there and the adapter reports the capability False.
+Not available on the lane engine (per-lane sampling groups), on a target
+without the device top-k sampler (fractured meshes) or on one whose sampler
+masks a padded vocabulary: ``serving_prepare`` refuses the knob there with a
+ValueError at warmup (the capability follows the env; the refusal is loud).
 """
 
 import itertools
@@ -45,7 +46,12 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.common.sampling.generator import DEVICE_SEED_MAX, _hash_request_seed_to_device_seed, format_sampling_params
+from models.common.sampling.generator import (
+    DEVICE_SEED_MAX,
+    MAX_UINT32,
+    _hash_request_seed_to_device_seed,
+    format_sampling_params,
+)
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.sampling.tt_sampling import TIEBREAK_DELTA_FLOOR, TIEBREAK_DELTA_SCALE, TIEBREAK_INDEX_SENTINEL
 from models.demos.gemma4.tt.ccl import ccl_allgather
@@ -57,7 +63,11 @@ SPEC_SAMPLED_ROW_TILE = 32
 SPEC_SAMPLED_TOPK_MAX_WIDTH = 64 * 1024
 SPEC_SAMPLED_MAX_TOP_K = 32
 # The seed of a packed row whose draw is never read (greedy or padding rows): any valid device seed.
-SPEC_SAMPLED_IDLE_SEED = 1
+SPEC_SAMPLED_IDLE_SEED = MAX_UINT32  # the device SKIP sentinel: manual_seed leaves that core's PRNG untouched
+# A replay's manual_seed runs on the target sampler's cores, the ones the plain decode draws on. Every packed row
+# whose draw nobody reads (a greedy row, a padding row) carries the SKIP seed, so a replay re-initialises only
+# the cores of its sampled rows; a plain unseeded row that shares one of those cores continues from the
+# record's per-replay seed (fresh entropy or a position hash), a random state, not a fixed one.
 
 
 def spec_sampled_verify_enabled(env=None):
@@ -248,10 +258,9 @@ class SpecVerifySampler:
         self.decoder = decoder
         target = decoder.target
         self.tp = int(decoder._tp)
-        self.mesh_config = getattr(target, "mesh_config", None)
-        self.ccl_manager = getattr(target, "ccl_manager", None)
-        sampling = getattr(target, "sampling", None)
-        tt_sampling = getattr(sampling, "tt_sampling", None)
+        self.mesh_config = target.mesh_config
+        self.ccl_manager = target.ccl_manager
+        tt_sampling = getattr(target.sampling, "tt_sampling", None)  # None on a target without device sampling
         if tt_sampling is None:
             raise ValueError(
                 f"{SPEC_SAMPLED_VERIFY_ENV}=1 needs the target's device sampler (sample_on_device); this target has none"
@@ -262,10 +271,18 @@ class SpecVerifySampler:
                 "(fractured weights): unset the knob (sampled rows then decode plain)"
             )
         self.user_ids = tt_sampling.user_ids_tt_tensor  # [32] uint32: core per packed row
-        self.sub_core_grids = getattr(tt_sampling, "_sampling_sub_core_grids", None)
-        self.invalid_mask = getattr(tt_sampling, "tt_invalid_vocab_mask", None)
-        self.max_top_k = min(SPEC_SAMPLED_MAX_TOP_K, int(getattr(tt_sampling, "max_top_k", SPEC_SAMPLED_MAX_TOP_K)))
-        self._offsets = {}  # (width, slice) -> [1, 1, 32, width] int32 TILE: block d of 32 columns holds d * slice
+        self.sub_core_grids = tt_sampling._sampling_sub_core_grids
+        if tt_sampling.tt_invalid_vocab_mask is not None:
+            # the record draws over the verify logits as published (the gathered vocabulary, or a chip's slice):
+            # a padded vocabulary would need the plain sampler's per-chip mask re-laid for that width
+            raise ValueError(
+                f"{SPEC_SAMPLED_VERIFY_ENV}=1 does not mask a padded vocabulary (the target's sampler carries an "
+                "invalid-vocabulary mask): unset the knob (sampled rows then decode plain)"
+            )
+        self.max_top_k = min(SPEC_SAMPLED_MAX_TOP_K, int(tt_sampling.max_top_k))
+        # (width, slice, block) -> [1, 1, 32, width] int32 TILE: candidate block d (``block`` = top-k columns from
+        # one chip or one vocabulary chunk) holds the offset d * slice
+        self._offsets = {}
         self._uploaded = {}  # (S's serial, chunk) -> params_key last uploaded
         self._serial = itertools.count(1)  # one per alloc: a recycled id() never reads as the same buffers
         self.ops = 0  # device programs the last body issued (diagnostics)
@@ -278,6 +295,10 @@ class SpecVerifySampler:
         """The shape's per-chunk parameter rows, seed rows and draw outputs (``_srv_alloc_shape``)."""
         R = SPEC_SAMPLED_ROW_TILE
         chunks = serving_chunks(B, P)
+        if chunks != 1:
+            # spec_check_shape keeps every record within one 32-row argmax tile (spec_decode.py), so a record's
+            # sampler stage is one chunk; the per-chunk lists stay for the plan's own chunking
+            raise ValueError(f"a record of {B} x {P} packed rows spans {chunks} sampler chunks; one is supported")
         greedy = greedy_sampling_rows((B, P - 1))
         S = {
             "chunks": chunks,
@@ -300,9 +321,12 @@ class SpecVerifySampler:
             S["sidx"].append(self._from_torch(torch.zeros(1, 1, 1, R, dtype=torch.int64), ttnn.uint32))
         return S
 
-    def offsets_for(self, width, vocab_slice):
-        """Persistent ``[1, 1, 32, width]`` int32 TILE: the vocabulary offset of each 32-column candidate block."""
-        key = (int(width), int(vocab_slice))
+    def offsets_for(self, width, vocab_slice, block):
+        """Persistent ``[1, 1, 32, width]`` int32 TILE: the vocabulary offset of each ``block``-column candidate
+        block (``block`` candidates per chip or per vocabulary chunk, ``width // block`` blocks)."""
+        key = (int(width), int(vocab_slice), int(block))
+        if int(width) % int(block):
+            raise ValueError(f"candidate width {width} is not a multiple of the {block}-column block")
         t = self._offsets.get(key)
         if t is None:
             if getattr(self.decoder, "_srv_frozen", False):
@@ -310,10 +334,10 @@ class SpecVerifySampler:
                     f"no sampler offsets for width {width} after serving_prepare: the eager bodies make them; a replay "
                     "never allocates"
                 )
-            R = SPEC_SAMPLED_ROW_TILE
+            R, W = SPEC_SAMPLED_ROW_TILE, int(block)
             host = torch.zeros(1, 1, R, int(width), dtype=torch.int32)
-            for d in range(int(width) // R):
-                host[:, :, :, d * R : (d + 1) * R] = d * int(vocab_slice)
+            for d in range(int(width) // W):
+                host[:, :, :, d * W : (d + 1) * W] = d * int(vocab_slice)
             t = self._from_torch(host, ttnn.int32, layout=ttnn.TILE_LAYOUT)
             self._offsets[key] = t
         return t
@@ -355,15 +379,15 @@ class SpecVerifySampler:
                 x = _own(ttnn.slice(vlogits, [0, 0, lo, 0], [1, 1, lo + n, V_x]))
             if n < R:
                 x = _own(ttnn.pad(x, [(0, 0), (0, 0), (0, R - n), (0, 0)], value=0.0))
-            if self.invalid_mask is not None and tuple(int(d) for d in self.invalid_mask.shape) == (1, 1, R, V_x):
-                x = _own(ttnn.add(x, self.invalid_mask))
             values, indices, width, vocab_slice = self._candidates(x, V_x, sharded)
             for t in owned:
                 t.deallocate(True)
             idx_i32 = indices if indices.dtype == ttnn.int32 else ttnn.typecast(indices, ttnn.int32)
             if idx_i32 is not indices:
                 indices.deallocate(True)
-            gidx = ttnn.add(self.offsets_for(width, vocab_slice), idx_i32, dtype=ttnn.uint32)  # [1, 1, 32, width]
+            gidx = ttnn.add(
+                self.offsets_for(width, vocab_slice, self.max_top_k), idx_i32, dtype=ttnn.uint32
+            )  # [1, 1, 32, width]
             idx_i32.deallocate(True)
             adjusted = self._tiebreak_top1(values, gidx, S["gcol"][c])
             values.deallocate(True)

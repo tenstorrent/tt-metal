@@ -7683,8 +7683,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         """A proposal replayed with a sampled row's parameters (GEMMA4_SPEC_SAMPLED_VERIFY) answers only a
         device-sampled verify that sends the same ``(temperature, top_k, top_p, seed)`` for the row: its ids are
         the device sampler's draws under those parameters."""
-        if retained.sampling is None or float(retained.sampling[0]) <= 0.0:
-            return
+        if retained.sampling is None or (sampling is None and float(retained.sampling[0]) <= 0.0):
+            return  # knob off, or a greedy-planned row under a host-sampled verify: the argmax is its answer
         where = f"row {row} at position {position}"
         if sampling is None:
             raise RuntimeError(

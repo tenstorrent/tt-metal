@@ -1673,6 +1673,7 @@ def _bare_decoder(n_layers=3):
     spec._srv_last = None
     spec._srv_seeded = {}
     spec._srv_sampled_verify, spec._srv_sampler = False, None  # GEMMA4_SPEC_SAMPLED_VERIFY off
+    spec._srv_greedy_plans = {}
     spec.target = SimpleNamespace(layers=list(range(n_layers)))
     return spec
 
@@ -1702,7 +1703,7 @@ def _rail_allocates_nothing_after_capture(
 
     import models.demos.gemma4.tt.spec_decode as spec_decode_module
     import models.demos.gemma4.tt.spec_sampling as spec_sampling_module
-    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, serving_sampling_rows
+    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, _top1_mask, serving_sampling_rows
 
     class _Buf:
         made = [0]
@@ -1723,6 +1724,7 @@ def _rail_allocates_nothing_after_capture(
             self.freed = True
 
     allocated, ops, h2d, replays, forwards = [], [], [], [], []
+    events = []  # ("h2d", address) | ("replay", trace id) | ("d2h",) in call order: the replay's ordering
 
     def forbidden(name):
         def call(*args, **kwargs):
@@ -1740,6 +1742,7 @@ def _rail_allocates_nothing_after_capture(
         assert dev.on_device and not dev.freed and not host.on_device
         dev.host = host.host.clone()
         h2d.append(dev.address)
+        events.append(("h2d", dev.address))
 
     def op(host, dtype=None, address=None):
         out = _Buf(host, dtype, on_device=True)
@@ -1820,11 +1823,11 @@ def _rail_allocates_nothing_after_capture(
         Tensor=type("Tensor", (), {}),
         from_torch=from_torch,
         copy_host_to_device_tensor=copy_host_to_device_tensor,
-        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: replays.append(tid),
+        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: (replays.append(tid), events.append(("replay", tid))),
         release_trace=lambda mesh, tid: None,
         synchronize_device=lambda mesh: None,
         get_device_tensors=device_tensors,
-        to_torch=lambda t: t.host,
+        to_torch=lambda t: (events.append(("d2h",)), t.host)[1],
         to_memory_config=lambda t, cfg: t,
         pad=pad,
         assign=assign,
@@ -1921,6 +1924,7 @@ def _rail_allocates_nothing_after_capture(
     # GEMMA4_SPEC_SAMPLED_VERIFY: the sampler is built from the target's device sampler (its user-id row, its
     # sub-core grid, its invalid-vocab mask), as serving_prepare builds it
     spec._srv_sampled_verify = sampled_verify
+    spec._srv_greedy_plans = {}  # the all-greedy plans a replay without sampled rows uploads, one per shape
     spec.target.sampling = SimpleNamespace(
         tt_sampling=SimpleNamespace(
             user_ids_tt_tensor=from_torch(torch.arange(32), device=object(), dtype=fake.uint32),
@@ -2012,7 +2016,7 @@ def _rail_allocates_nothing_after_capture(
             assert samp["chunks"] == (S["B"] * S["P"] + 31) // 32
             assert all(t.address in prepared for key in ("k", "p", "temp", "seeds", "sidx", "gcol") for t in samp[key])
         width = (32 * tp) if sharded_verify else 32
-        assert list(spec._srv_sampler._offsets) == [(width, vocab_padded // tp if sharded_verify else vocab_padded)]
+        assert list(spec._srv_sampler._offsets) == [(width, vocab_padded // tp if sharded_verify else vocab_padded, 32)]
         assert all(t.address in prepared for t in spec._srv_sampler._offsets.values())
         assert len(seeded) == len(draws) == n_bodies and all(k == [1] * 32 for _a, k, _d in draws)
         seeded.clear(), draws.clear()
@@ -2144,12 +2148,21 @@ def _rail_allocates_nothing_after_capture(
         assert plan.sampled[:6] == [False] * 6 and plan.sampled[12:18] == [False] * 6
         samp_table = torch.zeros(5, spec._srv_blocks, dtype=torch.int32)
         spec.serving_reseed(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table)
-        h2d.clear(), seeded.clear()
+        h2d.clear(), seeded.clear(), events.clear()
         result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4, plan)
         samp = spec._srv_shape_bufs[samp_shape]["sampler"]
         assert samp["chunks"] == 1 and set(h2d) <= prepared and samp["seeds"][0].address in h2d
         assert samp["seeds"][0].host.reshape(-1).tolist() == plan.seeds
         assert samp["k"][0].host.reshape(-1).tolist() == plan.top_k
+        # the top-1 tie-break mask follows the plan's k rows (1.0 on the k == 1 rows) and went up with them
+        assert samp["gcol"][0].address in h2d and torch.equal(samp["gcol"][0].host, _top1_mask(plan.top_k))
+        # the order of one sampled replay: every upload (the seed rows among them) before the trace, the draw read
+        # after it
+        kinds = [event[0] for event in events]
+        replay_at = kinds.index("replay")
+        assert events.index(("h2d", samp["seeds"][0].address)) < replay_at, "the seed rows went up after the replay"
+        assert all(kind != "h2d" for kind in kinds[replay_at:]), "an upload after the replay"
+        assert "d2h" in kinds[replay_at + 1 :], "no readback after the replay"
         # a replay is a trace id on this fake (no body runs): the draws read back are the shape's persistent
         # draw output, which the last eager body of the record wrote
         assert draws == [] and seeded == []
@@ -2164,6 +2177,13 @@ def _rail_allocates_nothing_after_capture(
         result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4)
         assert samp["seeds"][0].address not in h2d and draws == []
         assert result.argmax_ids.tolist() == [[i * 6 + j for j in range(6)] for i in range(4)]
+        # the parameter rows and the mask follow a change of the k rows and only that: the greedy replay re-uploaded
+        # them (its k rows differ from the sampled plan's); a repeat of it uploads nothing
+        assert samp["k"][0].address in h2d and samp["gcol"][0].address in h2d
+        assert torch.equal(samp["gcol"][0].host, _top1_mask([1] * 32))
+        h2d.clear()
+        spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4)
+        assert samp["k"][0].address not in h2d and samp["gcol"][0].address not in h2d and draws == []
         # a plan for another shape is refused before anything is uploaded
         with expect_error(ValueError, "the sampling plan is for"):
             spec.serving_step((1, 5), [0], [1], [5], torch.zeros(1, spec._srv_blocks, dtype=torch.int32), [None], plan)
@@ -3814,7 +3834,8 @@ def test_sampling_rows_plan_encodes_the_plain_paths_parameters_and_seeds_per_col
     assert plan.temperature[12:18] == [1.0] * 6 and plan.top_k[12:18] == [32] * 6
     assert plan.seeds[12:18] == list(range(700, 706))
     # the chunk padding past the shape's rows
-    assert plan.temperature[18:] == [1.0] * 14 and plan.top_k[18:] == [1] * 14 and plan.seeds[18:] == [1] * 14
+    assert plan.temperature[18:] == [1.0] * 14 and plan.top_k[18:] == [1] * 14
+    assert plan.seeds[18:] == [SPEC_SAMPLED_IDLE_SEED] * 14  # the device SKIP sentinel: those cores stay untouched
     k, p, temp, seeds = plan.chunk(0)
     assert (k, p, temp, seeds) == (plan.top_k, plan.top_p, plan.temperature, plan.seeds)
     assert plan.params_key(0) == (tuple(plan.top_k), tuple(plan.top_p), tuple(plan.temperature))
