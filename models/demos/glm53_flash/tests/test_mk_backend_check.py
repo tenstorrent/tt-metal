@@ -80,12 +80,17 @@ def test_mk_backend_check(mesh_device, monkeypatch):
         g = gold["x_out"].float()[0, 0].reshape(4, H)
         gi = gold["x_in"].float()[0, 0].reshape(4, H)
         p = pcc(o, g)
+        p = p if p == p else 0.0  # NaN (a NaN / constant residual) counts as a miss
         per_stream = [round(pcc(o[s_], g[s_]), 5) for s_ in range(4)]
         sampled = backend.read(io.sampled)
+        stats = (
+            f"nan {int(torch.isnan(o).sum())} inf {int(torch.isinf(o).sum())} zero {int((o == 0).sum())} "
+            f"absmax {float(o.nan_to_num(0).abs().max()):.3g} std {float(o.nan_to_num(0).std()):.3g}"
+        )
         logger.info(
             f"MK_BACKEND_CHECK: layers {layers[0]}-{L} mesh {MESH} step {step} token {tok}: residual pcc {p:.6f} per "
-            f"stream {per_stream} (res shape {tuple(res.shape)}; golden std {g.std():.4f}, x_in(L) std {gi.std():.4f}); "
-            f"sampled {int(sampled[0])}"
+            f"stream {per_stream} (res shape {tuple(res.shape)}; out {stats}; golden std {g.std():.4f}, x_in(L) std "
+            f"{gi.std():.4f}); sampled {int(sampled[0])}"
         )
         worst = min(worst, p)
     logger.info(
