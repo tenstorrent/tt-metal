@@ -11,7 +11,7 @@
 #
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
-# tt_metal/tt-llk/tests/: run_llk_perf.sh <arch>
+# tt_metal/tt-llk/tests/: run_llk_perf_leg.sh <arch>
 # (both shard with --perf-splits / --perf-group).
 
 - name: llk_perf_wormhole group 1/5
@@ -20,7 +20,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh wormhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -38,7 +38,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh wormhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -56,7 +56,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh wormhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -74,7 +74,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh wormhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -92,7 +92,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh wormhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh wormhole {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -110,7 +110,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh blackhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -128,7 +128,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh blackhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -146,7 +146,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh blackhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -164,7 +164,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh blackhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240
@@ -182,7 +182,7 @@
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf.sh blackhole {split_group} 5
+    ./tests/run_llk_perf_leg.sh blackhole {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 240

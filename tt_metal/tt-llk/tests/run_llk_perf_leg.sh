@@ -5,11 +5,11 @@
 # LLK perf runner for one leg: group <group> of <n_groups> of the perf suite on <arch>
 # (tests/pipeline_reorg/llk_perf_tests.yaml, llk_perf_merge_gate_tests.yaml).
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf.sh <wormhole|blackhole> <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_leg.sh <wormhole|blackhole> <group> <n_groups>
 # Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS.
 set -euo pipefail
 
-USAGE="usage: run_llk_perf.sh <wormhole|blackhole> <group> <n_groups>"
+USAGE="usage: run_llk_perf_leg.sh <wormhole|blackhole> <group> <n_groups>"
 ARCH="${1:?$USAGE}"
 GROUP="${2:?$USAGE}"
 N_GROUPS="${3:?$USAGE}"
