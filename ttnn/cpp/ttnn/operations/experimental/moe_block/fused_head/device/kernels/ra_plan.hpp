@@ -414,8 +414,11 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             const uint16_t* pre = reinterpret_cast<const uint16_t*>(hb + 64 + BB + r * BBP);
             const uint32_t x1 = base + pre[e1];
             for (uint32_t x = base + pre[e0]; x < x1; ++x) {
-                const uint32_t w = eo[x];
-                ++et[(((w >> 11) & 63) - e0) * S + (w & 0x7FF)];
+                const uint32_t w = eo[x], e = ((w >> 11) & 63) - e0, t = w & 0x7FF;
+                if (e >= ER || t >= S) {
+                    continue;  // (a slice's run holds my experts' entries only: never - bounds et on bad data)
+                }
+                ++et[e * S + t];
             }
         }
     }
@@ -451,6 +454,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             const uint32_t x1 = base + pre[e1];
             for (uint32_t x = base + pre[e0]; x < x1; ++x) {
                 const uint32_t w = eo[x], t = w & 0x7FF, e = (w >> 11) & 63;
+                if (e - e0 >= ER || t >= S) {
+                    continue;  // (as the count above)
+                }
                 const uint32_t rr = et[(e - e0) * S + t]++;
                 if (rr >= INST_ROWS || R0 + rr >= ROWS_CAP) {
                     continue;  // (past the worst case only: never)

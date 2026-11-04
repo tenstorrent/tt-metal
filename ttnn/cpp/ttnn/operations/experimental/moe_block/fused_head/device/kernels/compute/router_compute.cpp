@@ -20,6 +20,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/topk.h"
 #include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #ifdef RT_SQRTSOFTPLUS
 #include "api/compute/eltwise_unary/softplus.h"
@@ -222,6 +223,11 @@ void kernel_main() {
         constexpr uint32_t LK = KS == 8 ? 3 : KS == 16 ? 4 : KS == 32 ? 5 : 2, NM = 6 - LK;
         constexpr auto TIE = ckernel::TopkTieOrder::Unset;
         tile_regs_acquire();
+        if constexpr (ET == 1) {  // (one tile of candidates: no running top K is parked in DEST tile 2 - the
+                                  // column's other half is -inf keys, below every score; K <= 32 never reaches them)
+            fill_tile_init();
+            fill_tile_int<DataFormat::Int32>(0, 0xFF800000u);
+        }
         reconfig_data_format_srca(SC);
         copy_init(SC);
         ckernel::topk_tile_init<true, false>();
@@ -229,7 +235,9 @@ void kernel_main() {
             const bool odd = t + 1 == ET;     // (a last tile alone: against the running top K, a full round)
             const bool fold = t > 0 && !odd;  // (a pair after the first: its run folded into the running top K)
             if (odd) {
-                copy_dest_values<DataFormat::Int32>(2, 0);
+                if constexpr (ET > 1) {
+                    copy_dest_values<DataFormat::Int32>(2, 0);  // (the running top K, parked at t - 2)
+                }
                 copy_tile(SC, t, 1);
             } else {
                 copy_tile(SC, t, 0);

@@ -71,12 +71,35 @@ inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, u
     for (uint32_t c = c0; c < c1; ++c) {
         uint32_t ids[K], w[K], sum = 0;  // (w: the scores' fp32 bits, then their block-exponent integers)
         int32_t emax = 0;
+        uint32_t bad = 0;
         for (uint32_t q = 0; q < K; ++q) {
             const uint32_t key =
                 reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];  // (the top-K's key: id in the low bits)
-            const uint32_t eid = key & EM;
-            ids[q] = eid;
-            w[q] = score_of(sv, eid, c);
+            ids[q] = key & EM;
+            bad |= uint32_t(ids[q] >= ET * 32) << q;
+        }
+        if (bad) {  // (an id past the candidates - only a broken top-K: every consumer indexes by it, the planner's
+                    // tables and the route words. Each such key takes the first expert the token does not have yet
+                    // (no repeat: the sizing's one entry an expert a token holds) at weight bits 0x7FC0 (bf16 NaN):
+                    // the error marker in the routing rows - garbage routing, not a hang)
+            for (uint32_t q = 0; q < K; ++q) {
+                if (!((bad >> q) & 1)) {
+                    continue;
+                }
+                for (uint32_t j = 0;; ++j) {  // (K <= E experts: a free one exists)
+                    bool used = false;
+                    for (uint32_t p = 0; p < K; ++p) {
+                        used |= (p < q || !((bad >> p) & 1)) && ids[p] / RT_FOLD == j;
+                    }
+                    if (!used) {
+                        ids[q] = j * RT_FOLD;
+                        break;
+                    }
+                }
+            }
+        }
+        for (uint32_t q = 0; q < K; ++q) {
+            w[q] = (bad >> q) & 1 ? 0 : score_of(sv, ids[q], c);
             if (w[q] >> 31) {
                 w[q] = 0;  // (sigmoid and sqrt(softplus) scores are >= 0)
             }
@@ -99,7 +122,8 @@ inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, u
         for (uint32_t q = 0; q < K; ++q) {
             o[q] = static_cast<uint16_t>(ids[q] / RT_FOLD);  // (candidate -> expert: RouterSpec.fold)
             const uint32_t wn = sh >= 0 ? (uint32_t)w[q] << sh : (uint32_t)w[q] >> -sh;
-            o[K + q] = static_cast<uint16_t>(bf16_of((uint32_t)(((uint64_t)wn * rs) >> 32), 6 - se));
+            o[K + q] = static_cast<uint16_t>(
+                (bad >> q) & 1 ? 0x7FC0u : bf16_of((uint32_t)(((uint64_t)wn * rs) >> 32), 6 - se));
         }
     }
 }
