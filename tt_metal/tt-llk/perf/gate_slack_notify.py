@@ -105,13 +105,6 @@ def _repro_command(rows, arch, baseline_sha):
     return " ".join(shlex.quote(part) for part in cmd)
 
 
-def _measure_complete(results):
-    """Every measuring job succeeded or was skipped; anything else is a partial suite."""
-    return all(
-        r.strip() in ("", "success", "skipped") for r in results.lower().split(",")
-    )
-
-
 def _findings(rows):
     """Points that differ only in marker or run type are one finding."""
     groups = {}
@@ -131,32 +124,36 @@ def _describe_finding(group, varying):
     return line
 
 
-def verdict(
-    *,
-    exit_code,
-    have_baseline,
-    report_written,
-    comparison_finished=True,
-    measure_failed=False,
-    measure_reason="",
-):
-    """``(status, reason)`` — ``regressed`` | ``skipped`` | ``clean``."""
-    if measure_failed:
-        if measure_reason:
-            return "skipped", f"{measure_reason.strip()} The gate compared nothing."
-        return "skipped", (
-            "Part of the measurement did not complete (failed or cancelled), "
-            "so the gate compared nothing."
+# gate.py's verdict status -> the Slack status; every other status is a skip.
+_STATUS = {"regression": "regressed", "pass": "clean"}
+
+
+def from_verdict(v):
+    """``(status, ctx)`` of a verdict-<arch>.json; ``None`` (no file) is a skip."""
+    if v is None:
+        return "skipped", {
+            "reason": "Its gate job wrote no verdict, so the gate compared nothing."
+        }
+    p, base = v["policy"], v.get("baseline") or {}
+    note = ""
+    if base.get("stale"):
+        note = (
+            f"Stale baseline: none at {base.get('expected_commit', '?')[:_SHORT_SHA]} yet, so this "
+            f"compares with {(base.get('commit_sha') or '?')[:_SHORT_SHA]} ({base.get('run_ts', '?')})."
         )
-    if not have_baseline:
-        return "skipped", "No baseline was found, so the gate compared nothing."
-    if not report_written:
-        return "skipped", "The comparison did not run, so the gate compared nothing."
-    if not comparison_finished:
-        return "skipped", (
-            "The comparison started but did not finish, so its " "verdict is unknown."
-        )
-    return ("regressed", "") if exit_code != 0 else ("clean", "")
+    ctx = {
+        "arch": v["arch"],
+        "run_types": ",".join(p["run_types"]),
+        "baseline_sha": base.get("commit_sha", ""),
+        "gate_name": p["title"],
+        "mode": "speed of light" if p["speed_of_light"] else "non speed-of-light",
+        "threshold": str(p["threshold"]),
+        "min_cycles": str(p["min_cycles"]),
+        "module_thresholds": ",".join(f"{m}={t}" for m, t in p["modules"].items()),
+        "reason": v["reason"],
+        "note": note,
+    }
+    return _STATUS.get(v["status"], "skipped"), ctx
 
 
 def _subject(ctx):
@@ -282,43 +279,27 @@ def _emit_outputs(**values):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the gate's Slack payload.")
+    ap.add_argument("--verdict", required=True, help="the gate's verdict-<arch>.json")
     ap.add_argument("--regressions", help="path to <stem>.regressions.csv")
-    ap.add_argument("--report", help="path to the Markdown report the gate wrote")
-    ap.add_argument("--have-baseline", help="path to have_baseline.txt")
-    ap.add_argument("--exit-code", type=int, default=0)
-    ap.add_argument("--comparison-finished", default="true")
-    ap.add_argument("--measure-result", default="")
-    ap.add_argument(
-        "--measure-reason", default="", help="which leg did not complete, and why"
-    )
     ap.add_argument("--channel", required=True, help="Slack channel id")
     ap.add_argument("--pr-number", default="?")
     ap.add_argument("--pr-url", default="")
     ap.add_argument("--pr-title", default="")
     ap.add_argument("--author", default="")
-    ap.add_argument("--arch", default="")
-    ap.add_argument("--run-types", default="")
     ap.add_argument("--run-url", default="")
     ap.add_argument(
         "--report-url", default="", help="this job's summary on the run page"
     )
     ap.add_argument("--artifact-url", default="", help="the uploaded gate report")
-    ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
-    ap.add_argument("--mode", default="")
-    ap.add_argument("--gate-name", default="LLK perf gate")
     ap.add_argument(
         "--trigger", default="nightly", help="what started a run with no PR"
     )
-    ap.add_argument("--note", default="", help="one extra line, e.g. a stale baseline")
     ap.add_argument(
         "--post-pass",
         default="true",
         help="false: post nothing when the gate passes; regressions and skips still post",
     )
-    ap.add_argument("--threshold", default="", help="for the combined post")
-    ap.add_argument("--min-cycles", default="", help="for the combined post")
-    ap.add_argument("--module-thresholds", default="", help="for the combined post")
     ap.add_argument(
         "--part-out",
         help="also write the verdict as JSON, for gate_slack_combine.py",
@@ -326,45 +307,27 @@ def main(argv=None):
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
-    have_baseline = False
-    if a.have_baseline and os.path.exists(a.have_baseline):
-        with open(a.have_baseline) as fh:
-            have_baseline = fh.read().strip() == "true"
-
-    report_written = bool(a.report) and os.path.exists(a.report)
-    status, reason = verdict(
-        exit_code=a.exit_code,
-        have_baseline=have_baseline,
-        report_written=report_written,
-        comparison_finished=a.comparison_finished.strip().lower() != "false",
-        measure_failed=not _measure_complete(a.measure_result),
-        measure_reason=a.measure_reason,
-    )
+    try:
+        with open(a.verdict) as fh:
+            v = json.load(fh)
+    except (OSError, ValueError):
+        v = None
+    status, ctx = from_verdict(v)
     rows = read_regressions(a.regressions) if status == "regressed" else []
 
     should_post = status != "clean" or a.post_pass.strip().lower() != "false"
 
-    ctx = {
-        "pr_number": a.pr_number,
-        "pr_url": a.pr_url,
-        "pr_title": a.pr_title,
-        "author": a.author,
-        "commit": a.commit,
-        "mode": a.mode,
-        "arch": a.arch,
-        "run_types": a.run_types,
-        "run_url": a.run_url,
-        "report_url": a.report_url,
-        "artifact_url": a.artifact_url,
-        "baseline_sha": a.baseline_sha,
-        "reason": reason,
-        "gate_name": a.gate_name,
-        "trigger": a.trigger,
-        "note": a.note,
-        "threshold": a.threshold,
-        "min_cycles": a.min_cycles,
-        "module_thresholds": a.module_thresholds,
-    }
+    ctx.update(
+        pr_number=a.pr_number,
+        pr_url=a.pr_url,
+        pr_title=a.pr_title,
+        author=a.author,
+        commit=a.commit,
+        run_url=a.run_url,
+        report_url=a.report_url,
+        artifact_url=a.artifact_url,
+        trigger=a.trigger,
+    )
     text = build_text(status, rows, ctx)
 
     if a.part_out:

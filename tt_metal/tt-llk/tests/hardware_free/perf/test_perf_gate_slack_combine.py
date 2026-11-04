@@ -135,16 +135,26 @@ def test_the_merge_gate_post_states_the_rule_of_a_regressed_arch(tmp_path, monke
         writer = csv.DictWriter(fh, fieldnames=list(_ROW))
         writer.writeheader()
         writer.writerow(_ROW)
-    flag = tmp_path / "have_baseline.txt"
-    flag.write_text("true")
+    verdict = tmp_path / "verdict-wormhole.json"
+    policy = {
+        "title": "LLK perf merge gate",
+        "speed_of_light": False,
+        "threshold": 0.025,
+        "min_cycles": 30,
+        "modules": {"perf_matmul": 0.25},
+        "run_types": ["L1_TO_L1"],
+    }
+    verdict.write_text(
+        json.dumps(
+            {"arch": "wormhole", "status": "regression", "reason": "", "policy": policy}
+        )
+    )
     part = tmp_path / "part.json"
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "notify.txt"))
     notify_main(
         [
-            *("--have-baseline", str(flag), "--report", str(flag)),
-            *("--exit-code", "1", "--regressions", str(regressions)),
-            *("--arch", "wormhole", "--threshold", "0.025", "--min-cycles", "30"),
-            *("--module-thresholds", "perf_matmul=0.25", "--part-out", str(part)),
+            *("--verdict", str(verdict), "--regressions", str(regressions)),
+            *("--part-out", str(part)),
             *("--channel", "C0TEST", "--out", str(tmp_path / "notify.json")),
         ]
     )

@@ -1,0 +1,60 @@
+# LLK perf gate policy: what each gate compares, against what, and when it fails.
+# The workflows name a gate and an arch; every number below is read by perf/gate.py only.
+#
+# A point regresses when it is slower by more than `threshold` (relative) AND by more than
+# `min_cycles`. `modules` overrides the threshold per test module. `block: true` fails the
+# job on a regression; false reports it only. A gate that compared nothing (incomplete
+# measurement, no baseline, failed compare) always fails the job.
+#
+# Why these numbers: BH 2 % is the noise of 5 same-commit runs (#53752). WH is wider until the
+# harness stability stack (#60314) merges; WH matmul LoFi configs are the least stable.
+
+min_cycles: 30
+
+gates:
+  pr:
+    title: LLK perf gate
+    speed_of_light: false
+    baseline: branch point, measured in the same run
+    arches:
+      blackhole: {threshold: 0.02, run_types: [L1_TO_L1], stage2: true}
+      wormhole: {threshold: 0.13, run_types: [L1_TO_L1]}
+
+  merge:
+    title: LLK perf merge gate
+    speed_of_light: false
+    baseline: merge_baseline
+    arches:
+      blackhole: {threshold: 0.02, run_types: [L1_TO_L1], stage2: true}
+      wormhole:
+        threshold: 0.13
+        modules: {perf_matmul: 0.25, perf_math_matmul: 0.25}
+        run_types: [L1_TO_L1]
+
+  # The pinned runs: move a pin by measuring with pipeline=baseline (llk-perf.yaml, upload on)
+  # and changing its run id here, in a reviewed PR.
+  nightly:
+    title: LLK perf nightly gate (non speed-of-light)
+    speed_of_light: false
+    baseline: {pipeline: baseline, run: 39432976698}
+    arches:
+      blackhole:
+        threshold: 0.02
+        run_types: [L1_TO_L1, PACK_ISOLATE, UNPACK_ISOLATE, MATH_ISOLATE]
+      wormhole:
+        threshold: 0.10
+        modules: {perf_matmul: 0.25, perf_math_matmul: 0.25}
+        run_types: [L1_TO_L1, UNPACK_ISOLATE, MATH_ISOLATE]
+
+  nightly_sol:
+    title: LLK perf nightly gate (speed of light)
+    speed_of_light: true
+    baseline: {pipeline: baseline, run: 39432951782}
+    arches:
+      blackhole:
+        threshold: 0.02
+        run_types: [L1_TO_L1, PACK_ISOLATE, UNPACK_ISOLATE, MATH_ISOLATE]
+      wormhole:
+        threshold: 0.03
+        modules: {perf_matmul: 0.10, perf_math_matmul: 0.10}
+        run_types: [L1_TO_L1, UNPACK_ISOLATE, MATH_ISOLATE]

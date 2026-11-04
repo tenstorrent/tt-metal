@@ -92,6 +92,7 @@ def pick_run(
     speed_of_light,
     exclude_workflow_run=None,
     commits=None,
+    run=None,
 ):
     """Newest run of this pipeline, arch and mode, other than the run being gated.
 
@@ -103,6 +104,9 @@ def pick_run(
     if exclude_workflow_run:
         where += " AND RUN_ID NOT LIKE %s"
         params += (f"%-{exclude_workflow_run}-%",)
+    if run:
+        where += " AND RUN_ID LIKE %s"
+        params += (f"%-{run}-{arch}",)
     if commits:
         where += f" AND COMMIT_SHA IN ({', '.join(['%s'] * len(commits))})"
         params += tuple(commits)
@@ -129,7 +133,14 @@ def find_run(cursor, a, sol, sleep=time.sleep):
 
     def pick(commits=None):
         return pick_run(
-            cursor, a.view, a.arch, a.pipeline, sol, a.exclude_workflow_run, commits
+            cursor,
+            a.view,
+            a.arch,
+            a.pipeline,
+            sol,
+            a.exclude_workflow_run,
+            commits,
+            a.run,
         )
 
     if a.commits is None:
@@ -240,6 +251,7 @@ def main(argv=None):
         default="",
         help="workflow run id whose own upload must not become its baseline",
     )
+    ap.add_argument("--run", default=None, help="the workflow run id of the pinned run")
     ap.add_argument(
         "--commits",
         default=None,
