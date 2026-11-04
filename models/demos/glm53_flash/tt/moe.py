@@ -1958,6 +1958,22 @@ class TtRoutedExperts(LightweightModule):
         rows' contributions in fp32 DST (one rounding) into [1,1,T,H] (rows past T zero)."""
         op = self._row_exchange("reduce", (int(y.padded_shape[-1]),), T)
         (out,) = op([y])
+        if os.environ.get("GLM53_ROWX_CHECK", "0") == "1" and not self.mesh.allocations_frozen[0]:
+            # diagnostic (eager steps only): the composite combine on the same y, compared per chip on the host
+            ref = self._combine_rows_allreduce(y, T)  # deallocates y
+            diffs = []
+            for i, (a, b) in enumerate(zip(ttnn.get_device_tensors(out), ttnn.get_device_tensors(ref))):
+                ta, tb = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
+                d = (ta - tb).abs()
+                diffs.append((float(d.max()), int(d.argmax() // d.shape[-1]), float(tb.abs().max())))
+            worst = max(range(len(diffs)), key=lambda i: diffs[i][0])
+            logger.warning(
+                f"ROWX-CHECK combine T={T}: max |fabric - composite| {diffs[worst][0]:.4f} on chip {worst} row "
+                f"{diffs[worst][1]} (|ref| max {diffs[worst][2]:.2f}); chips over 0.1: "
+                f"{[i for i, d in enumerate(diffs) if d[0] > 0.1]}"
+            )
+            ttnn.deallocate(ref)
+            return out
         ttnn.deallocate(y)
         return out
 

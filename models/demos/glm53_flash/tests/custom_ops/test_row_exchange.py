@@ -115,6 +115,10 @@ def test_gather(mesh_device):
     for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
         assert torch.equal(cx, exp_x), f"chip {i}: x gather differs ({(cx != exp_x).sum().item()} elements)"
         assert torch.equal(cw, exp_w), f"chip {i}: routing gather differs ({(cw != exp_w).sum().item()} elements)"
+    eager, traced = _timed(mesh_device, op, [xd, wd], [xg, wg])
+    for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
+        assert torch.equal(cx, exp_x) and torch.equal(cw, exp_w), f"chip {i}: differs after the trace replays"
+    logger.info(f"ROWX gather {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
     _replay_with_new_inputs(
         mesh,
         op,
@@ -126,10 +130,6 @@ def test_gather(mesh_device):
             [hs[1][:, 0, :T].reshape(ROWS * T, E)] * (ROWS * COLS),
         ],
     )
-    eager, traced = _timed(mesh_device, op, [xd, wd], [xg, wg])
-    for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
-        assert torch.equal(cx, exp_x) and torch.equal(cw, exp_w), f"chip {i}: differs after the trace replays"
-    logger.info(f"ROWX gather {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
 
 
 @pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
@@ -144,13 +144,24 @@ def test_reduce(mesh_device):
     op = RowExchange(mesh, "reduce", [H], T)
     (out,) = op([yd])
     chips = _chips(out)
+    rn = tr = 0
     for r in range(ROWS):
-        exp = y[:, 0, r * T : (r + 1) * T].sum(dim=0).bfloat16().float()  # over the source rows, fp32
+        fsum = y[:, 0, r * T : (r + 1) * T].sum(dim=0)  # over the source rows, fp32
+        exp = fsum.bfloat16().float()
+        exp_trunc = (fsum.view(torch.int32) & -65536).view(torch.float32)  # fp32 -> bf16 by truncation
         for c in range(COLS):
             got = chips[r * COLS + c]
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3  # one bf16 ulp: the device's fp32 order may differ from torch's
             assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
+            rn += int((got == exp).sum())
+            tr += int((got == exp_trunc).sum())
+    logger.info(f"ROWX reduce rounding: {rn} elements equal the round-to-nearest sum, {tr} the truncated sum")
+    eager, traced = _timed(mesh_device, op, [yd], [out])
+    chips2 = _chips(out)
+    for i, (a, b) in enumerate(zip(chips, chips2)):
+        assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
+    logger.info(f"ROWX reduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
     _replay_with_new_inputs(
         mesh,
         op,
@@ -161,11 +172,6 @@ def test_reduce(mesh_device):
             [hs[0][:, 0, r * T : (r + 1) * T].sum(dim=0).bfloat16().float() for r in range(ROWS) for _ in range(COLS)]
         ],
     )
-    eager, traced = _timed(mesh_device, op, [yd], [out])
-    chips2 = _chips(out)
-    for i, (a, b) in enumerate(zip(chips, chips2)):
-        assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
-    logger.info(f"ROWX reduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
 
 
 @pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
@@ -193,6 +199,11 @@ def test_allreduce(mesh_device):
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3
             assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
+    eager, traced = _timed(mesh_device, op, [yd], [out])
+    chips2 = _chips(out)
+    for i, (a, b) in enumerate(zip(chips, chips2)):
+        assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
+    logger.info(f"ROWX allreduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
     _replay_with_new_inputs(
         mesh,
         op,
@@ -201,11 +212,6 @@ def test_allreduce(mesh_device):
         [y],
         lambda hs: [[hs[0][r, :, :T].sum(dim=0).bfloat16().float() for r in range(ROWS) for _ in range(COLS)]],
     )
-    eager, traced = _timed(mesh_device, op, [yd], [out])
-    chips2 = _chips(out)
-    for i, (a, b) in enumerate(zip(chips, chips2)):
-        assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
-    logger.info(f"ROWX allreduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
 
 
 @pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
