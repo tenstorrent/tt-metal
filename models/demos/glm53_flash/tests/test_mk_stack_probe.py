@@ -127,6 +127,16 @@ def test_mk_stack_probe(mesh_device):
         a, b = o_stk.reshape(-1), o_seq.reshape(-1)
         fin = bool(torch.isfinite(a).all())
         p_ = float(torch.corrcoef(torch.stack([a.nan_to_num(0, 1e9, -1e9), b]))[0, 1]) if fin else 0.0
+        # the stack's shared intermediates after the launch (the last layer's values): where garbage first appears
+        for i, st_ in enumerate(getattr(stack, "shared", [])[:60]):
+            try:
+                v = ttnn.to_torch(ttnn.get_device_tensors(st_)[0]).float()
+                logger.info(
+                    f"MK_STACK_SHARED: {i} shape {tuple(st_.shape)} {st_.dtype} absmax {float(v.nan_to_num(0).abs().max()):.3g} "
+                    f"nonfinite {int((~torch.isfinite(v)).sum())} mem {st_.memory_config().buffer_type}"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"MK_STACK_SHARED: {i} unreadable: {e}")
         logger.info(
             f"MK_STACK_CHECK: mesh {MESH} vtp {VTP} layers {LAYERS} t {T}: stack vs sequential layer programs pcc "
             f"{p_:.6f}; stack finite {fin} absmax {float(a.nan_to_num(0).abs().max()):.3g}; sequential absmax "
