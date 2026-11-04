@@ -8,6 +8,9 @@ Quasar pool coverage sweeps — one device session per test, many cases, per-cas
 test_qpool_c_sweep : channel-width ladder (sub-face .. 768, partial-tile combos), the DEST-width
 regimes from WH/BH testing practice. C > 256 exercises the wide reduction (in_nblocks_c > 1).
 
+test_qpool_dram_sliced : DRAM-interleaved input pooled slice by slice (height / width slices, ROW_MAJOR
+and TILE input), the path pools take when the input does not fit in L1.
+
 test_qpool_matrix  : kernel sizes (2x2 .. 9x9 — 7/8/9 are chunked large kernels, 9x9 = 3 chunks),
 stride 1, batch 2, tall/wide inputs, a natural wide-reduction case (C=280 = 9 tiles -> three
 3-tile c-blocks via largest_uniform_block_width), avg pool (basic + chunked large kernel), and
@@ -72,6 +75,11 @@ def _run_case(
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
+    dram_slice=None,  # None = sharded L1 input; ("height" | "width", n) = DRAM input, n slices; ("auto",) = DRAM
+    # input with no slice config (the op picks the slicing)
+    rm_input=False,  # force ROW_MAJOR input even when C % 32 == 0
+    tile_input=False,  # force TILE input even when C % 32 != 0 (channels padded to the tile width)
+    shard_scheme=None,  # applied_shard_scheme: None = the op's choice | "height" | "width" | "block"
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
@@ -79,7 +87,7 @@ def _run_case(
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
     tensor_height = batch * in_h * in_w
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32"
-    tiled_input = channels % 32 == 0 or dtype == "bf8b"
+    tiled_input = (channels % 32 == 0 and not rm_input) or dtype == "bf8b" or tile_input
 
     x_nhwc = _build_input(pattern, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
     if dtype == "bf8b":
@@ -113,7 +121,14 @@ def _run_case(
     golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
 
     grid = device.compute_with_storage_grid_size()
-    if shard == "height":
+    dram_slice_config = None
+    if dram_slice is not None:
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
+        if dram_slice[0] != "auto":
+            slice_type = {"height": ttnn.Op2DDRAMSliceHeight, "width": ttnn.Op2DDRAMSliceWidth}[dram_slice[0]]
+            dram_slice_config = ttnn.Op2DSliceConfig(num_slices=dram_slice[1], slice_type=slice_type)
+        core_desc = f"DRAM-sliced {'x'.join(map(str, dram_slice))}" + (f" {shard_scheme}" if shard_scheme else "")
+    elif shard == "height":
         height_tiles = tensor_height // 32
         num_cores = cores or max(c for c in range(1, grid.x * grid.y + 1) if height_tiles % c == 0)
         shard_height = (height_tiles // num_cores) * 32
@@ -169,6 +184,12 @@ def _run_case(
             output_layout=ttnn.TILE_LAYOUT if out_layout == "tile" else ttnn.ROW_MAJOR_LAYOUT,
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+            **({} if dram_slice_config is None else dict(dram_slice_config=dram_slice_config)),
+            **(
+                {}
+                if shard_scheme is None
+                else dict(applied_shard_scheme=getattr(ttnn.TensorMemoryLayout, f"{shard_scheme.upper()}_SHARDED"))
+            ),
         )
         ttnn.synchronize_device(device)
         return out
@@ -511,6 +532,80 @@ UNIT_CASES = [
         ),
     ),
 ]
+
+
+# DRAM-interleaved input, pooled slice by slice. Each slice is gathered with padded_slice and written
+# back with slice_write; on Quasar those must be the quasar Metal-2 ops (the shared ones build kernels
+# Quasar rejects: "ComputeKernel is not supported on Quasar").
+DRAM_SLICED_CASES = [
+    # ROW_MAJOR input, and TILE input, which the pool untilizes before slicing
+    ("max_k3x3_s2_h2_rm", dict(channels=32, in_h=16, in_w=16, rm_input=True, dram_slice=("height", 2))),
+    ("max_k3x3_s2_h2_tile", dict(channels=32, in_h=16, in_w=16, dram_slice=("height", 2))),
+    ("max_k3x3_s2_w2_tile", dict(channels=32, in_h=16, in_w=16, dram_slice=("width", 2))),
+    # TILE input with C % 32 != 0, height-sharded: the slices are gathered ROW_MAJOR, so they are 40 channels
+    # wide, not the tile-padded 64
+    (
+        "max_k3x3_s2_h2_tile_c40",
+        dict(channels=40, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
+    ),
+    # C % 8 != 0: the ROW_MAJOR shard row is wider than the slice row (36 -> 40), so padded_slice
+    # zero-pads each row's tail
+    ("max_k3x3_s2_h2_rm_c36", dict(channels=36, in_h=16, in_w=16, dram_slice=("height", 2))),
+    # 60 -> 64 channels: a 128-byte row, so the pad runs on the DRAM-aligned path (the 80-byte rows of
+    # 36/40 channels take the non-aligned one when the DRAM alignment is 32 or 64 bytes)
+    ("max_k3x3_s2_h2_rm_c60", dict(channels=60, in_h=16, in_w=16, dram_slice=("height", 2))),
+    (
+        "max_k3x3_s2_h2_tile_c36",
+        dict(channels=36, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
+    ),
+    # width-sharded slices: ROW_MAJOR output runs them block-sharded (slice_write takes only sharded input and
+    # no width-sharded ROW_MAJOR one); TILE output keeps them width-sharded
+    ("max_k3x3_s2_h2_width_rm", dict(channels=64, in_h=16, in_w=16, shard_scheme="width", dram_slice=("height", 2))),
+    (
+        "max_k3x3_s2_h2_width_tile_out",
+        dict(
+            channels=64,
+            in_h=16,
+            in_w=16,
+            shard_scheme="width",
+            out_layout="tile",
+            dram_slice=("height", 2),
+            sim_skip="Quasar tiled-output pool bug (see tiled_out_*): the same width-sharded TILE-output pool mismatches identically unsliced in L1 on craq-sim -- not a slicing issue",
+        ),
+    ),
+    # BFLOAT8_B TILE input, untilized to BFLOAT16 before slicing
+    (
+        "max_k3x3_s2_h2_bf8b",
+        dict(
+            channels=32,
+            in_h=16,
+            in_w=16,
+            dtype="bf8b",
+            dram_slice=("height", 2),
+            sim_skip="Metal-2.0 DFB bfp8 unsupported (dfb.cpp:111 is_data_format_supported), as bf8b_k3x3",
+        ),
+    ),
+    # DRAM input with no slice config: the op picks the slicing (one slice at this size -> the L1 path)
+    ("max_k3x3_s2_auto", dict(channels=32, in_h=16, in_w=16, dram_slice=("auto",))),
+    (
+        "avg_k2x2_s2_h2_tile",
+        dict(
+            pool="avg",
+            channels=32,
+            in_h=16,
+            in_w=16,
+            kernel=(2, 2),
+            padding=(0, 0),
+            dram_slice=("height", 2),
+            sim_skip="Quasar pool bug, windows <= 8 rows (see k2x2_s2): the same 2x2 avg pool mismatches on craq-sim unsliced too -- not a slicing issue; passes on ttsim Blackhole",
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_qpool_dram_sliced(device):
+    _run_cases(device, DRAM_SLICED_CASES)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
