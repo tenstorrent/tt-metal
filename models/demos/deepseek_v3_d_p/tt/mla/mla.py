@@ -53,8 +53,8 @@ class ttMLA:
 
     @staticmethod
     def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
-        """True for the layers that take _early_q_reshard: they run wkv_b1 over every head after the all-to-all
-        to sequence sharding, so they load all heads' wkv_b1 on every chip instead of the TP shard."""
+        """True for the layers that take _early_q_reshard or sequence-sharded Q (_q_stem_seq): they run wkv_b1 over
+        every head on sequence-sharded rows, so they load all heads' wkv_b1 on every chip instead of the TP shard."""
         heads_local = config.num_attention_heads // tp_factor
         thin_head_shard = tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
         return has_indexer and not getattr(config, "mla_use_nope", False) and thin_head_shard
@@ -765,7 +765,8 @@ class ttMLA:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
 
         # Sequence-sharded absorbed Q (see _q_stem_seq). Resolved last (it needs the rope binding), after the
-        # weights load, because it swaps the head-sharded q_b / wkv_b1 / wkv_b2 for TP-replicated copies.
+        # weights load, because it swaps the head-sharded q_b / wkv_b2 for TP-replicated copies. wkv_b1 is
+        # already loaded replicated on these layers (replicates_wkv_b1).
         self._seq_q = self._resolve_seq_sharded_q(seq_sharded_q)
         self._seq_q_out = os.getenv("MLA_SEQQ_OUT", "heads")
         assert self._seq_q_out in ("heads", "cols"), f"MLA_SEQQ_OUT must be heads or cols, got {self._seq_q_out}"
@@ -774,8 +775,8 @@ class ttMLA:
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
+            assert ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer), "needs every head's wkv_b1"
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
-            self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
             self.wkv_b2_weight = self._replicate_over_tp(self.wkv_b2_weight, dim=1)
         if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
             self._log_dram(f"after MLA layer {layer_idx} weights (seq_q={self._seq_q})")
@@ -1379,8 +1380,9 @@ class ttMLA:
         """Sparse layers whose head shard is too thin for sparse_sdpa move q to sequence sharding before the wkv_b1
         absorption, where it is 256 channels wide instead of 576, and RoPE writes it row-major for sparse_sdpa, so
         no untilize follows; sparse_sdpa's row-major output then goes to the all-to-all back to heads, which tilizes
-        it on the way. Costs all heads' wkv_b1 on every chip, which __init__ loads replicated for these layers."""
-        return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
+        it on the way. Costs all heads' wkv_b1 on every chip, which __init__ loads replicated for these layers.
+        Off under sequence-sharded Q, which builds q on the sequence-sharded rows from the start (_q_stem_seq)."""
+        return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer) and not self._seq_q
 
     def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
         """_q_stem after the head split, for _early_q_reshard: all-to-all heads -> sequence, wkv_b1 over all heads on
@@ -2397,9 +2399,10 @@ class ttMLA:
     # TP), exactly like the indexer's own Q: the q_a latent is reduce-scattered over rows instead of
     # all-reduced, so no chip ever holds the other quarters' rows. sparse_sdpa then runs on Q as built, wkv_b2
     # runs on all heads of those rows, and one all-to-all of the v_head_dim-wide (bfp8) result restores the
-    # head-sharded [S/sp, H/tp * v] layout o_proj consumes. The heads -> sequence all-to-all is gone and the
-    # sequence -> heads one moves the 256-wide bfp8 output instead of the 512-wide bf16 latent. Same FLOPs;
-    # costs the replicated weights (+3/4 of q_b, wkv_b1, wkv_b2 per layer).
+    # head-sharded [S/sp, H/tp * v] layout o_proj consumes. The q_a all-gather and the heads -> sequence
+    # all-to-alls are gone, and the sequence -> heads one moves the 256-wide bfp8 output instead of the 512-wide
+    # bf16 latent. Same FLOPs; costs the replicated weights (+3/4 of q_b and wkv_b2 per layer; wkv_b1 is
+    # replicated on these layers either way, see replicates_wkv_b1).
     # ----------------------------------------------------------------------------------------
 
     def _resolve_seq_sharded_q(self, requested: Optional[bool]) -> bool:
@@ -2459,27 +2462,18 @@ class ttMLA:
     def _q_a_latent_seq(
         self, hidden_states: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
     ) -> ttnn.Tensor:
-        """q_a projection + TP reduce-scatter over ROWS + q_a_layernorm: this chip's [1, 1, S/(sp*tp), q_lora] rows
-        of the q_a latent (rows [r*S/(sp*tp), (r+1)*S/(sp*tp)) of its SP slab at TP rank r, the same rows
-        mesh_partition(dim=2) over TP selects). Replaces all-reduce + norm of all S/sp rows: both consumers (the
-        indexer and _q_stem_seq) read only these rows."""
-        qr = ttnn.linear(
+        """q_a projection fused with a TP reduce-scatter over ROWS, then q_a_layernorm: this chip's
+        [1, 1, S/(sp*tp), q_lora] rows of the q_a latent (rows [r*S/(sp*tp), (r+1)*S/(sp*tp)) of its SP slab at TP
+        rank r, the same rows mesh_partition(dim=2) over TP selects, as for the indexer's weights_proj). Replaces
+        all-reduce + norm of all S/sp rows: both consumers (the indexer and _q_stem_seq) read only these rows."""
+        qr_rows = ttnn.experimental.matmul_reduce_scatter_prefill(
             hidden_states,
             self.q_a_proj_weight,
-            **self._get_mm_kwargs("q_a_proj", seq_len_local),
-        )
-        qr_rows = ttnn.experimental.reduce_scatter_minimal_async(
-            qr,
-            persistent_output_buffers=None,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            scatter_dim=-2,
+            topology=self.tp_ccl_topology,
+            num_links=self.ccl_num_links,
         )
-        ttnn.deallocate(qr)
         out = self._q_a_norm(qr_rows, norm_memory_config)
         ttnn.deallocate(qr_rows)
         return out
@@ -2491,7 +2485,8 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]."""
+        """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]. Row-major
+        (see the RoPE call)."""
         q_rows = qr.shape[2]
         tt_q = ttnn.linear(qr, self.q_b_proj_weight, **self._get_mm_kwargs("q_b_proj", q_rows))
         ttnn.deallocate(qr)
@@ -2505,16 +2500,16 @@ class ttMLA:
         tt_q_nope_abs = ttnn.linear(tt_q_nope, self.wkv_b1_weight, **self._get_mm_kwargs("wkv_b1", q_rows))
         ttnn.deallocate(tt_q_nope)
         # The rows are this TP rank's quarter of the SP slab: seq_subshard_axis adds that window to the rotated
-        # block-cyclic offset (the indexer ropes its TP-partitioned queries the same way).
-        tt_q = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+        # block-cyclic offset (the indexer ropes its TP-partitioned queries the same way). Row-major output, as in
+        # _q_stem_seq_sharded: sparse_sdpa reads it with no untilize.
+        tt_q = self._apply_rope_padded(
             tt_q_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
-            cluster_axis=self.sp_axis,
-            seq_subshard_axis=self.tp_axis,
+            rope_tensors,
+            kv_actual_isl,
+            metadata=metadata,
             concat_prefix=tt_q_nope_abs,
+            seq_subshard_axis=self.tp_axis,
+            row_major_output=True,
         )
         ttnn.deallocate(tt_q_nope_abs)
         ttnn.deallocate(tt_q_rope)
@@ -2576,7 +2571,7 @@ class ttMLA:
         single [1, 1, T, row_width] slot (single-shot path)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
-        # A row-major q comes from _q_stem_seq_sharded, already sequence-sharded over TP.
+        # A row-major q comes from _q_stem_seq_sharded or _q_stem_seq, already sequence-sharded over TP.
         q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
         seq_len_local = q.shape[2] * (self.tp_factor if q_seq_ready else 1)  # per-chip query rows == S / sp
 
@@ -2590,10 +2585,8 @@ class ttMLA:
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
 
-        # Sequence-sharded Q (_q_stem_seq) is built TP-sequence-sharded with all heads: no all-to-all here, and
-        # the caller (_finish_sparse_chunked_attn) restores heads after wkv_b2 instead of below.
         q_seq_sharded = q
-        if transpose_head_to_seq and not q_seq_ready and not self._seq_q:
+        if transpose_head_to_seq and not q_seq_ready:
             q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
                 q,
                 in_dim=1,
@@ -2652,6 +2645,7 @@ class ttMLA:
             ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
             ttnn.deallocate(out)
 
+        # Sequence-sharded Q keeps all heads of its rows through wkv_b2; _finish_sparse_chunked_attn restores heads.
         if transpose_head_to_seq and not self._seq_q:
             # Invert the redistribution so the result matches the head-sharded
             # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
