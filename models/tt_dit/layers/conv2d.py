@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 from typing import TYPE_CHECKING
 
@@ -36,15 +35,14 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
-    # Opt-in fallback for conv shapes missing from slice_params (off by default, so models that
-    # rely on unlisted shapes running unsliced are unchanged). When on, an unlisted shape is
-    # DRAM-width-sliced at the documented max (ceil(w / TILE)), and every conv keeps its
-    # halo/reader config tensors in DRAM instead of L1_SMALL. Without it an unlisted large conv
-    # runs unsliced and its static CBs can clash with resident L1 buffers. The Ideogram 4 VAE
-    # (14 output resolutions on any mesh) sets it on its convs: the config tensors stay allocated
-    # with each cached program, so in L1_SMALL they fill it after one or two output sizes.
-    slice_fallback: bool = False
+    # Keep each conv's halo/reader config tensors in DRAM instead of L1_SMALL. They stay allocated
+    # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
+    config_tensors_in_dram: bool = False
 
+    # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
+    # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
+    # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
+    # own convs with configure_conv2d.
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -371,7 +369,6 @@ class Conv2d(Module):
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
         use_barrier: bool = True,
-        config_tensors_in_dram: bool = False,
     ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
@@ -387,9 +384,6 @@ class Conv2d(Module):
             in_mesh_axis: Axis to shard input channels across mesh devices.
             out_mesh_axis: Axis to shard output channels across mesh devices.
             ccl_manager: CCL manager to use.
-            config_tensors_in_dram: Keep the conv's halo and sliding-window config tensors in DRAM
-                rather than L1_SMALL, as ``slice_fallback`` does. Each input shape keeps its own,
-                so a module run at several shapes can exhaust L1_SMALL otherwise.
             torch_ref: Reference to the torch layer. Parameters from this will be used to initialize the layer
 
         The arguments in_mesh_axis and out_mesh_axis control how weights and biases are sharded
@@ -432,8 +426,6 @@ class Conv2d(Module):
             on_host=True,
         )
 
-        self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -447,12 +439,8 @@ class Conv2d(Module):
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
-        self.config_tensors_in_dram = config_tensors_in_dram
 
-        # Prepared (device-resident) weight/bias tensors, one pair per conv configuration:
-        # the prepared layout depends on the input size and slice config, so weights prepared
-        # for one input size give wrong results at another. Populated lazily on the first
-        # forward call at each size so they are ready before any trace capture begins.
+        # (batch, height, width, num_slices) -> device (weight, bias) prepared for that input.
         self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
     @classmethod
@@ -492,8 +480,6 @@ class Conv2d(Module):
         self._prepared.clear()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Invalidate any previously prepared device tensors so they are re-prepared on the
-        # next forward call with the new weights.
         self._release_prepared()
 
         bias = state.pop("bias", None)
@@ -548,13 +534,7 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        shape_key = (h, w, self.in_channels, self.out_channels)
-        if shape_key in slice_params:
-            num_slices = slice_params[shape_key]
-        elif self.slice_fallback:
-            num_slices = max(1, math.ceil(w / 32))
-        else:
-            num_slices = None
+        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
             if num_slices is not None
@@ -566,9 +546,12 @@ class Conv2d(Module):
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
-            config_tensors_in_dram=self.slice_fallback or self.config_tensors_in_dram,
+            config_tensors_in_dram=self.config_tensors_in_dram,
         )
 
+        # The prepared layout depends on the input size and the slice config. The input memory config,
+        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
+        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
         prepared_key = (b, h, w, num_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
@@ -648,3 +631,27 @@ class Conv2d(Module):
             )
 
         return x
+
+
+def configure_conv2d(
+    module: Module,
+    *,
+    slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
+    config_tensors_in_dram: bool | None = None,
+) -> None:
+    """Configure every Conv2d in ``module``'s tree.
+
+    ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
+    class default for them.
+    """
+    if isinstance(module, Conv2d):
+        if slice_params is not None:
+            table = dict(Conv2d.slice_params)
+            for mesh_shape, entries in slice_params.items():
+                table[mesh_shape] = {**Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default), **entries}
+            module.slice_params = table
+        if config_tensors_in_dram is not None:
+            module.config_tensors_in_dram = config_tensors_in_dram
+    for _, child in module.named_children():
+        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)

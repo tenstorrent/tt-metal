@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
+from ...layers.conv2d import configure_conv2d
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
@@ -60,9 +61,6 @@ class Flux2VaeDecoder(Module):
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
-            # The pipeline traces the decoder at every image size, and each keeps its own conv
-            # config tensors, which would not fit in L1_SMALL.
-            conv_config_tensors_in_dram=True,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -109,6 +107,10 @@ class Flux2VaeDecoder(Module):
         self.bn_eps = 1e-4
 
         self._ctx = ctx
+
+        # The pipeline traces the decoder at every image size, and each keeps its own conv config
+        # tensors, which would not fit in L1_SMALL.
+        configure_conv2d(self, config_tensors_in_dram=True)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
@@ -200,7 +202,6 @@ class Flux2VaeEncoder(Module):
             h_factor=parallel_config.h_parallel.factor if parallel_config.h_parallel is not None else 1,
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
-            conv_config_tensors_in_dram=True,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -235,6 +236,8 @@ class Flux2VaeEncoder(Module):
 
         self._z_channels = z_channels
         self._ctx = ctx
+
+        configure_conv2d(self, config_tensors_in_dram=True)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "decoder")
