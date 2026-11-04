@@ -104,8 +104,9 @@ class MoEBlock:
     def _one_arena_fits(self) -> bool:
         """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
         (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
-        the head's, then the exchange's (planned above them). The head's and the dispatch's CBs are in the arena; the
-        flat expert's static CBs are what is left below it."""
+        the head's, then the exchange's (planned above them). Every CB of the ops that run in the arena (head, dispatch,
+        flat experts, combine) is in it, so nothing sits below it (static 0) and the head's arena, planned on the free
+        L1, always fits: one arena. The check stays for a caller whose flat layout brings static CBs back."""
         free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
         kw = self.expert_kw
         static = self.mb.routed_experts_combine_static_cb_bytes(
@@ -209,8 +210,8 @@ class MoEBlock:
                 )
             )
         if self.exchange_spec:
-            # (two arenas a forward for a head larger than the exchange's arena - K3: the head's
-            # arena reaches below the flat expert's static circular buffers; the exchange's is planned above them)
+            # (two arenas a forward only for a head arena larger than the room above static CBs - none since every
+            # CB is in the arena; the exchange's arena is then planned above them)
             ttnn.deallocate(arena)
             arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
         # (the dispatch's CBs in the call's arena - between the head's use of it and the combine's)
