@@ -41,8 +41,7 @@ void kernel_main() {
         // generate_bcast_row_mask(dfb_id_mask, num_datum_padded, mask_val);
         const std::uint32_t ptr = (dfb_id_mask_obj.get_write_ptr());
         // same pointer, but for zeroing out the tile
-        volatile tt_l1_ptr std::uint16_t* zero_ptr =
-            reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(dfb_id_mask_obj.get_write_ptr());
+        auto* zero_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(dfb_id_mask_obj.get_write_ptr());
         for (std::uint32_t i = 0; i < tile_hw; i++) {
             zero_ptr[i] = 0.0f;
         }

@@ -21,8 +21,8 @@ namespace ckernel::sfpu {
 //
 // The lengths below are the instructions sfpi emits for mac_init()'s body:
 //   3x SFPLOAD, SFPMAD, [SFPSTOCHRND for bf16,] SFPSTORE
-// These differ from Wormhole, which needs one more on each path: sfpi there inserts an
-// SFPNOP after SFPMAD for the LREG write latency, a hazard Blackhole does not have.
+// Wormhole records a two-row body instead (its SFPMAD has a write latency that a one-row
+// body could only fill with an SFPNOP), so its lengths differ.
 // The count is therefore a property of what sfpi emits for this arch, not of the source
 // below - if mac_init()'s body changes, or sfpi changes how it schedules the block,
 // re-check these against the generated kernel's disassembly.
@@ -86,7 +86,7 @@ inline void mac_init() {
 // recorded replay sequence, so the operand tiles are always (0, 1, 2) and the
 // result is always written to tile 0.  Passing anything else has no effect.
 //
-// Because the replay slots (0..6) are shared with other SFPU ops, this must be
+// Because the replay slots mac_init records into are shared with other SFPU ops, this must be
 // replayed while mac_init's recording is still the resident one - i.e. a
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
