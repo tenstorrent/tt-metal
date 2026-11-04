@@ -80,28 +80,24 @@ void kernel_main() {
             DataflowBuffer tail_in1(dfb::in1_tail);
             const LocalTensorAccessor<uint32_t> a_shard(tensor::in0);
             const LocalTensorAccessor<uint32_t> b_shard(tensor::in1);
-            const uint32_t a_shard_base = a_shard.get_bank_base_address();
-            const uint32_t b_shard_base = b_shard.get_bank_base_address();
             const uint32_t a_tile_bytes = tail_in0.get_entry_size();
             const uint32_t b_tile_bytes = tail_in1.get_entry_size();
-            const uint32_t noc_x = my_x[noc.get_noc_id()];
-            const uint32_t noc_y = my_y[noc.get_noc_id()];
             uint32_t slot = get_my_thread_id();
             for (uint32_t c = 0; c < num_tcs; ++c, slot += num_threads) {
                 tail_in0.reserve_back(1);
                 tail_in1.reserve_back(1);
                 if (slot < TAIL_TILES) {
                     noc.async_read(
-                        UnicastEndpoint{},
+                        a_shard,
                         tail_in0,
                         a_tile_bytes,
-                        {.noc_x = noc_x, .noc_y = noc_y, .addr = a_shard_base + (dst_num_tiles + slot) * a_tile_bytes},
+                        {.offset_bytes = (dst_num_tiles + slot) * a_tile_bytes},
                         {.offset_bytes = 0});
                     noc.async_read(
-                        UnicastEndpoint{},
+                        b_shard,
                         tail_in1,
                         b_tile_bytes,
-                        {.noc_x = noc_x, .noc_y = noc_y, .addr = b_shard_base + (dst_num_tiles + slot) * b_tile_bytes},
+                        {.offset_bytes = (dst_num_tiles + slot) * b_tile_bytes},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                 }

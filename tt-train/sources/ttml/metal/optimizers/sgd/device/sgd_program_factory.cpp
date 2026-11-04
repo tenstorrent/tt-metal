@@ -98,7 +98,7 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
 
     auto* device = param.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(param.dtype());
     tt::DataFormat output_data_format = input_data_format;
