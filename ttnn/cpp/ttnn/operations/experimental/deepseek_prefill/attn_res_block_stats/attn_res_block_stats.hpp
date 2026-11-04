@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -29,12 +30,16 @@ namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats
 // returned, and a rank's rows go to its peers as they are summed. `gathered` must sit at
 // one address on every chip and stay allocated across calls:
 // peers write into it by address, and a buffer freed and reallocated between two calls can
-// still be in use on a chip that has not caught up.
+// still be in use on a chip that has not caught up. `semaphore` counts the peers' arrivals: a
+// global semaphore over the grid's last `num_links` cores of its last row, made by the caller
+// before any trace capture and kept for every call. `topology` defaults to what the axis is
+// wired for.
 ttnn::Tensor attn_res_block_stats(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& queries,
     const std::optional<ttnn::Tensor>& gathered,
     std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& semaphore,
     std::optional<ttnn::ccl::Topology> topology,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,

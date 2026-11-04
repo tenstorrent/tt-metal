@@ -9,23 +9,22 @@ from models.common.utility_functions import comp_pcc, run_for_blackhole
 
 pytestmark = run_for_blackhole()
 
-HIDDEN_SIZE = 7168
-SHARD_WIDTH = 1792  # HIDDEN_SIZE over a 4-way tensor-parallel axis
+SHARD_WIDTH = 1792  # 7168 over a 4-way tensor-parallel axis
 EPS = 1e-5
 
 
-def random_stats(num_candidates, num_tokens, num_sites):
+def random_stats(num_candidates, num_tokens, num_sites, hidden_size):
     """Statistics at the magnitudes the model hands the op: sums of squares of unit-scale rows
     over the full hidden size, and dots with 0.02-scale queries."""
-    sum_squares = HIDDEN_SIZE * (0.5 + torch.rand(1, num_candidates, num_tokens, 1))
-    dots = torch.randn(1, num_candidates, num_tokens, num_sites) * 0.02 * HIDDEN_SIZE**0.5 * 4
+    sum_squares = hidden_size * (0.5 + torch.rand(1, num_candidates, num_tokens, 1))
+    dots = torch.randn(1, num_candidates, num_tokens, num_sites) * 0.02 * hidden_size**0.5 * 4
     padding = torch.zeros(1, num_candidates, num_tokens, 31 - num_sites)
     return torch.cat([sum_squares, dots, padding], dim=-1)
 
 
-def reference(stats, v, num_sites):
+def reference(stats, v, num_sites, hidden_size):
     sum_squares, dots = stats[..., :1], stats[..., 1 : 1 + num_sites]
-    scores = dots * torch.rsqrt(sum_squares / HIDDEN_SIZE + EPS)  # [1, C, N, R]
+    scores = dots * torch.rsqrt(sum_squares / hidden_size + EPS)  # [1, C, N, R]
     shift = scores.amax(dim=1, keepdim=True)
     weights = torch.exp(scores - shift)
     mass = weights.sum(dim=1, keepdim=True)
@@ -38,8 +37,10 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
     """The op's outputs and the reference's, as torch tensors."""
     torch.manual_seed(0)
     num_candidates = sum(planes)
+    # Each partial is over one shard, so together they cover the hidden size the op scores over.
+    hidden_size = SHARD_WIDTH * num_partials
     snapshots = [torch.randn(1, s, num_tokens, SHARD_WIDTH).bfloat16() for s in planes]
-    stats = random_stats(num_candidates, num_tokens, num_sites)
+    stats = random_stats(num_candidates, num_tokens, num_sites, hidden_size)
     # Partials side by side on the last dim, as the tensor-parallel gather leaves them:
     # random shares of the statistics.
     shares = torch.rand(num_partials, *stats.shape)
@@ -50,19 +51,20 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
         [to_device(s, ttnn.bfloat16) for s in snapshots],
         to_device(gathered, ttnn.float32),
         num_sites=num_sites,
-        inv_hidden_size=1.0 / HIDDEN_SIZE,
         eps=EPS,
         num_closed_sites=num_closed,
     )
     num_open = num_sites - num_closed
-    assert len(outputs) == (4 if num_closed else 3)
+    assert len(outputs) == 4
     assert tuple(outputs[0].shape) == (num_open, 1, num_tokens, SHARD_WIDTH)
     assert tuple(outputs[1].shape) == tuple(outputs[2].shape) == (num_open, 1, num_tokens, 1)
     if num_closed:
         assert tuple(outputs[3].shape) == (num_closed, 1, num_tokens, SHARD_WIDTH)
+    else:
+        assert outputs[3] is None
 
-    partials, shift, mass = reference(stats, torch.cat(snapshots, dim=1).float(), num_sites)
-    got = tuple(ttnn.to_torch(t).float() for t in outputs)
+    partials, shift, mass = reference(stats, torch.cat(snapshots, dim=1).float(), num_sites, hidden_size)
+    got = tuple(ttnn.to_torch(t).float() for t in outputs if t is not None)
     return got, (partials, shift, mass)
 
 

@@ -118,7 +118,6 @@ std::vector<Tensor> attn_res_block_mix(
     const std::vector<Tensor>& sealed,
     const Tensor& stats,
     uint32_t num_sites,
-    float inv_hidden_size,
     float eps,
     uint32_t num_closed_sites,
     const MemoryConfig& output_mem_config,
@@ -128,7 +127,6 @@ std::vector<Tensor> attn_res_block_mix(
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_sites = num_sites,
         .num_closed_sites = num_closed_sites,
-        .inv_hidden_size = inv_hidden_size,
         .eps = eps,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config};

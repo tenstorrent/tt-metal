@@ -336,6 +336,8 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+        python3 -m pytest -vvv --tb=short \
+          "models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference[torusxy-mesh-8x4]"
       '
     )
 

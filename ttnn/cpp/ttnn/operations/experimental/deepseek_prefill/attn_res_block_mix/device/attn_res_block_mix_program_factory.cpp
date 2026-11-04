@@ -8,6 +8,7 @@
 #include <bit>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -38,6 +39,24 @@ CBDescriptor make_cb(
     };
 }
 
+// Circular buffers. The kernels take every id as a named compile-time arg.
+constexpr auto cb_stats = CBIndex::c_0;   // gathered statistics
+constexpr auto cb_rr = CBIndex::c_1;      // rsqrt
+constexpr auto cb_scores = CBIndex::c_2;  // scores
+constexpr auto cb_shift = CBIndex::c_3;   // shift, for compute
+constexpr auto cb_summed = CBIndex::c_4;  // summed statistics
+constexpr auto cb_exp = CBIndex::c_5;     // packed exponentials
+constexpr auto cb_values = CBIndex::c_6;  // the run's candidate tiles
+constexpr auto cb_weights = CBIndex::c_7;
+constexpr auto cb_mass = CBIndex::c_8;           // mass, for compute
+constexpr auto cb_closed_mask = CBIndex::c_9;    // closed-column mask
+constexpr auto cb_factor = CBIndex::c_10;        // per-site factor
+constexpr auto cb_shift_out = CBIndex::c_16;     // shift, for the writer
+constexpr auto cb_mass_out = CBIndex::c_17;      // mass, for the writer
+constexpr auto cb_partials = CBIndex::c_18;      // even site groups
+constexpr auto cb_partials_odd = CBIndex::c_19;  // odd site groups
+constexpr auto cb_staging = CBIndex::c_24;       // scalar staging, never pushed
+
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor(
@@ -64,6 +83,9 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t num_sites = operation_attributes.num_sites;
     const uint32_t num_closed_sites = operation_attributes.num_closed_sites;
     const uint32_t num_open_sites = num_sites - num_closed_sites;
+    // Each partial is over one tensor-parallel shard of `d`, so together they cover the
+    // hidden size the mean square is taken over.
+    const float inv_hidden_size = 1.0f / static_cast<float>(num_partials * Wt * TILE_WIDTH);
     // The closed sites' reads. Where there are none the accessor aliases the partials, so
     // the kernels' compile-time offsets hold either way and nothing is written through it.
     auto& closed = num_closed_sites > 0 ? tensor_return_value.at(3) : partials;
@@ -123,64 +145,83 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
         desc.cbs.push_back(make_cb(index, all_cores, tiles, tile_size, format));
     };
     // Scoring, in the statistics tile's own layout: a row is a token, a column a site.
-    cb(CBIndex::c_0, num_candidates * num_partials, stats_tile_size, stats_format);  // gathered statistics
-    cb(CBIndex::c_1, num_candidates, stats_tile_size, stats_format);                 // rsqrt
-    cb(CBIndex::c_2, num_candidates, stats_tile_size, stats_format);                 // scores
-    cb(CBIndex::c_3, 1, stats_tile_size, stats_format);                              // shift, for compute
-    cb(CBIndex::c_4, num_candidates, stats_tile_size, stats_format);                 // summed statistics
-    cb(CBIndex::c_5, num_candidates, value_tile_size, value_format);                 // packed exponentials
+    cb(cb_stats, num_candidates * num_partials, stats_tile_size, stats_format);
+    cb(cb_rr, num_candidates, stats_tile_size, stats_format);
+    cb(cb_scores, num_candidates, stats_tile_size, stats_format);
+    cb(cb_shift, 1, stats_tile_size, stats_format);
+    cb(cb_summed, num_candidates, stats_tile_size, stats_format);
+    cb(cb_exp, num_candidates, value_tile_size, value_format);
     // The mixture: a site's weight is column 0 of its own tile, the column a broadcast MAC
     // reads; the reader builds them from the packed exponentials.
-    cb(CBIndex::c_6, value_tiles, value_tile_size, value_format);           // the run's candidate tiles
-    cb(CBIndex::c_7, weight_tiles, value_tile_size, value_format);          // a group's weights, twice
-    cb(CBIndex::c_16, 2, stats_tile_size, stats_format);                    // shift, for the writer
-    cb(CBIndex::c_17, 2, stats_tile_size, stats_format);                    // mass
+    cb(cb_values, value_tiles, value_tile_size, value_format);
+    cb(cb_weights, weight_tiles, value_tile_size, value_format);  // a group's weights, twice
+    cb(cb_shift_out, 2, stats_tile_size, stats_format);
+    cb(cb_mass_out, 2, stats_tile_size, stats_format);
     // The partials go out on both NoCs, even site groups from the writer and odd ones from
     // the reader. The reader drains an odd group only between building weights, so its
     // buffer holds a whole group: compute must be able to finish one without waiting on it.
-    cb(CBIndex::c_18, 2 * sites_per_group, value_tile_size, value_format);        // even groups
-    cb(CBIndex::c_19, sites_per_group * max_run, value_tile_size, value_format);  // odd groups
-    cb(CBIndex::c_24, num_open_sites, stats_tile_size, stats_format);             // scalar staging, never pushed
+    cb(cb_partials, 2 * sites_per_group, value_tile_size, value_format);
+    cb(cb_partials_odd, sites_per_group * max_run, value_tile_size, value_format);
+    cb(cb_staging, num_open_sites, stats_tile_size, stats_format);
     if (num_closed_sites > 0) {
         // A closed site's weights are its exponentials over its mass: compute keeps the mass,
         // and turns it into a per-site factor that is 1 / mass in the closed sites' columns
         // and 1 in the rest, through a mask the reader builds once.
-        cb(CBIndex::c_8, 1, stats_tile_size, stats_format);   // mass, for compute
-        cb(CBIndex::c_9, 1, stats_tile_size, stats_format);   // closed-column mask
-        cb(CBIndex::c_10, 1, stats_tile_size, stats_format);  // per-site factor
+        cb(cb_mass, 1, stats_tile_size, stats_format);
+        cb(cb_closed_mask, 1, stats_tile_size, stats_format);
+        cb(cb_factor, 1, stats_tile_size, stats_format);
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels
     ////////////////////////////////////////////////////////////////////////////
-    // A core finds its items from its own position, so a launch ships no per-core args.
-    const std::vector<uint32_t> split_ct_args = {grid.x, num_cores, num_items, chunks_per_row, Wt};
+    // Every kernel takes the shape, the split and the CB ids by name; only the tensor
+    // accessors are positional. A core finds its items from its own position, so a launch
+    // ships no per-core args. The scalars go as fp32 bit patterns, what the SFPU takes.
+    const KernelDescriptor::NamedCompileTimeArgs named_ct_args = {
+        {"num_candidates", num_candidates},
+        {"num_partials", num_partials},
+        {"Ht", Ht},
+        {"Wt", Wt},
+        {"num_sites", num_sites},
+        {"sites_per_group", sites_per_group},
+        {"num_groups", num_groups},
+        {"num_closed_sites", num_closed_sites},
+        {"inv_hidden_size", std::bit_cast<uint32_t>(inv_hidden_size)},
+        {"eps", std::bit_cast<uint32_t>(operation_attributes.eps)},
+        {"grid_x", grid.x},
+        {"num_cores", num_cores},
+        {"num_items", num_items},
+        {"chunks_per_row", chunks_per_row},
+        {"cb_stats", cb_stats},
+        {"cb_rr", cb_rr},
+        {"cb_scores", cb_scores},
+        {"cb_shift", cb_shift},
+        {"cb_summed", cb_summed},
+        {"cb_exp", cb_exp},
+        {"cb_values", cb_values},
+        {"cb_weights", cb_weights},
+        {"cb_mass", cb_mass},
+        {"cb_closed_mask", cb_closed_mask},
+        {"cb_factor", cb_factor},
+        {"cb_shift_out", cb_shift_out},
+        {"cb_mass_out", cb_mass_out},
+        {"cb_partials", cb_partials},
+        {"cb_partials_odd", cb_partials_odd},
+        {"cb_staging", cb_staging},
+    };
 
-    std::vector<uint32_t> reader_ct_args = {
-        num_candidates, num_partials, Ht, num_sites, sites_per_group, num_groups, num_closed_sites};
-    reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
+    std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(*stats.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*first.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*partials.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*closed.buffer()).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {num_sites, Ht, sites_per_group, num_groups, num_closed_sites};
-    writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
+    std::vector<uint32_t> writer_ct_args;
     TensorAccessorArgs(*partials.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*closed.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*shift.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
-
-    std::vector<uint32_t> compute_ct_args = {
-        num_candidates,
-        num_partials,
-        num_sites,
-        std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
-        std::bit_cast<uint32_t>(operation_attributes.eps),
-        sites_per_group,
-        num_groups,
-        num_closed_sites};
-    compute_ct_args.insert(compute_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
     // Each candidate is a (snapshot address, first page) pair: the snapshot that holds it and
     // the offset of its plane there. The snapshots share one accessor configuration, which
@@ -201,6 +242,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     reader.compile_time_args = std::move(reader_ct_args);
+    reader.named_compile_time_args = named_ct_args;
     reader.config = ReaderConfigDescriptor{};
     reader.emplace_common_runtime_args(reader_common);
 
@@ -209,26 +251,22 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
     writer.compile_time_args = std::move(writer_ct_args);
+    writer.named_compile_time_args = named_ct_args;
     writer.config = WriterConfigDescriptor{};
     writer.emplace_common_runtime_args({partials.buffer(), closed.buffer(), shift.buffer(), mass.buffer()});
 
     // Scoring runs on the SFPU: every fp32 buffer it reads is only ever copied into dest, so
     // they unpack straight to it rather than being cut to tf32 on the way through srcA.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_2] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_4] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    for (const auto index : {cb_stats, cb_rr, cb_scores, cb_shift, cb_summed, cb_mass, cb_closed_mask, cb_factor}) {
+        unpack_to_dest_mode[index] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute;
     compute.kernel_source = std::string(kKernelDir) + "attn_res_block_mix.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = all_cores;
-    compute.compile_time_args = std::move(compute_ct_args);
+    compute.named_compile_time_args = named_ct_args;
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

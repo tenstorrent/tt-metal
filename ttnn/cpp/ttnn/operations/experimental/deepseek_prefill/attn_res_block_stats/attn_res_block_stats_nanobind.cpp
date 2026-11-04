@@ -34,7 +34,10 @@ void bind_attn_res_block_stats(nb::module_& mod) {
             With `cluster_axis`, the op also gathers the statistics across that mesh axis:
             rank p's land in tile column p of `gathered`, `[1, C, N, 32 * P]` float32, which
             is returned. `gathered` must stay allocated across calls (peers write into it by
-            address) and is the layout `attn_res_block_mix` reads.
+            address) and is the layout `attn_res_block_mix` reads. `semaphore` counts the
+            peers' arrivals: a global semaphore over the last `num_links` cores of the grid's
+            last row, made before any trace capture and kept across calls. `topology`
+            defaults to what the axis is wired for.
         )doc",
         &ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats::attn_res_block_stats,
         nb::arg("sealed"),
@@ -42,6 +45,7 @@ void bind_attn_res_block_stats(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("gathered").noconvert() = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
+        nb::arg("semaphore") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = 1,
         nb::arg("memory_config").noconvert() = nb::none(),

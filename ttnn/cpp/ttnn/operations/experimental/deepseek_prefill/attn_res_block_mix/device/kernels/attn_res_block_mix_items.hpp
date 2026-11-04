@@ -21,15 +21,14 @@ struct AttnResBlockMixItem {
     uint32_t num_tiles() const { return end - begin; }
 };
 
-// The split's compile-time args start at `Base`: grid width, cores, items, runs per row,
-// tiles per row.
-template <uint32_t Base, typename Body>
+// The split, from the named compile-time args every kernel of the op gets.
+template <typename Body>
 inline void for_each_attn_res_block_mix_item(Body body) {
-    constexpr uint32_t grid_x = get_compile_time_arg_val(Base);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(Base + 1);
-    constexpr uint32_t num_items = get_compile_time_arg_val(Base + 2);
-    constexpr uint32_t chunks_per_row = get_compile_time_arg_val(Base + 3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(Base + 4);
+    constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t num_items = get_named_compile_time_arg_val("num_items");
+    constexpr uint32_t chunks_per_row = get_named_compile_time_arg_val("chunks_per_row");
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
 
     const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     for (uint32_t item = core; item < num_items; item += num_cores) {

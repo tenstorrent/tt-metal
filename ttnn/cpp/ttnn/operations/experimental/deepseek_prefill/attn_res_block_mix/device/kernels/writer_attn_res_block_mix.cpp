@@ -17,23 +17,22 @@
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_tile_columns.hpp"
 
 void kernel_main() {
-    constexpr uint32_t num_sites = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t sites_per_group = get_compile_time_arg_val(2);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(3);
-    constexpr uint32_t num_closed_sites = get_compile_time_arg_val(4);
+    constexpr uint32_t num_sites = get_named_compile_time_arg_val("num_sites");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
+    constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
     constexpr uint32_t num_open_sites = num_sites - num_closed_sites;
-    constexpr uint32_t kSplitArgs = 5;
-    constexpr uint32_t Wt = get_compile_time_arg_val(kSplitArgs + 4);
-    constexpr auto partials_args = TensorAccessorArgs<kSplitArgs + 5>();
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr auto partials_args = TensorAccessorArgs<0>();
     constexpr auto closed_args = TensorAccessorArgs<partials_args.next_compile_time_args_offset()>();
     constexpr auto shift_args = TensorAccessorArgs<closed_args.next_compile_time_args_offset()>();
     constexpr auto mass_args = TensorAccessorArgs<shift_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_shift = 16;
-    constexpr uint32_t cb_mass = 17;
-    constexpr uint32_t cb_partials = 18;
-    constexpr uint32_t cb_staging = 24;
+    constexpr uint32_t cb_shift = get_named_compile_time_arg_val("cb_shift_out");
+    constexpr uint32_t cb_mass = get_named_compile_time_arg_val("cb_mass_out");
+    constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_partials");
+    constexpr uint32_t cb_staging = get_named_compile_time_arg_val("cb_staging");
     constexpr uint32_t value_tile_bytes = get_tile_size(cb_partials);
     constexpr uint32_t scalar_tile_bytes = get_tile_size(cb_shift);
 
@@ -77,7 +76,7 @@ void kernel_main() {
         src_obj.pop_front(1);
     };
 
-    for_each_attn_res_block_mix_item<kSplitArgs>([&](const AttnResBlockMixItem& item) {
+    for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
         // The row's shift and mass belong to the row, so its first run writes them.
         if (item.chunk == 0) {
             scatter_scalar(cb_shift_obj, shift_accessor, item.row);

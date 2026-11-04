@@ -60,6 +60,9 @@ TP_AXIS = 1
 # The op's contract with the statistics all-reduce: two barriers, the reduce-scatter's
 # three, the all-gather's two.
 STATS_SEMAPHORES = 7
+# `attn_res_block_stats` counts its peers' arrivals on a semaphore of the op's own, made with
+# or without a pool: it is consumed by subtraction, so it is not one to share.
+BLOCK_STATS_SEMAPHORES = 1
 
 # One full 12-layer block of read sites against the widest sealed set the walk reaches, so
 # the batch axis, the site-major permute and every candidate-axis kernel are all live.
@@ -182,7 +185,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
     tt_prefix, tt_block = place_case(op, running_sum, block_residual)
     tt_queries = [op.to_query(q) for q in queries]
 
-    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
 
     # Capture replays programs, it does not build them: the compile pass, the query stack and
     # the lazily-created scratch and semaphore all have to exist before the region opens.
@@ -241,12 +244,12 @@ def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_pa
     finally:
         monkeypatch.undo()
 
-    assert own == STATS_SEMAPHORES, (
+    assert own == STATS_SEMAPHORES + BLOCK_STATS_SEMAPHORES, (
         "constructing without a pool has to make the whole statistics set up front -- two "
-        f"barriers, the scatter's three and the gather's two: got {own}"
+        f"barriers, the scatter's three, the gather's two and the block statistics' one: got {own}"
     )
-    assert shared == 0, (
-        "a caller that brought its own pool has to be taken at its word; allocating anyway "
-        f"puts a mesh write back where a capture can reach it: got {shared}"
+    assert shared == BLOCK_STATS_SEMAPHORES, (
+        "a caller that brought its own pool has to be taken at its word; allocating more than "
+        f"the block statistics' own puts a mesh write back where a capture can reach it: got {shared}"
     )
     logger.info(f"semaphores at construction: {own} on its own, {shared} with a shared pool")

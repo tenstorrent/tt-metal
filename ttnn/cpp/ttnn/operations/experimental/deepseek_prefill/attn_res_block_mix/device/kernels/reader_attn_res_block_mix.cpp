@@ -18,16 +18,15 @@
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_tile_columns.hpp"
 
 void kernel_main() {
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-    constexpr uint32_t num_partials = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t num_sites = get_compile_time_arg_val(3);
-    constexpr uint32_t sites_per_group = get_compile_time_arg_val(4);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(5);
-    constexpr uint32_t num_closed_sites = get_compile_time_arg_val(6);
-    constexpr uint32_t kSplitArgs = 7;
-    constexpr uint32_t Wt = get_compile_time_arg_val(kSplitArgs + 4);
-    constexpr auto stats_args = TensorAccessorArgs<kSplitArgs + 5>();
+    constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
+    constexpr uint32_t num_partials = get_named_compile_time_arg_val("num_partials");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t num_sites = get_named_compile_time_arg_val("num_sites");
+    constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
+    constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr auto stats_args = TensorAccessorArgs<0>();
     constexpr auto sealed_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto partials_args = TensorAccessorArgs<sealed_args.next_compile_time_args_offset()>();
     constexpr auto closed_args = TensorAccessorArgs<partials_args.next_compile_time_args_offset()>();
@@ -36,12 +35,12 @@ void kernel_main() {
     // (address, first page) pair per candidate.
     constexpr uint32_t kCandidateArgs = 3;
 
-    constexpr uint32_t cb_stats = 0;
-    constexpr uint32_t cb_exp = 5;
-    constexpr uint32_t cb_values = 6;
-    constexpr uint32_t cb_weights = 7;
-    constexpr uint32_t cb_closed_mask = 9;
-    constexpr uint32_t cb_partials_odd = 19;
+    constexpr uint32_t cb_stats = get_named_compile_time_arg_val("cb_stats");
+    constexpr uint32_t cb_exp = get_named_compile_time_arg_val("cb_exp");
+    constexpr uint32_t cb_values = get_named_compile_time_arg_val("cb_values");
+    constexpr uint32_t cb_weights = get_named_compile_time_arg_val("cb_weights");
+    constexpr uint32_t cb_closed_mask = get_named_compile_time_arg_val("cb_closed_mask");
+    constexpr uint32_t cb_partials_odd = get_named_compile_time_arg_val("cb_partials_odd");
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_stats);
     constexpr uint32_t value_tile_bytes = get_tile_size(cb_values);
 
@@ -74,7 +73,7 @@ void kernel_main() {
         cb_mask_obj.push_back(1);
     }
 
-    for_each_attn_res_block_mix_item<kSplitArgs>([&](const AttnResBlockMixItem& item) {
+    for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
         // The row's statistics, candidate-major with the partials innermost: a candidate's
         // partials are adjacent pages.
         cb_stats_obj.reserve_back(num_candidates * num_partials);

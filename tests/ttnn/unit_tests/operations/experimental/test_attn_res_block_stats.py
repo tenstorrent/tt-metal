@@ -94,13 +94,21 @@ def test_attn_res_block_stats_gathered(mesh_device, device_params, num_sites):
         t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=m
     )
     gathered = to_device(torch.zeros(1, sum(planes), num_tokens, 32 * tp_factor), mapper(2, None), ttnn.float32)
+    # The peers' arrivals, counted on the gather cores: the last `num_links` of the grid's last row.
+    num_links = get_num_links(mesh_device, TP_AXIS)
+    grid = mesh_device.compute_with_storage_grid_size()
+    gather_cores = ttnn.CoreRange(
+        ttnn.CoreCoord(grid.x - num_links, grid.y - 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    )
+    semaphore = ttnn.create_global_semaphore(mesh_device, ttnn.CoreRangeSet([gather_cores]), 0)
     out = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
         [to_device(s, mapper(2, 3)) for s in snapshots],
         to_device(queries, mapper(None, 2)),
         gathered=gathered,
         cluster_axis=TP_AXIS,
+        semaphore=semaphore,
         topology=per_axis_topology()[TP_AXIS],
-        num_links=get_num_links(mesh_device, TP_AXIS),
+        num_links=num_links,
     )
 
     # Tokens concatenate over the sequence axis and the tensor-parallel replicas stack on

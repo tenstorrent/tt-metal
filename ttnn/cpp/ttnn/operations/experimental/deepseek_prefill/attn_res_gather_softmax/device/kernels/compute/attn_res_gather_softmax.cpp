@@ -42,6 +42,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_bcast_mac.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_core_runs.hpp"
 
 using namespace ckernel;
@@ -266,9 +267,7 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
     // the MAC alternates its srcA operand. That is only safe because the device
     // operation rejects a dtype mismatch among them — one `bcast_init` configures the
     // unpacker for all of them.
-    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
-        cb_partial, cb_row, 1 /*acc_to_dest*/)));
+    attn_res_mul_bcast_cols_acc_init(cb_partial, cb_row);
     reconfig_data_format(cb_partial, cb_row);
     pack_reconfig_data_format(cb_out);
 }

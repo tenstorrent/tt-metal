@@ -30,19 +30,18 @@ void fill_column_of_ones(uint32_t tile_addr, uint32_t tile_bytes) {
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-    constexpr uint32_t kSplitArgs = 1;
-    using Split = AttnResBlockStatsSplit<kSplitArgs>;
+    constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
+    using Split = AttnResBlockStatsSplit;
     constexpr uint32_t Wt = Split::Wt;
-    constexpr auto sealed_args = TensorAccessorArgs<kSplitArgs + 5>();
+    constexpr auto sealed_args = TensorAccessorArgs<0>();
     constexpr auto queries_args = TensorAccessorArgs<sealed_args.next_compile_time_args_offset()>();
 
     // Common args: the queries, then one (address, first page) pair per candidate.
     constexpr uint32_t kCandidateArgs = 1;
 
-    constexpr uint32_t cb_v = 0;
-    constexpr uint32_t cb_queries = 1;
-    constexpr uint32_t cb_ones = 2;
+    constexpr uint32_t cb_v = get_named_compile_time_arg_val("cb_v");
+    constexpr uint32_t cb_queries = get_named_compile_time_arg_val("cb_queries");
+    constexpr uint32_t cb_ones = get_named_compile_time_arg_val("cb_ones");
     constexpr uint32_t tile_bytes = get_tile_size(cb_v);
 
     Noc noc;

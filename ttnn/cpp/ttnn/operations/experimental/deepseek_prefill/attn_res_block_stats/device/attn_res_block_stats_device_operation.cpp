@@ -24,7 +24,40 @@ uint32_t num_candidates(const AttnResBlockStatsInputs& tensor_args) {
     return count;
 }
 
+// The semaphore is hashed by its cores, so a cache hit can carry one the program was not built
+// against. Peers count into it at the gather cores' address; built without one of them, or in
+// DRAM, nothing arrives where the core waits and the op hangs.
+void validate_semaphore(const AttnResBlockStatsParams& args, const AttnResBlockStatsInputs& tensor_args) {
+    TT_FATAL(
+        args.cluster_axis.has_value() == args.semaphore.has_value(),
+        "AttnResBlockStats gathers across an axis with the caller's semaphore: give both or neither");
+    if (!args.semaphore.has_value()) {
+        return;
+    }
+    auto* device = tensor_args.queries.device();
+    TT_FATAL(args.semaphore->device() == device, "AttnResBlockStats requires the semaphore on its operands' device");
+    const auto [semaphore_cores, semaphore_buffer_type] = args.semaphore->attribute_values();
+    const auto grid = device->compute_with_storage_grid_size();
+    for (uint32_t link = 0; link < args.num_links; ++link) {
+        const CoreCoord gather_core{grid.x - 1 - link, grid.y - 1};
+        TT_FATAL(
+            semaphore_cores.contains(gather_core),
+            "AttnResBlockStats gathers on core {} and needs the semaphore built over it, but it covers {}",
+            gather_core,
+            semaphore_cores);
+    }
+    TT_FATAL(
+        semaphore_buffer_type == tt::tt_metal::BufferType::L1,
+        "AttnResBlockStats waits on the semaphore in L1, got buffer type {}",
+        semaphore_buffer_type);
+}
+
 }  // namespace
+
+void AttnResBlockStatsDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_semaphore(args, tensor_args);
+}
 
 void AttnResBlockStatsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -66,6 +99,7 @@ void AttnResBlockStatsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.cluster_axis.has_value() == tensor_args.gathered.has_value(),
         "AttnResBlockStats gathers across an axis into a caller's buffer: give both or neither");
+    validate_semaphore(args, tensor_args);
     if (tensor_args.gathered.has_value()) {
         const auto& gathered = *tensor_args.gathered;
         const auto view = queries.device()->get_view();
@@ -118,6 +152,7 @@ Tensor attn_res_block_stats(
     const Tensor& queries,
     const std::optional<Tensor>& gathered,
     std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& semaphore,
     ttnn::ccl::Topology topology,
     uint32_t num_links,
     const MemoryConfig& output_mem_config,
@@ -129,7 +164,8 @@ Tensor attn_res_block_stats(
         .compute_kernel_config = compute_kernel_config,
         .cluster_axis = cluster_axis,
         .topology = topology,
-        .num_links = num_links};
+        .num_links = num_links,
+        .semaphore = semaphore};
     auto tensor_args = OperationType::tensor_args_t{.sealed = sealed, .queries = queries, .gathered = gathered};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

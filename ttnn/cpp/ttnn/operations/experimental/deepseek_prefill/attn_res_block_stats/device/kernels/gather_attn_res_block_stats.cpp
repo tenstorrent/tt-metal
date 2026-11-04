@@ -37,25 +37,27 @@
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_stats/device/kernels/attn_res_block_stats_items.hpp"
 
 void kernel_main() {
-    constexpr uint32_t ring_size = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(2);
+    constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
     // The per-row counts of parked candidates, from this semaphore on.
-    constexpr uint32_t row_sem_id = get_compile_time_arg_val(3);
-    constexpr AttnResProgressFields row_fields{get_compile_time_arg_val(4)};
+    constexpr uint32_t row_sem_id = get_named_compile_time_arg_val("row_sem_id");
+    constexpr AttnResProgressFields row_fields{get_named_compile_time_arg_val("field_width")};
     // The arrivals this core waits for: one from the same link's gather core of each peer.
-    constexpr uint32_t num_arrivals = get_compile_time_arg_val(5);
-    constexpr uint32_t num_links = get_compile_time_arg_val(6);
+    constexpr uint32_t num_arrivals = ring_size - 1;
+    constexpr uint32_t num_links = get_named_compile_time_arg_val("num_gather_cores");
     // Pages staged behind one read barrier; the staging buffer holds exactly this many.
-    constexpr uint32_t kBatch = get_compile_time_arg_val(7);
-    constexpr auto gathered_args = TensorAccessorArgs<8>();
+    constexpr uint32_t kBatch = get_named_compile_time_arg_val("gather_batch");
+    constexpr auto gathered_args = TensorAccessorArgs<0>();
 
+    // The arrival semaphore is the caller's, common to every gather core and patched on a
+    // program-cache hit.
+    const auto arrival_sem_addr = get_common_arg_val<uint32_t>(0);
     const auto gathered_addr = get_arg_val<uint32_t>(0);
     const auto my_rank = get_arg_val<uint32_t>(1);
-    const auto arrival_sem_addr = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_headers = 8;
-    constexpr uint32_t cb_stage = 9;
+    constexpr uint32_t cb_headers = get_named_compile_time_arg_val("cb_headers");
+    constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
     constexpr uint32_t tile_bytes = get_tile_size(cb_stage);
     // A route each way along the axis.
     constexpr uint32_t kMaxRoutes = 2;
@@ -72,8 +74,8 @@ void kernel_main() {
 
     // This core's link, the routes' connections, one per route in route order, then each
     // route's multicast.
-    const auto link = get_arg_val<uint32_t>(3);
-    size_t arg_idx = 4;
+    const auto link = get_arg_val<uint32_t>(2);
+    size_t arg_idx = 3;
     const auto num_routes = get_arg_val<uint32_t>(arg_idx++);
     ASSERT(num_routes <= kMaxRoutes);
     auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<

@@ -27,15 +27,13 @@ struct AttnResBlockStatsUnit {
     uint32_t num_tiles() const { return end - begin; }
 };
 
-// The split's compile-time args start at `Base`: grid width, units per core, units, chunks
-// per row, tiles per row.
-template <uint32_t Base>
+// The split, from the named compile-time args every kernel of the op gets.
 struct AttnResBlockStatsSplit {
-    static constexpr uint32_t grid_x = get_compile_time_arg_val(Base);
-    static constexpr uint32_t units_per_core = get_compile_time_arg_val(Base + 1);
-    static constexpr uint32_t num_units = get_compile_time_arg_val(Base + 2);
-    static constexpr uint32_t chunks_per_row = get_compile_time_arg_val(Base + 3);
-    static constexpr uint32_t Wt = get_compile_time_arg_val(Base + 4);
+    static constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
+    static constexpr uint32_t units_per_core = get_named_compile_time_arg_val("units_per_core");
+    static constexpr uint32_t num_units = get_named_compile_time_arg_val("num_units");
+    static constexpr uint32_t chunks_per_row = get_named_compile_time_arg_val("chunks_per_row");
+    static constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     // The longest run, which is what a run's buffers are sized for.
     static constexpr uint32_t max_run = (Wt + chunks_per_row - 1) / chunks_per_row;
 

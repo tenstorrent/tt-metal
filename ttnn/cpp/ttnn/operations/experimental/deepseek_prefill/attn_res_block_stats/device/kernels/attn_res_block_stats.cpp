@@ -29,19 +29,18 @@ using namespace ckernel;
 
 namespace {
 
-constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-constexpr uint32_t kSplitArgs = 1;
-using Split = AttnResBlockStatsSplit<kSplitArgs>;
+constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
+using Split = AttnResBlockStatsSplit;
 constexpr uint32_t max_run = Split::max_run;
 constexpr uint32_t chunks_per_row = Split::chunks_per_row;
 
-constexpr auto cb_v = tt::CBIndex::c_0;
-constexpr auto cb_queries = tt::CBIndex::c_1;
-constexpr auto cb_ones = tt::CBIndex::c_2;
-constexpr auto cb_squares = tt::CBIndex::c_3;
-constexpr auto cb_local = tt::CBIndex::c_4;     // a row leader's own partials
-constexpr auto cb_received = tt::CBIndex::c_5;  // a row leader's: its other runs' partials
-constexpr auto cb_out = tt::CBIndex::c_16;
+constexpr uint32_t cb_v = get_named_compile_time_arg_val("cb_v");
+constexpr uint32_t cb_queries = get_named_compile_time_arg_val("cb_queries");
+constexpr uint32_t cb_ones = get_named_compile_time_arg_val("cb_ones");
+constexpr uint32_t cb_squares = get_named_compile_time_arg_val("cb_squares");
+constexpr uint32_t cb_local = get_named_compile_time_arg_val("cb_local");        // a row leader's own partials
+constexpr uint32_t cb_received = get_named_compile_time_arg_val("cb_received");  // its other runs' partials
+constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
 // One candidate's statistics over a run of `num_tiles`, packed to `out`.
 void run_statistics(uint32_t num_tiles, uint32_t out) {

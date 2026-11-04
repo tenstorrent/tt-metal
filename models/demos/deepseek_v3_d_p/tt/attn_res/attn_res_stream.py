@@ -239,7 +239,7 @@ class TtAttnResWalk(object):
             # here strands nothing.
             queries = next(self._blocks)
             self._free_batches()
-            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)
+            self._partials, self._shifts, self._masses, _ = self.op.inter_block(self.stream.sealed, queries)
             self._pending = enumerate(queries)
         return h, borrowed
 

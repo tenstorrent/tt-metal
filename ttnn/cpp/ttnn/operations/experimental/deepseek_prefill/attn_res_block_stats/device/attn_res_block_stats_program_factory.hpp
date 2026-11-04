@@ -21,6 +21,15 @@ struct AttnResBlockStatsProgramFactory {
         const AttnResBlockStatsInputs& tensor_args,
         Tensor& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    // The arrival semaphore is the caller's and left out of the program hash: a cache hit
+    // writes its address into the gather kernel's common args.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const AttnResBlockStatsParams& operation_attributes,
+        const AttnResBlockStatsInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttnn::experimental::prim

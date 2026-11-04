@@ -180,6 +180,21 @@ class TtAttnRes(LightweightModule):
         # inside a trace capture region is fatal. The set has to predate any capture, so it
         # is made here rather than on first use.
         self._tp_sems = None if tt_ccl is not None else self._new_tp_semaphores()
+        # `attn_res_block_stats` counts its peers' arrivals here, on its gather cores: the
+        # last `num_links` cores of the grid's last row. One serves every call, whatever the
+        # sealed depth, since the op consumes it by subtraction.
+        grid = mesh_device.compute_with_storage_grid_size()
+        self._block_stats_sem = ttnn.create_global_semaphore(
+            mesh_device,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(grid.x - self.num_links, grid.y - 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+                    )
+                ]
+            ),
+            0,
+        )
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -530,20 +545,19 @@ class TtAttnRes(LightweightModule):
             self._score_columns(queries),
             gathered=self._gathered_stats(sealed, sealed[0].shape[-2]),
             cluster_axis=self.tp_axis,
+            semaphore=self._block_stats_sem,
             topology=self.topology[self.tp_axis],
             num_links=self.num_links,
             compute_kernel_config=STATS_FIDELITY,
         )
 
-        outputs = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+        return ttnn.experimental.deepseek_prefill.attn_res_block_mix(
             sealed,
             stats,
             num_sites=len(queries),
-            inv_hidden_size=1.0 / self.hidden_size,
             eps=self.eps,
             num_closed_sites=num_closed,
         )
-        return tuple(outputs)
 
     def _dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
@@ -705,12 +719,13 @@ class TtAttnRes(LightweightModule):
                 back whole rather than as a batch entry.
 
         Returns:
-            The partials `[R, 1, N, d/tp_factor]`, each site's holding `sum_i e_i v_i`,
-            and the shifts and masses `[R, 1, N, 1]`, all batched over the open read
-            sites in the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes
-            the batches whole and names the site; keep them alive until the block's last
-            read. With `num_closed`, a fourth: the closed sites' reads,
-            `[num_closed, 1, N, d/tp_factor]`, and the batches start at the first open site.
+            `(partials, shifts, masses, closed)`. The partials `[R, 1, N, d/tp_factor]`,
+            each site's holding `sum_i e_i v_i`, and the shifts and masses `[R, 1, N, 1]`,
+            all batched over the open read sites in the online-softmax convention
+            `e_i = exp(s_i - m)`. `merge` takes the batches whole and names the site; keep
+            them alive until the block's last read. `closed` is the closed sites' reads,
+            `[num_closed, 1, N, d/tp_factor]`, with the batches starting at the first open
+            site; `None` without `num_closed`.
         """
         sealed = as_sealed_list(sealed)
         assert sealed, "inter_block needs a sealed snapshot to score against"
@@ -775,7 +790,7 @@ class TtAttnRes(LightweightModule):
 
         ttnn.deallocate(exponentials)
         if not num_closed:
-            return partials, site_shifts, site_masses
+            return partials, site_shifts, site_masses, None
         # The closed sites' weights were normalized above, so their mixture is the read.
         split = lambda batch: (batch[:num_closed], batch[num_closed:])
         (closed, partials_open), (_, shifts_open), (_, masses_open) = map(split, (partials, site_shifts, site_masses))

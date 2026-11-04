@@ -15,6 +15,7 @@ ttnn::Tensor attn_res_block_stats(
     const ttnn::Tensor& queries,
     const std::optional<ttnn::Tensor>& gathered,
     std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& semaphore,
     std::optional<ttnn::ccl::Topology> topology,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -29,12 +30,18 @@ ttnn::Tensor attn_res_block_stats(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
 
+    // Ring only where the axis wraps: that decides whether a rank has a neighbour each way.
+    const auto usable_topology = cluster_axis.has_value()
+                                     ? ttnn::ccl::get_usable_topology(queries, topology, cluster_axis)
+                                     : ttnn::ccl::Topology::Linear;
+
     return ttnn::prim::attn_res_block_stats(
         sealed,
         queries,
         gathered,
         cluster_axis,
-        topology.value_or(ttnn::ccl::Topology::Linear),
+        semaphore,
+        usable_topology,
         num_links,
         memory_config.value_or(queries.memory_config()),
         kernel_config_val);

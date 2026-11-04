@@ -27,6 +27,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_bcast_mac.hpp"
 
 using namespace ckernel;
 
@@ -51,9 +52,7 @@ void kernel_main() {
     CircularBuffer cb_out0_obj(cb_out0);
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_in0, cb_in1);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
-        cb_in0, cb_in1, 1 /*acc_to_dest*/)));
+    attn_res_mul_bcast_cols_acc_init(cb_in0, cb_in1);
     reconfig_data_format(cb_in0, cb_in1);
 
     for (uint32_t group = 0; group < num_groups; ++group) {

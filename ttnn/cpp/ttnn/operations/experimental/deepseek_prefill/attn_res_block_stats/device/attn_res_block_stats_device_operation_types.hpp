@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -22,6 +23,10 @@ struct AttnResBlockStatsParams {
     std::optional<uint32_t> cluster_axis;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
     uint32_t num_links = 1;
+    // The peers' arrivals, with the axis: the caller's, made before any trace capture, over
+    // the gather cores. It hashes by its cores, not its address, so a cache hit can carry
+    // another semaphore, and the factory rewrites the address on every hit.
+    std::optional<tt::tt_metal::GlobalSemaphore> semaphore;
 };
 
 // sealed   - [1, S_i, N, d] bfloat16 tensors, TILE, interleaved; their planes in order are the

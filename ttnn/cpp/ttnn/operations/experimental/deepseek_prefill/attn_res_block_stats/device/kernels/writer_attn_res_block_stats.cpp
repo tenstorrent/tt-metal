@@ -15,22 +15,21 @@
 // candidate's summed row as soon as it has it and, where the op gathers across ranks,
 // counts it on the gather cores, which send it on to the peers.
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(1);
-    constexpr uint32_t chunk_sem_id = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
+    constexpr uint32_t chunk_sem_id = get_named_compile_time_arg_val("chunk_sem_id");
     // Where the op gathers: the first of the gather cores' per-row count semaphores, and the
     // ranks side by side in the output (1 otherwise).
-    constexpr uint32_t gather_sem_id = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
+    constexpr uint32_t gather_sem_id = get_named_compile_time_arg_val("row_sem_id");
+    constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
     // The per-run counts here and the per-row counts on the gather cores share a field width.
-    constexpr AttnResProgressFields fields{get_compile_time_arg_val(5)};
+    constexpr AttnResProgressFields fields{get_named_compile_time_arg_val("field_width")};
     // One per fabric link, each counting the rows it sends.
-    constexpr uint32_t num_gather_cores = get_compile_time_arg_val(6);
-    constexpr uint32_t kSplitArgs = 7;
-    using Split = AttnResBlockStatsSplit<kSplitArgs>;
+    constexpr uint32_t num_gather_cores = get_named_compile_time_arg_val("num_gather_cores");
+    using Split = AttnResBlockStatsSplit;
     constexpr uint32_t chunks_per_row = Split::chunks_per_row;
     constexpr bool gathers = ring_size > 1;
-    constexpr auto out_args = TensorAccessorArgs<kSplitArgs + 5>();
+    constexpr auto out_args = TensorAccessorArgs<0>();
 
     // Common args: the output, this chip's rank, the gather cores as (x << 16) | y, then
     // where rows are cut, each row's leader the same way.
@@ -38,8 +37,8 @@ void kernel_main() {
     constexpr uint32_t kLeaderArgs = kGatherArgs + num_gather_cores;
     const uint32_t rank = get_common_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_received = 5;
-    constexpr uint32_t cb_out = 16;
+    constexpr uint32_t cb_received = get_named_compile_time_arg_val("cb_received");
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     Noc noc;

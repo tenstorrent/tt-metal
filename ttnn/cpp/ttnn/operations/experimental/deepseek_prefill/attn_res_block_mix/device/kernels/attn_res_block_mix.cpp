@@ -35,38 +35,39 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_bcast_mac.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
 
 using namespace ckernel;
 
 namespace {
 
-constexpr auto cb_stats = tt::CBIndex::c_0;
-constexpr auto cb_rr = tt::CBIndex::c_1;
-constexpr auto cb_scores = tt::CBIndex::c_2;
-constexpr auto cb_shift = tt::CBIndex::c_3;
-constexpr auto cb_summed = tt::CBIndex::c_4;
-constexpr auto cb_exp = tt::CBIndex::c_5;
-constexpr auto cb_values = tt::CBIndex::c_6;
-constexpr auto cb_weights = tt::CBIndex::c_7;
-constexpr auto cb_mass = tt::CBIndex::c_8;
-constexpr auto cb_closed_mask = tt::CBIndex::c_9;
-constexpr auto cb_factor = tt::CBIndex::c_10;
-constexpr auto cb_shift_out = tt::CBIndex::c_16;
-constexpr auto cb_mass_out = tt::CBIndex::c_17;
-constexpr auto cb_partials = tt::CBIndex::c_18;      // even site groups, for the writer
-constexpr auto cb_partials_odd = tt::CBIndex::c_19;  // odd site groups, for the reader
+constexpr uint32_t cb_stats = get_named_compile_time_arg_val("cb_stats");
+constexpr uint32_t cb_rr = get_named_compile_time_arg_val("cb_rr");
+constexpr uint32_t cb_scores = get_named_compile_time_arg_val("cb_scores");
+constexpr uint32_t cb_shift = get_named_compile_time_arg_val("cb_shift");
+constexpr uint32_t cb_summed = get_named_compile_time_arg_val("cb_summed");
+constexpr uint32_t cb_exp = get_named_compile_time_arg_val("cb_exp");
+constexpr uint32_t cb_values = get_named_compile_time_arg_val("cb_values");
+constexpr uint32_t cb_weights = get_named_compile_time_arg_val("cb_weights");
+constexpr uint32_t cb_mass = get_named_compile_time_arg_val("cb_mass");
+constexpr uint32_t cb_closed_mask = get_named_compile_time_arg_val("cb_closed_mask");
+constexpr uint32_t cb_factor = get_named_compile_time_arg_val("cb_factor");
+constexpr uint32_t cb_shift_out = get_named_compile_time_arg_val("cb_shift_out");
+constexpr uint32_t cb_mass_out = get_named_compile_time_arg_val("cb_mass_out");
+constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_partials");  // even site groups, for the writer
+constexpr uint32_t cb_partials_odd =
+    get_named_compile_time_arg_val("cb_partials_odd");  // odd site groups, for the reader
 
-constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-constexpr uint32_t num_partials = get_compile_time_arg_val(1);
-constexpr uint32_t num_sites = get_compile_time_arg_val(2);
+constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
+constexpr uint32_t num_partials = get_named_compile_time_arg_val("num_partials");
+constexpr uint32_t num_sites = get_named_compile_time_arg_val("num_sites");
 // fp32 bit patterns, which is what the SFPU scalar binops take.
-constexpr uint32_t inv_hidden_size = get_compile_time_arg_val(3);
-constexpr uint32_t eps = get_compile_time_arg_val(4);
-constexpr uint32_t sites_per_group = get_compile_time_arg_val(5);
-constexpr uint32_t num_groups = get_compile_time_arg_val(6);
-constexpr uint32_t num_closed_sites = get_compile_time_arg_val(7);
-constexpr uint32_t kSplitArgs = 8;
+constexpr uint32_t inv_hidden_size = get_named_compile_time_arg_val("inv_hidden_size");
+constexpr uint32_t eps = get_named_compile_time_arg_val("eps");
+constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
+constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
 constexpr uint32_t kOne = 0x3F800000;  // 1.0f
 
 constexpr uint32_t dst_a = 0;
@@ -271,9 +272,7 @@ void mix_run(uint32_t num_tiles) {
 
     // acc_to_dest turns each broadcast multiply into a MAC against its accumulator. The
     // accumulators start at zero: the packer clears a dest section on every release.
-    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_values, cb_weights);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
-        cb_values, cb_weights, 1 /*acc_to_dest*/)));
+    attn_res_mul_bcast_cols_acc_init(cb_values, cb_weights);
     reconfig_data_format(cb_values, cb_weights);
     pack_reconfig_data_format(cb_partials);
 
@@ -314,7 +313,7 @@ void kernel_main() {
         // Built once by the reader and held for every row.
         CircularBuffer(cb_closed_mask).wait_front(1);
     }
-    for_each_attn_res_block_mix_item<kSplitArgs>([](const AttnResBlockMixItem& item) {
+    for_each_attn_res_block_mix_item([](const AttnResBlockMixItem& item) {
         score_row();
         mix_run(item.num_tiles());
     });

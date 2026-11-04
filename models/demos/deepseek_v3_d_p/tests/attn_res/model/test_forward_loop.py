@@ -169,13 +169,16 @@ def test_transformer_loop_matches_reference(mesh_device, device_params):
         ttnn.deallocate(tensor)
 
 
-SPLIT_LAYERS = 36
+# Past a full block, so the second rank inherits more than one snapshot. Other boundaries are
+# swept on host by test_attn_res_pipeline_split.py.
+SPLIT_BOUNDARY = 2 * BLOCK_SIZE
+# The second rank only needs the block it opens: that is where the owed read is taken.
+SPLIT_LAYERS = SPLIT_BOUNDARY + BLOCK_SIZE
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("boundary", [12, 24])
 @pytest.mark.timeout(1800)
-def test_split_loop_matches_reference(mesh_device, device_params, boundary):
+def test_split_loop_matches_reference(mesh_device, device_params):
     """Two pipeline ranks, the second opening on what the first hands over, against the undivided oracle.
 
     The second rank opens owing the read that straddles the boundary, and takes it from the
@@ -183,6 +186,7 @@ def test_split_loop_matches_reference(mesh_device, device_params, boundary):
     the same read the undivided walk takes before its seal, so the split must not move the
     result.
     """
+    boundary = SPLIT_BOUNDARY
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     hidden_states, (q_pre, q_post, q_out) = _host_case(op)
     q_pre, q_post = q_pre[:SPLIT_LAYERS], q_post[:SPLIT_LAYERS]
