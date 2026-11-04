@@ -1450,3 +1450,11 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   window KV worst L27 0.171 / 0.215, top-5 1.0). Diff reviewed: switch DECODER_SKIP off | exact (default off), the
   runner passes last=True (tt-d-gen has no flag), carry masked by class-0 index lists (DS41-201). ACCEPTED as a
   switch (owner's order). Released P.31 (--until P.31).
+- 03:20 P.31 (DECODER_SKIP=replay128) A/B: full-chunk profile equal by design (F248); short turn (512 tokens on a
+  51200-token cached prefix, test_short_turn.py): exact side 512 rows, device / wall 176.8 / 226.1 ms, final hidden
+  0.134, tail hidden 0.178; replay128 640 rows (128 replay), 142.6 / 216.4 ms, final hidden 0.199, tail hidden 0.539
+  (3x); top-5 1.0 and last-token top-1 both. Caveat: the exact side ran with the golden prefix's complete windows
+  (today's contract), so it needed no 2688-token pull-back: the comparison is replay128 vs today's path, not vs the
+  exact skip after a cache hit (unmeasured). Fork change: ring_indexer_score_dsa option natural_query_rows (default
+  0 = as before; CHANGELOG, own unit test on 8x4). ACCEPTED as a switch (owner's order) -> 00d451965a8. Run stopped
+  at --until P.31. F247 / F248 to fix now (idle).
