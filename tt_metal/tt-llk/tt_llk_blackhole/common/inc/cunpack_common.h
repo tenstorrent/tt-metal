@@ -973,6 +973,7 @@ inline void wait_for_dest_available()
 // This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
 // snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
 // restore is deterministic and order-independent.
+// Callers release UNPACK_SYNC after this returns, so configure_unpack_AB doesn't race these config writes.
 inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
