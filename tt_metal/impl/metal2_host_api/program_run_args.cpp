@@ -157,7 +157,7 @@ static void report_tensor_arg_mismatch(
                 runtime_layout.get_alignment() == expected_layout.get_alignment(),
                 "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
                 "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
-                "the declared alignment. Set relax_tensor_alignment as well if it must not.",
+                "the declared alignment. To accept other alignments, also set relax_tensor_alignment.",
                 param_name,
                 runtime_layout.get_alignment(),
                 expected_layout.get_alignment());
@@ -169,7 +169,7 @@ static void report_tensor_arg_mismatch(
                 runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
                 "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
                 "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
-                "remain constant. Set relax_logical_rank as well if it must not.",
+                "remain constant. To accept other ranks, also set relax_logical_rank.",
                 param_name,
                 runtime_spec.logical_shape().rank(),
                 expected_spec.logical_shape().rank());
