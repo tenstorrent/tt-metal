@@ -244,7 +244,7 @@ class TT_CCL:
         return self.combine_overlap_semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages=None
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages
     ):
         """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
 
@@ -263,18 +263,17 @@ class TT_CCL:
                 seq_len_per_chip=seq_len_per_chip,
                 combine_axis=0,
                 combine_num_links=num_links,
-                **({} if fwd_vc_pages is None else {"combine_fwd_vc_pages": fwd_vc_pages}),
+                combine_fwd_vc_pages=fwd_vc_pages,
             )
             self.combine_forwarding_buffers[key] = buffer
         return buffer
 
-    def get_dispatch_fabric2d_buffers(self, emb_dim, seq_len_per_chip, num_links, cluster_axis=0, fwd_vc_pages=None):
+    def get_dispatch_fabric2d_buffers(self, emb_dim, seq_len_per_chip, num_links, fwd_vc_pages, cluster_axis=0):
         """dispatch_fabric2d's DRAM forwarding and staging buffers, as (forwarding, staging).
 
         One pair per shape, shared by every MoE layer, which run one after another. Get it at model init: left to
         the op, the pair is allocated at the first dispatch's cache miss in the middle of a forward and every cached
-        program keeps its own copy, which is how a model that fits runs out of DRAM. fwd_vc_pages None takes the
-        op's default, as TtDispatch2dModule does.
+        program keeps its own copy, which is how a model that fits runs out of DRAM.
         """
         key = (emb_dim, seq_len_per_chip, num_links, cluster_axis, fwd_vc_pages)
         buffers = self.dispatch_fabric2d_buffers.get(key)
@@ -286,7 +285,7 @@ class TT_CCL:
                     seq_len_per_chip=seq_len_per_chip,
                     cluster_axis=cluster_axis,
                     num_links=num_links,
-                    **({} if fwd_vc_pages is None else {"fwd_vc_pages": fwd_vc_pages}),
+                    fwd_vc_pages=fwd_vc_pages,
                 )
             )
             self.dispatch_fabric2d_buffers[key] = buffers
