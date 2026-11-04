@@ -11,7 +11,8 @@
 (e) what an op left on its default (full) grid does while the chip is partitioned.
 
 Every test checks correctness. Timings are logged and, when SUBDEVICE_STUDY_RESULTS names a directory,
-written there as <test id>.json; they never fail a test, except the compute-bound overlap ratio in (a).
+written there as <test id>.json; they never fail a test, except the compute-bound overlap ratio in (a) and an
+implausible (outside 0.5-2 GHz) device wall-clock estimate.
 """
 
 import json
@@ -217,7 +218,11 @@ def _wall_clock_hz(device):
         estimates.append((nb - na) / (hb - ha))
     hz = statistics.median(estimates)
     logger.info(f"device wall clock: {hz / 1e6:.1f} MHz (estimates {[round(e / 1e6, 1) for e in estimates]})")
-    assert 0.5e9 < hz < 2.0e9 and max(estimates) - min(estimates) < 0.05 * hz, f"unstable clock estimates {estimates}"
+    # The clock only converts logged ticks to time, and the median absorbs a host hiccup in one round, so a wide
+    # spread is reported rather than failed on. Only an implausible median fails.
+    if max(estimates) - min(estimates) > 0.05 * hz:
+        logger.warning(f"device wall clock estimates spread more than 5%: {estimates}")
+    assert 0.5e9 < hz < 2.0e9, f"implausible device wall clock {hz / 1e6:.1f} MHz (estimates {estimates})"
     _CLOCK_HZ["hz"] = hz
     return hz
 
