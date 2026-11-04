@@ -111,6 +111,7 @@ def test_transformer_block_motif(
         padding_config=padding_config,
         attention_k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
         attention_exp_approx_mode=MotifTransformer.SDPA_EXP_APPROX_MODE,
+        norm_eps=1e-5,
     )
     converted_state_dict = dict(torch_model.state_dict())
     convert_motif_transformer_block_state(converted_state_dict, is_last_block=is_last_block)

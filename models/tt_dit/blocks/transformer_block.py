@@ -44,6 +44,7 @@ class TransformerBlock(Module):
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
         attention_exp_approx_mode: bool = False,
+        norm_eps: float = 1e-6,
     ) -> None:
         super().__init__()
 
@@ -75,7 +76,7 @@ class TransformerBlock(Module):
 
         self.norm1_norm = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -95,7 +96,7 @@ class TransformerBlock(Module):
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -124,7 +125,7 @@ class TransformerBlock(Module):
 
         self.norm2 = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -148,7 +149,7 @@ class TransformerBlock(Module):
         if not context_pre_only:
             self.norm2_context = DistributedLayerNorm(
                 dim,
-                norm_eps=1e-6,
+                norm_eps=norm_eps,
                 norm_elementwise_affine=False,
                 bias=False,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
