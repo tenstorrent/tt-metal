@@ -7,15 +7,21 @@ A device tensor allocated after a trace was captured can sit in that trace's scr
 replay of it. Model.prepare_inputs_prefill used to cache the RoPE slice of each prefill length on its first use, so the
 slice of a length first seen after the decode trace capture was overwritten by the decode replays and every later
 prefill of that length returned garbage (served-style request mix: every 128-token prompt after a 4096-token one).
+The new length's programs can also own long-lived device buffers (e.g. the global semaphores of the prefill's
+ttnn.all_reduce) placed in that region, so the generator re-captures the decode trace when programs were compiled
+since its capture (Model._tt_recapture_decode_trace_on_new_programs).
 
-A 2-layer model with random weights prefills a long prompt, captures a decode trace, prefills a short prompt of a new
-padded length, replays the decode trace, prefills the short prompt again and requires bit-identical logits. It also
-requires that an eager prefill keeps no device tensor alive in the model.
+Through the generator, as the demo and vLLM drive it: a 2-layer model with random weights prefills a long prompt,
+decodes one traced step (the generator captures the decode trace), prefills a short prompt of a new padded length (the
+generator re-captures the decode trace at the end of that prefill), replays decode steps that reload no inputs (as
+async decode does), prefills the short prompt again and requires bit-identical logits. It also requires that an eager
+prefill keeps no device tensor alive in the model, and that a prompt of another length within the same padded length
+compiles no program (its last token is in another tile: the prefill tail slices it with runtime bounds).
 
-The short prefill compiles new programs, and those can own long-lived device buffers (e.g. global semaphores) placed in
-the trace's scratch region. The generator therefore re-captures the decode trace before the next replay when programs
-were compiled since its capture (Model._tt_recapture_decode_trace_on_new_programs); the test does the same, so it checks
-the serving protocol rather than the memory layout of the program cache.
+Bit-identical logits need a reproducible prefill. The model is built in the fused decode configuration (gpt-oss-20b on
+a whole 1x4 Blackhole mesh, TP 4, batch 1), where every prefill all-reduce is one ttnn.all_reduce (attention/prefill.py
+passes use_all_reduce=fused_decode, the MoE always does); the default reduce_scatter + all_gather pair of the attention
+output is not bit-reproducible on Blackhole.
 
 Run on a QuietBox 2 (Blackhole 1x4):
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_prefill_after_decode_trace.py
@@ -27,8 +33,9 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
@@ -36,26 +43,10 @@ NUM_LAYERS = 2
 PAGE_BLOCK = 64
 PAGE_BLOCKS = 64  # 4096-token KV cache
 LONG_PROMPT = 2000  # padded to 2048
-SHORT_PROMPT = 100  # padded to 128: a prefill length first seen after the decode trace capture
-DECODE_POS = 3000  # the decode step writes the KV cache past both prompts
-REPLAYS = 16
-
-
-def _prefill(model, ids, page_table):
-    """Eager prefill of ids [1, n] (padded like the generator) -> the last position's logits on the host."""
-    n = ids.shape[-1]
-    padded = torch.zeros(1, get_padded_prefill_len(n), dtype=torch.long)
-    padded[:, :n] = ids
-    x, rot_global, rot_local, tt_page_table, _, _ = model.prepare_inputs_prefill(padded, page_table=page_table)
-    last = n - 1
-    tt_out = model.ttnn_prefill_forward(
-        x,
-        rot_mats_global=rot_global,
-        rot_mats_local=rot_local,
-        page_table=tt_page_table,
-        get_last_token=(last // 32) * 32,
-    )
-    return model.process_output_prefill(tt_out, last % 32).float()
+SHORT_PROMPT = 100  # padded to 128: a prefill length first seen after the decode trace capture; last token in tile 96
+OTHER_SHORT_PROMPT = 40  # also padded to 128, last token in tile 32
+DECODE_POS = 3000  # the decode steps write the KV cache past every prompt
+DECODE_STEPS = 16
 
 
 @pytest.mark.skipif(
@@ -67,9 +58,7 @@ def test_prefill_after_decode_trace_capture(mesh_device, device_params, reset_se
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
-    from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
@@ -77,12 +66,11 @@ def test_prefill_after_decode_trace_capture(mesh_device, device_params, reset_se
     state_dict = convert_hf_qkv_to_meta_format(GptOssForCausalLM(config).eval().state_dict(), config.head_dim)
 
     mesh_shape = tuple(mesh_device.shape)
-    page_table = torch.arange(PAGE_BLOCKS, dtype=torch.int32).reshape(1, PAGE_BLOCKS)
     model = Model(
         mesh_device=mesh_device,
         hf_config=config,
         state_dict=state_dict,
-        ccl_manager=CCLManager(mesh_device, num_links=get_default_num_links(mesh_device)),
+        ccl_manager=setup["ccl_manager"],
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         paged_attention_config=PagedAttentionConfig(block_size=PAGE_BLOCK, max_num_blocks=PAGE_BLOCKS),
@@ -90,49 +78,73 @@ def test_prefill_after_decode_trace_capture(mesh_device, device_params, reset_se
         create_kv_cache=True,
         max_local_batch_size=1,
     )
+    assert all(layer.self_attn.fused_decode for layer in model.layers), (
+        "the prefill all-reduce is bit-reproducible only in the fused decode configuration "
+        "(gpt-oss-20b, whole 1x4 Blackhole mesh, batch 1)"
+    )
+    model_args = setup["model_args"]  # dummy-weight ModelArgs (max batch 1) skip the HF config: give the logits size
+    model_args.vocab_size = config.vocab_size
+    generator = Generator([model], [model_args], mesh_device)
+    kv_cache = [[layer.self_attn.layer_past for layer in model.layers]]
+    page_table = torch.arange(PAGE_BLOCKS, dtype=torch.int32).reshape(1, PAGE_BLOCKS)
+
+    def prefill(ids):
+        return generator.prefill_forward_text(
+            ids,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=[ids.shape[-1]],
+            enable_trace=False,
+            warmup_prefill=False,
+        ).float()
+
+    def decode(reload_inputs):
+        return generator.decode_forward(
+            torch.tensor([[7]]),
+            torch.tensor([DECODE_POS]),
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=True,
+            read_from_device=False,
+            sampling_params=None,
+            reload_inputs=reload_inputs,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
 
     long_ids = torch.randint(0, config.vocab_size, (1, LONG_PROMPT))
     short_ids = torch.randint(0, config.vocab_size, (1, SHORT_PROMPT))
-    _prefill(model, long_ids, page_table)
-
-    # Decode trace over persistent inputs (compile once eagerly, then capture), as the generator does.
-    decode_inputs = model.prepare_inputs_decode(torch.tensor([7]), torch.tensor([DECODE_POS]), page_table=page_table)
-    tokens, current_pos, rot_idxs, tt_page_table = decode_inputs[:4]
-
-    def decode():
-        return model.ttnn_decode_forward(
-            tokens=tokens, current_pos=current_pos, rot_mat_idxs=rot_idxs, page_table=tt_page_table
-        )
-
-    def capture():
-        trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        decode()
-        ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
-        return trace
-
-    decode()
-    trace_id = capture()
-    captured_programs = mesh_device.num_program_cache_entries()
+    other_short_ids = torch.randint(0, config.vocab_size, (1, OTHER_SHORT_PROMPT))
 
     try:
+        prefill(long_ids)
+        decode(reload_inputs=True)  # the generator compiles and captures the decode trace
+        captured = dict(generator.trace_ids_decode[False])
+        assert generator._decode_trace_recaptures == 0
+
         live_slices = set(model._prefill_rope_slices)
-        first = _prefill(model, short_ids, page_table)
+        first = prefill(short_ids)  # compiles the 128-token programs after the capture
         kept = set(model._prefill_rope_slices) - live_slices
-        if mesh_device.num_program_cache_entries() != captured_programs:
-            # As the generator does at the start of the next request.
-            ttnn.release_trace(mesh_device, trace_id)
-            trace_id = None
-            trace_id = capture()
-        for _ in range(REPLAYS):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        assert generator._decode_trace_recaptures == 1, "the new prefill length did not re-capture the decode trace"
+        assert generator.trace_ids_decode[False] != captured
+
+        for _ in range(DECODE_STEPS):
+            decode(reload_inputs=False)
         ttnn.synchronize_device(mesh_device)
-        again = _prefill(model, short_ids, page_table)
+        again = prefill(short_ids)
+
+        programs = mesh_device.num_program_cache_entries()
+        prefill(other_short_ids)
+        new_programs = mesh_device.num_program_cache_entries() - programs
+        recaptures = generator._decode_trace_recaptures
     finally:
-        if trace_id is not None:
-            ttnn.release_trace(mesh_device, trace_id)
+        generator.release_persistent_capture()
 
     assert torch.isfinite(first).all()
     assert torch.equal(
         first, again
     ), f"prefill logits changed after decode replays (max abs diff {(first - again).abs().max().item()})"
     assert not kept, f"an eager prefill kept device tensors alive (rope slices for lengths {sorted(kept)})"
+    assert new_programs == 0, f"a new prompt length in a known padded length compiled {new_programs} programs"
+    assert recaptures == 1, f"{recaptures} decode trace re-captures, expected 1 (for the new padded length)"
