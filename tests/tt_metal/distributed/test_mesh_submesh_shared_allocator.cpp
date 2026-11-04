@@ -14,6 +14,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -220,6 +221,16 @@ TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshRejectsTracesAndSubDeviceManager
     const auto grid = submesh->compute_with_storage_grid_size();
     SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}))});
     EXPECT_THROW(submesh->create_sub_device_manager({sub_device}, 0), std::runtime_error);
+}
+
+TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshRejectsCommandLists) {
+    if (mesh_device_->num_devices() < 2 || mesh_device_->shape().dims() != 2) {
+        GTEST_SKIP() << "Requires a 2D mesh of at least 2 devices";
+    }
+    auto submesh = last_device_submesh(*mesh_device_, /*share_allocator=*/true);
+    EXPECT_THROW({ experimental::CommandListBuilder builder(*submesh); }, std::runtime_error);
+    // The parent keeps its command lists.
+    experimental::CommandListBuilder parent_builder(*mesh_device_);
 }
 
 TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshUsesParentDriscL1Arena) {
