@@ -111,14 +111,13 @@ inline void calculate_lgamma_stirling_fp32(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat log_z = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat z = in;
 
         // 1. Reflection for x < 0.5
-        v_if(in < 0.5f) { z = 1.0f - in; }
-        v_endif;
+        sfpi::vFloat z = sfpi::max(in, sfpi::min(1.0f - in, 16777216.0f));
 
         sfpi::vFloat d1 = z - 1.0f;
-        sfpi::vFloat d2 = z - 2.0f;
+        sfpi::vFloat d2 = d1 - 1.0f;
+        sfpi::vFloat z_minus_half = z - 0.5f;
         sfpi::vFloat abs_range1 = sfpi::abs(d1);
         sfpi::vFloat abs_range2 = sfpi::abs(d2);
 
@@ -147,7 +146,7 @@ inline void calculate_lgamma_stirling_fp32(
         }
         v_else {
             // Stirling base + Bernoulli correction
-            res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
+            res = (z_minus_half * log_z - z + LOG_SQRT_2PI);
             sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
             // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
@@ -157,7 +156,7 @@ inline void calculate_lgamma_stirling_fp32(
         v_endif;
 
         // Handle boundary case
-        v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
+        v_if(sfpi::abs(z_minus_half) < 0.01f) { res = LOG_SQRT_PI; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
