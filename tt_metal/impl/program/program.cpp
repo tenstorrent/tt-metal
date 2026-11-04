@@ -101,7 +101,6 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <fmt/ranges.h>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
@@ -194,7 +193,13 @@ SummaryRows program_config_breakdown(
         }
     }
     rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
-    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    // (joined by hand: fmt::join needs fmt/ranges.h, whose range formatter clashes with tt_stl/fmt.hpp's container
+    // formatters and leaves std::vector unformattable for the files after this one in a unity batch)
+    std::string kernel_names;
+    for (size_t i = 0; i < names.size(); ++i) {
+        kernel_names += (i ? ", " : "") + names[i];
+    }
+    rows.emplace_back("  text-sizing group, kernels", kernel_names);
     return rows;
 }
 
