@@ -1458,3 +1458,24 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   exact skip after a cache hit (unmeasured). Fork change: ring_indexer_score_dsa option natural_query_rows (default
   0 = as before; CHANGELOG, own unit test on 8x4). ACCEPTED as a switch (owner's order) -> 00d451965a8. Run stopped
   at --until P.31. F247 / F248 to fix now (idle).
+- 04:50 INFRA: host leak (tt-kmd #301) back: unaccounted 130 GiB (MemFree 213, Cached 212, Anon 3.9, Slab 5.9) vs ~39
+  at boot (2026-11-02 14:58) and 2026-11-03 09:40: ~91 GiB from P.27-P.31's device work (~18 h). Reboot threshold
+  ~250 GiB; infra's tt-kmd main build is the fix. Run idle (owner's decisions pending).
+
+## 2026-11-04 09:05 UTC INFRA: Slurm job 170114 cancelled by the owner (~07:15) to clear a stuck login helper
+- Cause (owner side): slurmstepd [170114.extern] had grown to ~4300 threads (the login-node guard ssh-ed in every 3 s
+  for ~5 h; that guard is dead and will not be restarted with logins) and pam_slurm_adopt stopped admitting ssh. Also:
+  nproc (ulimit -u) was 512 for our user in that job; a test at its peak plus the orchestrator, gate checker and Claude
+  processes went over it (nothing of ours could fork). In the new job this shell reports ulimit -u 2318132.
+- Lost with the old job: the full selftest run (F248 check; rerun), the overseer's heartbeat / watch / cron. The
+  orchestrator had stopped cleanly at --until P.31 (00d451965a8). No reboot (up 1 d 18 h).
+- 09:05 free RAM: MemFree 206, MemAvailable 424 GiB, Cached 213, Anon 4.0, Slab 8.1; unaccounted 130 GiB (tt-kmd #301
+  leak, unchanged since 04:50). Box test PASS (test_box.py, 7 s); no UMD locks held, no other users' device jobs,
+  ps -u dlukic empty.
+- Uncommitted in the tree: F248 (harness BRINGUP_CHUNK_LAST, ab_nonlast; selftests pass) waiting for the full selftest
+  rerun before its commit.
+- 09:45 Full selftest rerun (idle box): 680 passed, 9 skipped, 2 xfailed, 1 failed: test_e2e_runtime.py::
+  test_no_runner_contract_test_takes_a_fixed_threshold -> xing40_a4b_d_p/tests/bringup/contract/server_rules.py:393
+  (another model's fixed threshold, open since before this run; for the owner). F244 found and fixed: test_fork_cases
+  ::test_a_volatile_cache_key... opened every chip through fork_capture._device -> ttnn.get_fabric_config(); stubbed.
+  F248 committed (ab_nonlast / BRINGUP_CHUNK_LAST) with F244.
