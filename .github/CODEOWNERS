@@ -674,8 +674,13 @@ tests/ttnn/distributed/test_distributed_layernorm_TG.py @tenstorrent/metalium-de
 tests/ttnn/integration_tests/ @tenstorrent/metalium-models-maintainers
 # Op infrastructure stays with ttnn-core: the shared pieces every op builds on.
 # Until now these only fell back to ops-leads through ttnn/cpp/ttnn/operations/.
-ttnn/cpp/ttnn/operations/*.hpp @tenstorrent/metalium-developers-ttnn-core
-ttnn/cpp/ttnn/operations/*.cpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/cb_utils.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/compute_throttle_utils.cpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/compute_throttle_utils.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/functions.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/math.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/trace.cpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/trace.hpp @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/core/core.* @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/core/compute_kernel/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/core/data_movement_kernel/ @tenstorrent/metalium-developers-ttnn-core
