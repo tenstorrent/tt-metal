@@ -18,7 +18,6 @@ import torch
 import ttnn
 from models.demos.moe_block.tt.flat_gather import (
     _pages,
-    emulate_gather,
     flat_face_map,
     flat_weights_module,
     gather,
@@ -28,6 +27,20 @@ from models.demos.moe_block.tt.flat_gather import (
 R, C = 8, 4
 H, I, E, NG, CHUNK = 6144, 2048, 8, 256, 5120
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
+
+
+def emulate_gather(srcs: list, face_map: torch.Tensor) -> torch.Tensor:
+    """gather on the host: float source matrices (s order) -> the dest pages [pages, 32, 32]."""
+
+    def faces_of(s):  # (each source's own [rows, cols]: Wd is [I, H]; every source has NT tiles)
+        R, C = s.shape
+        return s.reshape(R // 32, 2, 16, C // 32, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(-1, 256)
+
+    faces = torch.cat([faces_of(s) for s in srcs])
+    fm = face_map.to(torch.int64)
+    got = torch.where((fm >= 0).unsqueeze(-1), faces[fm.clamp(min=0)], torch.zeros(()))  # [pages, 4, 256]
+    P = fm.shape[0]
+    return got.reshape(P, 2, 2, 16, 16).permute(0, 1, 3, 2, 4).reshape(P, 32, 32)
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +54,7 @@ def mesh():
 
 def _lay(mesh):
     mb = ttnn.experimental.moe_block
-    layout = mb.FlatLayoutOptions(rows_hint=round(CHUNK * 8 / NG), x_helpers=1)
+    layout = mb.FlatLayoutOptions()
     return mb.flat_routed_expert_plan(mesh, H, I, E, NG, CHUNK, weights_bf8=False, pin=1, layout=layout).as_dict()
 
 

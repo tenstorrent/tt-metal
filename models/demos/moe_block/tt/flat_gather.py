@@ -17,7 +17,6 @@ pack / requantize (~4 min a Kimi-K3 layer of 896 experts that way).
   gather_batches(face_map, NT, E, per)  host: the face map split by local expert, `per` experts a batch: per batch
       (e0, e1, pages, sub map with sources renumbered from 3 e0) - so a layer's sources go to DRAM a batch at a time
       (the whole layer's sources next to its laid-out dest needed one layer's routed weights twice in DRAM).
-  emulate_gather(srcs, face_map, banks)  host: gather's result on float matrices (the layout check, test_flat_gather.py).
 
 TODO: this becomes part of the C++ flat op's weight prep (a "from bfp DRAM sources" path of the flat expert's weight
 preparation); it is a generic_op program here only to run the real models now.
@@ -181,20 +180,6 @@ def flat_face_map(H: int, I: int, E: int, lay: dict) -> dict:
     return out
 
 
-def emulate_gather(srcs: list, face_map: torch.Tensor) -> torch.Tensor:
-    """gather on the host: float source matrices (s order) -> the dest pages [pages, 32, 32]."""
-
-    def faces_of(s):  # (each source's own [rows, cols]: Wd is [I, H]; every source has NT tiles)
-        R, C = s.shape
-        return s.reshape(R // 32, 2, 16, C // 32, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(-1, 256)
-
-    faces = torch.cat([faces_of(s) for s in srcs])
-    fm = face_map.to(torch.int64)
-    got = torch.where((fm >= 0).unsqueeze(-1), faces[fm.clamp(min=0)], torch.zeros(()))  # [pages, 4, 256]
-    P = fm.shape[0]
-    return got.reshape(P, 2, 2, 16, 16).permute(0, 1, 3, 2, 4).reshape(P, 32, 32)
-
-
 def gather_batches(face_map: dict, NT: int, E: int, per: int) -> list:
     """flat_face_map's {name: [pages, 4]} split into batches of `per` local experts: [(e0, e1, {name: (pages int32 [n],
     sub map int32 [n, 4])})], a page in the batch of the expert its faces come from (a page's faces all come from one
@@ -220,7 +205,7 @@ def gather_batches(face_map: dict, NT: int, E: int, per: int) -> list:
     return out
 
 
-def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None = None, pages=None):
+def gather(mesh, srcs: list, face_map: torch.Tensor, dst, pages=None):
     """dst (a laid-out flat expert weight tensor) <- its faces from srcs (module docstring); face_map int32 [n, 4], row i
     the faces of dest page pages[i] (default i)."""
     tb, eb, mb = _BFP[dst.dtype]
@@ -246,7 +231,7 @@ def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None 
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
     grid = mesh.compute_with_storage_grid_size()
-    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: num_cores or grid.x * grid.y]
+    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
     per = -(-nq // len(cores))
     used = [(c, i * per, min(per, nq - i * per)) for i, c in enumerate(cores) if i * per < nq]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c, _, _ in used])
@@ -289,5 +274,3 @@ def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None 
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = prog
     ttnn.generic_op(list(srcs) + [tab_t, dst], md)
     ttnn.deallocate(tab_t)  # (ordered after the gather on the command queue)
-    ttnn.synchronize_device(mesh)
-    ttnn.deallocate(tab_t)

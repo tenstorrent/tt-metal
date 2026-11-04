@@ -102,9 +102,8 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # sync with the glm_5_3 runner adapter.
 # GLM-5.3's MoE is the MoE block by default (tt/moe_impl.py; MOE_IMPL=ttmoe for TtMoe): room for its persistent words
 # and semaphores, which live in L1_SMALL (its first call logs the total), and a fabric payload holding one combine row.
-# GLM_L1_SMALL overrides.
 GLM_MOE_BLOCK = moe_block_enabled(GLM53Config)
-GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", MOE_BLOCK_L1_SMALL if GLM_MOE_BLOCK else 1536))
+GLM_L1_SMALL_SIZE = MOE_BLOCK_L1_SMALL if GLM_MOE_BLOCK else 1536
 
 
 def _glm_payload():
@@ -116,15 +115,15 @@ def _glm_payload():
 
 
 # K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call
-# hangs) or with K3_FABRIC=torus_xy; Fabric2D on TtMoe (K3_MOE_IMPL=ttmoe).
-K3_TORUS = moe_block_enabled(KimiK3Config) or os.environ.get("K3_FABRIC") == "torus_xy"
+# hangs); Fabric2D on TtMoe (K3_MOE_IMPL=ttmoe).
+K3_TORUS = moe_block_enabled(KimiK3Config)
 
 
 def _k3_device_params():
     """K3's fabric (K3_TORUS) plus what the MoE block needs when it is K3's MoE: its combine's fabric payload and
-    L1_SMALL (tt/moe_impl.py; K3_L1_SMALL overrides the L1_SMALL)."""
+    L1_SMALL (tt/moe_impl.py)."""
     fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D
-    params = k3_moe_block_device_params(
+    return k3_moe_block_device_params(
         fabric2d_device_params(
             fabric_payload_size=moe_fabric_payload(KimiK3Config),
             l1_small_size=KimiK3Config.L1_SMALL_SIZE,
@@ -132,9 +131,6 @@ def _k3_device_params():
             fabric_config=fabric,
         )
     )
-    if os.environ.get("K3_L1_SMALL"):
-        params["l1_small_size"] = int(os.environ["K3_L1_SMALL"])
-    return params
 
 
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
@@ -2292,10 +2288,8 @@ def run_chunked_transformer_updated(
 
         trace_controller = SubDeviceTraceController(mesh_device)
         transformer.set_trace_controller(trace_controller)
-        # warm/compile the metadata-variant programs before recording (PREFILL_TRACE_WARMUPS=n: n passes)
-        for _ in range(int(os.environ.get("PREFILL_TRACE_WARMUPS", "1"))):
-            _fwd_meta()
-            ttnn.synchronize_device(mesh_device)
+        _fwd_meta()  # warm/compile the metadata-variant programs before recording
+        ttnn.synchronize_device(mesh_device)
 
         trace_controller.begin_capture()
         _fwd_meta()

@@ -23,7 +23,7 @@ class MoEBlockWeights:
     """One layer's weights in the ops' layouts.
 
     head: ttnn.experimental.moe_block.prepare_fused_head_weights (shared expert + router).
-    expert_ids, gate_up, down: the flat routed experts for routed_experts_combine_flat_config's plan
+    expert_ids, gate_up, down: the flat routed experts laid out for the combine's flat plan
         (flat_routed_expert_weights.FlatRoutedExpert's gidx / w_gu / w_d).
     w_up: a latent model's prepare_fused_tail_weights (None without a latent)."""
 
@@ -39,9 +39,9 @@ class MoEBlock:
     ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it);
     ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (se3_compute SE_ACT);
     ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
-    Capacity and layout default to the reference's sizing (RoutedExperts.cap_of / layout_of): max(chunk, 256) and
-    FlatLayoutOptions(rows_hint=chunk x top_k / experts, x_helpers=1) - the flat arena then fits next to the combine's
-    in the largest free L1 block (a capacity of 8192 did not)."""
+    Capacity and layout default to max(chunk, 256) and FlatLayoutOptions(rows_hint=chunk x top_k / experts) - the flat
+    arena then fits next to the combine's in the largest free L1 block (a capacity of 8192, or GLM-5.3's 128-row
+    sub-blocks at 8x4 chunk 5120, did not)."""
 
     def __init__(
         self,
@@ -67,7 +67,7 @@ class MoEBlock:
         if max_tokens_per_expert is None:  # (an expert sees each token at most once; the flat op is built for >= 256)
             max_tokens_per_expert = max(chunk, 256)
         if layout is None:
-            layout = mb.FlatLayoutOptions(rows_hint=round(chunk * dims.top_k / dims.num_experts), x_helpers=1)
+            layout = mb.FlatLayoutOptions(rows_hint=round(chunk * dims.top_k / dims.num_experts))
         self.combine = combine if combine is not None else mb.CombineConfig()
         self.combine.n_acc = accumulators
         self.expert_kw = dict(
@@ -80,40 +80,23 @@ class MoEBlock:
         self.arena_spec = mb.moe_block_arena_spec(
             resources, dtypes=dtypes, accumulators=accumulators, l1_free=l1_free, **self.expert_kw
         )
-        self.in_program_dispatch = resources.config.experts_during_dispatch
         self.exchange_spec = (
             None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
         )
         self.one_arena = None
-
-    def _static_cb_bytes(self) -> int:
-        """L1 a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts +
-        the combine) take for their static circular buffers from the bottom of L1 - what the exchange's arena reserve
-        (routed_experts_combine: exchange_arena_reserve) keeps below its arena, without its alignment slack."""
-        mb, res = self.mb, self.resources
-        topo, dims = res.topology, res.dims
-        R, C = int(topo["R"]), int(topo["C"])
-        N, W = R * C, dims.routed_width
-        S = res.config.chunk_tokens // N
-        kw = self.expert_kw
-        m = (kw["max_tokens_per_expert"] + 31) // 32 * 32
-        flat = mb.flat_routed_expert_plan(
-            self.mesh_device, W, dims.routed_expert_hidden_dim, dims.num_experts // N, dims.num_experts, m,
-            weights_bf8=False, pin=1, layout=kw["layout"],
-        ).as_dict()["static_l1_bytes"]  # fmt: skip
-        dispatch = mb.dispatch_static_cb_bytes(N, S, W, group=8 if 2 * W <= 7168 else 2)
-        manifest = (mb.manifest_layout(R, C, bool(topo["wrap_x"]), bool(topo["wrap_y"]), S)[2] * 16 + 63) // 64 * 64
-        flat = (flat + 63) // 64 * 64
-        if self.in_program_dispatch:
-            return max(flat, dispatch) + manifest
-        return max(flat, manifest + dispatch)
 
     def _one_arena_fits(self) -> bool:
         """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
         (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
         the head's, then the exchange's (planned above them). The real fix is those CBs in the arena."""
         free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
-        static = self._static_cb_bytes()
+        kw = self.expert_kw
+        static = self.mb.routed_experts_combine_static_cb_bytes(
+            self.resources,
+            max_tokens_per_expert=kw["max_tokens_per_expert"],
+            activation=kw["activation"],
+            layout=kw["layout"],
+        )
         head = int(self.arena_spec.memory_config.shard_spec.shape[0]) * 64
         bound = free - static - 1024  # (1 KB for the allocator's alignment)
         fits = head <= bound
@@ -149,14 +132,11 @@ class MoEBlock:
                 )
             )
         if self.exchange_spec:
-            # (two arenas a forward, as the reference block for a head larger than the exchange's arena - K3: the head's
+            # (two arenas a forward for a head larger than the exchange's arena - K3: the head's
             # arena reaches below the dispatch's static circular buffers; the exchange's arena is planned above them)
             ttnn.deallocate(arena)
             arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
-        if self.in_program_dispatch:  # (the dispatch is the combine's first phase: it fills xbuf from route)
-            dispatched, route = head.xbuf, head.route
-        else:
-            dispatched, route = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources), None
+        dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources)
         y_own = mb.routed_experts_combine(
             dispatched,
             head.counts,
@@ -168,7 +148,6 @@ class MoEBlock:
             weights.gate_up,
             weights.down,
             self.resources,
-            route=route,
             arena=arena,
             **self.expert_kw,
         )

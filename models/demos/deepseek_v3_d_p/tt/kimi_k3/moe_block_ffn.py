@@ -17,8 +17,8 @@ the block holds expert b = (r C + c) EPC + le there. The experts stay where TtMo
 bias) are permuted to match.
 
 One MoEBlock (and its MoEBlockResources) per (mesh, chunk) serves every layer, built at the first call (after the
-model's own ops placed their L1); each layer holds its MoEBlockWeights. Env: MOE_COMBINE_SNAP ("2^-14" or a float:
-the combine's snap), PERSIST_L1=small (the block's persistent words in L1_SMALL).
+model's own ops placed their L1); each layer holds its MoEBlockWeights. The block's persistent words live in L1_SMALL;
+MoEBlockFfnOptions holds the block's few non-default choices (the combine's snap, ...), production's by default.
 """
 
 from __future__ import annotations
@@ -27,7 +27,9 @@ import json
 import os
 import time
 import types
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -38,27 +40,29 @@ from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 LINKS = 2
 _WEKA_CACHE = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill"
-_BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlockResources, MoEBlock)
-_REPLAY: dict = {}  # (MOE_BLOCK_REPLAY=1: the first MoE call's x, weights and output - replayed before the next)
+_BLOCKS: dict = {}  # (id(mesh), chunk, options) -> (mesh, MoEBlockResources, MoEBlock)
 _FACE_MAPS: dict = {}  # ((H, I, E, layout), experts a batch) -> gather_batches of flat_face_map: the same every layer
 
 
-def _bytes_of(d):
-    """A device shard's values as bytes (bf16 viewed as int16: numpy has no bfloat16)."""
-    t = ttnn.to_torch(d).contiguous()
-    if t.dtype == torch.bfloat16:
-        t = t.view(torch.int16)
-    return t.numpy().tobytes()
+@dataclass(frozen=True)
+class MoEBlockFfnOptions:
+    """The MoE block's choices a caller may change; None / the defaults are production's.
 
+    combine_snap: the combine's snap q (a power of two: every routed term rounded to a multiple of q, so the sum is
+        bit-identical in any landing order); None: no snap.
+    words_slab_bytes: the persistent words' packed L1_SMALL slab, bytes a core (0: a tensor a word set); None: the
+        MoEBlockConfig default.
+    accumulators: the combine's accumulator count; None: the model's (GLM-5.3 11, Kimi-K3 15).
+    gu_read_pieces: each gate/up weight block read as this many pieces (FlatLayoutOptions.gu_read_pieces); None: the
+        model's (Kimi-K3 2, GLM-5.3 1).
+    gather_experts: a layer's routed-expert sources go to DRAM this many local experts at a time while their faces are
+        gathered into the flat layout (all of them next to the laid-out weights held a K3 layer twice: 65 MB a bank)."""
 
-def _host_all(t):
-    """Every chip's shard of t, flattened (a diagnostic)."""
-    return torch.cat([ttnn.to_torch(d).float().flatten() for d in ttnn.get_device_tensors(t)])
-
-
-def fabric_payload(H: int) -> int:
-    """Fabric payload bytes the combine's L1 hand-off needs: one piece a row (H bf16) plus its trailer, 64-B aligned."""
-    return max(7232, (2 * H + 32 + 63) // 64 * 64)
+    combine_snap: Optional[float] = None
+    words_slab_bytes: Optional[int] = None
+    accumulators: Optional[int] = None
+    gu_read_pieces: Optional[int] = None
+    gather_experts: int = 4
 
 
 def block_dims(model_cfg):
@@ -215,38 +219,27 @@ def device_sources(mesh, layer_idx: int, epc: int, cache, experts=None):
     return srcs
 
 
-def log_words_layout(res, l1s_before=None, l1s_after=None):
-    """The block's persistent words in L1_SMALL: each set's cores (the union over the chips), bytes a core and address,
-    the per-tensor footprint (each set reserves its bytes on every core) vs the packed slab's."""
-    rows = res.words_layout()
-    slab = res.words_slab()
-    per_core = {}
-    for w in rows:
-        for c in w["cores"]:
-            per_core[c] = per_core.get(c, 0) + w["bytes"]
-        logger.info(
-            f"MOE_WORDS {w['name']}: {len(w['cores'])} cores, {w['bytes']} B a core, at {w['address']}"
-            f"{' (slab +' + str(w['address'] - slab['address']) + ')' if w['packed'] else ' (own tensor)'}"
-        )
-    own = sum(w["bytes"] for w in rows if not w["packed"])
-    logger.info(
-        f"MOE_WORDS total: {len(rows)} sets, sum {sum(w['bytes'] for w in rows)} B (a tensor a set: every core), "
-        f"max a core {max(per_core.values(), default=0)} B; slab {slab}; own tensors {own} B; footprint "
-        f"{(slab['capacity'] if slab else 0) + own} B; mesh L1_SMALL before the block {l1s_before} B, after {l1s_after} B"
-    )
-
-
 class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
-    def _default_gu_read_pieces(self) -> str:
+    def _default_gu_read_pieces(self) -> int:
         """The gate/up reads' pieces (FlatLayoutOptions.gu_read_pieces): the fastest choice a model - Kimi-K3 2 (L1-L4
         golden, traced, full block: 1 piece +3.0%), GLM-5.3 1 (L78 chunked prefill, traced: 302.4 ms a chunk; 2 / 4
         pieces 305.1 / 304.9)."""
-        return "2" if self.model_name == "KimiK3Config" else "1"
+        return 2 if self.model_name == "KimiK3Config" else 1
 
-    def __init__(self, mesh_device, model_cfg, layer_idx: int, hf_config=None, cache_path=None, state_dict=None):
+    def __init__(
+        self,
+        mesh_device,
+        model_cfg,
+        layer_idx: int,
+        hf_config=None,
+        cache_path=None,
+        state_dict=None,
+        options: Optional[MoEBlockFfnOptions] = None,
+    ):
         self.mesh, self.layer_idx, self.hf_config = mesh_device, int(layer_idx), hf_config
+        self.options = options or MoEBlockFfnOptions()
         self.cache = Path(cache_path) if cache_path is not None else None
         # (a TtPrefillBlock state dict holding the MoE's host weights - gate_weights, shared_expert_weights,
         # routed_expert_weights, K3: latent_weights - as the synthetic-weight tests give TtMoe: the block's weights are
@@ -255,32 +248,26 @@ class TtK3MoEBlockFfn:
         self.dims, self.act = block_dims(model_cfg)
         self.model_name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", "")
         self.weights = None  # (this layer's MoEBlockWeights, made at its first call)
-        self.calls = 0
 
     def _block(self, chunk):
-        key = (id(self.mesh), chunk)
+        opts = self.options
+        key = (id(self.mesh), chunk, opts)
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
             mb = ttnn.experimental.moe_block
-            sv = os.environ.get("MOE_COMBINE_SNAP", "")
-            snap = None if not sv or sv == "0" else (2.0 ** int(sv[2:]) if sv.startswith("2^") else float(sv))
             cfg = mb.MoEBlockConfig(
                 chunk_tokens=chunk,
                 num_links=LINKS,
-                combine_snap=snap,
-                persist_l1_small=True,  # (the ops' words and semaphores in L1_SMALL: MoEBlock)
+                combine_snap=opts.combine_snap,
+                persist_l1_small=True,  # (the ops' words in L1_SMALL: MoEBlock)
             )
-            if os.environ.get("MOE_WORDS_SLAB"):  # (the persistent words' packed slab, B a core; 0: a tensor a set)
-                cfg.words_slab_bytes = int(os.environ["MOE_WORDS_SLAB"])
+            if opts.words_slab_bytes is not None:
+                cfg.words_slab_bytes = opts.words_slab_bytes
             dtypes = mb.MoEDtypes()
             t0 = time.time()
-            from models.demos.moe_block.tt.moe_block import l1_small_bytes
-
-            l1s_before = l1_small_bytes(self.mesh)  # (the model's own L1_SMALL users so far)
             res = mb.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
-            # (the reference's sizing - models/demos/moe_block RoutedExperts.cap_of / layout_of and plan_combine's
-            # accumulators at 8x4, chunk 5120: GLM-5.3 11, Kimi-K3 15; MOE_ACCUMULATORS overrides)
-            acc = int(os.environ.get("MOE_ACCUMULATORS", "0")) or (11 if self.dims.latent_dim is None else 15)
+            # (the combine's accumulators at 8x4, chunk 5120: GLM-5.3 11, Kimi-K3 15)
+            acc = opts.accumulators or (11 if self.dims.latent_dim is None else 15)
             block = MoEBlock(
                 self.mesh,
                 res,
@@ -288,23 +275,14 @@ class TtK3MoEBlockFfn:
                 accumulators=acc,
                 max_tokens_per_expert=max(chunk, 256),
                 activation=flat_weights_module().ACTS[self.act],
+                # (every gate/up core reads its own weight blocks on NOC0, each block as gu_read_pieces reads; the
+                # expected rows per expert size the sub-blocks)
                 layout=mb.FlatLayoutOptions(
                     rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts),
-                    x_helpers=1,
-                    # (which gate/up core reads which weight blocks, on which NoC - FlatLayoutOptions.gu_source tensix |
-                    # tensix_split | tensix_noc1 | placed | auto_tensix; MOE_GU_PLACE: a JSON file of gu_place words for
-                    # placed). Default: every gate/up core reads its own weights on NOC0 (K3: each block as 2 reads)
-                    gu_source=getattr(mb.FlatGuSource, os.environ.get("MOE_GU_SOURCE", "tensix")),
-                    gu_read_depth=int(os.environ.get("MOE_GU_READ_DEPTH", "-1")),
-                    gu_read_pieces=int(os.environ.get("MOE_GU_READ_PIECES", self._default_gu_read_pieces())),
-                    gu_place=json.load(open(os.environ["MOE_GU_PLACE"])) if os.environ.get("MOE_GU_PLACE") else [],
+                    gu_read_pieces=opts.gu_read_pieces or self._default_gu_read_pieces(),
                 ),
             )
-            _lo = block.expert_kw["layout"]
-            logger.info(
-                f"MoE block: flat layout gu_source {_lo.gu_source} "
-                f"gu_read_depth {_lo.gu_read_depth} gu_read_pieces {_lo.gu_read_pieces} gu_place {len(_lo.gu_place)}"
-            )
+            logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
             logger.info(
                 f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
                 f"accumulators {block.accumulators}, capacity {block.expert_kw['max_tokens_per_expert']}, arena "
@@ -317,7 +295,6 @@ class TtK3MoEBlockFfn:
                     f"MoE block: head engine {lay.GX}x{lay.GY}, MT {lay.MT}, {lay.NCH} chunk(s), KB {lay.KB}, router on "
                     f"the engine {lay.on_engine}, x in DRAM {lay.xdram}, predicted {p.t:.0f} us {fit.note}"
                 )
-            block._l1s_before = l1s_before
             hit = _BLOCKS[key] = (self.mesh, res, block)
         return hit[2]
 
@@ -332,11 +309,11 @@ class TtK3MoEBlockFfn:
             self.mesh, Hr, I, epc, E, kw["max_tokens_per_expert"], weights_bf8=False, pin=1, layout=kw["layout"]
         ).as_dict()
         lo = kw["layout"]
-        key = (Hr, I, epc, lo.x_helpers, lo.pin_ratio, lo.rows_hint, lo.x_ready, kw["max_tokens_per_expert"])
-        # (the layer's sources go to DRAM MOE_GATHER_EXPERTS local experts at a time and are freed after their gather:
+        key = (Hr, I, epc, tuple(lo.key()), kw["max_tokens_per_expert"])
+        # (the layer's sources go to DRAM gather_experts local experts at a time and are freed after their gather:
         # all 3 epc of them next to the laid-out dest held one layer's routed weights twice - 65 MB a bank on K3, which
         # the last layer of an SC4 stage at 100 slots did not have)
-        per = int(os.environ.get("MOE_GATHER_EXPERTS", "4"))
+        per = self.options.gather_experts
         t0 = time.time()
         batches = _FACE_MAPS.get((key, per))
         if batches is None:
@@ -548,92 +525,15 @@ class TtK3MoEBlockFfn:
         except OSError as e:  # (read-only, full, or another run renamed first: the cache is optional)
             logger.warning(f"MoE block layer {self.layer_idx}: head weights not cached in {d}: {e}")
 
-    def _hashes(self, block):
-        """sha1 a chip of every device buffer the block reads (MOE_BLOCK_REPLAY: what changed between two calls)."""
-        import hashlib
-
-        w, h = _REPLAY["w"], block.last_head
-        named = {"x": _REPLAY["x"], "expert_ids": w.expert_ids}
-        for n in ("w", "w_router", "router_bias", "router_index"):
-            named["head." + n] = getattr(w.head, n)
-        for n in ("se", "rows", "xbuf", "route", "counts", "regions", "token_index", "table", "plan", "latent"):
-            t = getattr(h, n, None)
-            if t is not None:
-                named["out." + n] = t
-        if w.w_up is not None:
-            named["w_up"] = w.w_up
-        out = {}
-        for name, t in named.items():
-            devs = ttnn.get_device_tensors(t)
-            out[name] = [hashlib.sha1(_bytes_of(d)).hexdigest()[:10] for d in devs]
-        for name, t in (("gate_up", w.gate_up), ("down", w.down)):  # (large: chips 0 and the last)
-            devs = ttnn.get_device_tensors(t)
-            out[name] = [hashlib.sha1(_bytes_of(d)).hexdigest()[:10] for d in (devs[0], devs[-1])]
-        return out
-
-    def _replay(self, block, when):
-        """MOE_BLOCK_REPLAY=1: the first MoE call again (its x and weights) - is the block's state intact?"""
-        if "y" not in _REPLAY or _REPLAY.get("mesh") is not self.mesh:
-            return
-        if when == "before its weights" and not getattr(self, "_replayed_twice", False):
-            self._replayed_twice = True  # (then once more: is only the first call after the model's ops wrong?)
-            self._replay(block, "before its weights (1st)")
-            when = "before its weights (2nd)"
-        if "hashes" in _REPLAY and when == "before its weights":
-            now = self._hashes(block)
-            diff = {
-                n: sum(a != b for a, b in zip(now[n], _REPLAY["hashes"][n]))
-                for n in now
-                if now[n] != _REPLAY["hashes"][n]
-            }
-            logger.info(
-                f"MOE_BLOCK_HASH layer {self.layer_idx}: {len(now)} buffers, changed since layer "
-                f"{_REPLAY['layer']}'s replay (chips): {diff if diff else 'none'}"
-            )
-        comp = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
-        y_again = block(_REPLAY["x"], _REPLAY["w"])
-        again = ttnn.to_torch(y_again, mesh_composer=comp).float()
-        ttnn.deallocate(y_again)
-        heads = {n: _host_all(getattr(block.last_head, n)) for n in ("rows", "se", "xbuf")}
-        logger.info(
-            f"MOE_BLOCK_REPLAY layer {self.layer_idx} {when}: head outputs differ - "
-            + ", ".join(f"{n} {int((heads[n] != _REPLAY[n]).sum())}" for n in heads)
-        )
-        ref = _REPLAY["y"]
-        fin = torch.isfinite(again) & torch.isfinite(ref)
-        logger.info(
-            f"MOE_BLOCK_REPLAY layer {self.layer_idx} {when}: layer {_REPLAY['layer']}'s call again - "
-            f"{int((again[fin] != ref[fin]).sum())} finite values differ, PCC "
-            f"{torch.corrcoef(torch.stack([again[fin], ref[fin]]))[0, 1].item():.5f}; non-finite {int((~torch.isfinite(again)).sum())}"
-            f" (first call {int((~torch.isfinite(ref)).sum())})"
-        )
-
     def __call__(self, x):
         R = tuple(self.mesh.shape)[0]
         block = self._block(int(x.shape[-2]) * R)
-        replay = os.environ.get("MOE_BLOCK_REPLAY") == "1" and self.layer_idx <= 5
-        if replay:
-            self._replay(block, "before its weights")
         weights = self._weights(block)
-        if replay:
-            self._replay(block, "after its weights")
         tmp = None
         if x.dtype != ttnn.bfloat16 or x.layout != ttnn.TILE_LAYOUT:
             x = tmp = ttnn.to_layout(ttnn.typecast(x, ttnn.bfloat16), ttnn.TILE_LAYOUT)
         y = block(x, weights)
-        if replay and ("y" not in _REPLAY or _REPLAY.get("mesh") is not self.mesh):
-            comp = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
-            _REPLAY.update(
-                mesh=self.mesh,
-                layer=self.layer_idx,
-                x=ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                w=weights,
-                y=ttnn.to_torch(y, mesh_composer=comp).float(),
-                **{n: _host_all(getattr(block.last_head, n)) for n in ("rows", "se", "xbuf")},
-            )
-            self._replay(block, "right after")
-            _REPLAY["hashes"] = self._hashes(block)
-        if not getattr(block, "_logged_l1_small", False):  # (the block's persistent words + semaphores, all made)
+        if not getattr(block, "_logged_l1_small", False):  # (the block's persistent words, all made)
             from models.demos.moe_block.tt.moe_block import l1_small_bytes
 
             mv = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
@@ -648,130 +548,12 @@ class TtK3MoEBlockFfn:
                 )
             )
             block._logged_l1_small = True
-            log_words_layout(block.resources, getattr(block, "_l1s_before", None), l1_small_bytes(self.mesh))
         if getattr(block, "_logged_arena", None) != block.arena_address:  # (where each call's arena lands)
             logger.info(
                 f"MoE block layer {self.layer_idx}: arena at {block.arena_address} (was "
                 f"{getattr(block, '_logged_arena', None)}); x {x.memory_config().buffer_type} {tuple(x.shape)}"
             )
             block._logged_arena = block.arena_address
-        self.calls += 1
-        if self.calls <= int(os.environ.get("MOE_BLOCK_CHECK", "0")) and self.layer_idx <= int(
-            os.environ.get("MOE_BLOCK_CHECK_LAYERS", "1000")
-        ):
-            self._check(block, x, y)
         if tmp is not None:
             ttnn.deallocate(tmp)
         return y
-
-    def _check(self, block, x, y):
-        """MOE_BLOCK_CHECK=N: the first N calls of each layer (up to MOE_BLOCK_CHECK_LAYERS) against the block's math on
-        the host in fp32, on the device's own routing (the head's routing rows) and this layer's weights."""
-        R, C = tuple(self.mesh.shape)
-        N, E, K = R * C, self.dims.num_experts, self.dims.top_k
-        epc = E // N
-        comp = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=(R, C), dims=(2, 3))
-        xs = ttnn.to_torch(x, mesh_composer=comp).float()
-        T = xs.shape[-2]
-        xs = xs.reshape(T, -1)
-        ys = ttnn.to_torch(y, mesh_composer=comp).float().reshape(T, -1)
-        S = T // N
-        ids, wts = [], []
-        for d in ttnn.get_device_tensors(block.last_head.rows):  # (row-major chips: chip k owns tokens k S ..)
-            u = ttnn.to_torch(d).to(torch.int64).reshape(-1)[: S * 2 * K].reshape(S, 2 * K) & 0xFFFF
-            ids.append(u[:, :K])
-            wb = u[:, K:]
-            wts.append(torch.where(wb >= 32768, wb - 65536, wb).to(torch.int16).view(torch.bfloat16).float())
-        ids, wts = torch.cat(ids), torch.cat(wts)
-        w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
-        cache = self.cache if self.cache is not None else _cache_dir(self.mesh)
-        mats = {}
-        for le in range(epc):
-            for proj in ("gate", "up", "down"):
-                hit = sorted(
-                    Path(cache).glob(f"layer_{self.layer_idx}.routed_expert.local_{le}_{proj}_dtype_*.tensorbin")
-                )
-                host = ttnn.load_tensor(str(hit[0]))
-                mats[le, proj] = [
-                    ttnn.to_torch(d).float().reshape(d.shape[-2], d.shape[-1]) for d in ttnn.get_device_tensors(host)
-                ]
-        h = xs if self.dims.latent_dim is None else xs @ w["latent_down"].T
-        acc = torch.zeros(T, self.dims.routed_width)
-        F = torch.nn.functional
-        act = (
-            (lambda g, u: F.silu(g) * u)
-            if self.act == "silu"
-            else (lambda g, u: 4 * torch.tanh(g / 4) * torch.sigmoid(g) * 25 * torch.tanh(u / 25))
-        )
-        for e in torch.unique(ids).tolist():
-            tok, kk = (ids == e).nonzero(as_tuple=True)
-            k, le = e // epc, e % epc
-            wg, wu, wd = (mats[le, p][k] for p in ("gate", "up", "down"))  # (W^T: [in, out])
-            a = act(h[tok] @ wg, h[tok] @ wu)
-            acc.index_add_(0, tok, (a @ wd) * wts[tok, kk].unsqueeze(1))
-        out = acc
-        if self.dims.latent_dim is not None:
-            out = out * torch.rsqrt(out.pow(2).mean(-1, keepdim=True) + self.dims.norm_eps) * w["latent_norm"]
-            out = out @ w["latent_up"].T
-        out = out + act(xs @ w["gate"].T, xs @ w["up"].T) @ w["down"].T
-        p = torch.corrcoef(torch.stack([ys.flatten(), out.flatten()]))[0, 1].item()
-        # (the routing too: the host router's top-K on the same x)
-        logits = xs @ w["router_weight"].T
-        sc = torch.sigmoid(logits) + w["router_bias"]
-        hk = sc.topk(K, dim=-1).indices.sort(-1).values
-        same = float((hk == ids.sort(-1).values).all(-1).float().mean())
-        logger.info(
-            f"MOE_BLOCK_CHECK layer {self.layer_idx} call {self.calls}: PCC {p:.5f} vs the host model (device routing); "
-            f"routing: {same:.4f} of tokens pick the host's top-{K}; |y| max {ys.abs().max():.3g}, host {out.abs().max():.3g}"
-        )
-
-
-def prebuild(mesh, model_cfg, chunk: int):
-    """The block for (mesh, chunk), built and run once on zeros with placeholder weights, so every persistent L1 word
-    of its ops exists before any program of the model is compiled: call it before the model runs anything on the device.
-    (A program is checked against the L1 buffers only when it is compiled; on its cache hits its circular buffers would
-    overwrite words the ops placed later - the MoE layers' outputs turned to garbage from the second one on.)"""
-    key = (id(mesh), chunk)
-    hit = _BLOCKS.get(key)
-    if hit is not None and hit[0] is mesh:
-        return
-    ffn = TtK3MoEBlockFfn(mesh, model_cfg, layer_idx=-1)
-    block = ffn._block(chunk)
-    mb, fw = ttnn.experimental.moe_block, flat_weights_module()
-    d = ffn.dims
-    R, C = tuple(mesh.shape)
-    N, E, H, Is = R * C, d.num_experts, d.emb_dim, d.shared_expert_hidden_dim
-    epc, Hr, I = E // N, d.routed_width, d.routed_expert_hidden_dim
-    host = lambda *sh: ttnn.from_torch(torch.zeros(*sh), dtype=ttnn.float32)
-    head = mb.prepare_fused_head_weights(
-        host(Is, H), host(Is, H), host(H, Is), host(Hr, H) if d.latent_dim else None, host(E, H), host(E),
-        resources=block.resources, dtypes=block.dtypes, accumulators=block.accumulators, l1_free=block.l1_free,
-    )  # fmt: skip
-    w_up = mb.prepare_fused_tail_weights(host(H, Hr), host(Hr), resources=block.resources) if d.latent_dim else None
-    kw = block.expert_kw
-    lay = mb.flat_routed_expert_plan(
-        mesh, Hr, I, epc, E, kw["max_tokens_per_expert"], weights_bf8=False, pin=1, layout=kw["layout"]
-    ).as_dict()
-    shapes = fw.flat_weight_shapes(Hr, I, epc, lay)
-    w_gu, w_d = (fw.uninitialized_bank_sharded(*shapes[n], lay["banks"], ttnn.bfloat4_b, mesh) for n in ("w_gu", "w_d"))
-    gidx = ttnn.from_torch(
-        torch.arange(E, dtype=torch.int32).reshape(N, 1, epc),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-    )
-    x = ttnn.from_torch(
-        torch.zeros(1, 1, chunk, H),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(R, C), dims=(2, 3)),
-    )
-    ttnn.deallocate(block(x, MoEBlockWeights(head=head, expert_ids=gidx, gate_up=w_gu, down=w_d, w_up=w_up)))
-    ttnn.synchronize_device(mesh)
-    for t in (x, gidx, w_gu, w_d):
-        ttnn.deallocate(t)
-    logger.info(f"MoE block: prebuilt for chunk {chunk} (its persistent L1 in place before the model's programs)")
