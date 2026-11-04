@@ -139,6 +139,18 @@ def rerun_args(log, xml_path, module):
 ASSERTION = re.compile(r"AssertionError|^\s*assert\b", re.M)
 
 
+ERROR_TYPE = re.compile(r"Error type:\s*([A-Za-z_][\w.]*)")
+
+
+def is_assertion(text):
+    """The LLK reporter's "Error type: <X>" decides alone (AssertionError is an assertion, anything else is not, so
+    a compiler line echoing `assert(` is no mismatch); without it, the ASSERTION pattern."""
+    m = ERROR_TYPE.search(text)
+    if m:
+        return m.group(1).rsplit(".", 1)[-1] == "AssertionError"
+    return bool(ASSERTION.search(text))
+
+
 def failure_kinds(xml_path, module):
     """({"assertion": ids, "other": ids}) of a junit xml's failing testcases (same ids as failed_ids): a failure whose
     message or text is an assertion (AssertionError, a bare assert) is a mismatch the test found; anything else (a
@@ -160,8 +172,8 @@ def failure_kinds(xml_path, module):
             nid = f"{module}::{cls[len(dotted) + 1:].replace('.', '::')}::{name}"
         else:
             nid = module
-        kind = "assertion" if bad.tag == "failure" and ASSERTION.search((bad.get("message") or "") + "\n"
-                                                                        + (bad.text or "")[:2000]) else "other"
+        kind = "assertion" if bad.tag == "failure" and is_assertion((bad.get("message") or "") + "\n"
+                                                                    + (bad.text or "")[:2000]) else "other"
         if nid not in out["assertion"] + out["other"]:
             out[kind].append(nid)
     return out
