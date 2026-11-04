@@ -207,6 +207,7 @@ class Qwen36MLP:
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         # decode (T<=1): gate/up outputs one step down to bfloat8_b; prefill keeps the default bfloat16
         gu_dtype = ttnn.bfloat8_b if T <= 1 else None
+        silu_in_mul = False
         if T > 512 and x.shape[-2] == 2048 and x.shape[-1] == 5120 and w.w1.shape[-1] == 17408:
             # prefill 2048 tokens: auto config picks 2D 13x10 with in0_block_w=1 (160 K-steps);
             # same geometry with in0_block_w=10 (sweep on Blackhole: 1508.8 vs 2447.5 us/call at in0_block_w=4;
@@ -228,7 +229,7 @@ class Qwen36MLP:
             w1_out = ttnn.linear(
                 x,
                 w.w1,
-                program_config=_gu_pc(ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+                program_config=_gu_pc(None),
                 compute_kernel_config=ckc,
                 memory_config=mc,
                 dtype=ttnn.bfloat8_b,
@@ -236,6 +237,9 @@ class Qwen36MLP:
             w3_out = ttnn.linear(
                 x, w.w3, program_config=_gu_pc(None), compute_kernel_config=ckc, memory_config=mc, dtype=ttnn.bfloat8_b
             )
+            # prefill 2048: SiLU moved from the gate matmul epilogue (~227 us/call extra on Blackhole) into the
+            # memory-bound SwiGLU mul as an lhs activation
+            silu_in_mul = True
         else:
             w1_out = ttnn.linear(
                 x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
@@ -243,6 +247,10 @@ class Qwen36MLP:
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype)
         if T <= 1:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc, dtype=ttnn.bfloat16)
+        elif silu_in_mul:
+            hidden = ttnn.mul(
+                w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc
+            )
         else:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
