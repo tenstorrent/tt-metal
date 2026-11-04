@@ -87,6 +87,23 @@ def test_mk_stack_probe(mesh_device):
     stack(hists, active, ss)  # builds the stack program (eager launch)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"first stack launch (build + run) {time.perf_counter() - t0:.1f} s")
+    if os.environ.get("GLM53_MK_CBDUMP", "0") == "1":  # the composed program's CB placement (tt/cb_guard.py replay)
+        from models.autoports.zai_org_glm_5_3_flash.tt import cb_guard
+
+        logger.info(f"MK_STACK_INFO: {getattr(stack, 'info', None)}")
+        desc = getattr(stack, "desc", None)
+        cbs = list(desc.cbs) if desc is not None else []
+        if not cbs and isinstance(getattr(stack, "program", None), tuple):
+            try:
+                mpd = stack.program[1]
+                cbs = list(mpd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))].cbs)
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"no cbs from the program: {e}")
+        rows = []
+        for addr, size, ranges, idx in cb_guard.placement(cbs):
+            rows.append((idx, addr, size, ranges))
+        for r in rows:
+            logger.info(f"MK_STACK_CB: idx {r[0]} addr {r[1]} size {r[2]} end {r[1] + r[2]} ranges {r[3]}")
     if one_chip:
         for L in range(len(tps)):
             _, marks = stack.probe_marks(L)
