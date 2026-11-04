@@ -203,19 +203,13 @@ class _Exchange:
         )
         self.exchange = _HistoryExchange.allocate(mesh_device, channels)
 
-    def run(
-        self,
-        actual_start: ttnn.Tensor,
-        actual_end: ttnn.Tensor | None,
-        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
-    ) -> tuple[ttnn.Tensor, ...]:
+    def run(self, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ...]:
         return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             self.projected,
             self.history_tt,
             *self.taps_tt,
             *self.widths,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_CHANNEL_CHUNK_SIZE),
-            compute_kernel_config=compute_kernel_config,
             actual_start=actual_start,
             exchange_buffer=self.exchange.buffer,
             exchange_semaphores=self.exchange.semaphores,
@@ -362,23 +356,15 @@ def test_qkv_convolution_exchange_kimi_k3_perf(
     interval = _Interval(start, start + capacity)
     actual_start = make_actual_start(mesh_device, interval.start)
     actual_end = make_actual_start(mesh_device, interval.end)
-    # The KDA layer's compute config (FP32 DST), which the production call runs.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
     try:
-        outputs = exchange.run(actual_start, actual_end, compute_kernel_config)
+        outputs = exchange.run(actual_start, actual_end)
         exchange.check(interval, exchange.to_host(outputs))
         _release(outputs)
 
         trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(_PERF_CALLS_PER_TRACE):
             # Released inside the trace, as the layer releases them after their use.
-            _release(exchange.run(actual_start, actual_end, compute_kernel_config))
+            _release(exchange.run(actual_start, actual_end))
         ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
         try:
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
