@@ -377,7 +377,12 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        if mode == "prefill":
+            # Prefill residual stays DRAM interleaved even when attn_output arrives L1-sharded
+            # (GDN o_proj), so the L1 shard is freed before ffn_norm's CBs are allocated.
+            h = ttnn.add(x, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
