@@ -15,7 +15,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--no-triage] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -30,6 +30,10 @@
 #               wrapper masks pytest's exit code, so a profiled run is reported
 #               PASS as long as profiling completed, regardless of the underlying
 #               test result. Hangs are still detected and still reset the device.
+#   --no-triage On a dispatch timeout, record the hang without running tt-triage (no host
+#               reads into the hung chip; for configurations expected to wedge a NoC, where
+#               host probing of a wedged chip has taken a host down). Hang detection, the
+#               exit code 2 and the device reset are unchanged.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -71,6 +75,7 @@ fi
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+NO_TRIAGE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -85,6 +90,10 @@ while [[ $# -gt 0 ]]; do
             PROFILE_MODE=true
             shift
             ;;
+        --no-triage)
+            NO_TRIAGE=true
+            shift
+            ;;
         *)
             break
             ;;
@@ -94,7 +103,7 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided"
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--no-triage] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
@@ -193,6 +202,10 @@ if [[ "$SIM_MODE" == false ]]; then
     # so machine-readers can consume it directly instead of scraping the log.
     mkdir -p "${TRIAGE_LLM_DIR}"
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output-path=${TRIAGE_LLM} > ${TRIAGE_LOG} 2>&1"
+    if [[ "$NO_TRIAGE" == true ]]; then
+        # The marker makes the result HANG (exit 2) and triggers the reset, without probing the chip.
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo 'dispatch timeout: tt-triage skipped (--no-triage)' > ${TRIAGE_LOG}"
+    fi
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
