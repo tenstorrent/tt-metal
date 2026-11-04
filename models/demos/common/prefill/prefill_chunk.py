@@ -135,6 +135,8 @@ def pack_media_refs(refs, max_refs: int) -> bytes:
 
 def pack_forward_metadata(chunks, forward_chunks: int, refs=(), max_refs: int = 0) -> bytes:
     if chunks and chunks[0].is_sentinel:
+        if refs:
+            raise ValueError("a sentinel carries no media refs")
         return sentinel_metadata(chunks[0].slot_id, forward_chunks, max_refs)
     return _pack_words(forward_metadata_words(chunks, forward_chunks)) + pack_media_refs(refs, max_refs)
 
