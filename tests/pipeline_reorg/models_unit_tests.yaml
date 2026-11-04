@@ -1887,6 +1887,18 @@
   team: shield
   budget_type: unit
 
+- name: RT-DETR unit tests
+  cmd: TT_METAL_WATCHER=30 pytest models/demos/vision/detection/rtdetr/tests/pcc.py --timeout=600
+  model: rt-detr
+  model_family: RT-DETR
+  skus:
+    bh_p150:
+      timeout: 20
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: models
+  budget_type: unit
+
 - name: EfficientDet-D0 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/efficientdetd0/tests/pcc/test_efficient_det.py
   model: efficientdet-d0

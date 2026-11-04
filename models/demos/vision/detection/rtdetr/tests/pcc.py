@@ -390,10 +390,10 @@ def run_rtdetr_multiscale_deformable_attention_test(device, model_name, model_cl
     tt_attention_weights = ttnn.to_torch(tt_attention_weights)
     torch_attention_weights = torch_attention_weights.reshape(tt_attention_weights.shape)
 
-    _, output_pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.98)
+    _, output_pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
     logger.info(f"Output: {output_pcc_message}")
 
-    _, weights_pcc_message = assert_with_pcc(torch_attention_weights, tt_attention_weights, pcc=0.98)
+    _, weights_pcc_message = assert_with_pcc(torch_attention_weights, tt_attention_weights, pcc=0.99)
     logger.info(f"Attention weights: {weights_pcc_message}")
 
 
@@ -497,7 +497,7 @@ def test_rtdetr_decoder_layer(device):
     )
     tt_output = ttnn.to_torch(tt_output)
 
-    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.98)
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
     logger.info(pcc_message)
 
 
@@ -624,28 +624,28 @@ def test_rtdetr_decoder(device):
     _, last_hidden_state_pcc = assert_with_pcc(
         torch_outputs.last_hidden_state,
         tt_last_hidden_state,
-        pcc=0.95,
+        pcc=0.99,
     )
     logger.info(f"Last hidden state: {last_hidden_state_pcc}")
 
     _, hidden_states_pcc = assert_with_pcc(
         torch_outputs.intermediate_hidden_states,
         tt_intermediate_hidden_states,
-        pcc=0.95,
+        pcc=0.99,
     )
     logger.info(f"Intermediate hidden states: {hidden_states_pcc}")
 
     _, logits_pcc = assert_with_pcc(
         torch_outputs.intermediate_logits,
         tt_intermediate_logits,
-        pcc=0.95,
+        pcc=0.99,
     )
     logger.info(f"Intermediate logits: {logits_pcc}")
 
     _, reference_points_pcc = assert_with_pcc(
         torch_outputs.intermediate_reference_points,
         tt_intermediate_reference_points,
-        pcc=0.95,
+        pcc=0.99,
     )
     logger.info(f"Intermediate reference points: {reference_points_pcc}")
 
@@ -709,28 +709,28 @@ def run_rtdetr_model_test(device, model_name, model_class):
     _, last_hidden_state_pcc = assert_with_pcc(
         torch_outputs.last_hidden_state[:, torch_positions],
         tt_last_hidden_state[:, tt_positions],
-        pcc=0.90,
+        pcc=0.95,
     )
     logger.info(f"Aligned last hidden state: {last_hidden_state_pcc}")
 
     _, hidden_states_pcc = assert_with_pcc(
         torch_outputs.intermediate_hidden_states[:, :, torch_positions],
         tt_intermediate_hidden_states[:, :, tt_positions],
-        pcc=0.90,
+        pcc=0.95,
     )
     logger.info(f"Aligned intermediate hidden states: {hidden_states_pcc}")
 
     _, logits_pcc = assert_with_pcc(
         torch_outputs.intermediate_logits[:, :, torch_positions],
         tt_intermediate_logits[:, :, tt_positions],
-        pcc=0.90,
+        pcc=0.95,
     )
     logger.info(f"Aligned intermediate logits: {logits_pcc}")
 
     _, reference_points_pcc = assert_with_pcc(
         torch_outputs.intermediate_reference_points[:, :, torch_positions],
         tt_intermediate_reference_points[:, :, tt_positions],
-        pcc=0.90,
+        pcc=0.95,
     )
     logger.info(f"Aligned intermediate reference points: {reference_points_pcc}")
 
@@ -876,7 +876,7 @@ def test_rtdetr_conv_norm_layer(device):
         torch_rtdetr.config.encoder_hidden_dim,
     )
 
-    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.999)
     logger.info(pcc_message)
 
 
@@ -1016,7 +1016,7 @@ def test_rtdetr_hybrid_encoder(device):
             width,
             torch_rtdetr.config.encoder_hidden_dim,
         )
-        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.95)
+        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
         logger.info(f"Output {output_index}: {pcc_message}")
 
 
@@ -1077,7 +1077,7 @@ def test_rtdetr_resnet_conv_layer(device):
     tt_output = tt_output.reshape(batch_size, output_height, output_width, out_channels)
     tt_output = tt_output.permute(0, 3, 1, 2)
 
-    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.999)
     logger.info(pcc_message)
 
 
@@ -1374,7 +1374,7 @@ def test_rtdetr_resnet_encoder(device):
         tt_output = tt_output.reshape(batch_size, output_height, output_width, out_channels)
         tt_output = tt_output.permute(0, 3, 1, 2)
 
-        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.97)
+        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
         logger.info(f"Stage {stage_index}: {pcc_message}")
 
 
@@ -1432,7 +1432,7 @@ def test_rtdetr_resnet_backbone(device):
         tt_output = tt_output.reshape(batch_size, output_height, output_width, out_channels)
         tt_output = tt_output.permute(0, 3, 1, 2)
 
-        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.97)
+        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
         logger.info(f"Stage {stage_index}: {pcc_message}")
 
 
@@ -1488,5 +1488,5 @@ def test_rtdetr_conv_encoder(device):
         tt_output = tt_output.reshape(batch_size, output_height, output_width, channels)
         tt_output = tt_output.permute(0, 3, 1, 2)
 
-        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.97)
+        _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
         logger.info(f"Output {output_index}: {pcc_message}")

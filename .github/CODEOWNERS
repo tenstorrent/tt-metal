@@ -650,6 +650,7 @@ models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-d
 models/demos/vision/classification/resnet50/ @tenstorrent/metalium-developers-convolutions
 models/demos/vision/classification/resnet50/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/detection/rtdetr/ @ctr-mmicicTT @ctr-mdukicTT @ctr-ikasicTT @tenstorrent/metalium-models-maintainers
 models/demos/vision/generative/stable_diffusion @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-models-maintainers
 models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/vision/segmentation/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
