@@ -38,7 +38,8 @@ using PostReduceMultiply = compute_kernel_lib::NoOp;
 template <bool enable_accumulation>
 ALWI auto make_accumulation(uint32_t iteration) {
     if constexpr (enable_accumulation) {
-        return compute_kernel_lib::Accumulate::at(cb_accumulator, iteration);
+        return iteration + 1 == num_calls ? compute_kernel_lib::Accumulate::at_last(cb_accumulator, iteration)
+                                          : compute_kernel_lib::Accumulate::at(cb_accumulator, iteration);
     } else {
         return compute_kernel_lib::NoAccumulation{};
     }
