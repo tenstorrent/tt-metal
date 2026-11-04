@@ -33,6 +33,7 @@ from .dbcache_flux3_klein import Flux3KleinDBCache
 from .packing import MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
+from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import resolve_weights_dir
 
@@ -61,6 +62,7 @@ class Flux3KleinRequest:
 @dataclass
 class Flux3KleinResult:
     image: Image.Image
+    prompt: str
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
@@ -136,7 +138,11 @@ class Flux3KleinPipeline:
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int = 2,
+        upsample: bool = False,
     ) -> None:
+        """With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
+        with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded."""
+        self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
         self._text_length = text_length
         self._sp_axis = sp_axis
@@ -185,6 +191,7 @@ class Flux3KleinPipeline:
         )
         # the base model's unconditional sample keeps the reference's own text length
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
+        self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
     @classmethod
     def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
@@ -215,20 +222,26 @@ class Flux3KleinPipeline:
         if request.model == "distilled" and guidance not in (None, 1.0):
             raise ValueError("the distilled model takes no guidance")
         guidance = None if request.model == "distilled" else guidance
-        seed = caption_seed(request.prompt) if request.seed is None else request.seed
-        timings = {}
-
-        t0 = time.time()
-        text = self._prompt_encoder.encode(request.prompt, self._text_length)
-        timings["encode"] = time.time() - t0
-
-        t0 = time.time()
-        image_cond = None
+        reference = None
         if request.images:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
             reference = prepare_reference(reference, REFERENCE_SIZE)
+        timings = {}
+
+        t0 = time.time()
+        prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
+        timings["upsample"] = time.time() - t0
+        seed = caption_seed(prompt) if request.seed is None else request.seed
+
+        t0 = time.time()
+        text = self._prompt_encoder.encode(prompt, self._text_length)
+        timings["encode"] = time.time() - t0
+
+        t0 = time.time()
+        image_cond = None
+        if reference is not None:
             h, w = latent_shape(*reference.size)
             image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
@@ -258,7 +271,12 @@ class Flux3KleinPipeline:
         timings["to_host"] = time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
         return Flux3KleinResult(
-            image=image, seed=seed, timings=timings, cached_steps=cached_steps, final_tokens=final_tokens
+            image=image,
+            prompt=prompt,
+            seed=seed,
+            timings=timings,
+            cached_steps=cached_steps,
+            final_tokens=final_tokens,
         )
 
     def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
@@ -367,6 +385,10 @@ class Flux3KleinPipeline:
         return x, cached_steps
 
     def close(self) -> None:
+        if self._upsampler is not None:
+            self._upsampler.close()
+            for t in self._upsampler_ranges:
+                ttnn.deallocate(t)
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
