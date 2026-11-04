@@ -38,9 +38,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_injection
+from models.demos.common.prefill.media import build_injection, store_key
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper, use_sharded_residual
@@ -343,19 +344,24 @@ class TtPrefillRuntime:
         return x
 
     def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:
-        """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd."""
+        """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd.
+
+        One fetch_batch per forward: a value on another host is a view into the reader's buffer that the next fetch
+        overwrites, so every value is fetched together and its rows are copied out by build_injection."""
         cfg = self.config
         hidden = self.hf_config.hidden_size
+        keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
+        bufs = self.media_embedding_reader.fetch_batch([FetchRequest(store_key(k)) for k in keys])
         values = {}
+        for key, buf in zip(keys, bufs, strict=True):
+            h = media_format.read_header(buf)
+            values[key] = (h, media_format.embeddings(buf, h))
 
         def rows_of(ref):
-            if ref.media_key not in values:
-                buf = self.media_reader.fetch(ref.media_key)
-                h = media_format.read_header(buf)
-                if (h.n_tokens, h.hidden) != (ref.num_tokens, hidden):
-                    raise ValueError(f"{ref}: stored value has {h.n_tokens} tokens of width {h.hidden}")
-                values[ref.media_key] = media_format.embeddings(buf, h)
-            return values[ref.media_key]
+            h, rows = values[ref.media_key]
+            if (h.n_tokens, h.hidden) != (ref.num_tokens, hidden):
+                raise ValueError(f"{ref}: stored value has {h.n_tokens} tokens of width {h.hidden}")
+            return rows
 
         rows, mask = build_injection(media_refs, chunks, rows_of, cfg.sp_factor, cfg.chunk_size // cfg.sp_factor)
         return inject_media_embeddings(
@@ -492,7 +498,7 @@ class TtPrefillRuntime:
             record_dev: the forward's metadata tensor, unused here.
             metadata_msg: the forward's raw socket metadata tensor, sent as the D2H ack record.
             media_refs: first rank only, the forward's MediaRefs (common/prefill/prefill_chunk.py); their image
-                positions take the stored embeddings media_reader returns instead of the token embeddings.
+                positions take the stored embeddings media_embedding_reader returns instead of the token embeddings.
         """
         assert d2h_service is None or (
             metadata_msg is not None and len(chunks) == 1

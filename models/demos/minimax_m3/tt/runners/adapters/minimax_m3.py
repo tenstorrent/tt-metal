@@ -195,6 +195,15 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             from models.common.multimedia_store.mooncake_store import open_media_embedding_reader_from_env
 
             media_embedding_reader = open_media_embedding_reader_from_env()
+            if media_embedding_reader is None and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
+                if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":
+                    raise ValueError(
+                        "PREFILL_MEDIA_MAX_REFS > 0 needs the media embedding store (PREFILL_MEDIA_STORE_MASTER) "
+                        "or PREFILL_MEDIA_STUB_EMBEDDINGS=1"
+                    )
+                from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+
+                media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
 
         # EXPERT_DTYPE selects the MoE routed-expert weight dtype (bf4 default here / bf8). The tilized
         # cache holds both, so either stays on the fast cache path. Same knob name as the M3 generate +
@@ -250,20 +259,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
         )
-        runtime = TtPrefillRuntime(
+        return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict=state_dict,
             config=runtime_config,
             media_embedding_reader=media_embedding_reader,
         )
-        if params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
-            if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":
-                raise NotImplementedError(
-                    "PREFILL_MEDIA_MAX_REFS > 0 needs an embedding reader; until the store reader exists, "
-                    "set PREFILL_MEDIA_STUB_EMBEDDINGS=1"
-                )
-            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
-
-            runtime.media_reader = StubEmbeddingReader(hf_config.hidden_size)
-        return runtime

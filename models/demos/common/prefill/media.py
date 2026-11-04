@@ -12,6 +12,12 @@ from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 
 
+def store_key(media_key: bytes) -> str:
+    """The embedding store's key for a media item: its 32-byte media key as lowercase hex. The encoder service must
+    store each value under the same string."""
+    return media_key.hex()
+
+
 def build_injection(
     refs: list[MediaRef],
     chunks: list[PrefillChunk],

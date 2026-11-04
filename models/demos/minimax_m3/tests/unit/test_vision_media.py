@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from models.common.media_store.reader import Missing
+from models.common.multimedia_store.reader import FetchRequest, Missing
 from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.minimax_m3.vision import format
 from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, MiniMaxM3Media
@@ -94,9 +94,11 @@ def test_image_pickles_out_of_band():
 
 def test_stub_reader_serves_stub_keys(expect_error):
     reader = StubEmbeddingReader(64)
-    key = stub_media_key(6, 0)
+    key = stub_media_key(6, 0).hex()
     value = reader.fetch(key)
     assert format.read_header(value) == format.Header(1, 6, 6, 64)
-    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
+    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1).hex()))
+    head, rows = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, format.HEADER_BYTES)])
+    assert bytes(head) == bytes(value[:16]) and bytes(rows) == bytes(value[format.HEADER_BYTES :])
     with expect_error(Missing, "00"):
-        reader.fetch(bytes(32))
+        reader.fetch(bytes(32).hex())

@@ -15,8 +15,11 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.multimedia_store.reader import FetchRequest
+from models.demos.common.prefill.media import build_injection, store_key
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt import tt_prefill_runtime
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime
@@ -30,18 +33,51 @@ IMAGE_TOKEN, VISION_START, VISION_END = 1000, 1001, 1002
 
 
 class Store:
-    """Serves each image's embeddings as a stored value in format.py's layout."""
+    """Serves each image's embeddings as a stored value in format.py's layout, keyed by store_key."""
 
     def __init__(self, embs: dict):
-        self.embs = embs
+        self.values = {store_key(key): self.value(rows) for key, rows in embs.items()}
 
-    def fetch(self, key: bytes) -> memoryview:
-        rows = self.embs[key].to(torch.bfloat16)
-        h = format.Header(1, rows.shape[0], rows.shape[0], HIDDEN)
-        buf = memoryview(bytearray(format.value_size(h.n_tokens, HIDDEN)))
+    @staticmethod
+    def value(rows: torch.Tensor) -> bytes:
+        rows = rows.to(torch.bfloat16)
+        h = format.Header(1, rows.shape[0], rows.shape[0], rows.shape[1])
+        buf = memoryview(bytearray(format.value_size(h.n_tokens, h.hidden)))
         format.write_header(buf, h)
         format.embeddings(buf, h)[:] = rows.view(torch.int16).numpy()
-        return buf
+        return bytes(buf)
+
+    def fetch_batch(self, requests) -> list:
+        return [memoryview(self.values[FetchRequest(*r).media_key]) for r in requests]
+
+
+class SharedBufferStore(Store):
+    """Like the store's reads from another host: each fetch_batch overwrites one buffer that its views point into."""
+
+    def __init__(self, embs: dict):
+        super().__init__(embs)
+        self.buf = bytearray(1 << 22)
+        self.calls = 0
+
+    def fetch_batch(self, requests) -> list:
+        self.calls += 1
+        self.buf[:] = bytes(len(self.buf))
+        views, at = [], 0
+        for r in requests:
+            value = self.values[FetchRequest(*r).media_key]
+            self.buf[at : at + len(value)] = value
+            views.append(memoryview(self.buf)[at : at + len(value)])
+            at += len(value)
+        return views
+
+
+def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None):
+    return SimpleNamespace(
+        config=SimpleNamespace(sp_factor=sp, chunk_size=chunk_size, mesh_shape=mesh_shape, sp_axis=0, tp_axis=1),
+        hf_config=SimpleNamespace(hidden_size=HIDDEN),
+        media_embedding_reader=store,
+        mesh_device=mesh_device,
+    )
 
 
 def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start):
@@ -58,12 +94,7 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start):
         dtype=ttnn.bfloat16,
         shard_vocab_on_sp=False,
     )
-    runtime = SimpleNamespace(
-        config=SimpleNamespace(sp_factor=1, chunk_size=CHUNK, mesh_shape=mesh_shape, sp_axis=0, tp_axis=1),
-        hf_config=SimpleNamespace(hidden_size=HIDDEN),
-        media_reader=store,
-        mesh_device=mesh_device,
-    )
+    runtime = runtime_with(store, sp=1, chunk_size=CHUNK, mesh_shape=mesh_shape, mesh_device=mesh_device)
     out = []
     for start in range(first_chunk_start, len(tokens), CHUNK):
         end = min(start + CHUNK, len(tokens))
@@ -130,6 +161,28 @@ def test_post_splice_embeddings(
 
     got = splice_chunks(mesh_device, table, tokens, images, Store(embs), first_chunk_start)
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
+
+
+def test_one_batched_fetch_per_forward(monkeypatch):
+    """A packed forward naming one image in two chunks reads every value in one fetch, before the next fetch could
+    overwrite it."""
+    monkeypatch.setattr(tt_prefill_runtime, "inject_media_embeddings", lambda dev, x, rows, mask, **kw: (rows, mask))
+    sp, chunk = 2, 128
+    a, b = bytes([1]) * 32, bytes([2]) * 32
+    embs = {a: torch.randn(100, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
+    chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(0, chunk, 2 * chunk)]
+    refs = [MediaRef(0, 100, 100, a), MediaRef(1, 100, 100, a), MediaRef(1, 220, 20, b)]
+    store = SharedBufferStore(embs)
+    runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+
+    rows, mask = TtPrefillRuntime._splice_media(runtime, None, chunks, refs)
+
+    want_rows, want_mask = build_injection(
+        refs, chunks, lambda r: embs[r.media_key].view(torch.int16).numpy(), sp, chunk // sp
+    )
+    assert store.calls == 1
+    assert torch.equal(mask, want_mask)
+    assert torch.equal(rows, want_rows)
 
 
 def tiny_hf_model():
