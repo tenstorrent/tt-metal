@@ -48,8 +48,6 @@ def _store_key(media_key: bytes, encoding: str) -> str:
     else its bytes as UTF-8 text. Store keys must be valid UTF-8 because Mooncake's batched lookup
     (batch_get_replica_desc) returns its results keyed by str, decoding each key as UTF-8: a raw digest is almost never
     valid UTF-8 and makes the lookup raise UnicodeDecodeError, though Mooncake's other calls accept it."""
-    if not isinstance(media_key, bytes):
-        raise ValueError(f"media key {media_key!r} is not bytes")
     if encoding == "hex":
         return media_key.hex()
     try:

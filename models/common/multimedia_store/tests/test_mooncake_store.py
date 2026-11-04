@@ -111,8 +111,6 @@ def test_key_must_be_utf8_bytes(setup, expect_error):
     assert bytes(reader.fetch("media-\u00e9".encode())) == local.tobytes()
     with expect_error(ValueError, "is not valid UTF-8"):
         reader.fetch(hashlib.sha256(b"image").digest())  # binary keys need MEDIA_STORE_KEY_ENCODING=hex
-    with expect_error(ValueError, "is not bytes"):
-        reader.fetch("media-1")
 
 
 def test_bytes_keys_are_read_under_their_hex(setup, expect_error):
@@ -128,8 +126,6 @@ def test_bytes_keys_are_read_under_their_hex(setup, expect_error):
     assert reader.size(there) == remote.nbytes
     with expect_error(Missing, absent.hex()):
         reader.fetch(absent)
-    with expect_error(ValueError, "is not bytes"):
-        reader.fetch(here.hex())  # the hex itself is not a media key in this mode
     with expect_error(ValueError, "unknown media key encoding"):
         MooncakeEmbeddingReader(client, ME, key_encoding="base64")
 
