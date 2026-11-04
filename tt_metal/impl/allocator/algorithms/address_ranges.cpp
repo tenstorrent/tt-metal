@@ -114,9 +114,12 @@ void trim_below(std::vector<AddressRange>& ranges, DeviceAddr limit) {
 }
 
 std::optional<DeviceAddr> first_fit(const std::vector<AddressRange>& ranges, DeviceAddr size, bool bottom_up) {
+    // Both directions test the window's width rather than forming range.first + size or
+    // range.second - size: DeviceAddr is unsigned, so a large enough request wraps around, passes
+    // the comparison, and the allocation "succeeds" at a nonsense address instead of reporting.
     if (bottom_up) {
         for (const auto& range : ranges) {
-            if (range.first + size <= range.second) {
+            if (range.second - range.first >= size) {
                 return range.first;
             }
         }
@@ -124,9 +127,6 @@ std::optional<DeviceAddr> first_fit(const std::vector<AddressRange>& ranges, Dev
     }
     for (ssize_t i = static_cast<ssize_t>(ranges.size()) - 1; i >= 0; --i) {
         const auto& range = ranges[static_cast<size_t>(i)];
-        // Test the window's width rather than forming range.second - size first: DeviceAddr is
-        // unsigned, so a request wider than range.second wraps to a huge value that compares
-        // >= range.first, and the allocation "succeeds" at a nonsense address instead of reporting.
         if (range.second - range.first >= size) {
             return range.second - size;
         }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -89,6 +90,10 @@ TEST(AddressRangesTest, FirstFit) {
     // Top-down with size > range.second: forming range.second - size first would wrap around and
     // pass a >= range.first check
     EXPECT_EQ(first_fit({{10, 20}}, 30, false), std::nullopt);
+    // Bottom-up with a huge size: range.first + size wraps around to 0x800, which would pass a
+    // <= range.second check
+    constexpr DeviceAddr huge = std::numeric_limits<DeviceAddr>::max() - 0x800;
+    EXPECT_EQ(first_fit({{0x1000, 0x2000}}, huge, true), std::nullopt);
 }
 
 }  // namespace
