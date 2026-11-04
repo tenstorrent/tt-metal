@@ -17,7 +17,8 @@ tests pin that down device against device, so they need the TTNN weight cache bu
 * test_k3_packed_forward_matches_one_chunk_forwards: two chunks per forward (FORWARD_CHUNKS). A schedule with
   partial chunks, a partial chunk followed by a real one, one user's consecutive chunks in the same forward (the
   second continues the first's KDA carry and reads its KV), users at different depths and empty tail chunks must
-  match the same chunks each alone in its own forward.
+  match the same chunks each alone in its own forward, and those must match a model built for one chunk per
+  forward.
 * test_k3_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
   (one capture, replayed per forward; each chunk position's slot and bounds and the MoE padding config read on
   device) must leave the same KDA carries and KV as the eager packed forward.
@@ -36,6 +37,7 @@ AttnRes asserts PCC bars.
 """
 
 import copy
+import gc
 
 import pytest
 import torch
@@ -384,6 +386,9 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
     Both sides use the same packed model; the reference forward is the chunk followed by empty chunks, so the
     comparison isolates what sharing a forward with other chunks does to a chunk. Plain residual: bit-exact
     everywhere. AttnRes: PCC bars, since it rounds a row by its position in the call (module docstring).
+    A second model built for one chunk per forward (forward_chunks=1, the regular path) then runs the same
+    chunks, and the packed model's one-chunk forwards must match its outputs: that catches an error common to
+    every packed forward (row layout, the MoE sized for FORWARD_CHUNKS chunks, padding).
     """
     exact = residual == "plain"
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
@@ -425,6 +430,7 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
                     packed[(c.slot_id, c.actual_start)] = _chunk_real_rows(hidden, k, FORWARD_CHUNKS, c, sp)
 
         failures = []
+        alone = {}  # (slot, actual_start) -> real rows of the chunk alone in a packed forward
         for chunks in forwards:
             for c in chunks:
                 if c.is_empty:
@@ -434,6 +440,7 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
                     model, kvpe, mesh_device, [ref_chunk] + [empty] * (FORWARD_CHUNKS - 1), ids_by_slot
                 )
                 ref = _chunk_real_rows(hidden, 0, FORWARD_CHUNKS, ref_chunk, sp)
+                alone[(c.slot_id, c.actual_start)] = ref
                 got = packed[(c.slot_id, c.actual_start)]
                 pcc = _pcc(ref, got)
                 diff = (ref - got).abs().max().item()
@@ -454,9 +461,30 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
         )
         cross = _pcc(packed[(0, 0)], packed[(3, 0)])
         assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D produced the same output (PCC {cross:.6f})"
-        assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         model.release_sub_device_managers()
+    del model, kvpe
+    gc.collect()  # free the packed model's device buffers before the second model allocates
+
+    single, single_kvpe = _build(
+        mesh_device, config, device_params, num_links, weight_cache_path, num_users, forward_chunks=1, residual=residual
+    )
+    try:
+        for chunks in forwards:
+            for c in chunks:
+                if c.is_empty:
+                    continue
+                hidden = _run_forward(single, single_kvpe, mesh_device, [c], ids_by_slot)
+                ref = _chunk_real_rows(hidden, 0, 1, c, sp)
+                got = alone[(c.slot_id, c.actual_start)]
+                pcc = _pcc(ref, got)
+                diff = (ref - got).abs().max().item()
+                logger.info(f"[single] {residual} {c} output PCC {pcc:.6f} max|diff| {diff:.3e}")
+                if pcc < PACKED_OUTPUT_PCC:
+                    failures.append(f"{c} output PCC {pcc:.6f} vs forward_chunks=1 < {PACKED_OUTPUT_PCC}")
+        assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        single.release_sub_device_managers()
 
 
 @_common
