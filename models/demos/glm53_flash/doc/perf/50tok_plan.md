@@ -284,3 +284,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   programs. Verdict for the fabric exchange: correct to one bf16 ulp per call (1386 calls), prefill chain unchanged,
   served smoke coherent; the served GPQA Diamond run with the three knobs (`served_fabric_gpqa`, reference 90 on the
   tip) decides the defaults.
+* 02:39 **GPQA Diamond, served with the three fabric knobs** (`served_fabric_gpqa`, 1 M profile, the release flow's
+  `--ci-mode` subset = 10 of 198 questions): exact match 0.90, the same 9 / 10 the frozen tip's release run scored on
+  that subset. No regression at the CI sample count; the full 198-question run follows as the arbiter before the
+  defaults flip.
