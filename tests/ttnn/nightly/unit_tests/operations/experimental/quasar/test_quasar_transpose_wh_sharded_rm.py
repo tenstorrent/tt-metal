@@ -54,3 +54,36 @@ def test_quasar_transpose_wh_sharded_rm(device, transpose, n, c, h, w):
 
     assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(tt_out), ulp_threshold=0)
+
+
+@pytest.mark.parametrize("case", ["width_sharded_output", "orientation_mismatch"])
+@pytest.mark.parametrize("transpose", [ttnn.transpose, ttnn.experimental.quasar.transpose], ids=["main", "quasar"])
+def test_quasar_transpose_wh_sharded_rm_fallback(device, transpose, case):
+    # Shardings the sharded factory cannot write (a partial HxW block per shard, or input and output shards
+    # assigned to cores in different orders) take the interleaved factory instead.
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 2 or grid_size.y < 2:
+        pytest.skip("Needs a 2x2 core grid")
+    if case == "width_sharded_output":
+        x_shape = (1, 1, 64, 64)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        in_spec = ttnn.ShardSpec(grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR)
+        out_layout, out_spec = ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.ShardSpec(
+            grid, (64, 32), ttnn.ShardOrientation.ROW_MAJOR
+        )
+    else:
+        x_shape = (1, 4, 32, 64)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        in_spec = ttnn.ShardSpec(grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR)
+        out_layout, out_spec = ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.ShardSpec(
+            grid, (64, 32), ttnn.ShardOrientation.COL_MAJOR
+        )
+    in_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_spec)
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1, out_spec)
+
+    # A ramp, so misplaced or unwritten rows show up as out-of-order values.
+    x = (torch.arange(torch.Size(x_shape).numel()) % 251).reshape(x_shape).to(torch.bfloat16)
+    tt_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
+    tt_out = transpose(tt_in, 2, 3, memory_config=out_mc)
+
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(tt_out), ulp_threshold=0)
