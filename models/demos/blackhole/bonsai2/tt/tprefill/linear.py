@@ -183,3 +183,13 @@ def reference(x_rot: torch.Tensor, t_kn: np.ndarray, s_nb: np.ndarray) -> torch.
         tb = torch.from_numpy(t_kn[kb * KBLOCK : (kb + 1) * KBLOCK].astype(np.float32))
         y += (x[:, kb * KBLOCK : (kb + 1) * KBLOCK] @ tb) * s[:, kb]
     return y
+
+
+def prefill_linear(lin, rec_host):
+    """The exact prefill linear sharing a TernaryDecodeLinear3's records: the 2D layout (linear2.py; as fast or faster
+    on every Bonsai shape at 2048 tokens, 2x on the large-K ones) unless BONSAI_TPRE_2D=0."""
+    if os.environ.get("BONSAI_TPRE_2D", "1") == "1":
+        from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+        return TernaryPrefillLinear2.from_decode(lin, rec_host)
+    return TernaryPrefillLinear.from_decode(lin)

@@ -82,10 +82,10 @@ class TernaryGDN:
         self.pre_qkvz = self.pre_out = None
         if prefill_rotations is not None:
             # exact ternary prefill on the same records (bonsai2/tt/tprefill, gdn_prefill/forward.py)
-            from models.demos.blackhole.bonsai2.tt.tprefill.linear import TernaryPrefillLinear
+            from models.demos.blackhole.bonsai2.tt.tprefill.linear import prefill_linear
 
-            self.pre_qkvz = TernaryPrefillLinear.from_decode(self.qkvz)
-            self.pre_out = TernaryPrefillLinear.from_decode(self.out)
+            self.pre_qkvz = prefill_linear(self.qkvz, packed["qkvz"][0])
+            self.pre_out = prefill_linear(self.out, packed["out"][0])
             self.prot_in, self.prot_out = prefill_rotations[self.qkvz.K], prefill_rotations[self.out.K]
         self.ab_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(ab_w.shape[-1] // 32, 1),

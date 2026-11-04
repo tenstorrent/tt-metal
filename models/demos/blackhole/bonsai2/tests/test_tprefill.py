@@ -164,3 +164,105 @@ def test_tprefill_parts_time(device):
     ht = ttnn.from_torch(torch.randn(1, T, N).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out.append(f"down={_time(device, lambda: down(ht)):.3f}")
     print("PARTS_MS " + " ".join(out))
+
+
+@pytest.mark.parametrize(
+    "T, K, N, glu",
+    [
+        (320, 1024, 512, False),
+        (640, 1024, 512, False),
+        (640, 5120, 512, False),
+        (640, 1024, 4096, False),
+        (960, 1024, 512, False),
+        (1280, 1024, 512, False),
+        (1600, 1024, 512, False),
+        (2240, 1024, 512, False),
+        (2048, 17408, 5120, False),
+        (2048, 5120, 8192, False),
+        (2048, 5120, 4096, True),
+    ],
+    ids=["small", "m2", "m2k", "m2n", "m3", "m4", "m5", "m7", "down", "k5120n8192", "glu"],
+)
+def test_tprefill2(device, T, K, N, glu):
+    from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import pack_glu_records, pack_records_inline
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+    x = torch.randn(T, K).bfloat16()
+    xt = ttnn.from_torch(x.reshape(1, 1, T, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    if glu:
+        tg, sg = _weights(K, N, seed=1)
+        tu, su = _weights(K, N, seed=2)
+        rg, ppr = pack_records_inline(tg, sg)
+        ru, _ = pack_records_inline(tu, su)
+        rec = pack_glu_records(rg, ru, ppr)
+        rec_dev = ttnn.from_torch(
+            torch.from_numpy(rec.view(np.int32)),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        lin = TernaryPrefillLinear2.from_records(device, rec_dev, rec, ppr, K, 2 * N, glu=True)
+        ref = torch.nn.functional.silu(reference(x, tg, sg)) * reference(x, tu, su)
+    else:
+        t, s = _weights(K, N)
+        lin = TernaryPrefillLinear2.from_host(device, t, s)
+        if "T2_NOSCALE" in os.environ.get("BONSAI_T2_DEFINES", ""):
+            s = np.ones_like(s)
+        ref = reference(x, t, s)
+    y = ttnn.to_torch(lin(xt)).float().reshape(T, -1)
+    rel = ((y - ref).norm() / ref.norm()).item()
+    print(f"tprefill2 T={T} K={K} N={N} glu={glu} rel={rel:.5f}")
+    if rel > 0.02:
+        e = (y - ref).reshape(T // 32, 32, -1, 32).norm(dim=(1, 3)) / ref.reshape(T // 32, 32, -1, 32).norm(dim=(1, 3))
+        bad = (e > 0.02).nonzero().tolist()
+        print(f"bad (row tile, col tile) ({len(bad)}): {bad[:20]}")
+    assert rel < 0.02, rel
+
+
+@pytest.mark.parametrize("K, N", [(17408, 5120), (5120, 17408), (6144, 5120)])
+def test_tprefill2_time(device, K, N):
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+    T = 2048
+    t, s = _weights(K, N)
+    lin2 = TernaryPrefillLinear2.from_host(device, t, s)
+    lin1 = TernaryPrefillLinear.from_host(device, t, s)
+    xt = ttnn.from_torch(
+        torch.randn(1, 1, T, K).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    print(
+        f"T2TIME K={K} N={N}: 2D {_time(device, lambda: lin2(xt)):.3f} ms, 1D {_time(device, lambda: lin1(xt)):.3f} ms"
+    )
+
+
+def test_tprefill2_model_shapes_time(device):
+    """2D vs 1D on the model's prefill shapes at T=2048 (GLU gate/up as pair records)."""
+    from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import pack_glu_records, pack_records_inline
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+    T = 2048
+    out = []
+    K, N = 5120, 17408
+    tg, sg = _weights(K, N, seed=1)
+    rg, ppr = pack_records_inline(tg, sg)
+    rec = pack_glu_records(rg, rg, ppr)
+    rec_dev = ttnn.from_torch(
+        torch.from_numpy(rec.view(np.int32)),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    g2 = TernaryPrefillLinear2.from_records(device, rec_dev, rec, ppr, K, 2 * N, glu=True)
+    g1 = TernaryPrefillLinear(device, rec_dev, ppr, K, 2 * N, glu=True)
+    xt = ttnn.from_torch(
+        torch.randn(1, 1, T, K).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    out.append(f"gateup_glu 2D={_time(device, lambda: g2(xt)):.3f} 1D={_time(device, lambda: g1(xt)):.3f}")
+    for N in (16384, 12288, 2048):
+        t, s = _weights(K, N)
+        l2 = TernaryPrefillLinear2.from_host(device, t, s)
+        l1 = TernaryPrefillLinear.from_host(device, t, s)
+        out.append(f"k5120n{N} 2D={_time(device, lambda: l2(xt)):.3f} 1D={_time(device, lambda: l1(xt)):.3f}")
+    print("SHAPES_MS " + " | ".join(out))

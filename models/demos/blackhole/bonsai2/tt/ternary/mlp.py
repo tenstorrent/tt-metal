@@ -43,19 +43,21 @@ class TernaryMLP:
         if os.environ.get("BONSAI_GLU", "1") == "1":
             # gate and up in one ternary pass that also applies silu(gate) * up
             (rg, ppr, K, N), (ru, _, _, _) = packed["ffn_gate"], packed["ffn_up"]
-            self.gateup = TernaryDecodeLinear3.from_packed(device, pack_glu_records(rg, ru, ppr), ppr, K, 2 * N)
+            self._gu_host = pack_glu_records(rg, ru, ppr)
+            self.gateup = TernaryDecodeLinear3.from_packed(device, self._gu_host, ppr, K, 2 * N)
             self.gateup.glu = True
             for t in (self.gate.w, self.up.w):
                 ttnn.deallocate(t)
         self.pre_gateup = self.pre_down = None
         if prefill_rotations is not None:
             # exact ternary prefill on the same records (bonsai2/tt/tprefill)
-            from models.demos.blackhole.bonsai2.tt.tprefill.linear import TernaryPrefillLinear
+            from models.demos.blackhole.bonsai2.tt.tprefill.linear import prefill_linear
 
             assert self.gateup is not None, "the exact prefill MLP uses the (gate, up) pair records"
-            self.pre_gateup = TernaryPrefillLinear.from_decode(self.gateup)
-            self.pre_down = TernaryPrefillLinear.from_decode(self.down)
+            self.pre_gateup = prefill_linear(self.gateup, self._gu_host)
+            self.pre_down = prefill_linear(self.down, packed["ffn_down"][0])
             self.prot_in, self.prot_hidden = prefill_rotations[self.gate.K], prefill_rotations[self.down.K]
+        self._gu_host = None
 
     def forward_prefill(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [..., T, dim] bf16 TILE, T a multiple of 32 -> the same shape: down(up * silu(gate)) in the exact ternary

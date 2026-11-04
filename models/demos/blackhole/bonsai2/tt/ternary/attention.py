@@ -56,14 +56,15 @@ class TernaryAttention:
         self.pre_q = None
         if prefill_rotations is not None:
             # exact ternary prefill (bonsai2/tt/tprefill): q with its columns as [q heads | gate heads]
-            from models.demos.blackhole.bonsai2.tt.tprefill.linear import TernaryPrefillLinear
+            from models.demos.blackhole.bonsai2.tt.tprefill.linear import prefill_linear
 
             rq, pq, Kq, Nq = packed["q"]
             hd_tiles = Nq // heads // 2 // 32
-            q_qg = TernaryDecodeLinear3.from_packed(device, qg_records(rq, pq, heads, hd_tiles), pq, Kq, Nq)
-            self.pre_q = TernaryPrefillLinear.from_decode(q_qg)
-            self.pre_kv = TernaryPrefillLinear.from_decode(self.kv)
-            self.pre_o = TernaryPrefillLinear.from_decode(self.o)
+            rq_qg = qg_records(rq, pq, heads, hd_tiles)
+            q_qg = TernaryDecodeLinear3.from_packed(device, rq_qg, pq, Kq, Nq)
+            self.pre_q = prefill_linear(q_qg, rq_qg)
+            self.pre_kv = prefill_linear(self.kv, packed["kv"][0])
+            self.pre_o = prefill_linear(self.o, packed["o"][0])
             self.prot_in, self.prot_out = prefill_rotations[Kq], prefill_rotations[self.o.K]
 
     def project_q(self, x):
