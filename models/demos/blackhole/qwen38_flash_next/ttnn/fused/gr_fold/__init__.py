@@ -90,8 +90,12 @@ class Line:
             raise ValueError(f"the line transport needs the (1, {TP_SIZE}) mesh, got {shape}")
         self.coordinates = [ttnn.MeshCoordinate(0, rank) for rank in range(TP_SIZE)]
         self.nodes = [mesh.get_fabric_node_id(coordinate) for coordinate in self.coordinates]
-        forward = [ttnn.get_eth_forwarding_direction(self.nodes[r], self.nodes[r + 1]) for r in range(TP_SIZE - 1)]
-        backward = [ttnn.get_eth_forwarding_direction(self.nodes[r + 1], self.nodes[r]) for r in range(TP_SIZE - 1)]
+        forward = [
+            ttnn.get_eth_forwarding_direction(mesh, self.nodes[r], self.nodes[r + 1]) for r in range(TP_SIZE - 1)
+        ]
+        backward = [
+            ttnn.get_eth_forwarding_direction(mesh, self.nodes[r + 1], self.nodes[r]) for r in range(TP_SIZE - 1)
+        ]
         if (
             None in forward
             or None in backward
@@ -103,7 +107,10 @@ class Line:
         degree = Counter()
         for rank in range(TP_SIZE):
             for other in range(TP_SIZE):
-                if other != rank and ttnn.get_eth_forwarding_direction(self.nodes[rank], self.nodes[other]) is not None:
+                if (
+                    other != rank
+                    and ttnn.get_eth_forwarding_direction(mesh, self.nodes[rank], self.nodes[other]) is not None
+                ):
                     degree[rank] += 1
         # every rank can forward to every other on a line; the immediate-neighbour count is what the transport uses
         neighbours = {rank: (rank > 0) + (rank + 1 < TP_SIZE) for rank in range(TP_SIZE)}

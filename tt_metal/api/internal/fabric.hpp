@@ -38,6 +38,12 @@ namespace tt::tt_metal::internal {
 // Exact 2D mesh shape is runtime routing metadata; configuration-wide header sizing and express
 // capacity are injected automatically when the kernel is created.
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Number of runtime-argument words emitted for the given connection count in the
@@ -49,6 +55,17 @@ size_t fabric_connection_rt_args_size(const tt::tt_metal::distributed::MeshDevic
 // through verbatim. sem_args_are_l1_addresses says they are raw L1 addresses rather than
 // program semaphore ids, which is checked here.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses = false);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
