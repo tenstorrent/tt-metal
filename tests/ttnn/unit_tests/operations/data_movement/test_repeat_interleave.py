@@ -102,6 +102,18 @@ def test_pc_repeat_interleave_codegen(device, shape, repeats, dim, layout):
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
+@pytest.mark.parametrize("repeats", [2, 3])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_repeat_interleave_block_float_is_exact(device, repeats, dim, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 64) * torch.logspace(-3, 3, 64).reshape(-1, 1)
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_result = torch.repeat_interleave(ttnn.to_torch(input_tensor), repeats, dim=dim)
+    output = ttnn.repeat_interleave(input_tensor, repeats, dim=dim)
+    assert_equal(torch_result, ttnn.to_torch(output))
+
+
 @pytest.mark.skip(reason="ttnn.repeat_interleave only supports `repeats` as int")
 def test_repeat_interleave_with_repeat_tensor(device):
     torch_input_tensor = torch.rand(1, 2, 32, 32, dtype=torch.bfloat16)
