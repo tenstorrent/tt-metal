@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, rope_cos_sin
 from models.demos.minimax_m3.tt.vision.common import to_device
-from models.tt_transformers.tt.rope import RotaryEmbedding
+from models.ttt_compat.tt.rope import RotaryEmbedding
 
 
 def rope_cos_sin_padded(
