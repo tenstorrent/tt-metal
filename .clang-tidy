@@ -38,6 +38,17 @@
 # performance-avoid-endl:
 #   Attempted, but developers rejected auto-fixits due to concerns about
 #   potential flush dependency.
+#
+# === v23 additions ===
+#
+# Checks new in, or with a stricter matcher since, clang-tidy 23 — kept
+# disabled rather than enabling + fixing as part of the version bump;
+# revisit individually.
+#
+# Exceptions: portability-no-assembler stays enabled (carries v20's
+# hicpp-no-assembler coverage); performance-faster-string-find stays
+# disabled though not new (v23 errors on the deprecated name itself
+# under --warnings-as-errors=*).
 Checks: >
   *,
   -bugprone-easily-swappable-parameters,
@@ -124,6 +135,67 @@ Checks: >
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof,
+  -bugprone-assignment-in-selection-statement,
+  -bugprone-capturing-this-in-member-variable,
+  -bugprone-command-processor,
+  -bugprone-copy-constructor-mutates-argument,
+  -bugprone-default-operator-new-on-overaligned-type,
+  -bugprone-derived-method-shadowing-base-method,
+  -bugprone-exception-copy-constructor-throws,
+  -bugprone-float-loop-counter,
+  -bugprone-fold-init-type,
+  -bugprone-invalid-enum-default-initialization,
+  -bugprone-misleading-setter-of-reference,
+  -bugprone-missing-end-comparison,
+  -bugprone-optional-value-conversion,
+  -bugprone-random-generator-seed,
+  -bugprone-raw-memory-call-on-non-trivial-type,
+  -bugprone-signed-bitwise,
+  -bugprone-std-exception-baseclass,
+  -bugprone-std-namespace-modification,
+  -bugprone-throwing-static-initialization,
+  -bugprone-unchecked-string-to-number-conversion,
+  -bugprone-unhandled-code-paths,
+  -bugprone-unintended-char-ostream-output,
+  -bugprone-unsafe-to-allow-exceptions,
+  -cert-exp45-c,
+  -cppcoreguidelines-explicit-constructor,
+  -cppcoreguidelines-missing-std-forward,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -cppcoreguidelines-use-enum-class,
+  -google-runtime-float,
+  -misc-anonymous-namespace-in-header,
+  -misc-explicit-constructor,
+  -misc-multiple-inheritance,
+  -misc-override-with-different-visibility,
+  -misc-predictable-rand,
+  -misc-static-initialization-cycle,
+  -modernize-avoid-c-style-cast,
+  -modernize-avoid-setjmp-longjmp,
+  -modernize-avoid-variadic-functions,
+  -modernize-redundant-void-arg,
+  -modernize-type-traits,
+  -modernize-use-default-member-init,
+  -modernize-use-scoped-lock,
+  -modernize-use-std-bit,
+  -modernize-use-string-view,
+  -modernize-use-structured-binding,
+  -performance-faster-string-find,
+  -performance-prefer-single-char-overloads,
+  -performance-string-view-conversions,
+  -performance-use-std-move,
+  -portability-avoid-pragma-once,
+  -readability-ambiguous-smartptr-reset-call,
+  -readability-else-after-return,
+  -readability-inconsistent-ifelse-braces,
+  -readability-redundant-lambda-parameter-list,
+  -readability-redundant-nested-if,
+  -readability-redundant-parentheses,
+  -readability-redundant-qualified-alias,
+  -readability-redundant-typename,
+  -readability-trailing-comma,
+  -readability-trivial-switch,
+  -readability-use-concise-preprocessor-directives,
   -abseil-*,
   -altera-*,
   -android-*,
