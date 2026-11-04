@@ -852,10 +852,24 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
 # so a signed read gives -0.0 and -32767 instead.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 
-# Int8 -> UInt8 keeps the low 8 bits (TypecastGolden): -1 -> 255, -2 -> 254, -64 -> 192, -127 -> 129.
+# Int8 -> UInt8: int32_to_uint8 drops the sign, so -1, -2, -64, -127 come back as 1, 2, 64, 127.
 # UInt8 -> Int8 saturates to sign-magnitude Int8: 128, 200 and 255 -> 127, and 127 stays 127.
 _INT8_TO_UINT8_SEEDS = (-1, -2, -64, -127)
 _UINT8_TO_INT8_SEEDS = (128, 200, 255, 127)
+
+
+def _quasar_typecast_integer(value, dst_format: DataFormat):
+    """Map one integer onto the Quasar destination before the torch cast.
+
+    A raw uint8 cast wraps negatives, and a raw int8 cast rejects anything above 127.
+    int32_to_uint8 keeps the magnitude. A signed destination saturates, and Int8 has no -128.
+    """
+    v = int(value)
+    if dst_format == DataFormat.UInt8:
+        return min(abs(v), 255)
+    if dst_format == DataFormat.Int8:
+        return max(-127, min(v, 127))
+    return v
 
 
 def _prepare_typecast_input(
@@ -1273,6 +1287,11 @@ def run_eltwise_unary_sfpu_quasar(
             else:
                 ops = UnarySFPUGolden().ops
                 op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+                if mathop == MathOperation.Typecast:
+                    op_res = [
+                        _quasar_typecast_integer(v, formats.output_format)
+                        for v in op_res
+                    ]
                 golden_tensor = torch.tensor(
                     op_res, dtype=format_dict[formats.output_format]
                 )
