@@ -130,7 +130,7 @@ FLAGS=(-x c++-header --target=$TGT -ferror-limit=0 -D__INT32_TYPE__=long
   -isystem "$SFPI/include"
   -I"$SHIM"
   -I"$LLK_ROOT/common" -I"$LLK_ROOT/$LLK/common/inc" -I"$LLK_ROOT/$LLK/common/inc/sfpu"
-  -I"$LLK_ROOT/$LLK/llk_lib" -I"$LLK_ROOT/tests/helpers/include" -I"$METAL_DIR/tt_metal/hw/inc/"
+  -I"$LLK_ROOT/$LLK/llk_lib" -I"$LLK_ROOT/$LLK/llk_lib/hal" -I"$LLK_ROOT/tests/helpers/include" -I"$METAL_DIR/tt_metal/hw/inc/"
   "${ARCHINC[@]}")
 
 mapfile -t HEADERS < <(find "$LLK_ROOT/$LLK/llk_lib" "$LLK_ROOT/$LLK/common/inc" -name '*.h' | sort)

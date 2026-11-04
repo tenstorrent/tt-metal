@@ -9,7 +9,7 @@
 namespace ttnn::experimental::prim {
 
 struct PlusoneParams {
-    const std::optional<CoreRangeSet> sub_core_grids;
+    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     const bool skip_negative_entries;
 };
 

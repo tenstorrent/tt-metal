@@ -7,8 +7,4 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype);
-
-}  // namespace ttnn
+#include "ttnn/tensor/tensor_ops.hpp"

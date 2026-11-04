@@ -26,11 +26,17 @@ void validate_pool2d(
     const Layout& output_layout) {
     // check the input tensor
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Pool2D input must be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Pool2D input must be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Pool2D input must be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
+    TT_FATAL(input.shard_spec().has_value(), "Pool2D input shard spec should not be empty");
+    const auto& shard_spec = input.shard_spec().value();
+    sliding_window::validate_sliding_window_shard_grid(
+        shard_spec.grid,
+        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+        shard_spec.orientation);
 
     if (return_indices) {
         TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Return_indices is only supported for MAX pool type");
@@ -166,8 +172,6 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
 }
 
 ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto input_mem_config = tensor.input_tensor_.memory_config();
-    auto in_dtype = tensor.input_tensor_.dtype();
     auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
@@ -179,8 +183,7 @@ ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op
         op_attr.count_include_pad_,
         op_attr.return_indices_,
         op_attr.config_tensor_in_dram,
-        input_mem_config,
-        in_dtype,
+        tensor.input_tensor_.tensor_spec(),
         out_dtype);
 }
 

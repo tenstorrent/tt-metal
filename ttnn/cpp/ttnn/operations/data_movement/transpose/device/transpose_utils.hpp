@@ -14,15 +14,26 @@ bool is_native_transpose_sharding(
     const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
 
+// MemoryConfig's public constructors always reset experimental per-core-allocation /
+// range-lockstep-allocation state to defaults, so any hand-reconstruction of a MemoryConfig (to
+// swap buffer_type/shard geometry while otherwise preserving it) must re-apply them explicitly.
+// Shared by transpose.cpp and the device op so a new allocation mode only has to be added once.
+void copy_experimental_allocation_flags(const tt::tt_metal::MemoryConfig& source, tt::tt_metal::MemoryConfig& dest);
+
 // Scale shard_spec from `from_shape` to `to_shape`; nullopt when scaling isn't exact.
 std::optional<tt::tt_metal::ShardSpec> adjust_shard_spec_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+// Selects `is_tile` for the synthesized non-sharded axis.
+// Default keeps pre-existing tile-aligned synth; Tile/RowMajor let transpose opt in per input layout.
+enum class OutputTiling : uint8_t { Default, Tile, RowMajor };
 
 // Build a sharded spec over the full compute grid from the post-transform shape.
 tt::tt_metal::ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
-    std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
+    std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt,
+    OutputTiling output_tiling = OutputTiling::Default);
 
 }  // namespace ttnn::operations::data_movement::transpose

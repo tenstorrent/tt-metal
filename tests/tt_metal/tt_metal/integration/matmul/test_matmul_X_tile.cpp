@@ -37,7 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -253,10 +253,20 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -291,10 +301,20 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -328,24 +348,13 @@ static void matmul_tile_block(
         {"WITH_DT", cfg.with_dt ? "1" : "0"},
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .fpu_math_fidelity = cfg.math_fidelity,
-            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
-            .double_buffer_dest = !cfg.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .fpu_math_fidelity = cfg.math_fidelity,
-            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
-            .double_buffer_dest = !cfg.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .fpu_math_fidelity = cfg.math_fidelity,
+        .enable_32_bit_dest = cfg.fp32_dest_acc_en,
+        .double_buffer_dest = !cfg.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = cfg.compute_kernel,
@@ -449,7 +458,7 @@ static void matmul_tile(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
@@ -566,9 +575,6 @@ static void matmul_tile(
     std::map<std::string, std::string> compute_defines;
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines["DST_ACCUM_MODE"] = "1";
-    }
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program_,

@@ -676,7 +676,7 @@ void SetRuntimeArgs(
     KernelHandle kernel,
     const LogicalDeviceRange& logical_device_range,
     const CoreRangeSet& core_ranges,
-    stl::Span<const uint32_t> runtime_args
+    ttsl::Span<const uint32_t> runtime_args
 );
 
 // Dispatch a MeshWorkload to a Virtual Mesh. This allows a preconfigured
@@ -1931,7 +1931,7 @@ void SetRuntimeArgs(
     KernelHandle kernel,
     const LogicalDeviceRange& logical_device_range,
     const CoreRangeSet& core_ranges,
-    stl::Span<const uint32_t> runtime_args);
+    ttsl::Span<const uint32_t> runtime_args);
 
 // Dispatch a MeshWorkload to a Virtual Mesh through the Serialization, Transport,
 // Deserialization and Local Device Dispatch layers

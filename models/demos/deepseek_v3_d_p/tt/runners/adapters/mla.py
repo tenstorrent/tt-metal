@@ -3,7 +3,7 @@
 
 """``MLAPrefillAdapter`` — shared adapter base for the DeepSeek-V3 model family.
 
-DeepSeek-V3 and Kimi-K2.6 share one architecture (MLA attention + MoE) and one TT
+DeepSeek-V3 and Kimi-K2.7 share one architecture (MLA attention + MoE) and one TT
 implementation (``TtPrefillTransformer`` driven by ``TtPrefillRuntime``); they
 differ only in static dimensions, default paths, HF-config quirks, and a couple of
 device knobs. The adapter is pure glue: it tells the engine where this model's
@@ -11,7 +11,7 @@ config / weights / trace live and how to build its runtime. All operational beha
 (running a chunk, the KV layout, the migration table, PCC) lives on the runtime
 (``TtPrefillRuntime``) the build returns; the engine drives those + owns all comms.
 
-Concrete models (``deepseek_v3.py``, ``kimi_k2_6.py``) subclass this and set the
+Concrete models (``deepseek_v3.py``, ``kimi_k2_7.py``) subclass this and set the
 identity / default-path attributes, overriding a method only where they genuinely
 diverge (e.g. Kimi's L1-small routing semaphores). A non-MLA architecture subclasses
 ``PrefillModelAdapter`` directly and builds its own runtime.
@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 
 
 def unwrap_multimodal_config(cfg):
-    """Unwrap a multimodal wrapper config (Kimi K2.5/K2.6) to its inner text_config.
+    """Unwrap a multimodal wrapper config (Kimi K2.7-Code) to its inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, ...)
     live under ``text_config``. Also stubs ``quantization_config.weight_block_size``
@@ -56,6 +56,11 @@ def unwrap_multimodal_config(cfg):
 
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
+
+    def fabric_payload_size(self) -> int:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
+
+        return moe_fabric_payload_size(self.model_config)
 
     # ------------------------------------------------------------------
     # HF config
@@ -92,7 +97,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> MlaKvCaches:
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token; one shared cache of
         num_users * num_layers user-major slots). Dense MLA has no indexer cache, so ``index`` stays None.
-        The engine owns the returned cache and passes it into every runtime call."""
+        ``params.tp_shard_kv`` stripes it over SP*TP instead of TP-replicating it. The engine owns the
+        returned cache and passes it into every runtime call."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
         return MlaKvCaches(
@@ -104,8 +110,17 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
         )
+
+    def _dense_tp_shard_kv(self, params: PrefillRunParams) -> bool:
+        """The one predicate both the cache allocation and the model's reader key on."""
+        assert (
+            not params.tp_shard_kv or self.supports_tp_shard_kv
+        ), f"tp_shard_kv requested but model {self.name!r} does not support it (supports_tp_shard_kv=False)"
+        return params.tp_shard_kv
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
@@ -140,11 +155,14 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             dflash_enabled=params.dflash_enabled,
-            tp_shard_kv=params.tp_shard_kv,
+            dflash_checkpoint_path=params.dflash_checkpoint_path,
+            mtp_levels=params.mtp_levels,
+            mtp_decode_levels=params.mtp_decode_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

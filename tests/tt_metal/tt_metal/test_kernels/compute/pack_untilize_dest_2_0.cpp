@@ -10,11 +10,11 @@
 #include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Id-free (2.0) pack-untilize-DEST kernel: per tile, copy c_0 -> DST, then experimental::pack_untilize_dest
+// Id-free (2.0) pack-untilize-DEST kernel: per tile, copy c_0 -> DST, then experimental::pack_untilize_dest_block
 // packs (untilizes) the tile straight out of the DEST register to c_16. The pack ops take only an OUTPUT
 // LLKOperand (data format + tile geometry as NTTPs; L1 address the only runtime state) -- there is NO input
 // operand because the source is the DEST register. copy_tile stays the legacy CB-id API so the differential
-// against pack_untilize_dest_legacy.cpp isolates the pack_untilize_dest[_init] calls. Output must be
+// against pack_untilize_dest_legacy.cpp isolates the pack_untilize_dest_init/_block calls. Output must be
 // bit-for-bit identical to the legacy kernel. block_ct_dim = full_ct_dim = block_rt_dim = 1.
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
@@ -27,7 +27,7 @@ void kernel_main() {
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+    copy_init(tt::CBIndex::c_0);
     experimental::pack_untilize_dest_init<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(OutOp(out_cb.write_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -39,7 +39,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        experimental::pack_untilize_dest<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
+        experimental::pack_untilize_dest_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
             OutOp(out_cb.write_address()), 1 /*block_rt_dim*/);
         tile_regs_release();
 

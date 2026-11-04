@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_replay_bank1.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
@@ -46,16 +47,18 @@ constexpr std::uint32_t CUMSUM_CARRY_REG = CUMSUM_QUAD_ROWS - 1;
 constexpr std::uint32_t CUMSUM_ADDR_MOD = ADDR_MOD_6;
 
 // Quads alternate banks, so the shortest sequence that repeats byte-for-byte is two quads, one per
-// bank. Recorded once into replay slot 0 by cumsum_init and run over the 4 bank pairs, that leaves a
-// tile costing 5 instruction issues instead of the 112 the SFPU executes.
+// bank. Recorded once by cumsum_init and run over the 4 bank pairs, that leaves a tile costing a
+// handful of instruction issues instead of the 112 the SFPU executes.
 constexpr std::uint32_t CUMSUM_QUAD_INSTRS = 14;  // 4 SFPLOAD + SFPTRANSP + 4 SFPADD + SFPTRANSP + 4 SFPSTORE
 constexpr std::uint32_t CUMSUM_QUADS_PER_RECORDING = 2;
 constexpr std::uint32_t CUMSUM_REPLAY_SLOT = 0;
 constexpr std::uint32_t CUMSUM_REPLAY_LEN = CUMSUM_QUADS_PER_RECORDING * CUMSUM_QUAD_INSTRS;
 constexpr std::uint32_t CUMSUM_REPLAYS_PER_FACE_PAIR = CUMSUM_QUADS_PER_FACE_PAIR / CUMSUM_QUADS_PER_RECORDING;
-constexpr std::uint32_t CUMSUM_REPLAY_DEPTH = 32;
 static_assert(CUMSUM_ROW_QUADS % CUMSUM_QUADS_PER_RECORDING == 0, "the recorded body must tile the Dest tile exactly");
-static_assert(CUMSUM_REPLAY_LEN <= CUMSUM_REPLAY_DEPTH, "the recorded body must fit the replay buffer");
+
+// Replay bank 1, so bank-0 FPU ops can run between cumsum tiles; EMA records over it.
+static_assert(
+    CUMSUM_REPLAY_SLOT + CUMSUM_REPLAY_LEN <= SFPU_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
 
 /**
  * @brief Accumulate one tile row quad on top of the previous quad's running totals.
@@ -114,12 +117,12 @@ inline void _calculate_cumsum_row_quad_() {
  * @brief Configure the SFPU state the cumsum tile walk depends on.
  *
  * Resets the RWC counters so the quad-relative Dest immediates start from 0, programs ADDR_MOD_6
- * with the per-quad Dest advance the replayed body rides on, and records that body into the replay
- * buffer. Every instruction the recording captures is an immediate, so it needs no runtime state and
+ * with the per-quad Dest advance the replayed body rides on, and records that body into replay
+ * bank 1. Every instruction the recording captures is an immediate, so it needs no runtime state and
  * recording it here rather than per call leaves each tile costing only its replays.
  *
- * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any other
- *       SFPU op has run on this thread - the recording is what the other op's own init overwrites.
+ * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any op that
+ *       reprograms ADDR_MOD_6 or records into replay bank 1 (EMA does).
  */
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
@@ -132,8 +135,8 @@ inline void cumsum_init() {
     }
         .set(CUMSUM_ADDR_MOD);
 
-    // Record only; the tile the walk would touch is not this call's to write.
-    load_replay_buf<CUMSUM_REPLAY_SLOT, CUMSUM_REPLAY_LEN, false /* exec_while_loading */>([] {
+    // Record only, without executing.
+    _sfpu_record_replay_bank1_<CUMSUM_REPLAY_SLOT, CUMSUM_REPLAY_LEN>([] {
         _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_A>();
         _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_B>();
     });
@@ -152,7 +155,9 @@ inline void cumsum_init() {
  * @note On return CUMSUM_LREG_BANK_B (LREG4-7) collectively holds this tile's 32 column totals in
  *       store order. The next call's first transpose reconstructs the carry in LREG7. Feed tiles
  *       top-to-bottom and write nothing to LREG4-7 in between.
- * @note Uses replay slot 0 on the math thread.
+ * @note Replays from bank 1 of the math thread's replay buffer, and overwrites bank 0's last slot with
+ *       the SFPNOP that switches banks (see SFPU_REPLAY_BANK_SWITCH_SLOT_FREE). Both replay bank IDs
+ *       are back at 0 on return.
  * @note Call @ref cumsum_init before this - it programs the address mode and records the body this
  *       replays.
  */
@@ -167,6 +172,8 @@ inline void calculate_cumsum(const bool first) {
         TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 3, 0 /* instr_mod1: plain copy */);
     }
 
+    _sfpu_enter_replay_bank1_();
+
     for (std::uint32_t face_pair = 0; face_pair < CUMSUM_FACE_PAIRS; face_pair++) {
         if (face_pair != 0) {
             // The quad advance only walks the left face of a pair, so the right face still separates
@@ -176,15 +183,43 @@ inline void calculate_cumsum(const bool first) {
 
         // Each replay runs two quads, one per LREG bank; Dest auto-increment walks them down the face.
         for (std::uint32_t replay = 0; replay < CUMSUM_REPLAYS_PER_FACE_PAIR; replay++) {
-            TTI_REPLAY(
-                CUMSUM_REPLAY_SLOT,
-                CUMSUM_REPLAY_LEN,
-                0 /* last */,
-                0 /* set_mutex */,
-                0 /* execute_while_loading */,
-                0 /* load_mode */);
+            const bool last_replay =
+                (face_pair == CUMSUM_FACE_PAIRS - 1) && (replay == CUMSUM_REPLAYS_PER_FACE_PAIR - 1);
+            if (last_replay) {
+                // `last` flips the read ID back to bank 0 for everyone else.
+                TTI_REPLAY(
+                    CUMSUM_REPLAY_SLOT,
+                    CUMSUM_REPLAY_LEN,
+                    1 /* last */,
+                    0 /* set_mutex */,
+                    0 /* exec_while_loading */,
+                    0 /* load */);
+            } else {
+                TTI_REPLAY(
+                    CUMSUM_REPLAY_SLOT,
+                    CUMSUM_REPLAY_LEN,
+                    0 /* last */,
+                    0 /* set_mutex */,
+                    0 /* exec_while_loading */,
+                    0 /* load */);
+            }
         }
     }
+}
+
+// The compensated scan is not ported to Quasar. cumsum.h still compiles there; a kernel that uses
+// CumsumMode::Compensated fails to build.
+[[gnu::error("cumsum_tile with CumsumMode::Compensated is not supported on Quasar")]] void
+compensated_cumsum_is_not_supported_on_quasar();
+
+template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en /*unused*/>
+inline void calculate_cumsum_compensated([[maybe_unused]] const bool first) {
+    compensated_cumsum_is_not_supported_on_quasar();
+}
+
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void cumsum_compensated_init() {
+    compensated_cumsum_is_not_supported_on_quasar();
 }
 
 }  // namespace sfpu

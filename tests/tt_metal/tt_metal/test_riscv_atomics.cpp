@@ -60,7 +60,7 @@ protected:
 
     void run_riscv_atomics_test(const std::map<std::string, std::string>& dm_defines) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(this->device());
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -89,7 +89,7 @@ protected:
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -103,9 +103,12 @@ protected:
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementGen1Config{
-                            .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                            .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                        experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                                },
                         },
                 });
                 kernel_names.push_back(name);

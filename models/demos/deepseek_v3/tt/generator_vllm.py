@@ -39,6 +39,8 @@ def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USER
 
 
 class DeepseekV3ForCausalLM(DeepseekGenerator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
@@ -154,10 +156,27 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
         num_of_users = tokens.shape[0]
         if sample_on_device:
+            sampling_user_slots = list(empty_slots) if empty_slots is not None else list(range(num_of_users))
+            if len(sampling_user_slots) != num_of_users:
+                raise ValueError(
+                    f"DeepSeek prefill has {num_of_users} requests but " f"{len(sampling_user_slots)} stable slots"
+                )
+            prompt_history = self._sampling_history_for_user_slots(
+                self._prompt_history(tokens, lengths),
+                sampling_user_slots,
+            )
             self._validate_and_initialize_sampling(
-                sampling_params,
+                self._sampling_params_for_user_slots(
+                    sampling_params,
+                    sampling_user_slots,
+                ),
                 sample_on_device,
                 enable_trace=False,
+                reload_sampling_params=True,
+                reset_sampling_state=True,
+                user_slots=sampling_user_slots,
+                prompt_tokens=prompt_history,
+                preserve_unlisted_slots=True,
             )
 
         user_outputs = []
@@ -220,7 +239,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         return prefill_output
 
-    def decode_forward(self, *args, **kwargs):
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        slot_remap=None,
+        **kwargs,
+    ):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
         page_tables = kwargs.get("page_table", None)
@@ -229,26 +257,38 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
-        reset_batch = kwargs.get("reset_batch", False)
-        # NOTE: vLLM also passes `slot_remap` (the seed-slot reindex map from batch
-        # condense) in kwargs, but deepseek does not consume it — so per-request
-        # seeded determinism is not preserved across condense. Tracked by
-        # https://github.com/tenstorrent/tt-metal/issues/46350.
+        prompt_tokens = kwargs.get("prompt_tokens")
+        output_tokens = kwargs.get("output_tokens")
+        if not reload_inputs or reload_page_table:
+            raise ValueError("DeepSeek vLLM decode requires a full host-input reload")
+        if not sample_on_device and (reload_sampling_params or reset_sampling_state):
+            raise ValueError("DeepSeek sampling update commands require device sampling")
 
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
-        if sample_on_device and reset_batch:
+        start_pos = kwargs["start_pos"]
+        active_user_slots = [
+            idx for idx, position in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(position) >= 0
+        ]
+        if sample_on_device:
+            self._apply_sampling_slot_remap(slot_remap)
             self._validate_and_initialize_sampling(
                 sampling_params,
                 sample_on_device,
                 enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                user_slots=active_user_slots,
+                positions=start_pos,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
             )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
-            start_pos=kwargs["start_pos"],
+            start_pos=start_pos,
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,
@@ -258,6 +298,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             decode_output = self.sample_decode_on_device(
                 decode_step_output,
                 enable_trace=enable_trace,
+                user_slots=active_user_slots,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             if read_from_device:
                 decode_output = self._tokens_from_device(
@@ -277,6 +320,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     f"Unexpected decode logits rank for host sampling: {tuple(decode_step_output.shape)}"
                 )
             decode_output = decode_step_output.unsqueeze(1)
+            # Host sampling bypasses the device sampler, but its dormant
+            # per-slot state must still follow the layout. Apply after the
+            # decode/output path succeeds so retries cannot consume the same
+            # non-idempotent remap twice.
+            self._apply_sampling_slot_remap(slot_remap)
 
         # decode_output semantics:
         # - sample_on_device=True  -> sampled token ids

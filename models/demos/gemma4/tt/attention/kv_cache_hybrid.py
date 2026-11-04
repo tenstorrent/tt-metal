@@ -73,9 +73,14 @@ def build_hybrid_page_tables(
 
     max_blocks_per_req = _max_blocks_per_seq(max_seq_len, block_size)
     if sliding_window is not None:
+        # Must match the ALLOCATION and the wrap modulo, i.e. the ring size
+        # (window + optional speculative headroom), not the bare window.
+        from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+        sliding_window = bounded_ring_modulo(sliding_window)
         if sliding_window % block_size != 0:
             raise ValueError(
-                f"sliding_window ({sliding_window}) must be a multiple of block_size ({block_size}) "
+                f"sliding ring ({sliding_window}) must be a multiple of block_size ({block_size}) "
                 "for the bounded paged path"
             )
         sliding_blocks = sliding_window // block_size
@@ -130,7 +135,10 @@ def init_hybrid_kv_caches(
     kv_caches = []
     for cfg, is_sliding in zip(attention_configs, sliding_layers_mask):
         if is_sliding and cfg.sliding_window is not None:
-            sliding_blocks_per_seq = cfg.sliding_window // block_size
+            # Ring size (window + spec headroom), matching the wrap modulo.
+            from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+            sliding_blocks_per_seq = bounded_ring_modulo(cfg.sliding_window) // block_size
             max_num_blocks_override = sliding_blocks_per_seq * max_batch_size
         else:
             max_num_blocks_override = None

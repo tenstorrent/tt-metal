@@ -35,6 +35,20 @@ generator and, when needed, the C++ kernel to determine:
 Flag stale-report risk when current test axes are absent from the CSV. Never
 claim an independent effect for parameters the test does not vary independently.
 
+Before trending `TILE_LOOP` or `MATH_ISOLATE` across reports, check three
+accounting facts:
+
+- the perf schema version, `PERF_TEST_SCHEMAS[...]["version"]` in
+  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
+  change, and that CSV is not comparable to the previous one. A `tile_cnt`
+  accounting change can make rows incomparable without a version bump;
+- whether `tile_cnt` counts operand tiles. The `.post.csv` divides by
+  `loop_factor * tile_cnt`, so two operand tiles per SFPU call publish about
+  half a result tile;
+- whether 16-bit `dest_acc=Yes` doubled dest handshakes relative to
+  `dest_acc=No`. That mixes a datapath change with twice the section-done
+  traffic.
+
 ### 2. Filter and audit
 
 Filter exactly on `marker == <requested marker>`. When useful, save the result
@@ -231,8 +245,8 @@ For matmul-style reports with format, fidelity, and destination-accumulation
 axes, use this design unless the user requests another:
 
 1. Add clickable fidelity options for values the **current sweep actually
-   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 / Float16_b and
-   LoFi-only for MX; do not show empty HiFi2/3/4 MX panels as if they were
+   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 and LoFi-only for
+   Float16_b, Int8, and MX; do not show empty HiFi panels as if they were
    measured.
 2. Under the selected fidelity, show absolute cycles by composite
    input/register mode, output format, and geometry/destination accumulation.

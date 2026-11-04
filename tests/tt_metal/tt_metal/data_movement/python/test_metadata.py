@@ -8,6 +8,8 @@ import os
 
 
 class TestMetadataLoader:
+    __test__ = False
+
     def __init__(self, config):
         self.config = config
 

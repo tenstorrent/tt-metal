@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8 REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8 TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8)
 
 set_target_properties(
@@ -16,7 +16,12 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8

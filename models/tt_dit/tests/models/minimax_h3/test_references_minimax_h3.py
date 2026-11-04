@@ -19,6 +19,7 @@ from loguru import logger
 
 from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
+from ....pipelines.minimax_h3 import policy
 from ....pipelines.minimax_h3 import references as R
 from ....utils.check import assert_quality
 from ....utils.test import ring_params_req_exact_devices
@@ -119,7 +120,7 @@ def test_prepare_references_matches_reference(name):
     specs = [spec] if "audio" not in name else [SPECS["image"], spec]
     ours, theirs = _pair(specs)
 
-    got, got_frames = R.prepare_references(ours, TARGET_FRAMES, AUDIO_RATE)
+    got, got_frames = R.prepare_references(ours, TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers")
     want, want_frames = reference_before_encoder.MiniMaxH3Ref2VASetupStep.prepare_references(
         _components(), theirs, TARGET_FRAMES
     )
@@ -144,7 +145,7 @@ def test_prepare_references_uses_each_references_own_resolution():
         rp.MiniMaxH3Reference(image=_image(1024, 1024)),
         rp.MiniMaxH3Reference(video=_video(1920, 1080, 30), fps=24.0),
     ]
-    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE)
+    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers")
 
     assert prepared[0].image.size == (2048, 2048)
     assert min(prepared[0].image.size) == rp.MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE
@@ -156,7 +157,9 @@ def test_prepare_references_uses_each_references_own_resolution():
 def test_prepare_references_truncates_a_video_and_its_soundtrack_to_the_target():
     long_frames = _video(1344, 768, TARGET_FRAMES + 60)
     references = [rp.MiniMaxH3Reference(video=long_frames, fps=24.0, audio=_waveform(10.0))]
-    prepared, num_frames = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE)
+    prepared, num_frames = R.prepare_references(
+        references, TARGET_FRAMES, AUDIO_RATE, target_height=TARGET_HEIGHT, target_width=TARGET_WIDTH
+    )
 
     assert num_frames == TARGET_FRAMES
     assert prepared[0].frames.shape[0] == TARGET_FRAMES
@@ -165,8 +168,10 @@ def test_prepare_references_truncates_a_video_and_its_soundtrack_to_the_target()
 
 def test_num_frames_may_be_derived_from_a_single_audio_bearing_reference():
     references = [rp.MiniMaxH3Reference(image=_image(512, 512)), rp.MiniMaxH3Reference(audio=_waveform(6.0))]
-    _, num_frames = R.prepare_references(references, None, AUDIO_RATE)
-    assert num_frames == p.align_num_frames(round(6.0 * p.MINIMAX_H3_FPS))
+    _, num_frames = R.prepare_references(
+        references, None, AUDIO_RATE, target_height=TARGET_HEIGHT, target_width=TARGET_WIDTH
+    )
+    assert num_frames == policy.get_num_frames(6.0)
     assert num_frames % p.MINIMAX_H3_FRAMES_PER_CHUNK == p.MINIMAX_H3_LATENTS_PER_CHUNK
     theirs = [
         reference_packing.MiniMaxH3Reference(image=_image(512, 512)),
@@ -185,31 +190,36 @@ def test_num_frames_is_ambiguous_with_two_soundtracks(expect_error):
         R.prepare_references(references, None, AUDIO_RATE)
 
 
-@pytest.mark.parametrize("seconds", [4.0, 16.0])
+@pytest.mark.parametrize("seconds", [3.0, 16.0])
 def test_a_derived_duration_outside_the_models_range_is_rejected(seconds, expect_error):
     references = [rp.MiniMaxH3Reference(image=_image(512, 512)), rp.MiniMaxH3Reference(audio=_waveform(seconds))]
     with expect_error(ValueError, "seconds"):
-        R.prepare_references(references, None, AUDIO_RATE)
+        R.prepare_references(references, None, AUDIO_RATE, target_height=TARGET_HEIGHT, target_width=TARGET_WIDTH)
 
 
 @pytest.mark.parametrize("seconds", [DURATION, 5.0, 8.0, 15.0])
-def test_pad_waveform_to_hop_reproduces_the_reference_latent_count(seconds):
+def test_pad_waveform_to_max_duration_is_one_fixed_shape(seconds):
     waveform = _waveform(seconds)
-    padded = R.pad_waveform_to_hop(waveform)
+    padded = R.pad_waveform_to_max_duration(waveform)
 
-    assert padded.shape[-1] % R.MINIMAX_H3_AUDIO_HOP == 0
-    assert padded.shape[-1] - waveform.shape[-1] < R.MINIMAX_H3_AUDIO_HOP
+    assert padded.shape[-1] == R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * R.MINIMAX_H3_AUDIO_HOP
     assert torch.equal(padded[:, : waveform.shape[-1]], waveform), "padding must not disturb the samples"
     assert (padded[:, waveform.shape[-1] :] == 0).all(), "the pad is zeros, as F.pad's default is"
-    assert padded.shape[-1] // R.MINIMAX_H3_AUDIO_HOP == int(np.ceil(waveform.shape[-1] / R.MINIMAX_H3_AUDIO_HOP))
+
+
+def test_max_reference_audio_latents_covers_the_longest_soundtrack():
+    """604 hops: 15 s of frames aligns up to 362 (15.083 s), and the encoder count is a ceil."""
+    assert R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS == 604
+    longest = policy.get_num_frames(R.MINIMAX_H3_MAX_DURATION) / R.MINIMAX_H3_FPS
+    assert int(np.ceil(longest * AUDIO_RATE / R.MINIMAX_H3_AUDIO_HOP)) == 604
 
 
 def test_production_soundtrack_is_not_a_whole_number_of_hops():
-    """The case that makes the padding load-bearing rather than defensive."""
+    """The case that makes the trim count a ceil rather than an exact division."""
     samples = int(DURATION * AUDIO_RATE)
     assert samples == 165333
     assert samples % R.MINIMAX_H3_AUDIO_HOP != 0
-    assert R.pad_waveform_to_hop(_waveform(DURATION)).shape[-1] // R.MINIMAX_H3_AUDIO_HOP == 207
+    assert int(np.ceil(samples / R.MINIMAX_H3_AUDIO_HOP)) == 207
 
 
 def test_span_matches_both_reference_summation_orders():
@@ -244,13 +254,13 @@ def _target():
 
 
 def _image_geometry(source_width: int, source_height: int):
-    height, width = rp.resolve_reference_image_size(source_width, source_height)
+    height, width = rp.resolve_reference_image_size(source_width, source_height, mode="diffusers")
     return dict(num_latent_frames=1, latent_height=height // VAE_RATIO, latent_width=width // VAE_RATIO)
 
 
 def _video_geometry(source_width: int, source_height: int, num_frames: int = TARGET_FRAMES):
     frames = np.zeros((num_frames, source_height, source_width, 3), dtype=np.uint8)
-    frames = rp.prepare_reference_frames(frames, TARGET_FRAMES)
+    frames = rp.prepare_reference_frames(frames, TARGET_FRAMES, mode="diffusers")
     trimmed = rp.trim_reference_num_frames(frames.shape[0])
     return dict(
         num_latent_frames=p.video_latent_num_frames(trimmed),
@@ -359,8 +369,10 @@ def test_layout_matches_reference(case):
     ],
 )
 def test_resolve_reference_image_size(source, expected):
-    assert rp.resolve_reference_image_size(*source) == expected
-    assert rp.resolve_reference_image_size(*source) == reference_packing.resolve_reference_image_size(*source)
+    assert rp.resolve_reference_image_size(*source, mode="diffusers") == expected
+    assert rp.resolve_reference_image_size(*source, mode="diffusers") == reference_packing.resolve_reference_image_size(
+        *source
+    )
     height, width = expected
     assert height % p.MINIMAX_H3_CANVAS_MULTIPLE == 0 and width % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
     assert min(height, width) == rp.MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE
@@ -371,6 +383,60 @@ def test_resolve_reference_image_size_rejects_out_of_range(expect_error):
         rp.resolve_reference_image_size(5000, 1000)
     with expect_error(ValueError, "positive size"):
         rp.resolve_reference_image_size(0, 100)
+
+
+def test_resolve_reference_image_size_match_matches_canvas_area():
+    assert rp.resolve_reference_image_size(
+        1920, 1080, mode="match", target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT
+    ) == (768, 1344)
+
+
+def test_resolve_reference_image_size_match_upscales_to_canvas_area():
+    height, width = rp.resolve_reference_image_size(
+        512, 512, mode="match", target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT
+    )
+    assert (height, width) == (992, 992)
+    assert height * width <= TARGET_WIDTH * TARGET_HEIGHT
+    assert height % p.MINIMAX_H3_CANVAS_MULTIPLE == 0 and width % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
+
+
+def test_resolve_reference_image_size_defaults_to_match():
+    assert rp.resolve_reference_image_size(
+        512, 512, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT
+    ) == rp.resolve_reference_image_size(512, 512, mode="match", target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT)
+
+
+def test_resolve_reference_image_size_max_does_not_upscale():
+    assert rp.resolve_reference_image_size(1024, 1024, mode="max") == (1024, 1024)
+
+
+def test_resolve_reference_image_size_max_caps_short_edge():
+    height, width = rp.resolve_reference_image_size(3840, 2160, mode="max")
+    assert (height, width) == (2048, 3648)
+    assert min(height, width) == rp.MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE
+
+
+def test_resolve_reference_image_size_diffusers_upscales():
+    assert rp.resolve_reference_image_size(1024, 1024, mode="diffusers") == (2048, 2048)
+
+
+def test_resolve_reference_image_size_rejects_unknown_mode(expect_error):
+    with expect_error(ValueError, "got 'foo'"):
+        rp.resolve_reference_image_size(1024, 1024, mode="foo")
+
+
+def test_resolve_reference_image_size_match_requires_canvas(expect_error):
+    with expect_error(ValueError, "target canvas"):
+        rp.resolve_reference_image_size(1024, 1024, mode="match")
+
+
+def test_match_keeps_eight_1344x768_images_under_the_prompt_cap():
+    from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3ArenaCaps
+
+    height, width = rp.resolve_reference_image_size(1344, 768, mode="match", target_width=1344, target_height=768)
+    assert (height, width) == (768, 1344)
+    tokens_per_image = (height // p.MINIMAX_H3_CANVAS_MULTIPLE) * (width // p.MINIMAX_H3_CANVAS_MULTIPLE)
+    assert 8 * tokens_per_image < MiniMaxH3ArenaCaps.for_task("ref2va").prompt
 
 
 @pytest.mark.parametrize("fps", [24.0, 30.0, 25.0, 12.0, 60.0, 23.976])
@@ -384,16 +450,23 @@ def test_resample_reference_frames_matches_reference(fps):
         assert got is frames
 
 
-def test_prepare_reference_frames_uses_its_own_aspect_canvas():
-    frames = np.zeros((10, 480, 480, 3), dtype=np.uint8)
-    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES)
-    assert prepared.shape[1:3] == p.resolve_canvas_size(480, 480) == (768, 768)
-    assert np.array_equal(prepared, reference_packing.prepare_reference_frames(frames, TARGET_FRAMES))
+def test_prepare_reference_frames_matches_the_target_canvas_like_an_image():
+    frames = np.zeros((10, 1080, 1920, 3), dtype=np.uint8)
+    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES, target_width=768, target_height=768)
+    expected = rp.resolve_reference_image_size(1920, 1080, mode="match", target_width=768, target_height=768)
+    assert prepared.shape[1:3] == expected == (576, 1024)
 
     # `shares_memory`, not `is`: the frame-count cap slices first, so a view comes back.
     at_canvas = np.zeros((10, 768, 1344, 3), dtype=np.uint8)
-    passthrough = rp.prepare_reference_frames(at_canvas, TARGET_FRAMES)
+    passthrough = rp.prepare_reference_frames(at_canvas, TARGET_FRAMES, target_width=1344, target_height=768)
     assert np.shares_memory(passthrough, at_canvas)
+
+
+def test_prepare_reference_frames_uses_its_own_aspect_canvas_outside_match():
+    frames = np.zeros((10, 480, 480, 3), dtype=np.uint8)
+    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES, mode="diffusers")
+    assert prepared.shape[1:3] == p.resolve_canvas_size(480, 480) == (768, 768)
+    assert np.array_equal(prepared, reference_packing.prepare_reference_frames(frames, TARGET_FRAMES))
 
 
 @pytest.mark.parametrize("num_frames", [1, 5, 12, 24, 25, 124, 192])
@@ -627,7 +700,12 @@ def _reference_case(case: str):
     else:
         raise ValueError(case)
 
-    ours, _ = R.prepare_references([rp.MiniMaxH3Reference(**s) for s in specs], VIDEO_FRAMES, AUDIO_RATE)
+    ours, _ = R.prepare_references(
+        [rp.MiniMaxH3Reference(**s) for s in specs],
+        VIDEO_FRAMES,
+        AUDIO_RATE,
+        reference_resize_mode="diffusers",
+    )
     theirs, _ = reference_before_encoder.MiniMaxH3Ref2VASetupStep.prepare_references(
         _components(), [reference_packing.MiniMaxH3Reference(**s) for s in specs], VIDEO_FRAMES
     )
@@ -644,14 +722,14 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
     weights = _weights_dir()
     ours, theirs = _reference_case(case)
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, task="ref2va")
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        task="ref2va",
+        vae_output_type="float",
+    )
     needs_video = any(reference.kind == "video" for reference in ours)
-    vae = pipeline._prepare_vae()
-    vae = pipeline._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size), encode_taps=1)
-    if needs_video:
-        vae = pipeline._prepare_vae(
-            encode_shape=(pipeline.vae_config.clip_length, vae.tile_size, vae.tile_size), encode_taps=3
-        )
+    vae = pipeline.vae
     audio_encoder = pipeline._prepare_audio_encoder() if any(r.has_audio for r in ours) else None
 
     got_video, got_audio = R.encode_references(
@@ -748,12 +826,12 @@ def _build(stub, prompt, references):
 
 
 def test_presentation_orders_vision_patches_by_reference_not_by_batch():
-    """`_scatter_rows` consumes tower rows in run order, so processor-batch order would swap blocks."""
+    """`merge_vision` consumes tower rows in run order, so processor-batch order would swap blocks."""
     stub = _ProcessorStub(_weights_dir())
     video = rp.reference_from_video_file(_real_media(), with_audio=False)
     image = rp.MiniMaxH3Reference(image=_image(1024, 1024))
 
-    prepared, _ = R.prepare_references([video, image], TARGET_FRAMES, AUDIO_RATE)
+    prepared, _ = R.prepare_references([video, image], TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers")
     input_ids, tags, type_ids, pixel_values, grid_thw, kinds = _build(stub, "a prompt", prepared)
 
     assert kinds == ["video", "image"], f"vision entries are in {kinds}, not presentation order"
@@ -761,7 +839,9 @@ def test_presentation_orders_vision_patches_by_reference_not_by_batch():
     assert tuple(grid_thw[1].tolist()) == (1, 128, 128)
     assert pixel_values.shape[0] == sum(int(grid.prod()) for grid in grid_thw)
 
-    reversed_prepared, _ = R.prepare_references([image, video], TARGET_FRAMES, AUDIO_RATE)
+    reversed_prepared, _ = R.prepare_references(
+        [image, video], TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers"
+    )
     _, _, _, _, reversed_grid, reversed_kinds = _build(stub, "a prompt", reversed_prepared)
     assert reversed_kinds == ["image", "video"]
     assert tuple(reversed_grid[0].tolist()) == (1, 128, 128)
@@ -776,7 +856,7 @@ def test_presentation_vision_runs_line_up_with_the_towers_rows():
         rp.reference_from_video_file(_real_media(), with_audio=False),
         rp.MiniMaxH3Reference(audio=_waveform(DURATION)),
     ]
-    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE)
+    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers")
     input_ids, tags, type_ids, pixel_values, grid_thw, kinds = _build(stub, "a prompt", prepared)
 
     pad_ids = [stub.tokenizer.convert_tokens_to_ids(t) for t in ("<|image_pad|>", "<|video_pad|>")]
@@ -785,7 +865,7 @@ def test_presentation_vision_runs_line_up_with_the_towers_rows():
 
     assert len(runs) == sum(int(grid[0]) for grid in grid_thw)
     assert sum(length for _, length in runs) == sum(int(grid.prod()) for grid in grid_thw) // merge
-    # Runs are sorted and disjoint, which `_scatter_rows` requires outright.
+    # Runs are sorted and disjoint, which `vision_gather_indices` requires outright.
     assert all(a[0] + a[1] <= b[0] for a, b in zip(runs, runs[1:]))
     assert stub.tokenizer.decode(input_ids[0]).count("<Audio 1>") == 1
 
@@ -797,7 +877,7 @@ def test_presentation_token_type_ids_distinguish_image_from_video_pads():
         rp.MiniMaxH3Reference(image=_image(512, 512)),
         rp.reference_from_video_file(_real_media(), with_audio=False),
     ]
-    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE)
+    prepared, _ = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE, reference_resize_mode="diffusers")
     input_ids, tags, type_ids, _, grid_thw, _ = _build(stub, "a prompt", prepared)
 
     image_pad = stub.tokenizer.convert_tokens_to_ids("<|image_pad|>")

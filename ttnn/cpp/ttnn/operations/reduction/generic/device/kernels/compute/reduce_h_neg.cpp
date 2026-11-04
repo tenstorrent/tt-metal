@@ -18,6 +18,7 @@
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 #endif
 
 void kernel_main() {
@@ -26,7 +27,8 @@ void kernel_main() {
     const uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
-    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -45,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
-    dfb_scaler.wait_front(1);  // scaler tile from the reader
+    dfb_scaler.wait_front(onetile);  // scaler tile from the reader
 
     // tiles are expected to come in the N C W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
@@ -59,13 +61,11 @@ void kernel_main() {
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
             const uint32_t chunk_end = std::min(wt + row_chunk, Wt);
-            int reduce_dst_idx = 0;
             const uint32_t ntiles = chunk_end - wt;
 
             // reduction for one chunk
             // accumulation of Ht results in separate DST indexes
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                reduce_dst_idx = 0;
                 tile_regs_acquire();
                 dfb_input.wait_front(static_cast<uint16_t>(ntiles));
 
@@ -151,9 +151,11 @@ void kernel_main() {
             // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
             // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
             // output DEST register.
-            binop_with_scalar_tile_init();
-            for (uint32_t i = 0; i < ntiles; ++i) {
-                mul_unary_tile(i, post_mul_scaler_bits);
+            if (apply_post_mul) {
+                binop_with_scalar_tile_init();
+                for (uint32_t i = 0; i < ntiles; ++i) {
+                    mul_unary_tile(i, post_mul_scaler_bits);
+                }
             }
 #endif
 
@@ -169,5 +171,8 @@ void kernel_main() {
             dfb_output.push_back(static_cast<uint16_t>(ntiles));
         }
     }
+    // The scaler tile is waited once and reused for the whole reduction; pop it at the
+    // end so the buffer is left balanced.
+    dfb_scaler.pop_front(onetile);
 #endif  // REDUCE_FPU_NEGATE
 }

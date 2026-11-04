@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
@@ -135,7 +135,17 @@ def to_poisoned_sharded(device, torch_tensor, mem_config, pad_value):
 
 
 def ttnn_layer_norm_sharded(
-    device, tt_input_tensor, use_welford, block_ht, block_wt, subblock_w=1, residual=None, weight=None, bias=None
+    device,
+    tt_input_tensor,
+    use_welford,
+    block_ht,
+    block_wt,
+    subblock_w=1,
+    residual=None,
+    weight=None,
+    bias=None,
+    provide_reciprocal=True,
+    compute_kernel_config=None,
 ):
     """
     Run layer norm sharded on a TTNN tensor.
@@ -149,6 +159,8 @@ def ttnn_layer_norm_sharded(
         residual: The residual tensor to add to the input tensor.
         weight: The weight tensor to use for the layer norm.
         bias: The bias tensor to use for the layer norm.
+        provide_reciprocal: Whether to create the reciprocal LUT when Welford is requested.
+        compute_kernel_config: Compute precision configuration, or None for the op default.
     Returns:
         The output tensor as a torch tensor.
     """
@@ -157,7 +169,7 @@ def ttnn_layer_norm_sharded(
 
     # Create reciprocal tensor for Welford algorithm if needed
     recip_tensor = None
-    if use_welford:
+    if use_welford and provide_reciprocal:
         shard_spec = tt_input_tensor.memory_config().shard_spec
         recip_tensor = ttnn.create_layer_norm_reciprocals(device, shard_spec.grid, shard_spec.shape[1])
 
@@ -177,6 +189,7 @@ def ttnn_layer_norm_sharded(
             inplace=False,
         ),
         recip_tensor=recip_tensor,
+        compute_kernel_config=compute_kernel_config,
     )
 
     output_ttnn = ttnn.from_device(output_ttnn)
@@ -255,11 +268,7 @@ def rms_norm_golden(input_tensor, weight=None, bias=None, epsilon=1e-5):
         The output tensor as a torch tensor.
     """
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
-    golden_rms = golden_function(input_tensor, weight)
-    if bias is not None:
-        golden_rms = golden_rms + bias
-
-    return golden_rms
+    return golden_function(input_tensor, weight=weight, bias=bias, epsilon=epsilon)
 
 
 def simple_size_params(two_stage):
@@ -709,6 +718,39 @@ NON_RECTANGULAR_GRID_IDS = [
     "offset_origin",
     "offset_and_short",
 ]
+
+LINE_GRID_1D_MCAST_CASES = [
+    ((1, 0), (1, 7), 32, 1024, ttnn.ShardOrientation.ROW_MAJOR),
+    ((2, 0), (2, 7), 128, 1024, ttnn.ShardOrientation.ROW_MAJOR),
+    ((0, 0), (7, 0), 32, 2048, ttnn.ShardOrientation.COL_MAJOR),
+    ((0, 0), (3, 0), 64, 1024, ttnn.ShardOrientation.COL_MAJOR),
+    ((0, 1), (1, 7), 224, 1792, ttnn.ShardOrientation.COL_MAJOR),
+]
+LINE_GRID_1D_MCAST_IDS = [
+    "column_x1_row_major",
+    "column_x2_row_major_h128",
+    "row_col_major",
+    "row_col_major_h64",
+    "column_pair_y1_col_major",
+]
+
+
+def line_width_shard_config(device, start, end, h, w, orientation):
+    device_grid = device.compute_with_storage_grid_size()
+    if end[0] >= device_grid.x or end[1] >= device_grid.y:
+        pytest.skip(f"{start}-{end} does not fit a {device_grid.x}x{device_grid.y} device grid")
+    num_cores = (end[0] - start[0] + 1) * (end[1] - start[1] + 1)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end))}),
+        [h, w // num_cores],
+        orientation,
+    )
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    return memory_config, (w // num_cores) // TILE_WIDTH
 
 
 def cores_of(core_range_set):

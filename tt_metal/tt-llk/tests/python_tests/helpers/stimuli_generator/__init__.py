@@ -23,6 +23,7 @@ from .generator import (
     generate_stimuli,
 )
 from .spec import DistributionKind, StimuliSpec
+from .utils import _get_integer_bounds as integer_format_bounds
 from .utils import (
     apply_log_uniform_magnitudes,
     calculate_tile_and_face_counts,
@@ -31,6 +32,7 @@ from .utils import (
     convert_to_l1_view,
     format_elem_max,
     generate_face_matmul_data,
+    resolve_intervals,
 )
 
 __all__ = [
@@ -42,6 +44,7 @@ __all__ = [
     "generate_face",
     "generate_stimuli",
     # utils.py
+    "integer_format_bounds",
     "apply_log_uniform_magnitudes",
     "calculate_tile_and_face_counts",
     "calculate_tile_and_face_counts_w_tile_dimensions",
@@ -49,4 +52,5 @@ __all__ = [
     "convert_to_l1_view",
     "format_elem_max",
     "generate_face_matmul_data",
+    "resolve_intervals",
 ]

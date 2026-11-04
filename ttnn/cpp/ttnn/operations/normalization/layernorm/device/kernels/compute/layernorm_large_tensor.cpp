@@ -21,11 +21,49 @@
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Square
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
+
+namespace ckl = compute_kernel_lib;
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
+
+struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
+    static ALWI void init() {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_INIT_ACTIVATION
+#endif
+    }
+
+    static ALWI void exec_impl([[maybe_unused]] uint32_t i) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+    }
+};
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+constexpr bool fused_activation_enabled = true;
+#else
+constexpr bool fused_activation_enabled = false;
+#endif
+
+// Quasar: pack_reconfig_data_format and the ckl output stages reprogram only the packer's format,
+// not its L1 destination ring, which pack_init sets. Retarget the packer whenever the output
+// buffer changes, or pack_tile keeps writing into the previous buffer.
+ALWI void retarget_packer([[maybe_unused]] uint32_t dfb_id) {
+#ifdef ARCH_QUASAR
+    pack_init(dfb_id);
+#endif
+}
 
 void kernel_main() {
     const uint32_t NCHt = get_arg(args::NCHt);
@@ -33,9 +71,12 @@ void kernel_main() {
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
     constexpr auto do_beta = get_arg(args::do_beta);
+    constexpr bool activate_after_normalize = fused_activation_enabled && do_gamma == 0 && do_beta == 0;
+    constexpr bool activate_after_gamma = fused_activation_enabled && do_beta == 0;
+    // Fused activation runs after the last enabled affine stage: after beta, otherwise after
+    // gamma, otherwise immediately after normalization.
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto W = get_arg(args::W);
     constexpr auto tile_width = get_arg(args::tile_width);
 
@@ -47,28 +88,42 @@ void kernel_main() {
     constexpr auto dfb_in_id = dfb::in;          // input x or a for fused pre-add (x=a+b)
 #ifdef FUSE_PRE_ADD
     constexpr auto dfb_inb_id = dfb::inb;  // input b for fused pre-add
+#else
+    constexpr auto dfb_inb_id = dfb_in_id;
 #endif
     constexpr auto dfb_out_id = dfb::out;  // output
 #ifdef FUSE_GAMMA
     constexpr auto dfb_gamma_id = dfb::gamma;
+#else
+    constexpr auto dfb_gamma_id = dfb_out_id;
 #endif
 #ifdef FUSE_BETA
     constexpr auto dfb_beta_id = dfb::beta;
+#else
+    constexpr auto dfb_beta_id = dfb_out_id;
 #endif
     constexpr auto dfb_xmm_id = dfb::xmm;  // x minus mean
 #ifndef RMSNORM
     constexpr auto dfb_ex_id = dfb::ex;  // E[x]
+#else
+    // The LayerNorm-only input descriptor below is wrapped in Optional<false>, but its template arguments still need
+    // a valid DFB identifier when compiling the RMSNorm specialization.
+    constexpr auto dfb_ex_id = dfb_in_id;
 #endif
     constexpr auto dfb_ex2_id = dfb::ex2;      // E[(x-E[x])^2]
     constexpr auto dfb_xmm2_id = dfb::xmm2;    // xmm^2
     constexpr auto dfb_ex2pe_id = dfb::ex2pe;  // E[(x-E[x])^2]+eps
-    // Where the normalized tiles are staged. With gamma or beta to fold in this is the streaming
-    // intermediate; otherwise it is the output buffer, and the per-block reassignment below is a
-    // no-op.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
-    uint32_t dfb_fusion = dfb::fusion;  // stream gamma/beta
+    constexpr auto dfb_fusion_id = dfb::fusion;
 #else
-    uint32_t dfb_fusion = dfb_out_id;
+    constexpr auto dfb_fusion_id = dfb_out_id;
+#endif
+    // Where the normalized tiles land before gamma/beta are applied: the streaming intermediate
+    // when there is gamma or beta to fold in, otherwise the output buffer directly.
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    constexpr auto dfb_im_or_out_id = dfb_fusion_id;
+#else
+    constexpr auto dfb_im_or_out_id = dfb_out_id;
 #endif
     constexpr auto scaler0 = 0;
     constexpr auto dfb_accumulate_id = dfb::accumulate;  // For accumulating (x-E[x])^2
@@ -77,44 +132,88 @@ void kernel_main() {
     constexpr auto dfb_in_rm_id = dfb::in_rm;  // row-major input staging
 #endif
 
-    DataflowBuffer dfb_eps(dfb_eps_id);
-    DataflowBuffer dfb_in(dfb_in_id);
+#ifdef RMSNORM
+    constexpr bool is_rmsnorm = true;
+#else
+    constexpr bool is_rmsnorm = false;
+#endif
 #ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_inb(dfb_inb_id);
-#endif
-    DataflowBuffer dfb_out(dfb_out_id);
-#ifdef FUSE_GAMMA
-    DataflowBuffer dfb_gamma(dfb_gamma_id);
-#endif
-#ifdef FUSE_BETA
-    DataflowBuffer dfb_beta(dfb_beta_id);
-#endif
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
-#ifndef RMSNORM
-    DataflowBuffer dfb_ex(dfb_ex_id);
-#endif
-    DataflowBuffer dfb_ex2(dfb_ex2_id);
-    DataflowBuffer dfb_xmm2(dfb_xmm2_id);
-    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
-    DataflowBuffer dfb_accumulate(dfb_accumulate_id);
-    DataflowBuffer dfb_scaler(dfb_scaler_id);
-#ifdef TILIZE_IN
-    DataflowBuffer dfb_in_rm(dfb_in_rm_id);
+    constexpr bool do_fuse_pre_add = true;
+#else
+    constexpr bool do_fuse_pre_add = false;
 #endif
 
-    // Either the input itself, or the post-add result when a residual is fused in. Only the
-    // non-RMSNORM fused case needs a buffer of its own.
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr auto dfb_x_id = dfb_xmm_id;
-    DataflowBuffer& dfb_x = dfb_xmm;
 #else
     constexpr auto dfb_x_id = dfb::x;
-    const DataflowBuffer dfb_x(dfb_x_id);
 #endif
+#endif
+
+    constexpr auto in_input = ckl::input(
+        dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto inb_input = ckl::input(
+        dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto xmm_input = ckl::input(
+        dfb_xmm_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto fusion_input = ckl::input(
+        dfb_fusion_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto gamma_input = ckl::input(
+        dfb_gamma_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::PerBlockSize,
+        ckl::PopPolicy::PerBlockSize,
+        ckl::InputTileMapping::Block);
+    constexpr auto beta_input = ckl::input(
+        dfb_beta_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::PerBlockSize,
+        ckl::PopPolicy::PerBlockSize,
+        ckl::InputTileMapping::Block);
+
+    DataflowBuffer dfb_eps(dfb_eps_id);
+    DataflowBuffer dfb_scaler(dfb_scaler_id);
+    // The reader pushes the reduce scaler tile(s) once. The variance reduce below reads them by index on both
+    // the LayerNorm and RMSNorm paths, so they are waited for once after hw startup (row_wise_mean also waits,
+    // which is a no-op re-wait) and popped at the end.
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
+    DataflowBuffer dfb_in(dfb_in_id);
+#ifdef TILIZE_IN
+    DataflowBuffer dfb_in_rm(dfb_in_rm_id);
+#endif
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_inb(dfb_inb_id);
 #else
-    constexpr auto dfb_x_id = dfb_in_id;
-    DataflowBuffer& dfb_x = dfb_in;
+    auto& dfb_inb = dfb_in;
+#endif
+    DataflowBuffer dfb_out(dfb_out_id);
+#ifndef RMSNORM
+    DataflowBuffer dfb_ex(dfb_ex_id);
+#else
+    auto& dfb_ex = dfb_in;
+#endif
+    DataflowBuffer dfb_xmm2(dfb_xmm2_id);
+    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
+    DataflowBuffer dfb_accumulate(dfb_accumulate_id);
+    DataflowBuffer dfb_ex2(dfb_ex2_id);
+    DataflowBuffer dfb_xmm(dfb_xmm_id);
+#ifdef FUSE_GAMMA
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+#else
+    auto& dfb_gamma = dfb_out;
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer dfb_beta(dfb_beta_id);
+#else
+    auto& dfb_beta = dfb_out;
+#endif
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    DataflowBuffer dfb_fusion(dfb_fusion_id);
+    auto& dfb_im_or_out = dfb_fusion;
+#else
+    auto& dfb_fusion = dfb_out;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
 #ifdef FUSE_PRE_ADD
@@ -129,7 +228,8 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif
+#endif  // FUSE_PRE_ADD
+    dfb_scaler.wait_front(num_scaler_tiles);
     dfb_eps.wait_front(1);  // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -140,7 +240,64 @@ void kernel_main() {
         //  aka   ∑(x)
         //      --------
         //         n
+#if defined(TILIZE_IN)
+        // ROW_MAJOR input: dfb_in has no producer other than this kernel's tilize step, so pass 0 must
+        // tilize dfb_in_rm block by block (like the variance pass) instead of calling row_wise_mean,
+        // which waits on dfb_in directly and deadlocks. With a residual, mean(x + b) = mean(x) + mean(b),
+        // so both inputs are reduced into the same running sum; the reader interleaves them per block.
+        {
+            const bool mean_last_partial = W % tile_width > 0;
+            dfb_scaler.wait_front(mean_last_partial ? 2 : 1);
+            for (auto block : generic::blocks(Wt, block_size)) {
+                tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
+                tile_regs_acquire();
+                if (!block.is_first()) {
+                    dfb_accumulate.wait_front(onetile);
+                    reconfig_data_format_srca(dfb_accumulate_id);
+                    copy_init(dfb_accumulate_id);
+                    copy_tile(dfb_accumulate_id, 0, dst0);
+                    dfb_accumulate.pop_front(onetile);
+                }
+                dfb_in.wait_front(block.full_block_size());
+                reconfig_data_format(dfb_scaler_id, dfb_in_id);
+                reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_in_id, dfb_scaler_id, dfb_accumulate_id);
+                for (auto i : block.local()) {
+                    const auto sidx = block.to_global(i) == Wt - 1 && mean_last_partial ? 1 : 0;
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                        dfb_in_id, dfb_scaler_id, i, static_cast<uint32_t>(sidx), dst0);
+                }
+                dfb_in.pop_front(block.full_block_size());
 #ifdef FUSE_PRE_ADD
+                dfb_inb.wait_front(block.full_block_size());
+                reconfig_data_format(dfb_scaler_id, dfb_inb_id);
+                reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_inb_id, dfb_scaler_id, dfb_accumulate_id);
+                for (auto i : block.local()) {
+                    const auto sidx = block.to_global(i) == Wt - 1 && mean_last_partial ? 1 : 0;
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                        dfb_inb_id, dfb_scaler_id, i, static_cast<uint32_t>(sidx), dst0);
+                }
+                dfb_inb.pop_front(block.full_block_size());
+#endif
+                const auto final_iter = block.last() == Wt;
+                const auto pack_id = final_iter ? dfb_ex_id : dfb_accumulate_id;
+                DataflowBuffer pack_obj(pack_id);
+                if (final_iter) {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
+                }
+                reduce_uninit();
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_obj.reserve_back(onetile);
+                pack_reconfig_data_format(pack_id);
+                retarget_packer(pack_id);
+                pack_tile(dst0, pack_id);
+                tile_regs_release();
+                pack_obj.push_back(onetile);
+            }
+            dfb_ex.wait_front(1);
+        }
+#elif defined(FUSE_PRE_ADD)
         numeric::row_wise_mean_with_pre_add<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -159,58 +316,31 @@ void kernel_main() {
         //              n
         const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, block_size)) {
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
-#ifdef RMSNORM
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-            // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
-#else
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-            // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif
-            dfb_in.wait_front(static_cast<uint16_t>(block.full_block_size()));
-            tile_regs_acquire();
-#ifdef RMSNORM
-            reconfig_data_format_srca(dfb_in_id);
-            copy_init(dfb_in_id);
-            for (auto i : block.local()) {
-                copy_tile(dfb_in_id, i, i);
-            }
-#else
-            // x-E[x]
-            reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
-            }
-#endif
-            dfb_in.pop_front(static_cast<uint16_t>(block.full_block_size()));
-#ifdef FUSE_PRE_ADD
-            dfb_inb.wait_front(static_cast<uint16_t>(block.full_block_size()));
-            reconfig_data_format_srca(dfb_in_id, dfb_inb_id);
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb_id);
-            for (auto i : block.local()) {
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb_id, i, i);
-            }
-            dfb_inb.pop_front(static_cast<uint16_t>(block.full_block_size()));
-#endif
-            // (x-E[x])^2. Pack to the buffer
-            square_tile_init();
-            for (auto i : block.local()) {
-                square_tile(i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            dfb_xmm2.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-            pack_reconfig_data_format(dfb_xmm2_id);
-            for (auto i : block.local()) {
-                pack_tile(i, dfb_xmm2_id);
-            }
-            tile_regs_release();
-            dfb_xmm2.push_back(static_cast<uint16_t>(block.full_block_size()));
+            retarget_packer(dfb_xmm2_id);
+            ckl::eltwise_chain(
+                block_shape,
+                ckl::Optional<
+                    is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{dfb_in},
+                ckl::Optional<
+                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
+                        in_input,
+                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{
+                    dfb_in, dfb_ex},
+                ckl::Optional<
+                    do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
+                // (x-E[x])^2. Pack to the buffer
+                ckl::Square<ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(
+                    dfb_xmm2_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_xmm2});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -234,7 +364,8 @@ void kernel_main() {
             dfb_xmm2.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
             const auto final_iter = block.last() == Wt;
-            const auto pack_dfb = final_iter ? dfb_ex2_id : dfb_accumulate_id;
+            const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
+            auto& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
@@ -245,11 +376,12 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            DataflowBuffer(pack_dfb).reserve_back(onetile);
-            pack_reconfig_data_format(pack_dfb);
-            pack_tile(dst0, pack_dfb);
+            pack_dfb_obj.reserve_back(onetile);
+            pack_reconfig_data_format(pack_dfb_id);
+            retarget_packer(pack_dfb_id);
+            pack_tile(dst0, pack_dfb_id);
             tile_regs_release();
-            DataflowBuffer(pack_dfb).push_back(onetile);
+            pack_dfb_obj.push_back(onetile);
         }
 
         // End of
@@ -262,41 +394,19 @@ void kernel_main() {
         //                     1
         //  dfb_ex2pe =   -------------
         //               √(Var(X) + ε)
-        dfb_ex2.wait_front(onetile);
-        reconfig_data_format(dfb_ex2_id, dfb_eps_id);
-        tile_regs_acquire();
-
-        add_init(dfb_ex2_id, dfb_eps_id);
-        add_tiles(dfb_ex2_id, dfb_eps_id, 0, 0, dst0);
-
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb_ex2pe_id);
-        pack_tile(dst0, dfb_ex2pe_id);
-        tile_regs_release();
-        dfb_ex2pe.push_back(onetile);
-        dfb_ex2.pop_front(onetile);
+        retarget_packer(dfb_ex2pe_id);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb_ex2_id),
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_ex2, dfb_eps},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{dfb_ex2pe});
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
-        dfb_ex2pe.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(dfb_ex2pe_id);
-
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(dfb_ex2pe_id, dfb_ex2pe_id);
-        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe_id);
-        unary_bcast<BroadcastType::COL>(dfb_ex2pe_id, 0, dst0);
-        dfb_ex2pe.pop_front(onetile);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, dfb_ex2pe_id);
-        tile_regs_release();
-        dfb_ex2pe.push_back(onetile);
+        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
+            ckl::IterationShape::one_tile(), dfb_ex2pe, dfb_ex2pe);
         dfb_ex2pe.wait_front(onetile);
 
         // End of
@@ -311,172 +421,72 @@ void kernel_main() {
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
         for (auto block : generic::blocks(Wt, block_size)) {
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             // Tilize one block from dfb_in_rm → dfb_in per loop iteration (Pass 2).
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
-
-#ifdef RMSNORM
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-            // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
-#else
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-            // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif
-            tile_regs_acquire();
-            dfb_in.wait_front(static_cast<uint16_t>(block.full_block_size()));
-#ifdef RMSNORM
-            reconfig_data_format_srca(dfb_in_id);
-            copy_init(dfb_in_id);
-            for (auto i : block.local()) {
-                copy_tile(dfb_in_id, i, i);
-            }
-#else
+#ifndef RMSNORM
             dfb_ex.wait_front(1);
-            reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
-            // x-E[x]
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
-            }
 #endif
-            dfb_in.pop_front(static_cast<uint16_t>(block.full_block_size()));
-#ifdef FUSE_PRE_ADD
-            dfb_inb.wait_front(static_cast<uint16_t>(block.full_block_size()));
-            reconfig_data_format_srca(dfb_inb_id);
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb_id);
-            for (auto i : block.local()) {
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb_id, i, i);
-            }
-            dfb_inb.pop_front(static_cast<uint16_t>(block.full_block_size()));
-#endif
-            tile_regs_commit();
-            tile_regs_wait();
-            // Note: We shouldn't have to pack to
-            // an intermediate buffer. We should be able to
-            // do a binary dest with reuse (as we used
-            // to). However, tt-llk #868 is preventing
-            // that from working at the moment.
-            dfb_xmm.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-            pack_reconfig_data_format(dfb_xmm_id);
-            for (auto i : block.local()) {
-                pack_tile(i, dfb_xmm_id);
-            }
-            dfb_xmm.push_back(static_cast<uint16_t>(block.full_block_size()));
-            tile_regs_release();
+            retarget_packer(dfb_xmm_id);
+            ckl::eltwise_chain(
+                block_shape,
+                ckl::Optional<
+                    is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{dfb_in},
+                ckl::Optional<
+                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
+                        in_input,
+                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{
+                    dfb_in, dfb_ex},
+                ckl::Optional<
+                    do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
+                // Note: We shouldn't have to pack to
+                // an intermediate buffer. We should be able to
+                // do a binary dest with reuse (as we used
+                // to). However, tt-llk #868 is preventing
+                // that from working at the moment.
+                ckl::PackTile<ckl::output(dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                    dfb_xmm});
 
-            dfb_xmm.wait_front(static_cast<uint16_t>(block.full_block_size()));
-            reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
-            tile_regs_acquire();
+            retarget_packer(dfb_im_or_out_id);
+            ckl::eltwise_chain(
+                block_shape,
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    xmm_input,
+                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{dfb_xmm, dfb_ex2pe},
+                ckl::Optional<activate_after_normalize, FusedActivation>{},
+                ckl::PackTile<ckl::output(
+                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
 
-            mul_init(dfb_xmm_id, dfb_ex2pe_id);
-            for (auto i : block.local()) {
-                mul_tiles(dfb_xmm_id, dfb_ex2pe_id, i, 0, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
-                // activation will be applied after the gamma/beta multiplication/addition.
-                // Otherwise, we can apply the activation here.
-                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-#endif
+            if constexpr (do_gamma == 1) {
+                constexpr auto dfb_gamma_out_id = do_beta != 0 ? dfb_fusion_id : dfb_out_id;
+                auto& dfb_gamma_out = do_beta != 0 ? dfb_fusion : dfb_out;
+                retarget_packer(dfb_gamma_out_id);
+                ckl::eltwise_chain(
+                    block_shape,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{dfb_fusion, dfb_gamma},
+                    ckl::Optional<activate_after_gamma, FusedActivation>{},
+                    ckl::PackTile<ckl::output(
+                        dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                        dfb_gamma_out});
             }
-            tile_regs_commit();
-            tile_regs_wait();
-
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                dfb_fusion = dfb_out_id;
+            if constexpr (do_beta == 1) {
+                retarget_packer(dfb_out_id);
+                ckl::eltwise_chain(
+                    block_shape,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{dfb_fusion, dfb_beta},
+                    ckl::Optional<fused_activation_enabled, FusedActivation>{},
+                    ckl::PackTile<ckl::output(
+                        dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_out});
             }
-            DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                .reserve_back(static_cast<uint16_t>(block.full_block_size()));
-            pack_reconfig_data_format(dfb_fusion);
-            for (auto i : block.local()) {
-                pack_tile(i, dfb_fusion);
-            }
-            tile_regs_release();
-            DataflowBuffer(static_cast<uint16_t>(dfb_fusion)).push_back(static_cast<uint16_t>(block.full_block_size()));
-            dfb_xmm.pop_front(static_cast<uint16_t>(block.full_block_size()));
-
-#ifdef FUSE_GAMMA
-            {
-                tile_regs_acquire();
-                tile_regs_wait();
-                reconfig_data_format(dfb_fusion, dfb_gamma_id);
-#ifndef FUSE_BETA
-                pack_reconfig_data_format(dfb_out_id);
-#endif
-                dfb_gamma.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
-                mul_bcast_rows_init(dfb_fusion, dfb_gamma_id);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(dfb_fusion, dfb_gamma_id, i, i, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
-                    if constexpr (!(do_beta == 1)) {
-                        SFPU_OP_INIT_ACTIVATION
-                        SFPU_OP_FUNC_ACTIVATION
-                    }
-#endif
-                }
-                tile_regs_commit();
-                dfb_gamma.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
-#ifndef FUSE_BETA
-                dfb_out.reserve_back(block.full_block_size());
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_out_id);
-                }
-                dfb_out.push_back(block.full_block_size());
-#else
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_fusion);
-                }
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .push_back(static_cast<uint16_t>(block.full_block_size()));
-#endif
-
-                tile_regs_release();
-            }
-#endif
-#ifdef FUSE_BETA
-            {
-                tile_regs_acquire();
-                tile_regs_wait();
-                reconfig_data_format(dfb_fusion, dfb_beta_id);
-                pack_reconfig_data_format(dfb_out_id);
-                dfb_beta.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
-                add_bcast_rows_init(dfb_fusion, dfb_beta_id);
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(dfb_fusion, dfb_beta_id, i, i, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-#endif
-                }
-                tile_regs_commit();
-                dfb_beta.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_fusion))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
-                dfb_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_out_id);
-                }
-                tile_regs_release();
-                dfb_out.push_back(static_cast<uint16_t>(block.full_block_size()));
-            }
-#endif
 
 #ifdef UNTILIZE_OUT
             constexpr auto dfb_out_rm_id = dfb::out_rm;
@@ -494,4 +504,15 @@ void kernel_main() {
 #endif
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
+
+    // The reduce scalers are pushed once by the reader (on both the LayerNorm and RMSNorm paths) and
+    // waited above; nothing else pops them. reduce_scaler_tile_count gives the number pushed, which
+    // depends on the compile time args. dummy_unpack orders the pop after the wait on Quasar for a core
+    // whose row loop never unpacked the scaler (TEN-4746).
+    dummy_unpack(dfb_scaler_id);
+    dfb_scaler.pop_front(num_scaler_tiles);
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps.pop_front(1);
 }

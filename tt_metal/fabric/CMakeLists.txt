@@ -117,3 +117,5 @@ install(
     PATTERN
     "*.proto"
 )
+
+add_subdirectory(experimental/x280)

@@ -16,7 +16,6 @@ struct IndexerScoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel;
     tt::tt_metal::KernelHandle compute_kernel;
     tt::tt_metal::KernelHandle writer_kernel;
-    std::vector<CoreCoord> worker_cores;
     // This device's linearized SP-ring index (from its mesh coordinate); chunk_start = base + idx*stride.
     // Stored so override_runtime_arguments can recompute chunk_start for new base/stride on a cache hit.
     uint32_t device_index = 0;

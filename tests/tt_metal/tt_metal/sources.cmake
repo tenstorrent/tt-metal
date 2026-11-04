@@ -14,6 +14,8 @@ set(UNIT_TESTS_LEGACY_SRC
     test_datacopy_bfp8b.cpp
     test_datacopy_output_in_l1.cpp
     test_dm_loopback.cpp
+    test_dm_stateful_loopback.cpp
+    test_dm_worker_multicast.cpp
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
     test_eltwise_binary.cpp
@@ -36,6 +38,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_quasar_trace.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
+    test_quasar_dram_backing.cpp
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
     test_unaligned_read_write_core.cpp

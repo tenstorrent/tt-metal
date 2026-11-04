@@ -6,6 +6,9 @@
 
 #include "cross_node_dfb_test_utils.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/allocator/allocator.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "hostdev/remote_dfb_config_layout.h"
 
 namespace tt::tt_metal::prefetcher_pipe_test {
 
@@ -29,6 +32,15 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
     return bytes;
 }
 
+// Nothing zeroes a ring, and an earlier run can have left the same bytes at the same address. Clear every
+// receiver's ring before a check that new bytes arrived.
+inline void zero_receiver_rings(distributed::MeshDevice& device, const experimental::PrefetcherPipe& pipe) {
+    std::vector<uint32_t> zeros(pipe.ring_size() / sizeof(uint32_t), 0);
+    for (const CoreCoord& receiver_core : corerange_to_cores(pipe.receiver_cores())) {
+        slow_dispatch::WriteToL1(device, receiver_core, pipe.buffer_address(), zeros, CoreType::WORKER);
+    }
+}
+
 inline bool verify_receiver_ring(
     distributed::MeshDevice& device,
     const experimental::PrefetcherPipe& pipe,
@@ -45,11 +57,36 @@ inline bool verify_receiver_ring(
     return received == expected;
 }
 
+// Lane-0 (sent, acked) of `core`'s slot, read from TL1. SENT and ACKED live in separate blocks
+// (remote_dfb_config_layout.h); the core's config page words give its slot in each.
+inline std::pair<uint32_t, uint32_t> read_pipe_credits(
+    distributed::MeshDevice& device, const experimental::PrefetcherPipe& pipe, const CoreCoord& core) {
+    const auto& page = pipe.impl().config_page(core);
+    const auto read_word = [&](uint32_t page_offset) {
+        std::vector<uint8_t> bytes(sizeof(uint32_t), 0);
+        slow_dispatch::ReadFromL1(
+            device,
+            core,
+            pipe.config_address() + page_offset,
+            std::span<uint8_t>(bytes.data(), bytes.size()),
+            CoreType::WORKER);
+        uint32_t word = 0;
+        std::memcpy(&word, bytes.data(), sizeof(uint32_t));
+        return word;
+    };
+    return {
+        read_word(page[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET]),
+        read_word(page[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET])};
+}
+
 inline uint32_t sender_l1_staging_address(const experimental::PrefetcherPipe& pipe) {
     // The persistent arena grows bottom-up from l1_unreserved_base, so placing
-    // staging below the pipe would enter reserved firmware L1. Tests use the
-    // first address above this pipe's persistent ring + config allocation.
-    return std::max(pipe.buffer_address() + pipe.ring_size(), pipe.config_address() + pipe.config_page_size());
+    // staging below it would enter reserved firmware L1. Tests use the first
+    // address above every arena allocation on the sender core, where the sender
+    // programs place no program-local L1. An Allocator space's ring and config
+    // pages sit at the top of L1, clear of it.
+    return static_cast<uint32_t>(
+        pipe.get_device()->allocator_impl()->persistent_l1().high_water_mark(pipe.sender_cores()));
 }
 
 inline void write_sender_l1_staging(
@@ -73,18 +110,6 @@ inline void write_sender_l1_staging(
     std::memcpy(words.data(), bytes.data(), bytes.size());
     for (const auto& core : corerange_to_cores(sender_cores)) {
         slow_dispatch::WriteToL1(device, core, staging_addr, words, CoreType::WORKER);
-    }
-}
-
-inline void set_sender_l1_staging_runtime_args(
-    Program& program,
-    KernelHandle sender_kernel,
-    const CoreRangeSet& sender_cores,
-    const experimental::PrefetcherPipe& pipe) {
-    const uint32_t l1_staging_addr = sender_l1_staging_address(pipe);
-    for (const auto& core : corerange_to_cores(sender_cores)) {
-        const CoreRangeSet single = CoreRangeSet(CoreRange(core));
-        SetRuntimeArgs(program, sender_kernel, single, {l1_staging_addr});
     }
 }
 

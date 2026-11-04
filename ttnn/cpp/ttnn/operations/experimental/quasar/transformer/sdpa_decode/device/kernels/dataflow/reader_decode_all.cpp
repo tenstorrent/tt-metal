@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 #include <vector>
@@ -92,7 +93,9 @@ void kernel_main() {
     constexpr auto dfb_writer_cur_pos = dfb::writer_cur_pos;
     constexpr auto dfb_compute_cur_pos = dfb::compute_cur_pos;
 #endif
-#ifdef IS_PAGED_ATTENTION
+#if defined(IS_PAGED_ATTENTION) && defined(IS_PAGE_TABLE_SHARDED)
+    // Only the sharded page table is a DFB (it borrows the resident L1 shard). The non-sharded page
+    // table is a node-local scratchpad (scratch::page_table), so dfb::page_table does not exist there.
     constexpr auto dfb_id_page_table = dfb::page_table;
 #endif
 
@@ -213,6 +216,23 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
+#ifdef TILIZE_Q
+    DataflowBuffer q_dfb(dfb_q_rm);
+#else
+    DataflowBuffer q_dfb(dfb_q_in);
+#endif
+    DataflowBuffer k_dfb(dfb_k_in);
+    DataflowBuffer v_dfb(dfb_v_in);
+#ifdef USE_ATTENTION_MASK
+    DataflowBuffer mask_dfb(dfb_mask_in);
+#endif
+#ifdef USE_ATTENTION_SINK
+    DataflowBuffer sink_dfb(dfb_attention_sink);
+#endif
+#if defined(IS_PAGED_ATTENTION) && defined(IS_PAGE_TABLE_SHARDED)
+    DataflowBuffer page_table_dfb(dfb_id_page_table);
+#endif
+
     // Read Q entirely - always read into dfb_q_in
     // When tilize_q is true, compute will tilize back to dfb_q_in
     // When tilize_q is false, Q is already tilized
@@ -221,45 +241,30 @@ void kernel_main() {
     // Read Q
 #ifdef Q_LOCALLY_AVAILABLE
     // Q pre-sharded / replicated to all cores: it is already resident in the borrowed DFB. Just reserve + push.
-#ifdef TILIZE_Q
-    {
-        DataflowBuffer dfb_q_rm_buf(dfb_q_rm);
-        dfb_q_rm_buf.reserve_back(q_chunk_tiles);
-        dfb_q_rm_buf.push_back(q_chunk_tiles);
-    }
-#else
-    {
-        DataflowBuffer dfb_q(dfb_q_in);
-        dfb_q.reserve_back(q_chunk_tiles);
-        dfb_q.push_back(q_chunk_tiles);
-    }
-#endif
+    q_dfb.reserve_back(q_chunk_tiles);
+    q_dfb.push_back(q_chunk_tiles);
 #else
     // Not locally available: read Q from the output core's L1 (sharded) or from DRAM (interleaved).
     {
         const auto q_reader = TensorAccessor(tensor::q);
 #ifdef TILIZE_Q
         read_q<
-            dfb::q_rm,
-            dfb::q_rm,
             q_tile_bytes,
             q_chunk_tiles,
             is_q_sharded,
             /*tilize_q=*/true,
             use_half_tile,
             barrier_threshold>(
-            is_output_core, q_reader, output_core_noc_x, output_core_noc_y, q_chunk_size_bytes, q_batch_offset);
+            q_dfb, is_output_core, q_reader, output_core_noc_x, output_core_noc_y, q_chunk_size_bytes, q_batch_offset);
 #else
         read_q<
-            dfb::q_in,
-            dfb::q_in,
             q_tile_bytes,
             q_chunk_tiles,
             is_q_sharded,
             /*tilize_q=*/false,
             use_half_tile,
             barrier_threshold>(
-            is_output_core, q_reader, output_core_noc_x, output_core_noc_y, q_chunk_size_bytes, q_batch_offset);
+            q_dfb, is_output_core, q_reader, output_core_noc_x, output_core_noc_y, q_chunk_size_bytes, q_batch_offset);
 #endif
     }
 #endif
@@ -278,9 +283,8 @@ void kernel_main() {
         const auto attention_sink_reader = TensorAccessor(tensor::attention_sink);
         constexpr uint32_t attention_sink_tile_bytes = get_tile_size(dfb_attention_sink);
 
-        DataflowBuffer dfb_sink(dfb_attention_sink);
-        dfb_sink.reserve_back(PNHt);
-        uint32_t attention_sink_write_ptr = dfb_sink.get_write_ptr();
+        sink_dfb.reserve_back(PNHt);
+        uint32_t attention_sink_write_ptr = sink_dfb.get_write_ptr();
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
             // Use noc.async_read with explicit size instead of noc.async_read_page because
@@ -295,7 +299,7 @@ void kernel_main() {
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
         noc.async_read_barrier();
-        dfb_sink.push_back(PNHt);
+        sink_dfb.push_back(PNHt);
     }
 #endif
 
@@ -305,27 +309,33 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
 #ifdef IS_PAGED_ATTENTION
     {
-        DataflowBuffer dfb_page_table(dfb_id_page_table);
-        uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
-        dfb_page_table.reserve_back(num_pages_to_read);
 #ifndef IS_PAGE_TABLE_SHARDED
-        // Read page table from DRAM via the sdpa donor's Metal 2.0 overload of read_page_table_for_batch,
-        // building the accessor from the tensor::page_table binding (the legacy 3rd page-size argument is
-        // redundant — the binding token supplies the aligned page size — and is dropped).
-        page_table_ptr = read_page_table_for_batch(
-            noc,
-            dfb_page_table,
-            cur_batch / q_heads_parallel_factor,
+        // Non-sharded: read one page-table stick from DRAM into a node-local scratchpad (Gen2 forbids the
+        // self-loop DFB the legacy path used), then read it back through a pointer to its first element.
+        Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
+        noc.async_read(
             TensorAccessor(tensor::page_table),
-            page_table_page_size);
+            page_table_scratch,
+            page_table_page_size,
+            {.page_id = cur_batch / q_heads_parallel_factor},
+            {});
+        noc.async_read_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // The NoC wrote the page table to L1 behind the DM caches, and an earlier program may have left this
+        // scratchpad's lines in L2. Drop them so the CPU reads below see the new page table (as fill_cache does).
+        invalidate_l2_cache_range(
+            local_mem::detail::AddressAccess::address(page_table_scratch.local_mem()), page_table_page_size);
+#endif
+        page_table_ptr = &page_table_scratch[0];
         page_table_ptr_u32 = page_table_ptr;
 #else
-        // Read page table from dynamically allocated L1 buffer (borrowed sharded buffer)
+        // Sharded: read the page table from the borrowed sharded L1 buffer (the DFB backs the resident shard).
+        page_table_dfb.reserve_back(B);
         uint32_t page_table_dfb_wr_ptr =
-            dfb_page_table.get_write_ptr() + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
+            page_table_dfb.get_write_ptr() + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
         page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_dfb_wr_ptr);
+        page_table_dfb.push_back(B);
 #endif
-        dfb_page_table.push_back(num_pages_to_read);
     }
 #endif
 
@@ -335,14 +345,14 @@ void kernel_main() {
         const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+        Semaphore k_mcast_sem(sem::k_mcast);
         // Setup multicast parameters for K streaming (vertical multicast)
         KMcastParams k_mcast_params = {
             .do_mcast = do_k_mcast,
             .mcast_x = mcast_x,
             .mcast_y0 = mcast_y0,
             .mcast_y1 = mcast_y1,
-            .num_dests = num_dests,
-            .mcast_sem_id = sem::k_mcast};
+            .num_dests = num_dests};
 
 #ifdef IS_PAGED_ATTENTION
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
@@ -351,7 +361,6 @@ void kernel_main() {
 
             // Read K chunk - supports both multicast and non-multicast paths
             k_base_read_ptr = read_k<
-                dfb::k_in,
                 DHt,
                 num_kv_heads,
                 block_size_t,
@@ -360,6 +369,7 @@ void kernel_main() {
                 is_page_table_sharded,
                 use_k_mcast,
                 capacity_t>(
+                k_dfb,
                 k_chunk_tiles,
                 cur_head,
                 Sk_chunk_t_dynamic,
@@ -368,15 +378,15 @@ void kernel_main() {
                 page_table_ptr_u16,
                 page_table_ptr_u32,
                 barrier_count,
-                k_mcast_params);
+                k_mcast_params,
+                &k_mcast_sem);
 
 #ifdef USE_ATTENTION_MASK
-            mask_start_tile_id = read_mask_chunk<dfb::mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
-                PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
+            mask_start_tile_id = read_mask_chunk<mask_tile_bytes, barrier_threshold, PNHt>(
+                mask_dfb, PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
 #endif
             // Read V chunk - either from DRAM or from K's L1 buffer (transpose) when reuse_k is true
             read_v<
-                dfb::v_in,
                 vDHt,
                 num_kv_heads,
                 block_size_t,
@@ -385,6 +395,7 @@ void kernel_main() {
                 is_page_table_sharded,
                 reuse_k,
                 capacity_t>(
+                v_dfb,
                 v_chunk_tiles,
                 cur_head,
                 Sk_chunk_t_dynamic,
@@ -424,18 +435,19 @@ void kernel_main() {
                 mask_tile_bytes,
                 PNHt,
                 /*use_attention_mask=*/true,
-                dfb::k_in,
-                dfb::v_in,
-                dfb::mask_in,
 #else
                 /*mask_tile_bytes=*/0,
                 PNHt,
                 /*use_attention_mask=*/false,
-                dfb::k_in,
-                dfb::v_in,
-                dfb::k_in,  // dummy — mask path is disabled, this NTTP is unused
 #endif
                 reuse_k>(
+                k_dfb,
+                v_dfb,
+#ifdef USE_ATTENTION_MASK
+                mask_dfb,
+#else
+                k_dfb,  // dummy — mask path is disabled, this buffer is unused
+#endif
                 k_chunk_start,
                 k_chunk_end,
                 k_start_tile_id,

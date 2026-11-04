@@ -32,7 +32,7 @@ protected:
             ids.push_back(id);
         }
         this->create_devices(ids);
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -109,7 +109,7 @@ protected:
         this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -208,7 +208,7 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
-        init_max_cbs();
+        init_max_dfbs();
     }
 };
 
@@ -219,8 +219,20 @@ protected:
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
+        this->DetectDispatchMode();
         this->create_devices();
-        init_max_cbs();
+        init_max_dfbs();
+    }
+};
+
+class QuasarAnyDispatchMeshDeviceSingleCardFixture : public UnitMeshAnyDispatchFixture {
+protected:
+    void SetUp() override {
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (this->arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not a Quasar device";
+        }
+        UnitMeshAnyDispatchFixture::SetUp();
     }
 };
 

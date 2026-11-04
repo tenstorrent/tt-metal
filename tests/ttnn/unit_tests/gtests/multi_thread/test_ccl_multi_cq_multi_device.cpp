@@ -72,7 +72,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
     };
-    std::vector<IDevice*> devices = {
+    std::vector<MeshDevice*> devices = {
         single_meshes[0].get(),
         single_meshes[1].get(),
         single_meshes[2].get(),
@@ -233,7 +233,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
     };
-    std::vector<IDevice*> devices = {
+    std::vector<MeshDevice*> devices = {
         single_meshes[0].get(),
         single_meshes[1].get(),
         single_meshes[2].get(),
@@ -426,7 +426,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
         mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
     };
-    std::vector<IDevice*> devices = {
+    std::vector<MeshDevice*> devices = {
         single_meshes[0].get(),
         single_meshes[1].get(),
         single_meshes[2].get(),

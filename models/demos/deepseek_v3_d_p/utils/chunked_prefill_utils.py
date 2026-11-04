@@ -117,7 +117,7 @@ def cpu_mla_reference(config, weights, hidden_2d):
 
     Disk-cached on a content hash of (weights, seq_len, math-affecting config fields) -- see
     _ref_cache_key. A cache miss behaves exactly as before, so this is transparent to the
-    deepseek_v3 / kimi_k2_6 chunked tests that share this helper. Writes are suppressed under CI
+    deepseek_v3 / kimi_k2_7 chunked tests that share this helper. Writes are suppressed under CI
     (mirroring run_model's reference cache) so CI runners don't accumulate multi-GB of .pt files;
     reads stay enabled either way.
     """

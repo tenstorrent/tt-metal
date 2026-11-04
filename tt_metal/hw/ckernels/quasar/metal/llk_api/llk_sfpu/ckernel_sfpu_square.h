@@ -4,13 +4,21 @@
 
 #pragma once
 
-#include "ckernel_ops.h"
+#include "ckernel_addrmod.h"
+#include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
+
+/** @brief Square math policy, shared by Dest and SrcS. */
+struct SquareMath {
+    using value_type = sfpi::vFloat;
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
+};
 
 /**
  * @brief Configure the SFPU address mode used by the square op.
@@ -29,31 +37,26 @@ inline void init_square() {
 }
 
 /**
- * @brief Square one SFPU pass worth of rows (Quasar = 2 rows): dest = x * x.
+ * @brief Square a Dest span in place.
  *
- * Loads x from dest, multiplies it by itself, and stores the result back to dest using
- * ADDR_MOD_6 to advance to the next pair of rows.
- *
- * @note ADDR_MOD_6 must already be programmed by @ref init_square.
- */
-inline void _calculate_square_sfp_rows_() {
-    sfpi::vFloat v = sfpi::dst_reg[0];                     // load x from dest (SFPLOAD)
-    sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = v * v;  // x * x via SFPMUL, store back to dest (SFPSTORE)
-}
-
-/**
- * @brief Square a full Dest tile in place: dest = x * x.
- *
- * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows) needed to span the tile.
- * @note Call @ref init_square before this to program the address mode it depends on.
+ * @note Call @ref init_square before this.
  */
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_square() {
+    using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
+    using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        _calculate_square_sfp_rows_();
+        calculate_unary_operands<SquareMath, 1 /*ITERATIONS*/>(Input{}, Output{});
     }
 }
+
+/** @brief SrcS square op type; Sfpi only. */
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+
+// dispatch_sfpu_srcs_op relies on naming a float op for I32 without instantiating it; keep that true.
+static_assert(!srcs_op_supports<SquareSrcs, sfpi::DataLayout::I32>, "float SrcS ops must stay nameable for I32");
 
 }  // namespace sfpu
 }  // namespace ckernel

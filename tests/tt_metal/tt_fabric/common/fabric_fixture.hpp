@@ -45,6 +45,12 @@ class ControlPlaneFixture : public ::testing::Test {
        }
 
        void TearDown() override {
+           // Reset the process-wide fabric config to DISABLED so the next test starts clean. set_fabric_config is
+           // one-shot per process (metal_env.cpp: non-DISABLED -> non-DISABLED is a TT_FATAL), and tearing down to
+           // DISABLED is always allowed. Without this, a test that set e.g. FABRIC_2D would make a subsequent test
+           // that sets a different config (TORUS_Y / MGD_DEFAULT / per-mesh heterogeneous) abort with
+           // "Tried to override previous value of fabric config".
+           tt::tt_metal::MetalContext::instance().set_fabric_config(tt::tt_fabric::FabricConfig::DISABLED);
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
@@ -109,6 +115,12 @@ public:
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        // Fabric cannot be run if we have < 2 devices
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as fabric requires > 2 devices, but only saw {} devices", num_devices);
+            GTEST_SKIP();
+        }
+
         std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {

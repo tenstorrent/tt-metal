@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 
 import pytest
 import torch
@@ -10,7 +9,7 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs, qwen25_vl_mesh_shape
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -19,11 +18,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -42,9 +37,11 @@ def test_rms_norm_inference(
     max_seq_len,
     batch_size,
     mesh_device,
+    qwen25_vl_mesh_device,
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device = qwen25_vl_mesh_device
     dtype = ttnn.bfloat16
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)

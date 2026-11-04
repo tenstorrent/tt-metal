@@ -128,7 +128,7 @@ def test_k3_constants_match_the_vendored_checkpoint_config():
 
     config.json is vendored from ``huggingface.co/moonshotai/Kimi-K3`` at revision
     9f62e4e9fffbd0a83ddd60e1c209d828994b3569, matching the pattern of
-    ``reference/kimi_k2_6/config.json``. Content is unmodified; the only difference from the upstream
+    ``reference/kimi_k2_7/config.json``. Content is unmodified; the only difference from the upstream
     bytes is the trailing newline this repo's end-of-file-fixer hook requires, so a re-vendored copy
     diffs clean apart from that last line. It is the multimodal wrapper, so every LM field lives under
     ``text_config``; KDA sizing lives under ``text_config.linear_attn_config``.

@@ -16,6 +16,7 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 |------|----------------|-------|
 | **0 — standalone PCC** | Prefill writes correct K / V / index_k vs golden | tt-metal tree only |
 | **1 — mock migration** | The 9-config address table is correct, read device-lessly | tt-metal tree only |
+| **1P — packed mock migration** | Gate 1 with 4 chunks per forward from both slots | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → DCN → DRAM copy, and migrated-KV accuracy | + tt-llm-engine migration layer |
 | **P0 — merged-table unit test** | The multi-stage merge's address math, device-free | tt-metal tree only, no device |
 | **P1 — pipeline mock migration** | The MERGED 60-layer table over 2 stages, read device-lessly | tt-metal tree only |
@@ -33,6 +34,8 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 | `manifests/m3_binding_mock_migration_1rank.yaml` | Gate 1 runner: 1-rank topology + mock-migration env |
 | `manifests/m3_binding_loopback_migration_1rank.yaml` | Gate 2 runner: 1-rank topology + real-migration env |
 | `manifests/m3_producer_mock_migration.yaml` | Gate 1 producer: 2 slots × 2 chunks, golden PCC |
+| `manifests/m3_binding_mock_migration_packed_1rank.yaml` | Gate 1P runner: Gate 1 at 1024-token chunks, 4096-token forwards |
+| `manifests/m3_producer_mock_migration_packed.yaml` | Gate 1P producer: 2 slots × 10 chunks, 4 per forward, golden PCC |
 | `manifests/m3_producer_loopback_migration.yaml` | Gate 2 driver: prefill 0,1 → migrate to 2,3 |
 | `manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml` | Gate P1 runner: 2-stage intragalaxy + merged mock |
 | `manifests/m3_binding_loopback_migration_intragalaxy_2rank.yaml` | Gate P2 runner: 2-stage intragalaxy + real migration |
@@ -69,10 +72,10 @@ export MIG="$ENGINE/disaggregation/migration/build_RelWithDebInfo"
 #   longbook_5120  (5120 tok  -> 1 chunk)
 #   longbook_10240 (10240 tok -> 2 chunks)   <- what the manifests use
 #   longbook_56320 (55218 tok -> 11 chunks)  <- full length
-export GOLDEN=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+export GOLDEN=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240
 ```
 
-The checkpoint (`/mnt/models/MiniMaxAI/MiniMax-M3-ref/`, config + tilized weight cache) comes from the
+The checkpoint (`/mnt/weka/model-weights/llm/minimax/MiniMax-M3/`, config + tilized weight cache) comes from the
 adapter default; override with `PREFILL_HF_MODEL` / `TT_CACHE_PATH` in the binding's `global_env`, not the
 shell. Shape constraints: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0`; 5120 satisfies
 both at SP=8.
@@ -110,7 +113,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration.yaml
 ```
 
-**Expect:** runner `[mock-migration] KV chunk table -> /tmp/m3_kv_chunk_table.pb, device map -> …`;
+**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb (no worker handshake)`
+and `[migration] rank 0: local device map -> …`;
 producer `[producer] layer acks 240/240`, per-layer `K=… V=… index_k=…`, then
 `[producer] slot N M3 KV PCC over [0,10240) across 60 layers` and `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93` — different from the runner's `0.88`
@@ -125,6 +129,24 @@ and are skipped); the read-back picks the bf16 or bf8 decoder from the config's 
 The runner's request loop is unbounded, so it stays up after the producer exits — re-run the producer as
 often as you like, then stop it with Ctrl-C, or set `PREFILL_SEND_SHUTDOWN: "1"` in the producer manifest's
 `env:` block for a graceful drain-and-exit on the last push.
+
+### Gate 1P — packed forwards
+
+Gate 1 with `PREFILL_CHUNK_SIZE=1024` and `PREFILL_FORWARD_TOKENS_BUDGET=4096`: each forward carries up to 4
+chunks (`TtPrefillRuntime.prefill_forward`), and the last one carries both slots. The budget must match on both
+sides. Layer acks go through the host callback (`PREFILL_LAYER_ACK_D2H=0`): a D2H ack record names one chunk.
+
+```bash
+# ---- Terminal 1 — runner ----
+$RUN $M3/m3_binding_mock_migration_packed_1rank.yaml $HOST:1
+
+# ---- Terminal 2 — producer ----
+python -m models.demos.common.prefill.runners.prefill_producer \
+  --manifest $M3/m3_producer_mock_migration_packed.yaml
+```
+
+**Expect:** as Gate 1, with `[producer] layer acks 1200/1200` (2 slots × 10 chunks × 60 layers) and the same
+per-slot PCC pass.
 
 ---
 
@@ -141,7 +163,7 @@ endpoint kills both workers.
 # ---- Between runs: stop terminal A (Ctrl-C), then clear ----
 pkill -f migration_endpoint ; pkill prun ; pkill prted ; pkill prte
 rm -f /dev/shm/mig_ep1_* /dev/shm/ep_1_[ab]_* \
-      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* \
+      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
       /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.json /tmp/m3_migration_done.sentinel
 
 # ---- Terminal A — migration endpoint (leave running) ----
@@ -177,7 +199,7 @@ minutes of silence first):
 [migration] delivered 32 local device-map entries -> /ep_1_a_cmd     (and again for /ep_1_b_cmd)
 [migration] KV chunk address table serialized to /tmp/m3_kv_chunk_table.pb (configs=9, entries=691200)
 [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
-[migration] LayerAck channel ready at /tt_prefill_layer_acks_m3_prefill
+[migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 ```
 
 **Every verdict is logged by the DRIVER (terminal C), not the runner** — the runner-side
@@ -228,7 +250,7 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration_2rank.yaml
 ```
 
-**Expect:** rank 0 `[mock-migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
+**Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
 (configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
 merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.
@@ -327,7 +349,7 @@ Configuration notes:
 | cache length | 10240 | `PREFILL_MAX_SEQ_LEN` | `model.max_seq_len` |
 | mesh | 8 × 4 | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` |
 | H2D socket | `m3_prefill` | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` |
-| index dtype | bf16 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
+| index dtype | bf8 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
 | KV table | `/tmp/m3_kv_chunk_table.pb` | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` |
 | sentinel | `/tmp/m3_migration_done.sentinel` | `MIGRATION_DONE_FILE` | `migration.done_file` |
 | queues | `/mig_ep1_*` | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` |

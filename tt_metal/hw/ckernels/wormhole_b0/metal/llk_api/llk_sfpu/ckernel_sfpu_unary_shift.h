@@ -39,8 +39,9 @@ inline void calculate_left_shift(const uint shift_amt) {
 
 inline void right_shift_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-// Arithmetic right shift by an immediate scalar amount.
-// A shift amount >= 32 saturates to the sign (non-negative -> 0, negative -> -1).
+// Right shift by an immediate scalar amount. Signed data uses an arithmetic
+// shift; unsigned data uses a logical shift.
+// A shift amount >= 32 saturates to 31.
 template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_right_shift(const uint shift_amt) {
     static_assert(
@@ -49,7 +50,17 @@ inline void calculate_right_shift(const uint shift_amt) {
     // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
     // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
     const unsigned eff = (shift_amt >= 32) ? 31u : static_cast<unsigned>(shift_amt);
-    const unsigned sign_mask = (eff > 0) ? (~0u << (32 - eff)) : 0u;
+    // Int32 is an arithmetic shift through the sign-extension identity: with x = v >>u eff and
+    // b = sign_bit_mask >> eff = 1 << (31 - eff), (x ^ b) - b sign-extends x from bit (31 - eff).
+    // For eff == 0, b = 2^31 and (v ^ 2^31) - 2^31 == v (mod 2^32). b and neg_b are
+    // loop-invariant vector constants, materialized once per call; the UInt formats never read
+    // them, and the compiler drops their loads there. The fix-up is written as `+ neg_b` because
+    // SFPIADD's subtract form is VD = VC - VD, so `- b` would cost a register copy per row where
+    // `+ neg_b` is in place.
+    constexpr unsigned sign_bit_mask = 0x80000000u;
+    const unsigned sign_bit = sign_bit_mask >> eff;
+    const sfpi::vUInt b = sign_bit;
+    const sfpi::vUInt neg_b = 0u - sign_bit;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         if constexpr (DATA_FORMAT == DataFormat::UInt16) {
@@ -58,8 +69,9 @@ inline void calculate_right_shift(const uint shift_amt) {
         } else {
             sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
             sfpi::vUInt res = sfpi::as<sfpi::vUInt>(v) >> eff;
-            v_if(v < 0) { res = res | sign_mask; }
-            v_endif;
+            if constexpr (DATA_FORMAT == DataFormat::Int32) {
+                res = (res ^ b) + neg_b;
+            }
             sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<sfpi::vInt>(res);
         }
         sfpi::dst_reg++;

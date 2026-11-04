@@ -78,6 +78,20 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     ``input`` must then be TP-replicated and single-head, and each chip persists only
                     its own ``1/tp`` seq window. Must differ from ``cluster_axis``.
 
+                rope (ttnn.Tensor, optional): Separate TILE BF16 RoPE values. When supplied,
+                    input is TILE BF16 latent and cache is ROW_MAJOR BF16, with width equal to
+                    the sum of the two input widths. Packing and untilization are fused into
+                    the cache write; both inputs must be interleaved, single-batch, single-head.
+                scales (ttnn.Tensor, optional): Select scaled-FP8 packing. Input is ROW_MAJOR
+                    FP8_E4M3 latent (512 values), scales is ROW_MAJOR FP32 (4 values), and rope
+                    is BF16 (64 values), ROW_MAJOR or TILE. Tiled RoPE is untilized inside this
+                    operation using LLK. Cache is ROW_MAJOR FP8_E4M3 with 656-byte
+                    rows containing the three fields. All fields share leading shapes.
+                input_row_offset (int, optional, tensor form): first input row (token, multiple of 32)
+                    to write; with ``input_rows``, write rows ``[input_row_offset, input_row_offset +
+                    input_rows)`` of every head as if that slice were the input. Plain page copy only.
+                input_rows (int, optional, tensor form): rows in the window (multiple of 32).
+
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
         )doc",
@@ -92,7 +106,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 std::optional<uint32_t>,
                 std::optional<uint32_t>,
-                std::optional<uint32_t>>(&update_padded_kv_cache),
+                std::optional<uint32_t>,
+                const std::optional<Tensor>&,
+                const std::optional<Tensor>&>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -101,7 +117,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("kv_actual_global"),
             nb::arg("cluster_axis"),
             nb::arg("valid_global") = nb::none(),
-            nb::arg("tp_axis") = nb::none()),
+            nb::arg("tp_axis") = nb::none(),
+            nb::arg("rope").noconvert() = nb::none(),
+            nb::arg("scales").noconvert() = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -113,6 +131,10 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
+                std::optional<uint32_t>,
+                const std::optional<Tensor>&,
+                const std::optional<Tensor>&,
+                uint32_t,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -122,7 +144,11 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("num_layers"),
             nb::arg("cluster_axis"),
             nb::arg("valid_global").noconvert() = nb::none(),
-            nb::arg("tp_axis") = nb::none()));
+            nb::arg("tp_axis") = nb::none(),
+            nb::arg("rope").noconvert() = nb::none(),
+            nb::arg("scales").noconvert() = nb::none(),
+            nb::arg("input_row_offset") = 0,
+            nb::arg("input_rows") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

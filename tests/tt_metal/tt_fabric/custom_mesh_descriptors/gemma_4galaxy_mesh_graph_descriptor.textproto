@@ -67,28 +67,74 @@ graph_descriptors {
     channels { count: 8 policy: STRICT }
   }
 }
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
 # --- Pinnings ---------------------------------------------------------------
-# Same scheme as two_4x4 (mesh 0 -> Middle, mesh 1 -> Edge), generalized to all 8 meshes via mesh_id_regex:
-# even meshes ("[0-9]*[02468]") take the Middle column (corners 0,3,12,15 -> asic 3, chip 1 -> tray 1
-# asic 7); odd meshes ("[0-9]*[13579]") take the Edge column (corners -> asic 2, chip 2 -> tray 4 asic 6).
-
+# One pinning per 4x4 corner, even and odd meshes (0-7). Each corner is locked to one
+# galaxy tray (1 NW, 2 NE, 3 SW, 4 SE). Even chips 3/12 and odd chips 0/15 swap trays
+# 2 and 3 on BH_REV_AB vs BH_REV_C; those pins are ignored on other board types.
 pinnings {
-  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id_regex: "0,3,12,15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
 }
-
-pinnings {
-  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id_regex: "0,3,12,15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location: 2 }
-}
-
 pinnings {
   logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 1 }
   physical_asic_position { tray_id: 1 asic_location: 7 }
 }
-
 pinnings {
-  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 2 }
-  physical_asic_position { tray_id: 4 asic_location: 6 }
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_AB
 }
-top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 12 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 12 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 0 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 15 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 0 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 15 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}

@@ -38,11 +38,14 @@ class TtAttnResStream(object):
         block_size: layers per block; seals fire at `layer_idx % block_size == 0`.
     """
 
-    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE):
+    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE, block_residual=None):
         self.op = op
         self._running_sum = hidden_states
         self._pending = None
-        self.block_residual = None
+        # `block_residual` is the sealed set a previous pipeline rank handed over. None for a
+        # rank that holds layer 0, which starts with nothing sealed. Ownership transfers here on
+        # the same terms as `hidden_states`: the stream frees it.
+        self.block_residual = block_residual
         self.block_size = block_size
 
     @property
@@ -110,6 +113,23 @@ class TtAttnResStream(object):
         ttnn.deallocate(self._pending)
         self._running_sum, self._pending = total, None
 
+    def detach(self):
+        """Give up both tensors to the caller, settling the deferred write first.
+
+        The counterpart to construction: ownership moves OUT and the stream is empty after,
+        so this is `deallocate` for a caller that intends to keep what the stream held. Used
+        at a pipeline boundary, where the live stream and the sealed set cross to the next
+        rank instead of being read and freed.
+
+        Returns `(running_sum, block_residual)`; `block_residual` is None before the first
+        seal, which is only reachable on a rank holding fewer than `block_size` layers.
+        """
+        self._flush()
+        assert self._running_sum is not None, "nothing to hand off"
+        running_sum, block_residual = self._running_sum, self.block_residual
+        self._running_sum, self._pending, self.block_residual = None, None, None
+        return running_sum, block_residual
+
     def deallocate(self):
         for tensor in (self._running_sum, self._pending, self.block_residual):
             if tensor is not None:
@@ -166,13 +186,33 @@ class TtAttnResWalk(object):
     it holds the weights and outlives every walk built on it.
     """
 
-    def __init__(self, op, hidden_states, q_pre, q_post, q_out, num_layers, block_size=BLOCK_SIZE):
+    def __init__(
+        self, op, hidden_states, q_pre, q_post, q_out, num_layers, block_size=BLOCK_SIZE, inherited_block_residual=None
+    ):
+        """`inherited_block_residual` is the sealed set an upstream pipeline rank handed over.
+
+        Given one, the walk opens OWING a read: `q_pre[0]`, the site `walk_sites` drops
+        because layer 0 of a *whole* model has nothing sealed to read against. On a rank
+        that does not hold layer 0 that site is real — it is the pre-read of the layer
+        opening the next block, the one read that straddles the boundary, and it scores
+        against the set that arrives rather than anything this rank has sealed.
+
+        Nothing statistical crosses the boundary: `inter_block` is a pure function of
+        `(block_residual, queries)`, and this rank owns `q_pre[0]`, so the batch is
+        recomputed here rather than shipped. Ownership of the tensor transfers in.
+        """
         self.op = op
         self.block_size = block_size
-        self.stream = TtAttnResStream(op, hidden_states, block_size=block_size)
+        self.stream = TtAttnResStream(op, hidden_states, block_size=block_size, block_residual=inherited_block_residual)
+        # Unchanged by the inheritance: local group 0 is the group that opens after this
+        # rank's first seal, which is exactly what `_block_sites` yields first.
         self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
         self._pending = iter(())
         self._partials = self._shifts = self._masses = None
+        if inherited_block_residual is not None:
+            boundary = [q_pre[0]]
+            self._partials, self._shifts, self._masses = op.inter_block(inherited_block_residual, boundary)
+            self._pending = enumerate(boundary)
 
     def read(self):
         """The next read site, in the order the schedule issues them."""
@@ -208,11 +248,27 @@ class TtAttnResWalk(object):
 
         Returns what `model.norm` sees. The walk's own tensors are freed here; the returned
         one is the caller's.
+
+        Belongs to the LAST pipeline rank alone — it spends `q_out`, of which the stack has
+        exactly one. An earlier rank ends with `handoff` instead.
         """
         out = self.read()
         self._free_batches()
         self.stream.deallocate()
         return out
+
+    def handoff(self):
+        """End the walk at a pipeline boundary instead of at the model-level read.
+
+        Takes no read: it frees the block's batches and moves the live stream and the sealed
+        set out to the caller, who owns both and must free them (in the pipeline path, the
+        packing concat consumes them). The walk is dead afterwards, as after `finish`.
+
+        The current block's batch goes unconsumed here — its last site is the read the next
+        rank owes — which is the same inert abandoned-iterator state `discard` relies on.
+        """
+        self._free_batches()
+        return self.stream.detach()
 
     def _free_batches(self):
         if self._shifts is None:

@@ -4,6 +4,7 @@
 #include "transpose_wh_sharded_program_factory.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -33,7 +34,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto& output = output_tensor.mesh_tensor();
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     tt::DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_dfb_data_format);
@@ -43,9 +44,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto tile = input_tensor.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest stays Float32-only below.
+    bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(src0_dfb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -91,7 +93,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -104,13 +106,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     });
 
     // Legacy built a ComputeConfigDescriptor directly, setting only fp32_dest_acc_en and
-    // unpack_to_dest_mode; every other field kept its Metal default, which ComputeGen1Config
-    // reproduces.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    // unpack_to_dest_mode; every other field kept its Metal default, which ComputeHardwareConfig's
+    // defaults reproduce.
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
     if (src0_dfb_data_format == tt::DataFormat::Float32) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
     }

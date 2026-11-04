@@ -1,0 +1,45 @@
+name: Setup tt-train
+description: >-
+  Set up the environment and ttml module that tt-train tests need. Run after
+  setup-job, since the ttml install rebinds _ttml.so against the installed ttnn
+  wheel.
+inputs:
+  root:
+    description: Tree holding tt-train sources and build/tt-train
+    required: false
+    default: /work
+  install-ttml:
+    description: Install the ttml module into the ttnn wheel's site-packages. Needs the wheel installed.
+    default: true
+    type: boolean
+  hf-token:
+    description: Hugging Face token for tests that pull gated models. Left unset when empty.
+    required: false
+    default: ''
+runs:
+  using: "composite"
+  steps:
+    - name: Set up env vars for tt-train
+      env:
+        TT_METAL_RUNTIME_ROOT: ${{ inputs.root }}
+        HF_TOKEN_INPUT: ${{ inputs.hf-token }}
+      run: |
+        {
+          echo "TT_METAL_RUNTIME_ROOT=$TT_METAL_RUNTIME_ROOT"
+          echo "TT_METAL_HOME=$TT_METAL_RUNTIME_ROOT"
+          echo "PYTHONPATH=$TT_METAL_RUNTIME_ROOT"
+          echo "LD_LIBRARY_PATH=$TT_METAL_RUNTIME_ROOT/build/lib"
+          echo "TEST_DATA_DIR=$TT_METAL_RUNTIME_ROOT/data"
+          echo "ENABLE_CI_ONLY_TT_TRAIN_TESTS=1"
+        } >> "$GITHUB_ENV"
+        if [[ -n "$HF_TOKEN_INPUT" ]]; then
+          echo "HF_TOKEN=$HF_TOKEN_INPUT" >> "$GITHUB_ENV"
+        fi
+      shell: bash
+
+    - name: Install ttml module
+      if: ${{ inputs.install-ttml == 'true' }}
+      env:
+        TT_METAL_RUNTIME_ROOT: ${{ inputs.root }}
+      run: bash "$TT_METAL_RUNTIME_ROOT/tt-train/scripts/setup_pth.sh"
+      shell: bash

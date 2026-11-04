@@ -40,10 +40,18 @@ public:
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
 
+    // Show a dispatch stall (dispatch_s waited stall_cycles for a free RT-profiler record slot, until
+    // stall_end_timestamp): a zone on the device's "Dispatch stall" lane plus an error-level Tracy message
+    // (rate-limited per device; the zones are not).
+    void PushDispatchStallMarker(
+        uint32_t chip_id, uint64_t stall_end_timestamp, uint32_t stall_cycles, double frequency);
+
 private:
     TracyTTCtx GetContext(uint32_t chip_id);
 
     void RecordSkippedZoneWithEndBeforeStart(const tt::ProgramRealtimeRecord& record, int64_t delta);
+    // Emit the stalls rate-limiting held back for this device, if any. Caller holds mutex_.
+    void FlushDispatchStallMessageLocked(uint32_t chip_id);
     void MaybeEmitSkippedZoneSummaryLocked();
 
     struct SkippedEndBeforeStartStats {
@@ -52,12 +60,21 @@ private:
         bool logged_first_detail = false;
         std::unordered_map<uint32_t, uint64_t> count_by_runtime_id;
         std::unordered_map<uint32_t, uint64_t> count_by_chip_id;
-        std::chrono::steady_clock::time_point last_summary_time{};
+        std::chrono::steady_clock::time_point last_summary_time;
         static constexpr std::chrono::seconds kSummaryInterval{30};
+    };
+
+    struct DispatchStallMessageState {
+        std::chrono::steady_clock::time_point last_message_time;
+        uint64_t suppressed = 0;
+        uint64_t suppressed_cycles = 0;
+        double frequency = 0.0;
+        static constexpr std::chrono::milliseconds kMinInterval{100};
     };
 
     std::mutex mutex_;
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
+    std::unordered_map<uint32_t, DispatchStallMessageState> dispatch_stall_messages_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
 #if defined(TRACY_ENABLE)
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;

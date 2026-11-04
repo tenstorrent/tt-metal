@@ -33,7 +33,20 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Pops a constant the writer pushed once and compute read by index without popping. dummy_unpack orders the
+// pop after the wait on Quasar (a bare wait_front -> pop_front traps the unpacker).
+template <typename DFB>
+ALWI void release_writer_constant(DFB& dfb, uint32_t num_tiles) {
+    dfb.wait_front(num_tiles);
+    dummy_unpack(dfb.get_id());
+    dfb.pop_front(num_tiles);
+}
+
 void kernel_main() {
+    // Quasar: reset the packer-operand tracker so the first pack of this launch re-inits the packer
+    // descriptor regardless of any value left over from a prior launch. No-op on WH/BH.
+    sdpa_pack_operand_tracker_reset();
+
     // Compile time arguments
 
     // Input dimensions in tiles
@@ -103,7 +116,6 @@ void kernel_main() {
 #ifdef TILIZE_Q
     constexpr auto dfb_q_rm = dfb::q_rm;
 #endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
 #ifdef USE_CUR_POS_TENSOR
     // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
     // — see reader_decode_all.cpp.
@@ -113,16 +125,31 @@ void kernel_main() {
     constexpr auto dfb_qk_im = dfb::qk_im;
     constexpr auto dfb_out_im = dfb::out_im;
     constexpr auto dfb_out_accumulate_im = dfb::out_accumulate_im;
+    // Max ping-pong: two separate DFBs (each depth statistics_tiles). cur_max and prev_max are distinct
+    // physical buffers whose roles alternate by move_block(cur->prev) each chunk/round. Merging these into
+    // one 2-deep DFB with a cur-offset read is NOT correct multi-chunk: the offset read (fifo_rd_ptr +
+    // page_size*tile_index, no ring wrap) desyncs once the ring rotates off base, and reduce_c's prev==out
+    // in-place eltwise-max hits a self-aliasing hazard. Kept split (like the prefill sdpa sibling).
     constexpr auto dfb_max_1 = dfb::max_1;
     constexpr auto dfb_max_2 = dfb::max_2;
-    constexpr auto dfb_sum_1 = dfb::sum_1;
-    constexpr auto dfb_sum_2 = dfb::sum_2;
+    // Merged sum buffer (depth 2*statistics_tiles): sum_1/sum_2 collapsed into one DFB to free an
+    // intra-Tensix tile-counter slot (Quasar caps at 8). cur_sum and prev_sum alias this one buffer.
+    // Within a chunk the "prev" sum block sits at the ring front [0, Sq_chunk_t); reduce_c /
+    // correction_block append the freshly computed "cur" block behind it [Sq_chunk_t, 2*Sq_chunk_t) via
+    // reserve_back and read prev at the front (no change). The multi-chunk running-sum update
+    // (fma_block_merged_sum) reads prev@front + cur@offset from that contiguous layout in one fused pass
+    // (sum = cur + prev*exp_max_diff) and RE-BASES the ring: it pops BOTH prev and cur and re-pushes the
+    // running sum as the single contiguous front block, leaving rd_ptr at the buffer base for the next
+    // chunk. CRITICAL: there must be NO move_block(cur_sum->prev_sum) after the fma — the fma already
+    // re-based the ring, and an extra move_block would rotate it off base, desyncing the next chunk's
+    // cur offset read (fifo_rd_ptr + page_size*tile_index has no ring wrap). This is the single-buffer
+    // analog of the prefill sdpa sibling's merged-sum discipline. (Unlike max, sum has no reduce_c
+    // prev==out eltwise hazard — reduce_c<SUM> here runs do_eltwise=false — so sum is safe to merge.)
+    constexpr auto dfb_sum = dfb::sum;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    constexpr auto dfb_prev_sum_2 = dfb::prev_sum_2;
-    constexpr auto dfb_exp_max_diff_2 = dfb::exp_max_diff_2;
-    constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
 
     constexpr auto dfb_out_o = dfb::out_o;
+    constexpr auto dfb_out_worker = dfb::out_worker;
     constexpr auto dfb_out_m = dfb::out_m;
     constexpr auto dfb_out_l = dfb::out_l;
     constexpr auto dfb_out_final = dfb::out;
@@ -180,7 +207,7 @@ void kernel_main() {
             // Read cur_pos from the DFB using mailbox-based synchronization (issue #27979).
             DataflowBuffer dfb_cur_pos_buf(dfb_cur_pos);
             dfb_cur_pos_buf.wait_front(1);
-            cur_pos = dfb_cur_pos_buf.read_tile_value(0, cur_batch / q_heads_parallel_factor);
+            cur_pos = ckernel::read_tile_value(dfb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
             // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
             // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
             dummy_unpack(dfb_cur_pos);
@@ -222,6 +249,50 @@ void kernel_main() {
         return;
     }
 
+    // One owning DataflowBuffer per DFB for the whole kernel; helpers take them by reference.
+    DataflowBuffer dfb_q_in_buf(dfb_q_in);
+    DataflowBuffer dfb_k_in_buf(dfb_k_in);
+    DataflowBuffer dfb_v_in_buf(dfb_v_in);
+    DataflowBuffer dfb_mask_in_buf(dfb_mask_in);
+#ifdef SLIDING_WINDOW
+    DataflowBuffer dfb_sliding_window_mask_in_buf(dfb_sliding_window_mask_in);
+#endif
+#ifdef HAS_BLOCK_PADDING
+    DataflowBuffer dfb_block_pad_mask_buf(dfb_block_pad_mask);
+#endif
+#ifdef USE_ATTENTION_SINK
+    DataflowBuffer dfb_attention_sink_buf(dfb_attention_sink);
+#endif
+    DataflowBuffer dfb_identity_scale_in_buf(dfb_identity_scale_in);
+    DataflowBuffer dfb_m_in_buf(dfb_m_in);
+    DataflowBuffer dfb_l_in_buf(dfb_l_in);
+    DataflowBuffer dfb_qk_im_buf(dfb_qk_im);
+    DataflowBuffer dfb_out_im_buf(dfb_out_im);
+    DataflowBuffer dfb_out_accumulate_im_buf(dfb_out_accumulate_im);
+    DataflowBuffer dfb_max_1_buf(dfb_max_1);
+    DataflowBuffer dfb_max_2_buf(dfb_max_2);
+    DataflowBuffer dfb_sum_buf(dfb_sum);
+    DataflowBuffer dfb_exp_max_diff_buf(dfb_exp_max_diff);
+    DataflowBuffer dfb_out_o_buf(dfb_out_o);
+    DataflowBuffer dfb_out_worker_buf(dfb_out_worker);
+    DataflowBuffer dfb_out_m_buf(dfb_out_m);
+    DataflowBuffer dfb_out_l_buf(dfb_out_l);
+    DataflowBuffer dfb_out_final_buf(dfb_out_final);
+    // The zero tile is entry 1 of identity_scale_in (entry 0 is the reduce scaler); see matmul_blocks.
+    auto& dfb_zero_in_buf = dfb_identity_scale_in_buf;
+    // Reuse compute-local buffers after the flash loop to stay within Quasar's eight-counter limit.
+    // QK holds the child sum at its front and the correction factor at its back; correction pops
+    // the sum, and the following multiply consumes the factor. The factory reserves at least two
+    // statistics blocks, with matching BF16 format and tile geometry, for this handoff.
+    // Child output uses out_im. Writer-owned out_m remains exclusively for the final parent send.
+    auto& dfb_prev_sum_2_buf = dfb_qk_im_buf;
+#ifdef ARCH_QUASAR
+    auto& dfb_exp_max_diff_2_buf = dfb_qk_im_buf;
+#else
+    auto& dfb_exp_max_diff_2_buf = dfb_out_m_buf;
+#endif
+    auto& dfb_out_accumulate_im_2_buf = dfb_out_im_buf;
+
     // Determine which children actually participate in reduction (based on chunk allocation)
     // A child at core_num is active or has data if core_num < k_num_chunks
     // E.g. k_num_chunks = 2, num_cores_per_head = 4
@@ -247,6 +318,7 @@ void kernel_main() {
     // We tilize input Q if it is in ROW MAJOR layout
 #ifdef TILIZE_Q
     {
+        DataflowBuffer dfb_q_rm_buf(dfb_q_rm);
         compute_kernel_hw_startup(dfb_q_rm, dfb_q_in);
         // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
         // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
@@ -258,7 +330,8 @@ void kernel_main() {
             dfb_q_in,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+            dfb_q_rm_buf, dfb_q_in_buf, 1);
         matmul_init(dfb_q_in, dfb_k_in);
         // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
         // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
@@ -277,13 +350,13 @@ void kernel_main() {
         matmul_init(dfb_q_in, dfb_k_in);
     }
 #endif
-    DataflowBuffer(dfb_q_in).wait_front(q_chunk_tiles);
+    dfb_q_in_buf.wait_front(q_chunk_tiles);
 
     // Wait for block padding mask (generated once by writer, reused every chunk without popping)
 #ifdef HAS_BLOCK_PADDING
     {
         uint32_t block_pad_mask_tiles = Sq_chunk_t * Sk_chunk_t_dynamic;
-        DataflowBuffer(dfb_block_pad_mask).wait_front(block_pad_mask_tiles);
+        dfb_block_pad_mask_buf.wait_front(block_pad_mask_tiles);
     }
 #endif
 
@@ -311,19 +384,22 @@ void kernel_main() {
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
     constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
-    // We set up Ping Pong intermediate buffers between loops
-    uint32_t dfb_cur_max = dfb_max_1;
-    uint32_t dfb_prev_max = dfb_max_2;
-    uint32_t dfb_cur_sum = dfb_sum_1;
-    uint32_t dfb_prev_sum = dfb_sum_2;
+    // We set up Ping Pong intermediate buffers between loops.
+    // max is a two-buffer ping-pong: cur and prev are distinct DFBs, swapped by move_block each chunk.
+    auto* dfb_cur_max = &dfb_max_1_buf;
+    auto* dfb_prev_max = &dfb_max_2_buf;
+    // sum is a single merged buffer: cur and prev alias the same DFB (prev at front, cur behind). The
+    // fma re-bases the ring each chunk, so no move_block(cur_sum->prev_sum) is needed (or allowed).
+    auto* dfb_cur_sum = &dfb_sum_buf;
+    auto* dfb_prev_sum = &dfb_sum_buf;
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
-        dfb_cur_max = dfb_max_1;
-        dfb_prev_max = dfb_max_2;
-        dfb_cur_sum = dfb_sum_1;
-        dfb_prev_sum = dfb_sum_2;
+        dfb_cur_max = &dfb_max_1_buf;
+        dfb_prev_max = &dfb_max_2_buf;
+        dfb_cur_sum = &dfb_sum_buf;
+        dfb_prev_sum = &dfb_sum_buf;
 
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
@@ -376,13 +452,12 @@ void kernel_main() {
          * @param out_chunk_tiles - Number of output chunk tiles
          */
         /* START OF FLASH ATTENTION LOOP */
-        uint32_t dfb_out_mm = dfb_out_accumulate_im;
+        auto* dfb_out_mm = &dfb_out_accumulate_im_buf;
 
         // Loop through all K chunks
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Reconfig register DF
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -396,17 +471,21 @@ void kernel_main() {
 
             /* QK = Q_CHUNK @ K_CHUNK */
             // Determine which mask buffer to use for fusion
-            uint32_t mask_dfb_to_use = dfb_mask_in;  // Default to causal mask buffer
+            auto* mask_dfb_to_use = &dfb_mask_in_buf;  // Default to causal mask buffer
 #ifdef SLIDING_WINDOW
             if (add_sliding_window_mask_fusion) {
-                mask_dfb_to_use = dfb_sliding_window_mask_in;  // Use sliding window mask buffer
+                mask_dfb_to_use = &dfb_sliding_window_mask_in_buf;  // Use sliding window mask buffer
             }
 #endif
 
+            // QK = Q @ K^T via the matmul's native SrcA transpose (transpose=true), reading dfb_k_in directly.
+            // matmul_blocks packs via pack_tile naming dfb_qk_im but does not itself reconfig the packer, so
+            // re-point the packer to the QK output here first (mirrors prefill sdpa).
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
-                dfb_q_in,
-                dfb_k_in,
-                dfb_qk_im,
+                dfb_q_in_buf,
+                dfb_k_in_buf,
+                dfb_qk_im_buf,
                 Sq_chunk_t,
                 Sk_chunk_t_dynamic,
                 DHt,
@@ -416,10 +495,10 @@ void kernel_main() {
                 qk_in0_block_w,
                 qk_subblock_h_dynamic,
                 qk_subblock_w_dynamic,
-                true,
+                true /*transpose*/,
                 add_mask_fusion,
                 mask_dfb_to_use,
-                dfb_zero_in);
+                &dfb_zero_in_buf);
 
             /* QK += MASK */
             // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
@@ -427,7 +506,7 @@ void kernel_main() {
             // Applied outside mask_fusion conditional since it's always needed independently.
 #ifdef HAS_BLOCK_PADDING
             reconfig_data_format(dfb_qk_im, dfb_block_pad_mask);
-            add_block_inplace<false>(dfb_qk_im, dfb_block_pad_mask, qk_chunk_tiles_dynamic);
+            add_block_inplace<false>(dfb_qk_im_buf, dfb_block_pad_mask_buf, qk_chunk_tiles_dynamic);
 #endif
 
             if (!add_mask_fusion) {
@@ -435,12 +514,12 @@ void kernel_main() {
                     // For decode, we only apply mask at the last chunk for causal mode
                     if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                         reconfig_data_format(dfb_qk_im, dfb_mask_in);
-                        add_block_inplace<false>(dfb_qk_im, dfb_mask_in, qk_chunk_tiles_dynamic);
+                        add_block_inplace<false>(dfb_qk_im_buf, dfb_mask_in_buf, qk_chunk_tiles_dynamic);
                     }
                 } else {
                     if constexpr (use_attention_mask) {
                         reconfig_data_format(dfb_qk_im, dfb_mask_in);
-                        add_block_inplace<true>(dfb_qk_im, dfb_mask_in, qk_chunk_tiles_dynamic);
+                        add_block_inplace<true>(dfb_qk_im_buf, dfb_mask_in_buf, qk_chunk_tiles_dynamic);
                     }
                 }
 
@@ -448,7 +527,7 @@ void kernel_main() {
 #ifdef SLIDING_WINDOW
                 if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
                     reconfig_data_format(dfb_qk_im, dfb_sliding_window_mask_in);
-                    add_block_inplace<false>(dfb_qk_im, dfb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
+                    add_block_inplace<false>(dfb_qk_im_buf, dfb_sliding_window_mask_in_buf, qk_chunk_tiles_dynamic);
                 }
 #endif
             }
@@ -461,7 +540,7 @@ void kernel_main() {
              */
 
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_max);
+            pack_reconfig_out(dfb_cur_max->get_id());
 
             /**
              * OPTIMIZATION
@@ -472,34 +551,44 @@ void kernel_main() {
              *  cur_max = max(qk, dim=-1)
              */
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                dfb_cur_max, dfb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                dfb_qk_im_buf,
+                dfb_identity_scale_in_buf,
+                *dfb_cur_max,
+                *dfb_prev_max,
+                Sk_chunk_t_dynamic,
+                k_chunk > k_chunk_start);
             /* QK -= dfb_cur_max */
             /* QK = exp(QK)*/
-            reconfig_data_format(dfb_qk_im, dfb_cur_max);
-            pack_reconfig_data_format(dfb_qk_im);
+            reconfig_data_format(dfb_qk_im, dfb_cur_max->get_id());
+            pack_reconfig_out(dfb_qk_im);
 
             /**
              * sub_exp performs `QK = exp((QK - cur_max) * scale)`
              */
+            // Split max: cur_max is the front block of its own DFB, so no cur offset (defaults to 0).
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
-                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic);
-            DataflowBuffer(dfb_qk_im).wait_front(qk_chunk_tiles_dynamic);
+                dfb_qk_im_buf, *dfb_cur_max, *dfb_cur_sum, Sk_chunk_t_dynamic);
+            dfb_qk_im_buf.wait_front(qk_chunk_tiles_dynamic);
 
             // Reconfig register DF
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_sum);
+            pack_reconfig_out(dfb_cur_sum->get_id());
 
             /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
             reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                dfb_cur_sum, dfb_cur_sum, Sk_chunk_t_dynamic, false);
+                dfb_qk_im_buf, dfb_identity_scale_in_buf, *dfb_cur_sum, *dfb_cur_sum, Sk_chunk_t_dynamic, false);
 
             /* OUT_IM = QK @ V_CHUNK */
             reconfig_data_format(dfb_v_in, dfb_qk_im);  // DEBUG
-            pack_reconfig_data_format(dfb_out_im);
+            // Re-point the packer to the ACTUAL matmul output (dfb_out_mm), not the hardcoded dfb_out_im:
+            // for the first chunk dfb_out_mm == dfb_out_accumulate_im (reassigned to dfb_out_im only after
+            // this matmul), so a hardcoded dfb_out_im pack_init sends chunk 0's OUT to the wrong ring and its
+            // contribution is lost. Must match the matmul's out arg.
+            pack_reconfig_out(dfb_out_mm->get_id());
             matmul_blocks(
-                dfb_qk_im,
-                dfb_v_in,
-                dfb_out_mm,
+                dfb_qk_im_buf,
+                dfb_v_in_buf,
+                *dfb_out_mm,
                 Sq_chunk_t,
                 vDHt,
                 Sk_chunk_t_dynamic,
@@ -511,55 +600,67 @@ void kernel_main() {
                 out_subblock_w,
                 false /*transpose*/,
                 false,
-                dfb_mask_in,
-                dfb_zero_in);
+                &dfb_mask_in_buf,
+                &dfb_zero_in_buf);
 
             // Reconfig register DF
             reconfig_data_format_srca(dfb_out_im);
-            DataflowBuffer(dfb_qk_im).pop_front(qk_chunk_tiles_dynamic);
+            dfb_qk_im_buf.pop_front(qk_chunk_tiles_dynamic);
 
             /* OUT_ACC += OUT_IM */
             if (k_chunk == k_chunk_start) {
-                dfb_out_mm = dfb_out_im;
+                dfb_out_mm = &dfb_out_im_buf;
             } else {
                 // When there is more than 1 chunk, we perform Lazy Softmax
                 // Reconfig register DF
-                reconfig_data_format(dfb_prev_max, dfb_cur_max);
-                pack_reconfig_data_format(dfb_exp_max_diff);
+                reconfig_data_format(dfb_prev_max->get_id(), dfb_cur_max->get_id());
+                pack_reconfig_out(dfb_exp_max_diff);
 
                 /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-                DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+                // Split max: prev_max and cur_max are distinct DFBs, each read at its own front (no offset).
+                sub_exp_block<scale_fp32>(*dfb_prev_max, *dfb_cur_max, dfb_exp_max_diff_buf, Sq_chunk_t);
+                dfb_prev_max->pop_front(Sq_chunk_t);
 
-                /* PREV_SUM *= EXP_MAX_DIFF */
-                mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                /* CUR_SUM = CUR_SUM + PREV_SUM * EXP_MAX_DIFF (fused) */
+                // Merged sum: cur_sum and prev_sum are the same DFB. reduce_c left the ring contiguous as
+                // [prev(front) | cur(behind at offset Sq_chunk_t)]. fma_block_merged_sum reads prev@front
+                // and cur@offset from that contiguous layout in one pass, then RE-BASES the ring (pops BOTH
+                // prev and cur, re-pushes the running sum as the single front block at rd_ptr==0). This
+                // replaces the old mul_block_inplace(prev) + add_block_inplace pair, and because it already
+                // re-bases the ring there must be NO move_block(cur_sum->prev_sum) after it (see below):
+                // an extra rotation would desync the next chunk's cur offset read (fifo_rd_ptr +
+                // page_size*tile_index, no ring wrap). EXP_MAX_DIFF is read but not popped here; the OUT_ACC
+                // scaling below pops it.
+                fma_block_merged_sum(*dfb_cur_sum, dfb_exp_max_diff_buf, Sq_chunk_t, Sq_chunk_t);
 
                 /* OUT_ACC *= EXP_MAX_DIFF */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_exp_max_diff);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
+                pack_reconfig_out(dfb_out_accumulate_im);
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
-                    dfb_out_accumulate_im, dfb_exp_max_diff, dfb_out_accumulate_im);
-
-                /* CUR_SUM += PREV_SUM */
-                reconfig_data_format(dfb_cur_sum, dfb_prev_sum);
-                pack_reconfig_data_format(dfb_cur_sum);
-                add_block_inplace<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+                    dfb_out_accumulate_im_buf, dfb_exp_max_diff_buf, dfb_out_accumulate_im_buf);
 
                 /* OUT_ACC += OUT_IM */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_out_im);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
-                add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_im, out_chunk_tiles);
+                pack_reconfig_out(dfb_out_accumulate_im);
+                add_block_inplace<true>(dfb_out_accumulate_im_buf, dfb_out_im_buf, out_chunk_tiles);
             }
 
-            // More local chunks to process - move intermediate sum and max values to ping-pong buffers
-            reconfig_data_format(dfb_cur_max, dfb_cur_max);
-            pack_reconfig_data_format(dfb_prev_max);
+            // More local chunks to process - carry the running max forward to the prev buffer.
+            // Split max: cur_max (dfb_max_1) and prev_max (dfb_max_2) are distinct DFBs, so this move_block
+            // copies the just-computed running max from cur into prev (through DST) and pops cur, setting up
+            // prev for the next chunk's reduce_c / the tree correction_block.
+            reconfig_data_format(dfb_cur_max->get_id(), dfb_cur_max->get_id());
+            pack_reconfig_out(dfb_prev_max->get_id());
 
             // PREV_MAX <- CUR_MAX
-            move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
+            move_block<true>(*dfb_cur_max, *dfb_prev_max, Sq_chunk_t);
 
-            // PREV_SUM <- CUR_SUM
-            move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+            // NOTE: no move_block for the merged sum in the flash loop. The multi-chunk fma re-bases the
+            // ring each chunk (pushes==pops==2N, running sum at rd_ptr==base) and an extra move_block would
+            // unbalance that and desync the next chunk's cur offset read. The single-chunk (batch1) case
+            // needs the running sum carried to the tree's expected position, but that carry is done once
+            // below (gated on the tree being active), not per-chunk here — the single-core flash->finalize
+            // path (batch32) reads the sum at the front directly and needs no carry at all.
         }
 
         /* END OF FLASH ATTENTION LOOP */
@@ -585,6 +686,11 @@ void kernel_main() {
         //   - dfb_prev_sum: local L (sum of exp)
         // Only receive from children that actually have data
         if (num_active_children > 0) {
+            // Merged sum: carry the flash-loop running sum into the ring position the tree's
+            // correction_block expects, ONCE before the rounds (the flash loop no longer does a per-chunk
+            // sum move_block). The single-core flash->finalize path (no children) skips this and reads the
+            // sum at the front directly.
+            move_block<true>(*dfb_cur_sum, *dfb_prev_sum, Sq_chunk_t);
             // Iterate through each round and receive from child if one exists AND has data
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
@@ -594,7 +700,7 @@ void kernel_main() {
 
                     // Combine child with existing local/accumulated data
                     // Move child's L to dfb_prev_sum_2 for correction
-                    move_block<true>(dfb_l_in, dfb_prev_sum_2, Sq_chunk_t);
+                    move_block<true>(dfb_l_in_buf, dfb_prev_sum_2_buf, Sq_chunk_t);
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -604,34 +710,41 @@ void kernel_main() {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     correction_block<scale_fp32, vector_mode>(
-                        dfb_m_in,        // child max
-                        dfb_prev_sum_2,  // child sum
-                        dfb_cur_max,
-                        dfb_prev_max,
-                        dfb_cur_sum,
-                        dfb_prev_sum,
-                        dfb_exp_max_diff,
-                        dfb_exp_max_diff_2,
+                        dfb_m_in_buf,        // child max
+                        dfb_prev_sum_2_buf,  // child sum
+                        *dfb_cur_max,
+                        *dfb_prev_max,
+                        *dfb_cur_sum,
+                        *dfb_prev_sum,
+                        dfb_exp_max_diff_buf,
+                        dfb_exp_max_diff_2_buf,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- CHILD_OUT
-                    move_block<true>(dfb_out_o, dfb_out_accumulate_im_2, out_chunk_tiles);
+                    // OUT_ACC_2 <- CHILD_OUT: consume the child's O out of the borrowed out_o into the
+                    // compute-private out_accumulate_im_2 (== out_im, freed above when correction popped
+                    // prev_sum_2). This move_block only *consumes* out_o (wait_front+pop_front), preserving
+                    // its cross-core handshake; the in-place scale/add below then run on out_im, never on
+                    // out_o (in-place ops re-produce their operand, which compute may not do to a borrowed
+                    // buffer).
+                    move_block<true>(dfb_out_o_buf, dfb_out_accumulate_im_2_buf, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_exp_max_diff);
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_2, dfb_exp_max_diff_2);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_buf, dfb_exp_max_diff_buf);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_2_buf, dfb_exp_max_diff_2_buf);
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
-                    add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_accumulate_im_2, out_chunk_tiles);
+                    add_block_inplace<true>(dfb_out_accumulate_im_buf, dfb_out_accumulate_im_2_buf, out_chunk_tiles);
 
-                    // Update prev buffers for next round
-                    // PREV_MAX <- CUR_MAX
-                    // PREV_SUM <- CUR_SUM
-                    DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
-                    DataflowBuffer(dfb_m_in).pop_front(Sq_chunk_t);
-                    move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
-                    move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+                    // Update prev buffers for next round.
+                    // Split max: pop the consumed prev_max (max_2), then move cur_max (max_1) into it.
+                    dfb_prev_max->pop_front(Sq_chunk_t);
+                    dfb_m_in_buf.pop_front(Sq_chunk_t);
+                    move_block<true>(*dfb_cur_max, *dfb_prev_max, Sq_chunk_t);
+                    // Merged sum, tree path: unlike the flash loop (where fma re-bases the ring), the tree
+                    // uses correction_block, whose front-reads + reserve_back/pop_front leave the running
+                    // sum needing an explicit carry to prev for the next round. Keep the move_block here.
+                    move_block<true>(*dfb_cur_sum, *dfb_prev_sum, Sq_chunk_t);
                 }
             }
         }
@@ -644,50 +757,59 @@ void kernel_main() {
             // If single core (no children with data), results are in dfb_cur_sum/dfb_cur_max from FA loop
 
             /* SUM = 1.0 / SUM */
-            reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
+            reconfig_data_format(dfb_prev_sum->get_id(), dfb_prev_sum->get_id());
+            pack_reconfig_out(dfb_prev_sum->get_id());
 
             // Handle attention sink here
 #ifdef USE_ATTENTION_SINK
             {
                 // Use appropriate max buffer based on tree reduction
-                uint32_t max_dfb_for_sink = dfb_prev_max;
+                auto& max_dfb_for_sink = *dfb_prev_max;
 
-                // m_new
-                max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
+                // max_block, sub_exp_block and mul_block_inplace pack via a bare pack_tile, so each is
+                // preceded by a pack_reconfig_out naming its output (Quasar packer re-point).
+
+                // m_new: max_block writes cur (m_new) into dfb_cur_max (max_1, its own DFB); split max
+                // means the two exp reads below take cur at its own front (no offset).
+                pack_reconfig_out(dfb_cur_max->get_id());
+                max_block<vector_mode>(dfb_attention_sink_buf, max_dfb_for_sink, *dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+                pack_reconfig_out(dfb_exp_max_diff);
+                sub_exp_block<scale_fp32>(max_dfb_for_sink, *dfb_cur_max, dfb_exp_max_diff_buf, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
-                mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                pack_reconfig_out(dfb_prev_sum->get_id());
+                mul_block_inplace(*dfb_prev_sum, dfb_exp_max_diff_buf, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
-                DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
+                pack_reconfig_out(dfb_exp_max_diff_2_buf.get_id());
+                sub_exp_block<scale_fp32>(dfb_attention_sink_buf, *dfb_cur_max, dfb_exp_max_diff_2_buf, Sq_chunk_t);
+                // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
+                dfb_cur_max->pop_front(Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
-                add_block_inplace<true>(dfb_prev_sum, dfb_exp_max_diff_2, Sq_chunk_t);
+                add_block_inplace<true>(*dfb_prev_sum, dfb_exp_max_diff_2_buf, Sq_chunk_t);
 
                 // O -> O * exp(m - m_new)
-                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_exp_max_diff);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_buf, dfb_exp_max_diff_buf);
             }
 #endif
 
-            reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
-            recip_block_inplace(dfb_prev_sum, Sq_chunk_t);
+            reconfig_data_format(dfb_prev_sum->get_id(), dfb_prev_sum->get_id());
+            pack_reconfig_out(dfb_prev_sum->get_id());
+            recip_block_inplace(*dfb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */
-            reconfig_data_format(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_accumulate_im);
+            reconfig_data_format(dfb_out_accumulate_im, dfb_prev_sum->get_id());
+            pack_reconfig_out(dfb_out_accumulate_im);
 
             // dfb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_final);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_buf, *dfb_prev_sum);
+            pack_reconfig_out(dfb_out_final);
 
             // Pop the max buffer that still has data
-            DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+            dfb_prev_max->pop_front(Sq_chunk_t);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
@@ -698,10 +820,11 @@ void kernel_main() {
                     dfb_out_final,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    dfb_out_accumulate_im_buf, dfb_out_final_buf, 1);
             } else {
                 // Move output to buffer for the writer
-                move_block<true>(dfb_out_accumulate_im, dfb_out_final, out_chunk_tiles);
+                move_block<true>(dfb_out_accumulate_im_buf, dfb_out_final_buf, out_chunk_tiles);
             }
 
         } else if (has_parent) {
@@ -711,15 +834,36 @@ void kernel_main() {
             //   - dfb_out_accumulate_im: O
             //   - dfb_prev_sum: L
             //   - dfb_prev_max: M
-            // Move O to the output DFB
-            move_block<true>(dfb_out_accumulate_im, dfb_out_o, out_chunk_tiles);
+            // Move O to the output DFB for the writer to send to parent
+            move_block<true>(dfb_out_accumulate_im_buf, dfb_out_worker_buf, out_chunk_tiles);
             // Move M to the output DFB
-            move_block<true>(dfb_prev_max, dfb_out_m, Sq_chunk_t);
+            move_block<true>(*dfb_prev_max, dfb_out_m_buf, Sq_chunk_t);
             // Move L to the output DFB
-            move_block<true>(dfb_prev_sum, dfb_out_l, Sq_chunk_t);
+            move_block<true>(*dfb_prev_sum, dfb_out_l_buf, Sq_chunk_t);
         }
     }
 
     // Free up dfb_q_in after Q chunks
-    DataflowBuffer(dfb_q_in).pop_front(q_chunk_tiles);
+    dfb_q_in_buf.pop_front(q_chunk_tiles);
+
+    // The writer pushes these constant tiles once on every core with local data; compute reads them by index
+    // (add_block_inplace<false>, the fused-mask matmul, reduce_c) without popping. Release them so the buffers
+    // are left balanced.
+    release_writer_constant(dfb_identity_scale_in_buf, 2);  // reduce scaler + zero tile
+#ifdef HAS_BLOCK_PADDING
+    release_writer_constant(dfb_block_pad_mask_buf, Sq_chunk_t * Sk_chunk_t_dynamic);
+#endif
+    if constexpr (is_causal) {
+        release_writer_constant(dfb_mask_in_buf, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#ifdef SLIDING_WINDOW
+    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+        release_writer_constant(dfb_sliding_window_mask_in_buf, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#endif
+#ifdef USE_ATTENTION_SINK
+    // The reader pushes the attention sink (Sq_chunk_t tiles) on every core with local data; only the core
+    // that finalizes the output reads it (by index, never popped). Release it on every core.
+    release_writer_constant(dfb_attention_sink_buf, Sq_chunk_t);
+#endif
 }

@@ -493,12 +493,9 @@ class SamplingOp:
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
-                # math_approx_mode=False routes recip_tile through the
-                # accurate Newton-Raphson path (~24-bit precision with
-                # fp32_dest_acc_en) instead of the ~7-bit LUT path. This is
-                # the dominant precision knob for top-P sampling; the
-                # approximate path was responsible for the ~3% relative
-                # error we were seeing on softmax outputs.
+                # math_approx_mode=False enables Newton-Raphson reciprocal
+                # refinement; fp32_dest_acc_en=True retains full destination
+                # precision. Both settings matter for top-P sampling accuracy.
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
             ),
@@ -1216,6 +1213,7 @@ class SamplingOp:
                     sender_group = kernel_result.get_group_by_arg("sampling_mesh_sender_core", 1)
                     sender_kernel_idx = sender_group.brisc_kernel_index
                     fabric_rt_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),
                         link_idx=sender_link_idx,

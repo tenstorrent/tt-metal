@@ -21,10 +21,15 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 NUM_TOKENS = PREFILL_CHUNK_TOKENS_PER_CHIP
 NUM_EXPERTS = 8
@@ -33,11 +38,11 @@ PCC_THRESHOLD = 0.999
 
 # Per-model (id, config, extended). Each test reads emb_dim (EMB_SIZE) and the routed-expert
 # count (NUM_ROUTED_EXPERTS) from the config, so every model exercises its own shape:
-#   dsv3 7168/256, glm_51 6144/256, minimax_m27 3072/256,
+#   dsv3 7168/256, glm_53 6144/256, minimax_m27 3072/256,
 #   dsv4_pro 7168/384, dsv4_flash 4096/256, gptoss_120b 2880/128.
 MODELS = [
     ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
@@ -97,6 +102,23 @@ def _xfail_multi_chunk_structured(request):
     reason = _MULTI_CHUNK_STRUCTURED_XFAIL.get((name, callspec.params.get("num_tokens")))
     if reason:
         request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+
+
+def randn_bf16(*shape):
+    """Standard-normal bfloat16, generated in fp32 blocks and cast down.
+
+    torch.randn(..., dtype=torch.bfloat16) has no vectorized path and runs ~5.7x slower than
+    filling the same buffer from fp32 blocks -- 5.4s versus 0.95s for the 940MB combine tensor
+    the multi-chunk cases use, which profiled as 59% of this file. The block keeps the fp32
+    temporary at ~17MB rather than doubling peak memory the way a whole-tensor fp32 draw would.
+    """
+    out = torch.empty(*shape, dtype=torch.bfloat16)
+    flat = out.view(-1)
+    block = 1 << 22
+    for start in range(0, flat.numel(), block):
+        stop = min(start + block, flat.numel())
+        flat[start:stop] = torch.randn(stop - start)
+    return out
 
 
 def pytorch_reference(combine, weights):
@@ -212,7 +234,7 @@ def test_random_data(device, config):
     """Random activations and weights, compared to PyTorch reference."""
     torch.manual_seed(42)
     emb_dim = config.EMB_SIZE
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
@@ -230,7 +252,7 @@ def test_vs_old_implementation(device, config):
     """Fused kernel vs old implementation (to_layout + mul + sum) with random data."""
     torch.manual_seed(42)
     emb_dim = config.EMB_SIZE
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
@@ -259,7 +281,7 @@ def test_sparse_weights(device, k_active, config):
     """Fused kernel with sparse weights (k_active out of 8 experts non-zero per token)."""
     torch.manual_seed(42)
     emb_dim = config.EMB_SIZE
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
     weights = torch.zeros(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
     for t in range(NUM_TOKENS):
         active = torch.randperm(NUM_EXPERTS)[:k_active]
@@ -303,7 +325,7 @@ def test_skip_nonlocal_experts(device, config):
         table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     # Reference: only sum local experts (non-local should be skipped by kernel)
@@ -332,7 +354,7 @@ def test_output_layout(device, config):
     """Verify output is TILE layout with correct shape."""
     torch.manual_seed(42)
     emb_dim = config.EMB_SIZE
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
@@ -391,7 +413,7 @@ def test_multi_chunk_random(device, num_tokens, config):
     """Random data with >100 chunks so some cores get 2+ chunks each."""
     torch.manual_seed(42)
     emb_dim = config.EMB_SIZE
-    combine = torch.randn(1, num_tokens, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine = randn_bf16(1, num_tokens, NUM_EXPERTS, emb_dim)
     weights = torch.randn(1, num_tokens, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     ref = pytorch_reference(combine, weights)

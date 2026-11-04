@@ -8,7 +8,6 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "test_one_to_all.hpp"
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -18,11 +17,9 @@ using namespace test_utils;
 
 namespace unit_tests::dm::core_to_all::multicast_schemes {
 
-uint32_t determine_max_grid_dimension(const shared_ptr<distributed::MeshDevice>& mesh_device) {
-    uint32_t smaller_dimension =
-        min(mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x,
-            mesh_device->impl().get_device(0)->compute_with_storage_grid_size().y);
-    return (smaller_dimension - 1);
+uint32_t determine_max_grid_dimension(distributed::MeshDevice& mesh_device) {
+    CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
+    return min(grid_size.x, grid_size.y) - 1;
 }
 
 enum class MulticastSchemeType {
@@ -98,7 +95,7 @@ pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size, Mul
 }
 
 void test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     uint32_t sub_grid_dimension_size,
     NOC noc_id,
@@ -125,8 +122,7 @@ void test(
         static_cast<uint32_t>(multicast_scheme_type));
 }
 
-void run_all_tests(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id, bool loopback = true) {
+void run_all_tests(distributed::MeshDevice& mesh_device, uint32_t test_case_id, bool loopback = true) {
     vector<NOC> noc_ids = {NOC::NOC_0, NOC::NOC_1};
     uint32_t starting_sub_grid_dimension_size = 2;  // Minimum size for sub-grid dimension
     uint32_t sub_grid_dimension_limit = determine_max_grid_dimension(mesh_device);
@@ -165,7 +161,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesLo
     uint32_t test_case_id = 100;
     bool loopback = true;
 
-    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(this->device(), test_case_id, loopback);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
@@ -174,14 +170,14 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesNo
     uint32_t test_case_id = 101;
     bool loopback = false;
 
-    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(this->device(), test_case_id, loopback);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 10;
     bool loopback = false;
 
-    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(this->device(), test_case_id, loopback);
 }
 
 /* ============================================================= */
@@ -210,17 +206,15 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemeSin
 
     uint32_t test_case_id = 102;
 
-    auto mesh_device = get_mesh_device();
-
     bool loopback = false;
     NOC noc_id = NOC::NOC_0;
     uint32_t sub_grid_dimension_size =
-        mesh_device->impl().get_device(0)->arch() == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
+        this->device().arch() == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
     unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType multicast_scheme =
         unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType::SenderInGridTopRight;
 
     unit_tests::dm::core_to_all::multicast_schemes::test(
-        mesh_device, test_case_id, sub_grid_dimension_size, noc_id, multicast_scheme, loopback);
+        this->device(), test_case_id, sub_grid_dimension_size, noc_id, multicast_scheme, loopback);
 }
 
 }  // namespace tt::tt_metal

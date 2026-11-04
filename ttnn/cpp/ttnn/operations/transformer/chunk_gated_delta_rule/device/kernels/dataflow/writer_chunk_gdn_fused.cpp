@@ -1,0 +1,446 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Fused-program (chunk_gdn_fused) PRODUCER writer: replaces the prep writer's DRAM drain with a
+// direct NoC hand-off into the NV RECEIVER cores of each item's head. The items of this producer
+// (head and chunk per item) come from the shared producer map (chunk_gdn_fused_map.hpp); the head
+// selects the receivers and the credit word. Per item (head h, chunk c):
+//   1. wait for the seven compute-pushed intermediates
+//        v_beta [C,V], t_inv [C,C], nkd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl*I [1 tile]
+//   2. wait credit[h][slot] == NV  — every receiver of head h has reserved chunk c's slots
+//      credit[h][slot] <- 0
+//   3. v_beta: NV V-slice writes (1x1-rectangle multicasts, unlinked), slice v -> receiver v's ring slot
+//   4. the six V-independent tensors: LINKED multicasts to the head's receiver rectangle (num_dests NV)
+//   5. noc.async_write_barrier()  — waits for ACKS. A flush only proves departure, and the unicast
+//      slices are not part of the linked chain, so only the barrier orders every byte before VALID.
+//   6. VALID multicast to the rectangle (unlinked: ends the chain)
+//   7. pop the seven CBs (the writes have completed, so compute may reuse the slots)
+//
+// Addressing: the seven hand-off CBs are declared on the UNION of producer and receiver cores, so this
+// core's CB base == every receiver's CB base. Six shared CBs: the receiver reserves/pushes n tiles per
+// chunk, so its slot for chunk c is base + (c % NBUF)*n*tile. v_beta: the CB is producer-sized
+// (cv*NBUF tiles) but a receiver reserves only Ct*Vtl per chunk, so its ring has NV*NBUF slots and its
+// slot for chunk c is base + ((c*Ct*Vtl) mod (cv*NBUF))*tile; row r of receiver v's slice is source
+// tiles [r*Vt + v*Vtl, +Vtl) of this core's front slot.
+//
+// Credit words: BH x NBUF words credit[h][slot] at CB_CREDIT's base + CREDIT_OFF — the last tile of the
+// union-declared u/mask CB, hence the same L1 address on every core. Dispatch re-initializes only
+// Semaphore objects per launch, so this kernel zeroes the words itself and then bumps the SEM_INIT
+// semaphore on each receiver of every head it serves; a receiver credits nothing before all its
+// producers have done so.
+//
+// Receiver coordinates: common runtime args, HEAD_WORDS per head — the multicast rectangle, already
+// ORDERED for this kernel's NoC (NOC_1 wants bottom-right -> top-left; coordinates themselves are
+// virtual and never flipped on Blackhole), then the NV receivers' coords, two per word.
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "internal/local_mem/address_access.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "hostdevcommon/common_values.hpp"
+#include "chunk_gdn_handoff_dm.hpp"
+#include "chunk_gdn_fused_map.hpp"
+#include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
+#include "api/debug/waypoint.h"
+#include "chunk_gdn_handoff.hpp"
+
+// Runtime checks of the protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled only
+// where the watcher's ASSERT is, so release kernels are unchanged.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#define GDN_HANDOFF_WATCHER_CHECKS 1
+#else
+#define GDN_HANDOFF_WATCHER_CHECKS 0
+#endif
+
+// CB indices (prep compute's output slots == the scan side's hand-off slots), checked against the shared map.
+constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20;
+constexpr uint32_t cb_kdec_t = 24, cb_dl = 22;
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_nkd == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
+    "hand-off CB indices drifted from chunk_gdn_handoff.hpp");
+
+void kernel_main() {
+    constexpr uint32_t Ct = get_compile_time_arg_val(0);
+    constexpr uint32_t Kt = get_compile_time_arg_val(1);
+    constexpr uint32_t Vt = get_compile_time_arg_val(2);          // FULL V in tiles: this core's v_beta width
+    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(3);   // producer -> receivers: "chunk c landed"
+    constexpr uint32_t SEM_INIT = get_compile_time_arg_val(4);    // producer -> receivers: "credit words zeroed"
+    constexpr uint32_t NBUF = get_compile_time_arg_val(5);        // hand-off CB depth (slots), from the factory
+    constexpr uint32_t NV = get_compile_time_arg_val(6);          // receivers per head
+    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(7);   // union-declared CB holding the credit words
+    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(8);  // byte offset of credit[0] in that CB
+    constexpr bool UNICAST = get_compile_time_arg_val(9) != 0;    // A/B: NV unicast writes instead of multicasts
+    constexpr bool POSTED =
+        get_compile_time_arg_val(10) != 0;  // A/B (unicast only): posted data, ordered VALID, no barrier
+    // The protocol tag is the LAST compile-time arg: a trailing-arg drift against the factory fails here.
+    static_assert(
+        kernel_compile_time_args.size() == 12 && kernel_compile_time_args.back() == gdn_handoff::kHandoffTag,
+        "writer_chunk_gdn_fused: compile-time arg layout drifted from chunk_gdn_fused_program_factory.cpp");
+    static_assert(!POSTED || UNICAST, "posted hand-off requires the unicast transport");
+    // Derived, not passed: the only way a compile-time check can tell NV from Vtl.
+    static_assert(NV >= 1 && Vt % NV == 0, "NV receivers must tile the full V width");
+    constexpr uint32_t Vtl = Vt / NV;  // per-receiver V-slice width (tiles)
+    // The slot addressing assumes one tile size across the seven hand-off CBs (all fp32).
+    static_assert(
+        get_dataformat(cb_vbeta) == DataFormat::Float32 && get_dataformat(cb_Tinv) == DataFormat::Float32 &&
+            get_dataformat(cb_nkd) == DataFormat::Float32 && get_dataformat(cb_qdecay) == DataFormat::Float32 &&
+            get_dataformat(cb_intra) == DataFormat::Float32 && get_dataformat(cb_kdec_t) == DataFormat::Float32 &&
+            get_dataformat(cb_dl) == DataFormat::Float32,
+        "hand-off CBs must be fp32");
+    static_assert(
+        get_tile_size(cb_Tinv) == get_tile_size(cb_vbeta) && get_tile_size(cb_nkd) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_qdecay) == get_tile_size(cb_vbeta) && get_tile_size(cb_intra) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_kdec_t) == get_tile_size(cb_vbeta) && get_tile_size(cb_dl) == get_tile_size(cb_vbeta),
+        "hand-off CBs must share one tile size");
+    // One VALID semaphore per slot, none colliding with the init semaphore, all within the program's cap.
+    static_assert(
+        NBUF >= 1 && SEM_VALID + NBUF <= gdn_handoff::kMaxSemaphores,
+        "valid[slot] semaphore ids exceed the program's semaphore cap");
+    static_assert(
+        SEM_INIT < SEM_VALID || SEM_INIT >= SEM_VALID + NBUF, "init semaphore collides with a valid[slot] id");
+    // The credit words live in the tile behind the mask tiles of the u CB.
+    static_assert(
+        CREDIT_OFF % 4 == 0 && CREDIT_OFF == gdn_handoff::kMaskTiles * get_tile_size(CB_CREDIT),
+        "credit words must sit in the tile behind the mask tiles of the u CB");
+
+    const uint32_t p = get_arg_val<uint32_t>(0);        // this producer's index in the map
+    const uint32_t n_items = get_arg_val<uint32_t>(1);  // its item count
+    const uint32_t BH = get_arg_val<uint32_t>(2);       // heads: credit words to zero, head-table entries
+    const uint32_t NC = get_arg_val<uint32_t>(3);
+    const GdnFusedMap map{
+        BH, NC, get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)};
+    // The heads this producer serves, one bit each: words 8 .. 8 + ceil(BH / 32) - 1.
+    auto serves_head = [](uint32_t h) { return (get_arg_val<uint32_t>(8 + h / 32) >> (h % 32)) & 1u; };
+    // Common args, per head: the rectangle word x0 | y0 << 8 | x1 << 16 | y1 << 24, then the receivers'
+    // coords x | y << 8, two per word (receiver v in the low half of word 1 + v/2 when v is even).
+    constexpr uint32_t HEAD_WORDS = 1 + (NV + 1) / 2;
+    auto rect_word = [](uint32_t h) { return get_common_arg_val<uint32_t>(h * HEAD_WORDS); };
+    auto rcv_word = [](uint32_t h, uint32_t v) {
+        return (get_common_arg_val<uint32_t>(h * HEAD_WORDS + 1 + v / 2) >> (16 * (v % 2))) & 0xFFFFu;
+    };
+
+    constexpr uint32_t cc = Ct * Ct;
+    constexpr uint32_t ck = Ct * Kt;
+    constexpr uint32_t cv = Ct * Vt;
+    constexpr uint32_t kc = Kt * Ct;
+    constexpr uint32_t cvl = Ct * Vtl;       // a receiver's v_beta tiles per chunk
+    constexpr uint32_t VB_RING = cv * NBUF;  // a receiver's v_beta ring, in tiles
+
+    constexpr uint32_t tb = get_tile_size(cb_vbeta);  // all hand-off CBs are fp32 -> same tile size (asserted above)
+
+    Noc noc;
+    UnicastEndpoint ucast_dst;  // unicast destination endpoint (VALID flags, unicast transport)
+    Semaphore<> init(SEM_INIT);
+    // Per-slot VALID flags: semaphore ids SEM_VALID + s, s = c % NBUF. The remote set
+    // (multicast or unicast) sources its 4-byte payload from this core's LOCAL copy of the SAME-id
+    // word — read asynchronously, when the NIU processes the command. Preset all NBUF to VALID once;
+    // any later write to these words must be preceded by a barrier (see the teardown).
+    for (uint32_t s = 0; s < NBUF; s++) {
+        Semaphore<>(SEM_VALID + s).set(VALID);
+    }
+
+    // The current item's receivers: coords of the NV receivers and the multicast rectangle of its head.
+    uint32_t rx[NV], ry[NV];
+    uint32_t mx0 = 0, my0 = 0, mx1 = 0, my1 = 0;
+    auto load_head = [&](uint32_t h) {
+        for (uint32_t v = 0; v < NV; v++) {
+            const uint32_t w = rcv_word(h, v);
+            rx[v] = w & 0xFFu;
+            ry[v] = w >> 8;
+        }
+        const uint32_t r = rect_word(h);
+        mx0 = r & 0xFFu;
+        my0 = (r >> 8) & 0xFFu;
+        mx1 = (r >> 16) & 0xFFu;
+        my1 = r >> 24;
+    };
+
+    // Send chunk c's VALID to the current head's receivers: their word for slot (c % NBUF).
+    auto set_valid = [&](uint32_t slot) {
+        if constexpr (POSTED || UNICAST) {
+            // One non-posted 4-byte write of this core's word into the same-id word of each receiver (the same
+            // L1 offset on every core), so the teardown barrier drains it. POSTED: ordered behind this item's
+            // posted data writes: same NIU, same write command buffer, same VC (NOC_UNICAST_WRITE_VC), same
+            // destination => delivered in issue order. UNICAST: issued after the data barrier.
+            const uint32_t word = get_semaphore(SEM_VALID + slot);
+            for (uint32_t v = 0; v < NV; v++) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(word), ucast_dst, 4, {}, {.noc_x = rx[v], .noc_y = ry[v], .addr = word});
+            }
+        } else {
+            Semaphore<>(SEM_VALID + slot).set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
+        }
+    };
+
+    // Credit words credit[h][slot] (BH x NBUF): zero them, then tell every receiver of every head this
+    // producer serves (init barrier).
+    CoreLocalMem<volatile uint32_t> credit(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
+#ifdef GDN_HANDOFF_CHECKS
+    // C8 canary words: one per slot in the tile behind the credit tile (same address on every core of the union).
+    // This core's own words are the payload source of the remote writes into the receivers' words.
+    constexpr uint32_t CANARY_OFF = CREDIT_OFF + get_tile_size(CB_CREDIT);
+    CoreLocalMem<volatile uint32_t> canary(CircularBuffer(CB_CREDIT).get_read_ptr() + CANARY_OFF);
+#endif
+    for (uint32_t i = 0; i < BH * NBUF; i++) {
+        credit[i] = 0;
+    }
+    for (uint32_t h = 0; h < BH; h++) {
+        if (!serves_head(h)) {
+            continue;
+        }
+        load_head(h);
+        for (uint32_t v = 0; v < NV; v++) {
+            init.up(noc, rx[v], ry[v], 1);
+        }
+    }
+
+    // Hand-off CB base addresses, captured BEFORE any pop (read_ptr starts at the CB base, and
+    // the union declaration makes each base identical on every receiver).
+    const uint32_t base_vbeta = CircularBuffer(cb_vbeta).get_read_ptr();
+    const uint32_t base_Tinv = CircularBuffer(cb_Tinv).get_read_ptr();
+    const uint32_t base_kd = CircularBuffer(cb_nkd).get_read_ptr();
+    const uint32_t base_intra = CircularBuffer(cb_intra).get_read_ptr();
+    const uint32_t base_qdecay = CircularBuffer(cb_qdecay).get_read_ptr();
+    const uint32_t base_kdec_t = CircularBuffer(cb_kdec_t).get_read_ptr();
+    const uint32_t base_dl = CircularBuffer(cb_dl).get_read_ptr();
+
+    MulticastEndpoint mcast_dst;
+    auto send_unicast = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
+        if constexpr (POSTED) {
+            noc.async_write<NocOptions::POSTED>(
+                CoreLocalMem<uint32_t>(src_addr),
+                ucast_dst,
+                n * tb,
+                {},
+                {.noc_x = rx[v], .noc_y = ry[v], .addr = dst_addr});
+        } else {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(src_addr),
+                ucast_dst,
+                n * tb,
+                {},
+                {.noc_x = rx[v], .noc_y = ry[v], .addr = dst_addr});
+        }
+    };
+    // One LINKED multicast of a shared CB's front slot into the head's rectangle (NV unicasts with UNICAST).
+    auto send_shared = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
+        const uint32_t addr = CircularBuffer(cb_id).get_read_ptr();
+        if constexpr (UNICAST) {
+            for (uint32_t v = 0; v < NV; v++) {
+                send_unicast(addr, v, n, dst_addr);
+            }
+            return;
+        }
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(addr),
+            mcast_dst,
+            n * tb,
+            NV,
+            {},
+            {.noc_x_start = mx0, .noc_y_start = my0, .noc_x_end = mx1, .noc_y_end = my1, .addr = dst_addr},
+            /*linked=*/true);
+    };
+    // One UNLINKED write of `n` tiles to a single receiver (1x1 rectangle: orientation-neutral).
+    auto send_slice = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
+        if constexpr (UNICAST) {
+            send_unicast(src_addr, v, n, dst_addr);
+            return;
+        }
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(src_addr),
+            mcast_dst,
+            n * tb,
+            1,
+            {},
+            {.noc_x_start = rx[v], .noc_y_start = ry[v], .noc_x_end = rx[v], .noc_y_end = ry[v], .addr = dst_addr},
+            /*linked=*/false);
+    };
+
+    for (uint32_t n = 0; n < n_items; n++) {
+        const GdnFusedItem item = gdn_fused_item(map, p, n);
+        const uint32_t h = item.h;
+        const uint32_t c = item.c;
+        const uint32_t slot = c % NBUF;  // the receivers' reserved slot for GLOBAL chunk c (shared CBs)
+        load_head(h);
+        // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
+        // compute's push order), so producer-side backpressure matches that writer exactly.
+        WAYPOINT("TXCB");
+        {
+            DeviceZoneScopedN("tx_wait_cb");
+            CircularBuffer(cb_vbeta).wait_front(cv);
+            CircularBuffer(cb_Tinv).wait_front(cc);
+            CircularBuffer(cb_nkd).wait_front(ck);
+            CircularBuffer(cb_intra).wait_front(cc);
+            CircularBuffer(cb_qdecay).wait_front(ck);
+            CircularBuffer(cb_kdec_t).wait_front(kc);
+            CircularBuffer(cb_dl).wait_front(1);
+        }
+
+        // All NV receivers of head h have reserved chunk c's slot. Exactly NV — an over-credit
+        // would be a protocol bug and shows up as a hang here rather than as corrupt output. The
+        // word is per (head, slot): its next credit (chunk c + NBUF) can only follow this chunk's
+        // VALID -> pop -> reserve, so the reset below never races an increment.
+        // C3': compute pushed exactly n_tiles per item, so this item's front slot is n % NBUF in every ring.
+#if GDN_HANDOFF_WATCHER_CHECKS
+        {
+            const uint32_t kslot = n % NBUF;
+            ASSERT(CircularBuffer(cb_vbeta).get_read_ptr() == base_vbeta + kslot * cv * tb);
+            ASSERT(CircularBuffer(cb_Tinv).get_read_ptr() == base_Tinv + kslot * cc * tb);
+            ASSERT(CircularBuffer(cb_nkd).get_read_ptr() == base_kd + kslot * ck * tb);
+            ASSERT(CircularBuffer(cb_intra).get_read_ptr() == base_intra + kslot * cc * tb);
+            ASSERT(CircularBuffer(cb_qdecay).get_read_ptr() == base_qdecay + kslot * ck * tb);
+            ASSERT(CircularBuffer(cb_kdec_t).get_read_ptr() == base_kdec_t + kslot * kc * tb);
+            ASSERT(CircularBuffer(cb_dl).get_read_ptr() == base_dl + kslot * 1 * tb);
+        }
+#endif
+        const CoreLocalMem<volatile uint32_t> credit_word = credit + (h * NBUF + slot);
+        WAYPOINT("TXCR");
+        {
+            DeviceZoneScopedN("tx_wait_credit");
+#if GDN_HANDOFF_WATCHER_CHECKS
+            // C1: the word counts one chunk at a time (I1); more than NV credits is a protocol bug that would
+            // otherwise hang here silently.
+            uint32_t seen;
+#ifdef GDN_HANDOFF_CHECKS
+            // C9: a credit that never comes reports (chunk, slot, value seen) instead of hanging.
+            uint32_t polls = 0;
+#endif
+            do {
+                seen = gdn_handoff::read_word(credit_word);
+                ASSERT(seen <= NV);
+#ifdef GDN_HANDOFF_CHECKS
+                if (seen != NV && ++polls > gdn_handoff::kHandoffSpinLimit) {
+                    WATCHER_RING_BUFFER_PUSH(
+                        gdn_handoff::handoff_trace_word(gdn_handoff::kTxCreditTimeout, c, slot, seen));
+                    ASSERT(false);
+                    polls = 0;
+                }
+#endif
+            } while (seen != NV);
+#ifdef GDN_HANDOFF_CHECKS
+            WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxCreditSeen, c, slot, seen));
+#endif
+#else
+            gdn_handoff::wait_word(credit_word, NV);
+#endif
+        }
+        *credit_word = 0;
+
+        {
+            DeviceZoneScopedN("tx_issue");
+            // v_beta slices: row r of receiver v's slice <- this slot's tiles [r*Vt + v*Vtl, +Vtl).
+            const uint32_t vb_src = CircularBuffer(cb_vbeta).get_read_ptr();
+            const uint32_t vb_dst = base_vbeta + ((c * cvl) % VB_RING) * tb;
+            for (uint32_t v = 0; v < NV; v++) {
+                for (uint32_t r = 0; r < Ct; r++) {
+                    send_slice(vb_src + (r * Vt + v * Vtl) * tb, v, Vtl, vb_dst + r * Vtl * tb);
+                }
+            }
+            // The six shared tensors, linked, into the rectangle.
+            send_shared(cb_Tinv, cc, base_Tinv + slot * cc * tb);
+            send_shared(cb_nkd, ck, base_kd + slot * ck * tb);
+            send_shared(cb_intra, cc, base_intra + slot * cc * tb);
+            send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
+            send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
+            send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
+#ifdef GDN_HANDOFF_CHECKS
+            // C8: the chunk index as the LAST data write of the item, into every receiver's canary word for this
+            // slot; the receiver asserts it after VALID (a witness of data-before-flag, I4, and of the slot being
+            // written only after its previous chunk was consumed, I5). Same transport as the data.
+#ifdef GDN_HANDOFF_FAULT
+            // Fault injection: the wrong chunk index as the canary (C8 on every receiver).
+            canary[slot] = (GDN_HANDOFF_FAULT == gdn_handoff::kFaultWrongCanary) ? c + 1 : c;
+#else
+            canary[slot] = c;
+#endif
+            // Raw: this same address is sent to every remote receiver's canary word (same offset on every core).
+            const uint32_t canary_addr = local_mem::detail::AddressAccess::address(canary + slot);
+            for (uint32_t v = 0; v < NV; v++) {
+                if constexpr (POSTED) {
+                    noc.async_write<NocOptions::POSTED>(
+                        CoreLocalMem<uint32_t>(canary_addr),
+                        ucast_dst,
+                        4,
+                        {},
+                        {.noc_x = rx[v], .noc_y = ry[v], .addr = canary_addr});
+                } else {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(canary_addr),
+                        ucast_dst,
+                        4,
+                        {},
+                        {.noc_x = rx[v], .noc_y = ry[v], .addr = canary_addr});
+                }
+            }
+#endif
+        }
+        WAYPOINT("TXBR");
+        {
+            DeviceZoneScopedN("tx_barrier");
+            if constexpr (POSTED) {
+                // Posted data: nothing to ack. The flag below is ordered behind the data by the NoC;
+                // the flush only guarantees the NIU has finished READING this item's CB slots, so
+                // the pops below may hand them back to compute.
+                noc.async_writes_flushed<NocOptions::POSTED>();
+            } else {
+                // Every write above must have LANDED before the flag: the slices are unlinked unicasts
+                // and could otherwise overtake the multicast flag. The barrier waits for acks.
+                noc.async_write_barrier();
+            }
+        }
+        WAYPOINT("TXVL");
+#ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxBarrierDone, c, slot, 0));
+        // C7: the flag carries the chunk's sequence value c + 1 instead of VALID; the receiver waits for exactly
+        // that value, so a flag of the wrong chunk or a stale one can never pass (I2, I6). The barrier above acked
+        // the previous remote set sourced from this local word, so rewriting it here is safe (I7).
+        Semaphore<>(SEM_VALID + slot).set(c + 1);
+#endif
+        {
+            DeviceZoneScopedN("tx_valid");
+            set_valid(slot);
+        }
+#ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxValidSent, c, slot, c + 1));
+#endif
+
+        // Free the slots for compute's next chunk only now (the writes have completed).
+        CircularBuffer(cb_vbeta).pop_front(cv);
+        CircularBuffer(cb_Tinv).pop_front(cc);
+        CircularBuffer(cb_nkd).pop_front(ck);
+        CircularBuffer(cb_intra).pop_front(cc);
+        CircularBuffer(cb_qdecay).pop_front(ck);
+        CircularBuffer(cb_kdec_t).pop_front(kc);
+        CircularBuffer(cb_dl).pop_front(1);
+    }
+
+    // Barrier BEFORE resetting the local valid word: set_multicast reads its payload from that
+    // word asynchronously, so resetting first could multicast INVALID for the final chunk and
+    // deadlock the receivers at valid.wait(VALID). Only after all nonposted writes are acked is
+    // the local reset safe (payload-source rule).
+    noc.async_write_barrier();
+    if constexpr (POSTED) {
+        noc.async_writes_flushed<NocOptions::POSTED>();  // no posted write may be in flight at kernel exit
+    }
+    // Drain the init.up() atomics: non-posted increments, counted apart from writes, and no NoC
+    // transaction may be outstanding at kernel exit. Their acks return on this NoC while the credits
+    // that prove the increments landed arrive on the other, so only the barrier makes it a guarantee.
+    noc.async_atomic_barrier();
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C2: every credit this producer was granted was consumed by a send (I1 over the whole run): a stray credit
+    // means a receiver credited a chunk this producer never sent (owner map or N_INIT mismatch).
+    for (uint32_t i = 0; i < BH * NBUF; i++) {
+        ASSERT(gdn_handoff::read_word(credit + i) == 0);
+    }
+#endif
+    for (uint32_t s = 0; s < NBUF; s++) {
+        Semaphore<>(SEM_VALID + s).set(INVALID);  // restore the semaphores' initial value
+    }
+    WAYPOINT("DONE");
+}

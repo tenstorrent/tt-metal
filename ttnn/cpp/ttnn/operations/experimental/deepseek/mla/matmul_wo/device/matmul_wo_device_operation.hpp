@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <optional>
-#include <variant>
+#include <tuple>
+
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "matmul_wo_device_operation_types.hpp"
-#include "matmul_wo_program_factory.hpp"
 
 namespace ttnn::operations::experimental::deepseek::mla {
 
@@ -18,9 +18,11 @@ struct MatmulWODeviceOperation {
     using tensor_args_t = deepseek::mla::tensor_args_t;
     using spec_return_value_t = deepseek::mla::spec_return_value_t;
     using tensor_return_value_t = deepseek::mla::tensor_return_value_t;
-    using program_factory_t = std::variant<program::MatmulWOProgramFactory>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

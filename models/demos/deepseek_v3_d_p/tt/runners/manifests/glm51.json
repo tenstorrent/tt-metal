@@ -1,6 +1,0 @@
-{
-  "env": {
-    "PREFILL_MODEL": "glm_5_1",
-    "PREFILL_LAYER_ACK_D2H": "1"
-  }
-}

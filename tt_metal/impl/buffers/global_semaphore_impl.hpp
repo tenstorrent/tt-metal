@@ -14,27 +14,31 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
 class GlobalSemaphore;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 
 // GlobalSemaphoreImpl is implemented as a wrapper around a sharded buffer
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
 public:
     GlobalSemaphoreImpl(
-        IDevice* device, const CoreRangeSet& cores, std::optional<uint32_t> initial_value, BufferType buffer_type);
-
-    GlobalSemaphoreImpl(
-        IDevice* device, CoreRangeSet&& cores, std::optional<uint32_t> initial_value, BufferType buffer_type);
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        uint8_t cq_id);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
     GlobalSemaphoreImpl(
-        IDevice* device,
-        const CoreRangeSet& cores,
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
-        uint64_t address);
+        uint64_t address,
+        uint8_t cq_id);
 
     // Copy/move semantics
     GlobalSemaphoreImpl(const GlobalSemaphoreImpl&) = default;
@@ -42,7 +46,7 @@ public:
     GlobalSemaphoreImpl(GlobalSemaphoreImpl&&) noexcept = default;
     GlobalSemaphoreImpl& operator=(GlobalSemaphoreImpl&&) noexcept = default;
 
-    IDevice* device() const;
+    distributed::MeshDevice& device() const;
 
     const CoreRangeSet& cores() const;
 
@@ -50,14 +54,15 @@ public:
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value) const;
+    // `cq_id` is only used (and only looked up) with fast dispatch; it is ignored on slow dispatch / simulator.
+    void reset_semaphore_value(uint32_t reset_value, uint8_t cq_id) const;
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address, uint8_t cq_id);
 
-    distributed::AnyBuffer buffer_;
-    IDevice* device_;
+    std::shared_ptr<distributed::MeshBuffer> buffer_;
+    distributed::MeshDevice* device_;
     CoreRangeSet cores_;
 };
 

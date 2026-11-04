@@ -17,6 +17,7 @@ import ttnn
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from .common import (
     CLIP_FRAMES,
@@ -245,6 +246,11 @@ DECODE_STAGE_MODES = {
     "uint8": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "readback_uint8": True},
     # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
     "yuv420": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "device_stitch": True},
+    "yuv420_neighbor": {
+        "pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+        "device_stitch": True,
+        "stitch_exchange": "neighbor",
+    },
 }
 
 
@@ -284,13 +290,12 @@ def test_decode_stage(mesh_device, seconds, mode):
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-    vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode])
-    output_type = "yuv420" if mode == "yuv420" else "float"
+    vae = MiniMaxH3Vae(
+        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode]
+    )
+    output_type = "yuv420" if mode.startswith("yuv420") else "float"
 
-    vae.load_decoder_state(_decode_stage_state(weights_dir))
-    # Build the per-shape decoder outside the timed region, as `_prepare_vae(decode_shape=...)` does:
-    # its weight upload is seconds and would otherwise land inside the first `decode`.
-    vae._decoder_for(config.tokens_chunk_size + config.token_overlap, 16, 16)
+    vae.load_state(_decode_stage_state(weights_dir))
 
     torch.manual_seed(0)
     latent_h, latent_w = DECODE_STAGE_LATENT_HW
@@ -325,3 +330,207 @@ def test_decode_stage(mesh_device, seconds, mode):
         + f" waves={int(profile.get('waves', 0))} units={int(profile.get('units', 0))}"
         + f" readback_gb={profile.get('readback_mb', 0.0) / 1000:.2f}"
     )
+
+
+# ---- whole-stage `encode` timing, per conditioning case --------------------------------------
+#
+# Times the "vae_encode" stage through the production entry points; asserts row counts, not wall time.
+#   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k encode_stage -s
+
+# l1_small_size 16384: the taps=3 video encoder clashes with L1 above it.
+ENCODE_STAGE_MESH = [
+    pytest.param(
+        (4, 8),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 16384,
+        },
+        id="4x8ring",
+    )
+]
+
+ENCODE_STAGE_WIDTH, ENCODE_STAGE_HEIGHT = 1344, 768
+ENCODE_STAGE_FRAMES = 124
+ENCODE_STAGE_AUDIO_SAMPLES = int(ENCODE_STAGE_FRAMES / 24 * 32000)
+
+ENCODE_STAGE_CASES = ("fl2va_1key", "fl2va_2key", "ref2va_video", "ref2va_video_audio")
+
+
+def _encode_stage_state(weights_dir: str) -> dict[str, torch.Tensor]:
+    """Just the encoder-side tensors, mirroring `_decode_stage_state`."""
+    import json
+
+    from safetensors.torch import load_file
+
+    prefixes = ("encoder.", "quant_conv.")
+    index_path = os.path.join(weights_dir, "diffusion_pytorch_model.safetensors.index.json")
+    if not os.path.isfile(index_path):
+        return {
+            k: v
+            for k, v in load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")).items()
+            if k.startswith(prefixes)
+        }
+    weight_map = json.loads(open(index_path).read())["weight_map"]
+    wanted = {k: f for k, f in weight_map.items() if k.startswith(prefixes)}
+    state: dict[str, torch.Tensor] = {}
+    for shard in sorted(set(wanted.values())):
+        loaded = load_file(os.path.join(weights_dir, shard))
+        state.update({k: loaded[k] for k in wanted if k in loaded})
+    return state
+
+
+def _encode_stage_audio_encoder(mesh_device, ccl_manager) -> "MiniMaxH3AudioEncoder":
+    weights_dir = weights_subdir("audio_vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
+    from safetensors.torch import load_file
+
+    config = load_config(weights_dir)
+    converted = convert_minimax_h3_audio_state_dict(
+        load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+    )
+    encoder = MiniMaxH3AudioEncoder(
+        encoder_dim=config["encoder_dim"],
+        encoder_rates=tuple(config["encoder_rates"]),
+        latent_dim=config["latent_dim"],
+        latent_channels=config["latent_channels"],
+        num_attention_heads=config["num_attention_heads"],
+        mesh_device=mesh_device,
+        split_mode="weight",
+        stereo_split_axis=0,
+        parallel_config=ParallelFactor(factor=tuple(mesh_device.shape)[1], mesh_axis=1),
+        ccl_manager=ccl_manager,
+    )
+    encoder.load_torch_state_dict(
+        {k: v for k, v in converted.items() if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))}
+    )
+    return encoder
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), ENCODE_STAGE_MESH, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("case", ENCODE_STAGE_CASES, ids=ENCODE_STAGE_CASES)
+def test_encode_stage(mesh_device, case):
+    """Measurement driver, not a gate: reports the split, asserts nothing about wall time."""
+    import numpy as np
+    from loguru import logger
+    from PIL import Image
+
+    from ....pipelines.minimax_h3.conditioning import encode_keyframes
+    from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3PreparedReference
+    from ....pipelines.minimax_h3.references import encode_references
+    from .common import create_fractal_image
+
+    weights_dir = weights_subdir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
+
+    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    vae = MiniMaxH3Vae(
+        config,
+        task="ref2va",
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+    )
+    vae.load_state(_encode_stage_state(weights_dir))
+
+    ratio = config.spatial_compression_ratio
+    latent_height, latent_width = ENCODE_STAGE_HEIGHT // ratio, ENCODE_STAGE_WIDTH // ratio
+    rows_per_frame = (latent_height // 2) * (latent_width // 2)
+    audio_seconds = {"audio_encode": 0.0}
+
+    if case.startswith("fl2va"):
+        image = create_fractal_image(ENCODE_STAGE_WIDTH, ENCODE_STAGE_HEIGHT)
+        keyframes = [image]
+        if case == "fl2va_2key":
+            keyframes.append(Image.fromarray(255 - np.asarray(image)))
+        expected_rows = len(keyframes) * rows_per_frame
+
+        def run():
+            return encode_keyframes(
+                keyframes, vae.encode_clip, config.latents_mean, config.latents_std, raw_pixels=True
+            )
+
+    else:
+        audio_config = load_config(weights_subdir("audio_vae")) if weights_subdir("audio_vae") else None
+        if audio_config is None:
+            pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
+
+        rng = np.random.default_rng(0)
+        reference = MiniMaxH3PreparedReference(kind="video", has_audio=case == "ref2va_video_audio")
+        reference.frames = rng.integers(
+            0, 256, (ENCODE_STAGE_FRAMES, ENCODE_STAGE_HEIGHT, ENCODE_STAGE_WIDTH, 3), dtype=np.uint8
+        )
+        encode_audio = None
+        if reference.has_audio:
+            audio_encoder = _encode_stage_audio_encoder(mesh_device, ccl_manager)
+            torch.manual_seed(3)
+            reference.waveform = torch.randn(2, ENCODE_STAGE_AUDIO_SAMPLES) * 0.1
+
+            def encode_audio(waveform):
+                mark = time.perf_counter()
+                out = audio_encoder(waveform)[0]
+                audio_seconds["audio_encode"] += time.perf_counter() - mark
+                return out
+
+        expected_rows = (5 * 8 - config.token_drop) * rows_per_frame
+
+        def run():
+            return encode_references(
+                [reference],
+                encode_clip=vae.encode_clip,
+                encode_video=vae.encode,
+                encode_audio=encode_audio,
+                latents_mean=config.latents_mean,
+                latents_std=config.latents_std,
+                audio_latents_mean=audio_config["latents_mean"],
+                audio_latents_std=audio_config["latents_std"],
+                audio_latent_channels=audio_config["latent_channels"],
+                raw_pixels=True,
+            )
+
+    run()
+    vae._profile = vae._empty_profile()
+    audio_seconds["audio_encode"] = 0.0
+
+    started = time.perf_counter()
+    rows = run()
+    elapsed = time.perf_counter() - started
+
+    if case.startswith("fl2va"):
+        video_rows, audio_rows = rows, None
+    else:
+        video_rows, audio_rows = rows
+    assert video_rows.shape[0] == expected_rows, f"{video_rows.shape[0]} video rows, expected {expected_rows}"
+    if case == "ref2va_video_audio":
+        assert audio_rows is not None and audio_rows.shape[0] == 2 * -(
+            -ENCODE_STAGE_AUDIO_SAMPLES // 800
+        ), f"audio rows {None if audio_rows is None else audio_rows.shape[0]}"
+
+    profile = dict(vae._profile)
+    split_keys = ("device", "readback", "upload", "host_prep", "unpatchify", "stitch", "tiling")
+    accounted = sum(profile.get(k, 0.0) for k in split_keys) + audio_seconds["audio_encode"]
+    logger.info(
+        f"ENCODE_STAGE case={case} total={elapsed:.3f}s "
+        f"video_rows={video_rows.shape[0]} audio_rows={0 if audio_rows is None else audio_rows.shape[0]}"
+    )
+    logger.info(
+        f"ENCODE_SPLIT case={case} "
+        + " ".join(f"{k}={profile.get(k, 0.0):.3f}" for k in split_keys)
+        + f" audio_encode={audio_seconds['audio_encode']:.3f}"
+        + f" residual={max(0.0, elapsed - accounted):.3f}"
+        + f" waves={int(profile.get('waves', 0))} units={int(profile.get('units', 0))}"
+        + f" upload_gb={profile.get('upload_mb', 0.0) / 1000:.2f}"
+        + f" readback_gb={profile.get('readback_mb', 0.0) / 1000:.2f}"
+    )
+    for name, each in (("device", profile.get("device_each") or []), ("readback", profile.get("readback_each") or [])):
+        if each:
+            logger.info(
+                f"    {name} per wave: min {min(each) * 1000:.0f} / median "
+                f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
+                f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]"
+            )

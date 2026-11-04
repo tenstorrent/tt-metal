@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -17,7 +20,10 @@ namespace sfpu {
 // bits (seed -> ~7 bits after 1 iter -> ~14 bits after 2 iters). Two iterations
 // give near-fp32 accuracy; a single iteration (~0.17% rel error, <0.5 bf16 ULP)
 // suffices for consumers whose own approximation error already dominates.
-template <bool APPROXIMATION_MODE, int NEWTON_ITERATIONS = 2>
+//
+// NEGATIVE_INFINITY_SAFE adds a branch for IEEE sqrt(-inf) = NaN; off by default, see below.
+// Last, so the older 2-argument spellings still bind NEWTON_ITERATIONS; Blackhole matches.
+template <bool APPROXIMATION_MODE, int NEWTON_ITERATIONS = 2, bool NEGATIVE_INFINITY_SAFE = false>
 sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out = val;
@@ -25,15 +31,9 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     // excluding because the +inf seed (~5.2e-20) squares to a denormal, SFPMAD flushes it to +0,
     // and 0 * -inf = NaN: sqrt_custom(+inf) was NaN and consumers inherited it (erfinv(+/-1)).
     //
-    // Exponent test rather than a compare against inf: SFPSETCC's float compare is unspecified
-    // for NaN (VectorUnit.md), and `&&` is SFPXBOOL(AND), so `val != 0.0f` is still evaluated on
-    // NaN lanes. That is safe -- exexp(NaN) == 255 falsifies the other conjunct and AND is
-    // monotone, so NaN passes through whatever the compare returned.
-    //
-    // Residual: -inf passes through where IEEE and the golden give NaN. No negative-to-NaN guard,
-    // because erfinv's NR undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
-    // non-positive for small in-domain x, which would turn erfinv(1e-6) into NaN.
-    v_if(val != 0.0f && sfpi::exexp(val, sfpi::ExponentMode::Biased) != 255) {
+    // NaN lanes still evaluate `val != 0.0f`, whose result is unspecified (VectorUnit.md), but
+    // is_finite(NaN) is false and `&&` is a monotone AND, so they pass through regardless.
+    v_if(val != 0.0f && sfpi::is_finite(val)) {
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
         sfpi::vFloat neg_half_val = val * -0.5f;
@@ -44,6 +44,18 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
         out = approx * val;
     }
     v_endif;
+
+    // IEEE sqrt(-inf) = NaN, where the pass-through above yields -inf. Opt-in because it is not
+    // free (always-on costs erfinv ~1.13x) and no production consumer can reach a -inf; only the
+    // test-only calculate_sqrt_custom wrapper turns it on.
+    //
+    // Exact bit pattern, and a literal +qNaN: `val < 0.0f` would claim -0.0 too (SFPSETCC reads
+    // the sign bit) and a sign-carrying NaN would be negative, which a bf16 pack makes -inf.
+    if constexpr (NEGATIVE_INFINITY_SAFE) {
+        constexpr std::int32_t negative_infinity_bits = static_cast<std::int32_t>(0xFF800000);
+        v_if(sfpi::as<sfpi::vInt>(val) == negative_infinity_bits) { out = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+    }
     return out;
 }
 

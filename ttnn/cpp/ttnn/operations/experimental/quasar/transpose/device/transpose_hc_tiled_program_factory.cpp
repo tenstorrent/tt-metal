@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -156,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
                   "ct",
                   "ctoffs",
                   "wt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ------------------------------------------------------------------------
@@ -170,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = {{"page_size", single_tile_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ------------------------------------------------------------------------

@@ -74,8 +74,14 @@ class LlamaForCausalLM:
             seed = torch.tensor([s if s is not None else int(torch.randint(0, 2**30, ())) for s in seeds])
             # Absolute positions preserve each request's random stream through
             # scheduler compaction; steady decode advances the seed on device.
-            seed += torch.as_tensor(positions).flatten().clamp_min(0)
-        self.generator.set_sampling(top_k=params.top_k, top_p=params.top_p, temperature=params.temperature, seed=seed)
+            # The generator bounds request seeds before it adds these positions.
+        self.generator.set_sampling(
+            top_k=params.top_k,
+            top_p=params.top_p,
+            temperature=params.temperature,
+            seed=seed,
+            seed_positions=positions,
+        )
 
     def prefill_forward(
         self,

@@ -8,27 +8,34 @@
 namespace ttnn::experimental::kda {
 
 std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
-    const ttnn::Tensor& a,
-    const ttnn::Tensor& b,
+    const ttnn::Tensor& summaries,
     uint32_t groups_per_head,
+    const ttnn::Tensor& actual_start,
+    uint32_t local_rows,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t sequence_parallel_axis,
+    const std::optional<Tensor>& actual_end) {
     TT_FATAL(
-        a.storage_type() == StorageType::DEVICE && a.buffer() != nullptr,
-        "reduce_affine_transforms: a must be an allocated device tensor");
-    TT_FATAL(
-        b.storage_type() == StorageType::DEVICE && b.buffer() != nullptr,
-        "reduce_affine_transforms: b must be an allocated device tensor");
+        summaries.storage_type() == StorageType::DEVICE && summaries.is_allocated(),
+        "reduce_affine_transforms: summaries must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
-        a.device()->arch(),
+        summaries.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::reduce_affine_transforms(
-        a, b, groups_per_head, output_memory_config, kernel_config);
+        summaries,
+        groups_per_head,
+        output_memory_config,
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis,
+        local_rows,
+        actual_end);
 }
 
 }  // namespace ttnn::experimental::kda

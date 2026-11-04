@@ -19,8 +19,8 @@
 #error "TEST_NUM_DFBS must be defined by the host (KernelSpec compiler_options.defines)"
 #endif
 
-template <bool ImplicitSync>
-static inline void touch_one(DFBBindingToken token) {
+template <bool ImplicitSync, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+static inline void touch_one(DFBBindingToken<Pap, Cap> token) {
     DataflowBuffer dfb(token);
     (void)dfb.get_entry_size();
     if constexpr (ImplicitSync) {

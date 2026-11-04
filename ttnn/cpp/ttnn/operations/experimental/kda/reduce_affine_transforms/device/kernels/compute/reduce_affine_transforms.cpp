@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -14,8 +16,8 @@
 // FP32 half-DST holds four 32x32 output tiles. Production's four-tile output rows fit exactly and use
 // matmul_block; wider rows retain the tile loop because a row-major B operand cannot be column-sliced as a block
 // without repacking.
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
-void matmul_product(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, DataflowBuffer* send) {
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut, typename DFBSend>
+void matmul_product(DFBA& a, DFBB& b, DFBOut& out, DFBSend* send) {
     constexpr uint32_t max_block_columns = 4;
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
@@ -68,7 +70,8 @@ void matmul_product(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, D
     }
 }
 
-void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, DataflowBuffer& send, uint32_t tiles) {
+template <typename DFBA, typename DFBB, typename DFBOut, typename DFBSend>
+void add(DFBA& a, DFBB& b, DFBOut& out, DFBSend& send, uint32_t tiles) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t out_id = out.get_id();
@@ -92,7 +95,8 @@ void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, DataflowBuff
     send.push_back(tiles);
 }
 
-void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_t tiles) {
+template <typename DFBIn, typename DFBOut, typename DFBSend>
+void copy(DFBIn& in, DFBOut& out, DFBSend& send, uint32_t tiles) {
     const uint32_t in_id = in.get_id();
     const uint32_t out_id = out.get_id();
     const uint32_t send_id = send.get_id();
@@ -117,6 +121,8 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
+
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
@@ -129,7 +135,15 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer remote_b(dfb::remote_b);
     DataflowBuffer scratch(dfb::scratch);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    const uint32_t active = topology.head_groups(G);
+    if (group >= active) {
+        return;
+    }
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
     copy(initial_a, stage_a, send_a, a_tiles);
@@ -137,7 +151,7 @@ TT_KERNEL void compute(uint32_t group) {
     initial_a.pop_front(a_tiles);
     initial_b.pop_front(b_tiles);
 
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         // Every participating group produces a prefix consumed by a later group at a subsequent power-of-two
         // distance. Only the final group writes DRAM, but these intermediate prefixes are required inputs.
         if (group < distance) {
@@ -154,7 +168,7 @@ TT_KERNEL void compute(uint32_t group) {
         // Both FP32 products remain separate calls: they consume different right-hand operands and publish
         // different output rectangles.
         matmul_product<Kt, Kt, Kt>(stage_a, remote_a, stage_a, &send_a);
-        matmul_product<Kt, Kt, Vt>(stage_a, remote_b, scratch, nullptr);
+        matmul_product<Kt, Kt, Vt>(stage_a, remote_b, scratch, static_cast<decltype(&send_a)>(nullptr));
         scratch.wait_front(b_tiles);
         add(scratch, stage_b, stage_b, send_b, b_tiles);
         stage_a.pop_front(a_tiles);

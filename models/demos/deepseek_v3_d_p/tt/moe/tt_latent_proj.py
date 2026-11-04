@@ -44,6 +44,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 
 # Both projections are the shared expert's shapes with a narrower latent -- down_proj is its gate
 # (K 224 tiles, N 28) and up_proj its down (K 28, N 224) -- so the block rules measured there apply
@@ -366,7 +367,8 @@ class TtLatentMoeProjections(LightweightModule):
             ),
             compute_kernel_config=self.compute_kernel_config,
         )
-        logger.debug(f"[LatentMoe.to_latent] after down_proj: {latent.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[LatentMoe.to_latent] after down_proj: {latent.shape}")
 
         if self.tp_factor > 1:
             latent = ttnn.experimental.all_gather_async(
@@ -379,7 +381,8 @@ class TtLatentMoeProjections(LightweightModule):
                 topology=self.topology,
             )
         assert latent.shape[-1] == self.routed_emb_dim, f"{latent.shape=} != ..{self.routed_emb_dim}"
-        logger.debug(f"[LatentMoe.to_latent] after all_gather: {latent.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[LatentMoe.to_latent] after all_gather: {latent.shape}")
         return latent
 
     def from_latent(self, y: ttnn.Tensor) -> ttnn.Tensor:
@@ -400,7 +403,8 @@ class TtLatentMoeProjections(LightweightModule):
 
         if self.use_norm:
             y = self.norm(y)
-            logger.debug(f"[LatentMoe.from_latent] after latent norm: {y.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"[LatentMoe.from_latent] after latent norm: {y.shape}")
 
         out_full = ttnn.matmul(
             y,
@@ -413,7 +417,8 @@ class TtLatentMoeProjections(LightweightModule):
             ),
             compute_kernel_config=self.compute_kernel_config,
         )
-        logger.debug(f"[LatentMoe.from_latent] after up_proj: {out_full.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[LatentMoe.from_latent] after up_proj: {out_full.shape}")
 
         if self.tp_factor > 1:
             # Plain reduce_scatter rather than TtSharedExpert's persistent intermediate: that buffer
@@ -427,5 +432,6 @@ class TtLatentMoeProjections(LightweightModule):
             )
         else:
             out = out_full
-        logger.debug(f"[LatentMoe.from_latent] after reduce_scatter: {out.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[LatentMoe.from_latent] after reduce_scatter: {out.shape}")
         return out

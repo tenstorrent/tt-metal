@@ -37,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -119,8 +119,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_stick_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Writer kernel --
@@ -136,16 +135,15 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Compute kernel --
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);
     if (fp32_llk_acc) {
-        std::visit([&](auto& c) { c.unpack_modes.emplace(SC_INPUT_DFB, UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(SC_INPUT_DFB, UnpackMode::UnpackToDest);
     }
     KernelSpec compute{
         .unique_id = SC_COMPUTE_KERNEL,

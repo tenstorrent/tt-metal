@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -15,14 +17,22 @@ struct AffineExclusiveScanParams {
     uint32_t groups_per_head;
     uint32_t key_dim;
     uint32_t value_dim;
+
+    uint32_t sequence_parallel_axis;
+    uint32_t local_rows;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct AffineExclusiveScanInputs {
-    Tensor a;
-    Tensor b;
+    // Packed [S, B*H*G, K, K+V] summaries: slot 0 head transforms; slot 1 tail transforms, present iff S = 2.
+    Tensor summaries;
     Tensor initial_state;
+    // The tail seed, required exactly when the summaries hold a tail slot.
+    std::optional<Tensor> tail_entry_states;
+
+    Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

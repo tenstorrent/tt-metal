@@ -43,7 +43,7 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
 * Program configs are rebuilt field-for-field from the repr (including
-  LayerNorm's ``legacy_reduction`` / ``legacy_rsqrt`` / ``use_welford`` and SDPA's
+  LayerNorm's ``legacy_reduction`` and ``use_welford``, and SDPA's
   ``max_cores_per_head_batch``). The only exceptions are the optional
   CoreRangeSet restrictions (``sub_core_grids``, ``allowed_worker_cores``): those
   print as ``std::nullopt`` in every capture so far, and a non-null value skips
@@ -89,6 +89,16 @@ DTYPE = {
 
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
+# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors are materialized and checked as bfloat16 instead
+# (and judged on the bfloat16 PCC floor, see ``_PCC_BY_DTYPE`` below).
+BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+
+
 MEM_LAYOUT = {
     "INTERLEAVED": ttnn.TensorMemoryLayout.INTERLEAVED,
     "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -127,6 +137,11 @@ _INT_DTYPES = {"UINT32", "INT32", "UINT16", "UINT8"}
 # reduction-heavy ops listed here.
 _DEFAULT_PCC = 0.999
 _PCC_BY_DTYPE = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.90}
+# Under ``TTNN_GRAPH_OPS_BF8_AS_BF16`` the block-float cases run and are checked as bfloat16, so no
+# per-face quantization happens and the block-float floors would only hide real errors: judge those
+# cases on the dtype that actually ran (the 0.999 bar, or the op's own floor).
+if BF8_AS_BF16:
+    _PCC_BY_DTYPE = {}
 _PCC_BY_OP = {
     "ttnn.linear": 0.99,
     "ttnn.experimental.minimal_matmul": 0.99,
@@ -255,7 +270,6 @@ _PROGRAM_CONFIG_FIELDS = {
         "block_w",
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
     ),
     "SDPAProgramConfig": (
@@ -297,7 +311,6 @@ _BOOL_FIELDS = frozenset(
     {
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
         "transpose_mcast",
         "fuse_batch",

@@ -4,6 +4,7 @@
 
 #include "upsample_device_operation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -84,9 +85,10 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
 
     const std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, std::nullopt, true);
 
-    // Calculate stick sizes (aligned based on buffer type for efficient reads)
+    // Reader writes aligned_input_page_size bytes per entry, writer reads aligned_output_page_size.
+    // Take the larger so both fit and every entry stays DRAM-aligned if either tensor is in DRAM.
     const std::uint32_t num_cb_pages = BUFFERING_FACTOR;
-    const std::uint32_t output_cb_page_size = aligned_output_page_size;
+    const std::uint32_t output_cb_page_size = std::max(aligned_input_page_size, aligned_output_page_size);
 
     metal2::DataflowBufferSpec out_dfb{
         .unique_id = OUT,
@@ -115,7 +117,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
                 {"reciprocal_scale_w_fixed", static_cast<std::uint32_t>(reciprocal_scale_w_fixed)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     metal2::KernelSpec writer{
@@ -128,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = {{"aligned_stick_nbytes", aligned_output_page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     metal2::ProgramSpec spec{

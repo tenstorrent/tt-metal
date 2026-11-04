@@ -11,188 +11,9 @@ from tests.ttnn.utils_for_testing import (
     assert_with_pcc,
     assert_with_ulp,
     assert_allclose,
-    generate_all_bfloat16_bitpatterns,
-    flush_subnormal_values_to_zero,
 )
 
 pytestmark = pytest.mark.use_module_device
-
-
-def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
-    """Run a single-input activation on a torch-random bf16 tensor in [-1, 1) and assert vs golden.
-
-    Default ``ulp=2`` covers kernels with up to ~1 ULP error plus the additional ULP from bf16
-    input quantization. Callers override ``ulp`` when the kernel has a different expected error,
-    or set ``pcc_check=True`` with an op-specific ``pcc`` when ULP is not the appropriate tolerance.
-    """
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    else:
-        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_hardtanh(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.hardtanh)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sigmoid_accurate(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.sigmoid_accurate)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_mish(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.mish, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.gelu)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high, atol, rtol",
-    [
-        (-13, 0, 1e-2, 1e-2),  # Negative saturation region
-        (0, 3, 1e-2, 1e-2),  # Positive transition region
-        (3, 6, 1e-3, 1e-3),  # Positive saturation region
-    ],
-)
-def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device):
-    """Test GELU accuracy using allclose for different input regions matching analysis ranges"""
-    num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(input_shapes)
-
-    golden_function = ttnn.get_golden_function(ttnn.gelu)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.gelu(tt_in)
-    result = ttnn.to_torch(tt_result)
-    # Use allclose with range-specific tolerances
-    assert_allclose(result, golden, atol=atol, rtol=rtol)
-
-
-def test_gelu_bfloat16_accuracy(device):
-    """Exhaustive bf16 accuracy test: all positive normal bfloat16 bit-patterns (0x0100–0x7F7F).
-
-    Every positive finite normal bf16 value is swept through ttnn.gelu and compared
-    against a float32 reference (torch.nn.functional.gelu upcast).  The requirement
-    is ≤ 10 ULP for every tested input.
-
-    Excluded categories:
-    - Subnormal inputs (x < 2^-126): hardware may flush subnormals to zero.
-    - NaN / +inf: handled by dedicated special-value tests.
-    - 128 positive normals whose exponent field = 1 (x ∈ [2^-126, 2^-125)):
-        gelu(x) ≈ x/2 falls in [2^-127, 2^-126) which is subnormal in fp32.
-        TT hardware DAZ/FTZ flushes this intermediate value to 0, so hardware
-        returns 0 while torch (no FTZ) returns a tiny bf16 subnormal or rounds
-        up to 2^-126 — up to 128 ULP error (e.g. 0x00FF → 128 ULP).
-        Bit-patterns: 0x0080–0x00FF.
-    """
-    # generate_all_bfloat16_bitpatterns returns (256, 256) — tile-layout compatible with no padding waste.
-    all_bf16_2d = generate_all_bfloat16_bitpatterns(torch.bfloat16)
-    all_bf16 = all_bf16_2d.flatten()
-
-    idx = torch.arange(0, 2**16, dtype=torch.int32)
-    exp_field = (idx >> 7) & 0xFF
-    is_negative = idx >= 0x8000
-
-    tiny = torch.finfo(torch.bfloat16).tiny
-    is_special = torch.isnan(all_bf16) | torch.isinf(all_bf16)
-    is_subnormal = (all_bf16.abs() > 0) & (all_bf16.abs() < tiny)
-    # exp=1 normals: gelu output is fp32-subnormal → hardware FTZ → 0; up to 128 ULP
-    is_exp1_normal = exp_field == 1
-
-    test_mask = ~is_negative & ~is_special & ~is_subnormal & ~is_exp1_normal
-
-    tt_in = ttnn.from_torch(
-        all_bf16_2d,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.gelu)
-    golden = golden_function(all_bf16, device=device)
-
-    result = ttnn.to_torch(ttnn.gelu(tt_in)).flatten()
-
-    check_mask = test_mask & torch.isfinite(golden) & torch.isfinite(result)
-    assert_with_ulp(expected_result=golden[check_mask], actual_result=result[check_mask], ulp_threshold=10)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sigmoid(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.sigmoid)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sign(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.sign)
-
-
-def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, pcc=0.99):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor_a, beta=beta, threshold=threshold)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    output_tensor = ttnn_function(input_tensor_a, beta=beta, threshold=threshold, queue_id=0)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("beta", [-1, 0.5, 1, 2])
-@pytest.mark.parametrize("threshold", [-20, 5, 10, 20, 40])
-def test_softplus(device, h, w, beta, threshold):
-    run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
 def _bfloat16_neighbour(value, steps):
@@ -251,8 +72,8 @@ def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
 # `threshold` must stay at roughly 4 or below. The boundary residual is log1p(exp(-threshold))/beta,
 # which falls under half a bfloat16 output ULP by threshold=5, and past SOFTPLUS_POLY_BOUNDARY = 5.0f
 # the kernel drops the residual entirely. A correct softplus then returns the input bit for bit and
-# the strict-inequality assertion below would fail spuriously. Note the neighbouring test_softplus
-# uses thresholds up to 40 and the ttnn default is 20; neither can be reused here.
+# the strict-inequality assertion below would fail spuriously. Note test_softplus_op in
+# test_unary_category6_bfloat16.py uses thresholds up to 20; neither can be reused here.
 @pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
 def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
@@ -318,38 +139,6 @@ def torch_prelu(x, *args, weight, **kwargs):
     return result
 
 
-def run_activation_test_elu(device, h, w, scalar, ttnn_function, ulp=2):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=scalar)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, alpha=scalar)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-def run_activation_test_leaky_relu(device, h, w, scalar, ttnn_function, ulp=2):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor_a, negative_slope=scalar)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, negative_slope=scalar)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
 def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, ulp=2):
     torch.manual_seed(0)
 
@@ -366,35 +155,12 @@ def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, ulp=2):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
-def run_activation_test_scalarB_key(device, h, w, value, ttnn_function, ulp=2):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor_a, value=value)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("scalar", [-0.5, 0, 0.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_elu(device, h, w, scalar):
-    run_activation_test_elu(device, h, w, scalar, ttnn.elu)
-
-
 @pytest.mark.parametrize("alpha", [1, 2.5, 5.0, -1, -5, 0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
-    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat4_b)],
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat4_b)],
 )
 def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
     if alpha == 0:
@@ -420,36 +186,104 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
-@pytest.mark.parametrize("scalar", [0.5, 1.0])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_hardshrink(device, h, w, scalar):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("alpha", [-1.0, -4.0])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_scalarB_celu_negative_alpha_negative_input(device, alpha, torch_dtype, ttnn_dtype):
+    """celu(x, alpha) = alpha * (exp(x / alpha) - 1) for x < 0. With alpha < 0 the exp
+    argument x / alpha is positive and unbounded; torch overflows to -inf once it passes
+    ln(FLT_MAX) ~ 88.72, and the device must agree (it used to wrap the 2^k exponent of
+    its exp reconstruction and return +|alpha| instead of -inf).
 
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    x / alpha in [0, 80] exercises the finite path, [90, 200] the overflow path. The gap
+    (80, 90) is left out on purpose: there exp(x / alpha) is within a factor of two of
+    FLT_MAX and the device's 2^k reconstruction cannot represent it (a separate accuracy
+    edge, not the sign wrap). Power-of-two alphas keep x / alpha and alpha * (...) exact on
+    both host and device so the ULP bound measures the kernel, not the host reciprocal.
+    """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
+    h, w = 64, 128
+    ratio = torch.cat([torch.linspace(0.0, 80.0, h * w // 2), torch.linspace(90.0, 200.0, h * w // 2)])
+    torch_input_tensor_a = (ratio * alpha).reshape(h, w).to(torch_dtype)  # x = alpha * ratio <= 0
 
-    golden_function = ttnn.get_golden_function(ttnn.hardshrink)
-    torch_output_tensor = golden_function(torch_input_tensor_a, lambd=scalar)
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+    overflow = torch.isinf(torch_output_tensor)
+    assert overflow.sum() == h * w // 2, "the x / alpha >= 90 half must overflow to -inf in the golden"
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.celu(input_tensor_a, alpha=alpha))
 
-    output_tensor = ttnn.hardshrink(input_tensor_a, lambd=scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("value", [0.88])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_heaviside(device, h, w, value):
-    run_activation_test_scalarB_key(device, h, w, value, ttnn.heaviside)
+    assert torch.equal(
+        output_tensor[overflow], torch_output_tensor[overflow]
+    ), f"x / alpha past ln(FLT_MAX) must give -inf, device gave {output_tensor[overflow].unique().tolist()}"
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True
+    )
 
 
-@pytest.mark.parametrize("scalar", [-0.5, 0, 0.1, 0.01, 0.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_leaky_relu(device, h, w, scalar):
-    run_activation_test_leaky_relu(device, h, w, scalar, ttnn.leaky_relu)
+@pytest.mark.parametrize("alpha", [1.0, -1.0])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_scalarB_celu_nonfinite_input(device, alpha, torch_dtype, ttnn_dtype):
+    """+-NaN and +-inf inputs for either sign of alpha. Both NaN signs matter: the kernel's
+    x >= 0 branch is a sign test, so a sign-set NaN takes the exp branch, where a swap-based
+    clamp of the exp argument would turn it into a number.
+
+    Expectations beyond torch's, all pre-existing and documented in the ISA:
+    - bfloat16 output goes through SFPSTOCHRND, which turns +NaN into +inf and -NaN into
+      -inf, so for bfloat16 a NaN input must give an infinity with the NaN's sign.
+    - For alpha > 0 the sign-set NaN element is not checked: on that (unchanged) branch the
+      NaN sign of the x / alpha product is unspecified on Wormhole, so the helper's own
+      clamp may rank it below -87 and return alpha * (exp(-87) - 1) instead of NaN.
+    """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
+    h, w = 32, 32
+    if torch_dtype == torch.float32:
+        nan_bits = torch.tensor([0x7FC00000, -0x00400000], dtype=torch.int32)  # +NaN, -NaN (0xFFC00000)
+    else:
+        nan_bits = torch.tensor([0x7FC0, -0x0040], dtype=torch.int16)  # +NaN, -NaN (0xFFC0)
+    specials = [*nan_bits.view(torch_dtype), torch.tensor(float("inf")), torch.tensor(float("-inf"))]
+    x = torch.linspace(-4.0, 4.0, h * w, dtype=torch.float32).to(torch_dtype)
+    for i, v in enumerate(specials * 8):  # every face and every SFPU lane group sees each special
+        x[i * 29] = v
+    torch_input_tensor_a = x.reshape(h, w)
+    int_dtype = torch.int32 if torch_dtype == torch.float32 else torch.int16
+    nan_in = torch.isnan(torch_input_tensor_a)
+    nan_in_signset = nan_in & (torch_input_tensor_a.view(int_dtype) < 0)
+    assert nan_in_signset.any() and (nan_in & ~nan_in_signset).any(), "the input must contain NaNs of both signs"
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+    assert torch.equal(torch.isnan(torch_output_tensor), nan_in)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.celu(input_tensor_a, alpha=alpha))
+
+    checked = nan_in if alpha < 0 else (nan_in & ~nan_in_signset)
+    if torch_dtype == torch.float32:
+        assert torch.isnan(
+            output_tensor[checked]
+        ).all(), f"NaN in must be NaN out, device gave {output_tensor[checked].unique().tolist()}"
+    else:
+        assert torch.isinf(output_tensor[checked]).all() and torch.equal(
+            output_tensor[checked] < 0, nan_in_signset[checked]
+        ), f"bfloat16 NaN in must be inf with the NaN's sign, device gave {output_tensor[checked].unique().tolist()}"
+    rest = ~nan_in
+    assert not torch.isnan(output_tensor[rest]).any(), "NaN produced from a non-NaN input"
+    inf_out = torch.isinf(torch_output_tensor)
+    assert torch.equal(output_tensor[inf_out], torch_output_tensor[inf_out]), "infinite outputs differ from torch"
+    assert_with_ulp(
+        expected_result=torch_output_tensor[rest & ~inf_out],
+        actual_result=output_tensor[rest & ~inf_out],
+        ulp_threshold=2,
+    )
 
 
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
@@ -468,75 +302,6 @@ def test_scalarB_prelu(device, h, w, weight):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("scalar", [0.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_softshrink(device, h, w, scalar):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.softshrink)
-    torch_output_tensor = golden_function(torch_input_tensor_a, lambd=scalar)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.softshrink(input_tensor_a, lambd=scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_function, ulp=2):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar1, scalar2)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, scalar1, scalar2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("min", [-0.5, -0.1, -5.5])
-@pytest.mark.parametrize("max", [0.5, 1.5, 27.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarBC_clip(device, h, w, min, max):
-    run_activation_test_scalarBC_key(device, h, w, min, max, ttnn.clip)
-
-
-def run_activation_test_threshold(device, h, w, value, threshold, ttnn_function, ulp=1):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-
-    torch_output_tensor = golden_function(torch_input_tensor_a, value=value, threshold=threshold)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, threshold, value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    # threshold is a piecewise-exact op; use ULP=1 to absorb bf16 rounding of non-representable scalars.
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("value", [-0.5, -0.1, -5.5])
-@pytest.mark.parametrize("threshold", [-0.5, 1.5, 27.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_threshold(device, h, w, value, threshold):
-    run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
 
 
 @pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
@@ -564,7 +329,6 @@ def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
     "dtype",
     [
         "float32",
-        "bfloat16",
     ],
 )
 @pytest.mark.parametrize("alpha_p, alpha_n", [(0.8, 0.8), (0.3, 0.1), (0.5, 1.0), (1.0, 0.5)])
@@ -618,26 +382,3 @@ def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
         assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        (3, 4, 64, 32),
-        (128, 128),
-    ],
-)
-def test_lgamma_fp32(device, shapes):
-    torch.manual_seed(42)
-    torch_dtype = torch.float32
-    ttnn_dtype = ttnn.float32
-
-    x_torch = torch.empty(shapes, dtype=torch_dtype).uniform_(-5, 5)
-    z_torch = torch.lgamma(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.lgamma(x_tt)
-
-    tt_out = ttnn.to_torch(z_tt)
-
-    assert_with_pcc(z_torch, tt_out, 0.999)

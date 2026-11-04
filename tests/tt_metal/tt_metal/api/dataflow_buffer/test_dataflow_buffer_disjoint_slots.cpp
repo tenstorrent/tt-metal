@@ -26,7 +26,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "../metal2_host_api/test_helpers.hpp"
+#include "../metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -47,8 +47,19 @@ void apply_gen1_dm_configs(m2::KernelSpec& producer, m2::KernelSpec& consumer, d
     if (mesh_device.arch() == ARCH::QUASAR) {
         return;
     }
-    producer.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-    consumer.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    producer.hw_config = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+            },
+    };
+    consumer.hw_config = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::NOC_1,
+            },
+    };
 }
 
 void expect_half_grid_slots_packed(Program& program, uint32_t num_dfbs_per_half, bool /*is_quasar*/) {
@@ -77,7 +88,12 @@ m2::KernelSpec make_touch_producer(const std::string& name, uint32_t num_dfbs, d
     kernel.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                },
+        };
     }
     return kernel;
 }
@@ -91,7 +107,13 @@ m2::KernelSpec make_touch_consumer(
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}, {"touched_magic", touched_magic}};
     kernel.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
     }
     return kernel;
 }
@@ -356,22 +378,28 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
         this->device(), CoreCoord{1, 0}, result_addr, per_half, /*expected_entry_size=*/32, touched_magic, right_slots);
 }
 
-// All bindings here are 1-to-1, so 22 active DFBs consume exactly 22 shared Pack TC slots.
+// 22 active DFBs on one Neo's packer: 16 Tensix->DM, each taking one of the Neo's 16 DM
+// tile counters, plus 6 compute self-loops, whose intra-Tensix counter pairs come from the
+// Tensix-only pool. All bindings are 1-to-1, so the 22 DFBs consume exactly 22 shared Pack TC slots.
 TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Pack DFB TC-slot pooling is Quasar-only";
     }
 
-    constexpr uint32_t num_dfbs = 22;
-    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_PACK);
-    static_assert(num_dfbs <= ::dfb::MAX_PACK_TC_SLOTS);
+    constexpr uint32_t num_dm_dfbs = 16;
+    constexpr uint32_t num_intra_dfbs = 6;
+    constexpr uint32_t num_dfbs = num_dm_dfbs + num_intra_dfbs;
+    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_TRISC);
+    static_assert(num_dfbs <= ::dfb::MAX_TRISC_TC_SLOTS);
+    static_assert(num_dm_dfbs <= ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM);
+    static_assert(num_intra_dfbs * ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB <= ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS);
 
     const m2::KernelSpecName pack_name{"pack"};
     auto pack = make_compute_kernel(
         pack_name, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_pack_multi_touch.cpp", /*num_threads=*/1);
     pack.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
 
-    auto dm = make_touch_producer("dm_consumer", num_dfbs, this->device());
+    auto dm = make_touch_producer("dm_consumer", num_dm_dfbs, this->device());
 
     m2::ProgramSpec spec;
     spec.name = "pack_22_dfb_tc_slot_pool";
@@ -386,12 +414,20 @@ TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
             .accessor_name = name,
             .endpoint_type = m2::DFBEndpointType::PRODUCER,
         });
-        dm.dfb_bindings.push_back({
-            .dfb_spec_name = dfb,
-            .accessor_name = name,
-            .endpoint_type = m2::DFBEndpointType::CONSUMER,
-        });
-        disable_implicit_sync_for(dm, dfb);
+        if (i < num_dm_dfbs) {
+            dm.dfb_bindings.push_back({
+                .dfb_spec_name = dfb,
+                .accessor_name = name,
+                .endpoint_type = m2::DFBEndpointType::CONSUMER,
+            });
+            disable_implicit_sync_for(dm, dfb);
+        } else {
+            pack.dfb_bindings.push_back({
+                .dfb_spec_name = dfb,
+                .accessor_name = name + "_in",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER,
+            });
+        }
     }
     spec.kernels = {pack, dm};
     spec.work_units = {

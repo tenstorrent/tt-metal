@@ -6,13 +6,13 @@ import pytest
 from loguru import logger
 import ttnn
 
-from models.common.utility_functions import skip_for_n_or_less_dev
+from tt_py_test_utils_common.utility_functions import skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(

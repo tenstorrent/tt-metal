@@ -12,7 +12,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
+from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
@@ -22,9 +22,16 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDAProgramConfig,
+    KDARecurrenceProgramConfig,
+    kimi_k3_program_config,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -49,14 +56,24 @@ def collect_mesh_accuracy_and_determinism_results(
     run: Callable[[], Sequence[ttnn.Tensor]],
     *,
     count: int = 3,
+    defined: Sequence[ttnn.Tensor | None] | None = None,
 ) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...]]:
-    """Retain first mesh outputs and reduce exact repeat mismatches on device."""
+    """Retain first mesh outputs and reduce exact repeat mismatches on device.
+
+    ``ttnn.ne`` compares values: +0 and -0, and subnormals and zero, compare equal.
+    ``defined`` optionally gives, per output, a 0/1 mask broadcastable to it that
+    selects the defined elements; mismatches elsewhere, such as NaN padded rows
+    (NaN != NaN), are ignored. ``None`` compares the whole output.
+    """
     if count <= 1:
         raise ValueError("count must be greater than one")
 
     reference_outputs = tuple(run())
     if not reference_outputs:
         raise ValueError("run must return at least one output")
+    masks = tuple(defined) if defined is not None else (None,) * len(reference_outputs)
+    if len(masks) != len(reference_outputs):
+        raise ValueError("defined must give one mask or None per output")
 
     mismatch_marker = None
     for _ in range(1, count):
@@ -65,7 +82,7 @@ def collect_mesh_accuracy_and_determinism_results(
             for output in outputs:
                 ttnn.deallocate(output)
             raise ValueError("run returned a different number of outputs")
-        for reference, output in zip(reference_outputs, outputs, strict=True):
+        for reference, output, mask in zip(reference_outputs, outputs, masks, strict=True):
             if (
                 output.shape != reference.shape
                 or output.dtype != reference.dtype
@@ -76,6 +93,11 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            if mask is not None:
+                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
+                defined_mismatch = ttnn.multiply(mismatch, mask)
+                ttnn.deallocate(mismatch)
+                mismatch = defined_mismatch
             current_marker = ttnn.max(mismatch)
             ttnn.deallocate(mismatch)
             if mismatch_marker is None:
@@ -163,16 +185,34 @@ def reconstruct_convolution_at_sp_rank(
     )
 
 
+# Convolution-state NRMSE bar for K3's bfloat8_b projections: q/k/v feed the convolution state directly.
+KIMI_K3_CONVOLUTION_NRMSE = 0.009
+
+
+@dataclass(frozen=True)
+class LayerNrmseThresholds:
+    """NRMSE thresholds for a KDA layer's three results: output, recurrent state, convolution state.
+
+    No defaults: K3's bfloat8_b projections pass `KIMI_K3_CONVOLUTION_NRMSE`, bfloat16-projection
+    layers keep a tighter convolution bar, and a default would silently loosen one of them.
+    """
+
+    output: float
+    recurrent: float
+    convolution: float
+
+
 def compare_cpu_device(
     name: str,
     expected: torch.Tensor,
     actual: torch.Tensor,
     *,
     pcc_threshold: float,
+    nrmse_threshold: float | None,
 ) -> tuple[float, list[str]]:
     """Run the shared accuracy contract without hiding later tensor results."""
     try:
-        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold)
+        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse_threshold)
     except AssertionError as error:
         return float("nan"), [str(error)]
     return pcc, []
@@ -189,8 +229,14 @@ def check_kimi_k3_accuracy(
     tensor_parallel_axis: int,
     *,
     pcc_threshold: float,
+    nrmse: LayerNrmseThresholds,
+    valid_length: int | None = None,
 ) -> dict[str, float]:
-    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint."""
+    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint.
+
+    ``valid_length`` restricts the output to rows before an ``actual_end``; padded rows
+    are unspecified. Input rows must be in natural order (``actual_start`` of zero).
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
@@ -203,13 +249,15 @@ def check_kimi_k3_accuracy(
         tp_dim=2,
         sp_dim=1,
     )
+    if valid_length is not None:
+        actual_output = actual_output[:, :valid_length]
     golden_output = golden_output.to(torch.bfloat16)
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
     local_width = case.config.num_heads // tp_size * case.config.head_k_dim
     output_pcc, failures = compare_cpu_device(
-        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold
+        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse.output
     )
     pcc = {"output": output_pcc}
     for sp_rank in range(sp_size):
@@ -229,6 +277,7 @@ def check_kimi_k3_accuracy(
             golden_state.recurrent,
             actual_recurrent,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.recurrent,
         )
         pcc[f"sp_rank_{sp_rank}_recurrent"] = recurrent_pcc
         failures.extend(recurrent_failures)
@@ -237,6 +286,7 @@ def check_kimi_k3_accuracy(
             golden_convolution,
             actual_convolution,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.convolution,
         )
         pcc[f"sp_rank_{sp_rank}_convolution"] = convolution_pcc
         failures.extend(convolution_failures)
@@ -283,9 +333,14 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
     )
 
 
-def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
-    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
+def make_synthetic_kimi_k3_test_case(*, sequence: int, num_heads: int | None = None) -> KimiK3TestCase:
+    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint.
+
+    ``num_heads`` overrides the global KDA head count, so a smaller TP keeps Galaxy's heads per chip.
+    """
     config = _kda_config_from_kimi_k3_constants()
+    if num_heads is not None:
+        config = replace(config, num_heads=num_heads)
     state_dict = random_weights(config)
     hidden = torch.randn(
         1,
@@ -331,12 +386,15 @@ def make_kimi_k3_device_case(
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
-    default_program_config = kimi_k3_program_config(
+    selected_program_config = program_config or kimi_k3_program_config(
+        active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
+        # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
         tp_ccl_topology=(
-            ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
-        )
+            ttnn.Topology.Ring
+            if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
+            else per_axis_topology()[tensor_parallel_axis]
+        ),
     )
-    selected_program_config = program_config or default_program_config
     if summary_group_chunks is not None:
         selected_program_config = replace(
             selected_program_config,
@@ -353,6 +411,7 @@ def make_kimi_k3_device_case(
         sp_axis=sequence_parallel_axis,
         tp_axis=tensor_parallel_axis,
         program_config=selected_program_config,
+        active_seq_len=case.hidden.shape[1],
     )
     return layer, hidden
 
@@ -415,3 +474,141 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
         weights["g_a_proj.weight"] = normal(value_rank, hidden)
         weights["g_b_proj.weight"] = normal(config.num_heads * value_rank, value_rank)
     return weights
+
+
+def deallocate_state(state: KdaState) -> None:
+    ttnn.deallocate(state.recurrent)
+    ttnn.deallocate(state.convolution)
+
+
+def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
+    """Natural-order index carried by each MLA row, flattened in chip-major order."""
+    positions = rotated_chip_positions(actual_start, sp_size, local_rows)
+    return torch.tensor([position - actual_start for chip in positions for position in chip])
+
+
+def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+    mesh_dims = [None, None]
+    mesh_dims[sp_axis] = 1
+    return ttnn.from_torch(
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(mesh_dims), mesh_shape=tuple(mesh_device.shape)),
+    )
+
+
+def build_layer(
+    mesh_device: ttnn.MeshDevice,
+    config: KDAConfig,
+    weights: dict[str, torch.Tensor],
+    sp_axis: int,
+    tp_axis: int,
+    *,
+    active_seq_len: int,
+    summary_group_chunks: int | None = None,
+) -> ttKDA:
+    if summary_group_chunks is None:
+        # Explicit small-model configurations preserve the established geometry coverage.
+        local_rows = active_seq_len // tuple(mesh_device.shape)[sp_axis]
+        summary_group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 5, 640: 5, 1280: 8, 2560: 8, 5120: 8}[local_rows]
+    return ttKDA(
+        mesh_device,
+        config,
+        weights,
+        tt_ccl=TT_CCL(mesh_device),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        program_config=KDAProgramConfig(
+            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
+            gated_rms_output_dtype=ttnn.bfloat16,
+            output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        ),
+        active_seq_len=active_seq_len,
+    )
+
+
+def reference_case(
+    sequence: int = 1280,
+) -> tuple[KDAConfig, dict[str, torch.Tensor], torch.Tensor, torch.Tensor, KDAReferenceState]:
+    config = KDAConfig(
+        hidden_size=128,
+        num_heads=8,
+        head_k_dim=32,
+        head_v_dim=32,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+    )
+    weights = random_weights(config)
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(4211)).to(
+        torch.bfloat16
+    )
+    expected_output, expected_state = kda_forward_reference(hidden, weights, config)
+    return config, weights, hidden, expected_output.to(torch.bfloat16), expected_state
+
+
+def assert_matches_reference(
+    *,
+    output_tt: ttnn.Tensor,
+    state: KdaState,
+    permutation: torch.Tensor,
+    expected_output: torch.Tensor,
+    expected_state: KDAReferenceState,
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    config: KDAConfig,
+    label: str,
+    nrmse: LayerNrmseThresholds,
+    state_linf_threshold: float | None = 0.6,
+    pcc_threshold: float = 0.999,
+) -> None:
+    """Undo MLA's row permutation, then compare output and both carries."""
+    rotated_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
+    natural_output = torch.empty_like(rotated_output)
+    natural_output[:, permutation, :] = rotated_output
+
+    assert_accurate(
+        expected_output,
+        natural_output[:, : expected_output.shape[1]],
+        name=f"{label} output",
+        pcc_threshold=pcc_threshold,
+        nrmse_threshold=nrmse.output,
+        linf_threshold=0.25,
+    )
+
+    expected_convolution = torch.cat(
+        (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
+    ).to(torch.bfloat16)
+    local_heads = config.num_heads // tuple(mesh_device.shape)[tp_axis]
+    local_width = local_heads * config.head_k_dim
+
+    for sp_rank in range(tuple(mesh_device.shape)[sp_axis]):
+        assert_accurate(
+            expected_state.recurrent,
+            reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
+            name=f"{label} sp_rank={sp_rank} recurrent",
+            pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.recurrent,
+            linf_threshold=state_linf_threshold,
+        )
+        assert_accurate(
+            expected_convolution,
+            reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
+            name=f"{label} sp_rank={sp_rank} convolution",
+            pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.convolution,
+            linf_threshold=0.1,
+        )
+
+
+def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
+    """A copy of layer ``layer_idx``'s carry at host ``slot``, read through the device-slot import the
+    K3 layers use. OWNED: free it with ``deallocate_state``."""
+    state = allocate_native_state(mesh_device, slabs.geometry)
+    index = device_scalar(mesh_device, slot)
+    slabs.import_layer(state, index, layer_idx)
+    ttnn.deallocate(index)
+    return state

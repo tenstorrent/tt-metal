@@ -92,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts FullNDShardedProgramFactory::create_pro
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"fill_value", "start_shard_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(operation_attributes.mesh_device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     m2::KernelRunArgs writer_run_args{.kernel = WRITER};

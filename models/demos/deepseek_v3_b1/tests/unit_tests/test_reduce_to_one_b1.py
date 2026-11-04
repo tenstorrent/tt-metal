@@ -40,6 +40,7 @@ VALID_TOTAL_WIDTH = LogicalModelDimensions.HIDDEN_SIZE
 PADDED_WIDTH_PER_CORE = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE
 VALID_WIDTH_PER_CORE = VALID_TOTAL_WIDTH // NUM_WORKERS
 PADDED_TOTAL_WIDTH = PADDED_WIDTH_PER_CORE * NUM_WORKERS
+NUM_DEVICES_4x2 = 4 * 2
 
 
 def _build_reduce_to_one_op(config: dict, *, root_coord: tuple[int, int], exit_coord: tuple[int, int], is_torus: bool):
@@ -130,12 +131,10 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
 
     # Validate mesh has enough devices for 4x2 submesh
     mesh_rows, mesh_cols = mesh_device.shape
-    if mesh_rows * mesh_cols < 8:
-        pytest.skip(f"Need at least 8 devices, got {mesh_rows * mesh_cols}")
     logger.info(f"Mesh is {mesh_rows}x{mesh_cols} = {mesh_rows * mesh_cols} devices")
 
     # Setup - create 4x2 submesh
-    num_devices = 8
+    num_devices = NUM_DEVICES_4x2
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh_device.shape}")
@@ -464,6 +463,9 @@ def run_reduce_to_one_with_trace(
     indirect=["device_params"],
     ids=["fabric_1d"],
 )
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_reduce_to_one_1d(bh_2d_mesh_device):
     """Test reduce_to_one with 1D fabric."""
     run_reduce_to_one(bh_2d_mesh_device)
@@ -475,6 +477,9 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)})],
     indirect=["device_params"],
     ids=["fabric_2d"],
+)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
 )
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
@@ -496,6 +501,9 @@ def test_reduce_to_one_2d(bh_2d_mesh_device):
     ],
     indirect=["device_params"],
     ids=["fabric_2d_trace"],
+)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
 )
 def test_reduce_to_one_trace(
     bh_2d_mesh_device,

@@ -20,6 +20,7 @@ from runner_failure_common import (
     format_signature_summary,
     format_utc,
     group_results_by_runner,
+    is_failed_job,
     job_state_key,
     job_to_dict,
     list_recent_jobs,
@@ -38,7 +39,6 @@ from runner_failure_common import (
 
 STATE_SCHEMA_VERSION = 1
 STATE_RETENTION_HOURS = 48
-NON_FAILED_CONCLUSIONS = {"success", "skipped", "cancelled"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,11 +109,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--gh-timeout must be greater than zero.")
     if args.log_workers <= 0:
         raise ValueError("--log-workers must be greater than zero.")
-
-
-def is_failed_job(job: RecentJob) -> bool:
-    conclusion = job.conclusion.lower()
-    return bool(conclusion) and conclusion not in NON_FAILED_CONCLUSIONS
 
 
 def empty_state() -> dict[str, Any]:
@@ -216,6 +211,17 @@ def mark_job_checked(state: dict[str, Any], result: JobScanResult) -> None:
     }
 
 
+def log_download_counts(
+    jobs_to_scan: list[RecentJob],
+    scan_results: list[JobScanResult],
+) -> tuple[int, int, int, int]:
+    unavailable = sum(1 for result in scan_results if result.log_unavailable and not result.log_checked)
+    attempts = max(len(jobs_to_scan) - unavailable, 0)
+    successes = sum(1 for result in scan_results if result.log_checked)
+    failures = max(attempts - successes, 0)
+    return attempts, successes, failures, unavailable
+
+
 def build_markdown_report(
     *,
     generated_at: datetime,
@@ -228,6 +234,10 @@ def build_markdown_report(
     scan_results: list[JobScanResult],
 ) -> str:
     failures = [result for result in scan_results if result.signature_labels]
+    download_attempts, download_successes, download_failures, unavailable_logs = log_download_counts(
+        jobs_to_scan, scan_results
+    )
+    download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     lines = [
         "# Runner Failure Scan",
         "",
@@ -236,10 +246,23 @@ def build_markdown_report(
         f"- Workflows: `{', '.join(workflow.name for workflow in workflows)}`",
         f"- Recent selected jobs: `{len(recent_jobs)}`",
         f"- Failed jobs: `{len(failed_jobs)}`",
-        f"- Scanned jobs: `{len(jobs_to_scan)}`",
+        f"- Jobs selected for scanning: `{len(jobs_to_scan)}`",
+        f"- Log downloads: `{download_successes}/{download_attempts}` succeeded",
+        f"- Log download failures: `{download_failures}` (`{download_failure_rate:.1%}`)",
+        f"- Logs unavailable (excluded from download health): `{unavailable_logs}`",
         f"- Runner-failure jobs: `{len(failures)}`",
         "",
     ]
+
+    if unavailable_logs:
+        lines.extend(["## Unavailable Logs", "", "| Job | Reason |", "| --- | --- |"])
+        for result in scan_results:
+            if result.log_unavailable:
+                lines.append(
+                    f"| {markdown_link(result.job.job_id, result.job.html_url)} | "
+                    f"{markdown_escape(result.log_status)} |"
+                )
+        lines.append("")
 
     if not failures:
         lines.append("No runner-failure signatures found in scanned jobs.")
@@ -299,6 +322,10 @@ def build_json_report(
     runner_log_table_results: list[JobScanResult],
 ) -> dict[str, Any]:
     failures = [result for result in scan_results if result.signature_labels]
+    download_attempts, download_successes, download_failures, unavailable_logs = log_download_counts(
+        jobs_to_scan, scan_results
+    )
+    download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     return {
         "generated_at": format_utc(generated_at),
         "since": format_utc(since),
@@ -318,6 +345,11 @@ def build_json_report(
             "failed_jobs": len(failed_jobs),
             "jobs_to_scan": len(jobs_to_scan),
             "scanned_jobs": len(scan_results),
+            "log_download_attempts": download_attempts,
+            "log_download_successes": download_successes,
+            "log_download_failures": download_failures,
+            "log_download_unavailable": unavailable_logs,
+            "log_download_failure_rate": download_failure_rate,
             "runner_log_table_jobs": len(runner_log_table_results),
             "runner_failure_jobs": len(failures),
         },
@@ -365,7 +397,7 @@ def main() -> int:
         log_workers=args.log_workers,
     )
     for result in scan_results:
-        if result.log_checked:
+        if result.log_checked or result.signature_labels:
             mark_job_checked(state, result)
 
     save_state(args.state_out, state)

@@ -8,6 +8,10 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -27,11 +31,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "hostdev/observability_event_descriptor.h"
+
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <taskflow/core/async.hpp>
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
@@ -45,10 +50,11 @@
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
+#include "pch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace fs = std::filesystem;
@@ -58,6 +64,77 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
+
+// Hands out the tu_id half of a structural descriptor id (hostdev/observability_event_descriptor.h) as
+// -DTT_PROFILER_TU_ID. Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its
+// .tt_event_descriptor_meta), hence a file. The key is source identity plus build target: one source compiled for
+// BRISC vs NCRISC can number its events differently. Compile-time args are left out to keep the registry bounded; two
+// define-variants of one source then share a tu_id, which the host reports as a collision rather than
+// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
+// sharing a cache root, the mutex covers the JIT's own thread pool.
+uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+
+    struct RegistryLock {
+        int fd;
+        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+            TT_FATAL(fd >= 0, "Failed to open observability event tu-id registry '{}': {}", path, std::strerror(errno));
+            if (::flock(fd, LOCK_EX) != 0) {
+                int err = errno;
+                ::close(fd);
+                TT_THROW("Failed to lock observability event tu-id registry '{}': {}", path, std::strerror(err));
+            }
+        }
+        ~RegistryLock() {
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
+        }
+    } registry_lock(registry_path);
+
+    std::vector<bool> taken(TT_EVENT_DESCRIPTOR_TU_COUNT, false);
+    {
+        std::ifstream in(registry_path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto tab = line.rfind('\t');
+            if (tab == std::string::npos) {
+                continue;
+            }
+            uint32_t entry_id = 0;
+            try {
+                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+            } catch (const std::exception&) {
+                continue;
+            }
+            if (entry_id >= TT_EVENT_DESCRIPTOR_TU_COUNT) {
+                continue;  // assigned when the tu split was wider
+            }
+            if (line.compare(0, tab, source_id) == 0) {
+                return entry_id;
+            }
+            taken[entry_id] = true;
+        }
+    }
+
+    taken[TT_EVENT_DESCRIPTOR_RESERVED_TU] = true;
+    uint32_t id = 0;
+    while (id < TT_EVENT_DESCRIPTOR_TU_COUNT && taken[id]) {
+        ++id;
+    }
+    TT_FATAL(
+        id < TT_EVENT_DESCRIPTOR_TU_COUNT,
+        "Observability event tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
+        "each build's ELFs, so nothing is lost by resetting it.",
+        TT_EVENT_DESCRIPTOR_TU_COUNT,
+        registry_path);
+
+    std::ofstream out(registry_path, std::ios::app);
+    out << source_id << '\t' << id << '\n';
+    out.flush();
+    TT_FATAL(out.good(), "Failed to persist observability event tu-id registry entry to '{}'", registry_path);
+    return id;
+}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -120,7 +197,56 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
+
+// Bits 16-24 of TT_METAL_PROFILE_PERF_COUNTERS select the Quasar l1_client event counter, subport*8 + event; 0 is
+// off because event 0 is never valid. perf_counters.hpp decodes the same field from PROFILE_PERF_COUNTERS.
+constexpr uint32_t PERF_COUNTER_L1_CLIENT_SHIFT = 16;
+constexpr uint32_t PERF_COUNTER_GROUP_MASK = (1u << PERF_COUNTER_L1_CLIENT_SHIFT) - 1;
+
+// Quasar has no L1 counter unit: valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy frontend sends
+// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it. The l1_client checks mirror
+// llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h (37 subports, 8 events).
+static uint32_t quasar_perf_counter_mode(uint32_t mode) {
+    constexpr uint32_t quasar_groups = 0x27;
+    constexpr uint32_t tt1xx_all_groups = 0x2F;
+    uint32_t groups = mode & PERF_COUNTER_GROUP_MASK;
+    const uint32_t sel = mode >> PERF_COUNTER_L1_CLIENT_SHIFT;
+    if (groups == tt1xx_all_groups) {
+        groups = quasar_groups;
+    }
+    TT_FATAL(
+        (groups & ~quasar_groups) == 0,
+        "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
+        "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+        mode);
+    if (sel != 0) {
+        constexpr uint32_t num_events = 8;
+        constexpr uint32_t num_selections = 37 * num_events;
+        TT_FATAL(
+            sel < num_selections,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} (bits 16-24) is out of range; it encodes "
+            "subport*8 + event with 37 subports and 8 events",
+            mode,
+            sel);
+        TT_FATAL(
+            sel % num_events != 0,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is event 0, which is unused in the L1 RTL",
+            mode,
+            sel);
+        TT_FATAL(
+            !(sel / num_events == 4 && sel % num_events <= 3),
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is a THCON event 1-3, the TRISC port's SBank 0 "
+            "counters already exposed by selections 1-3",
+            mode,
+            sel);
+    }
+    return groups | (sel << PERF_COUNTER_L1_CLIENT_SHIFT);
+}
 
 void JitBuildEnv::init(
     uint64_t build_key,
@@ -130,15 +256,16 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        this->gpp_ = "ccache ";
+        // ccache requires sloppiness settings for both PCH creation and consumption
+        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
     } else {
         this->gpp_ = "";
     }
@@ -243,6 +370,26 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
     }
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
+        // DeviceZoneScopedN / DeviceTimestampedData event compiled; PROFILE_STREAMING makes
+        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        TT_FATAL(
+            this->arch_ != tt::ARCH::QUASAR,
+            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
+            "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+        this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
+            // Note: only enabled with streaming profiler.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        }
+    }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
         if (!rtoptions.get_profiler_enabled()) {
@@ -256,7 +403,17 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
-        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+        uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
+        } else {
+            TT_FATAL(
+                (perf_counter_mode >> PERF_COUNTER_L1_CLIENT_SHIFT) == 0,
+                "TT_METAL_PROFILE_PERF_COUNTERS={}: bits 16-24 select the Quasar l1_client event counter, which this "
+                "architecture does not have",
+                perf_counter_mode);
+        }
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
@@ -306,6 +463,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_relaxed_memory_ordering_disabled()) {
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
+    if (this->arch_ == tt::ARCH::BLACKHOLE && rtoptions.get_l1_ecc_halt_enabled()) {
+        this->defines_ += "-DL1_ECC_HALT ";
     }
 
     if (rtoptions.get_gathering_enabled()) {
@@ -363,7 +524,6 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",
@@ -391,19 +551,8 @@ void JitBuildEnv::init(
         // Do not hash compiler version when generating compiler logs
         // so that we may compare them between different compilers
         // without undue difficulty.
-    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // Read the sfpi compiler version directly from the compiler
-        // we're using.  Compiler changes invalidate the cache.
-
-        // First line is typically about 65 chars on a branch (and
-        // less on main):
-
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
-        char buf[100];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            hasher.update(std::string_view{buf});
-        }
-        pclose(pipe);
+    } else {
+        hasher.update(tt::jit_build::utils::compiler_version(gpp_));
     }
 
     build_key_ = hasher.digest();
@@ -447,9 +596,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
-    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
-                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
-                             build_config.processor_id == 2;
+    this->is_compute_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                        build_config.processor_class == HalProcessorClassType::COMPUTE;
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
@@ -459,6 +607,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-I{}{} ", env_.root_, include);
         }
     }
+    if (build_config.is_fw && build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::DM && build_config.processor_id == 0 &&
+        env_.get_rtoptions().get_brisc_firmware_variant() == llrt::BriscFirmwareVariant::Blaze) {
+        fmt::format_to(
+            std::back_inserter(this->includes_),
+            "-I{} ",
+            std::filesystem::path(env_.get_rtoptions().get_brisc_firmware_header()).parent_path().string());
+    }
     // Defines
     {
         auto it = std::back_inserter(this->defines_);
@@ -466,6 +622,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -661,17 +820,43 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific include
-    // paths and the -include for the named-compile-arg map header) ONCE via export_target_recipe,
-    // then turn it into an argv with the shared builder and run it SHELL-FREE via exec_command —
-    // the same argv builder the JIT compile server and preprocess-and-ship use. Shell-free also
-    // means defines carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", need no
-    // escaping — each define is one argv element, passed verbatim.
+    // Use the shared recipe and argv builder to pass defines verbatim without shell escaping.
     const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
     std::string cflags = recipe.cflags;
     if (env_.get_rtoptions().get_build_map_enabled()) {
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
+    }
+
+    // Add the machine-local PCH here so exported recipes remain portable.
+    // Exclude build-map dump flags from the PCH profile.
+    const std::string pch = tt::jit_build::ensure_pch(
+        env_.gpp_, recipe.compiler_opt_level, recipe.cflags, recipe.pch_umbrella, fs::path(env_.out_root_) / "pch");
+
+    // Preserve the recipe's defines for watcher logging.
+    std::vector<std::string> defines = recipe.defines;
+    if (!pch.empty()) {
+        // Load the PCH before any other force-included header emits C++ tokens.
+        defines.insert(defines.begin(), {"-include", pch});
+        // Warn if GCC rejects the PCH, while allowing textual fallback.
+        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+    }
+
+    // Per-TU half of the structural descriptor id (STREAMING profiler only; the DRAM profiler's 16-bit
+    // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
+    // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
+    // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
+    // compiled one.
+    if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
+        // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
+        // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
+        // would mint a fresh tu_id per config for the same source).
+        const std::string source_id = (settings != nullptr)
+                                          ? settings->get_observability_event_src_id() + '\x1f' + this->target_name_
+                                          : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
+        const uint32_t tu_id =
+            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".observability_event_tu_ids", source_id);
+        defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];
@@ -683,7 +868,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -695,7 +880,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     if (env_.get_rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(
-            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(recipe.defines, " ")));
+            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(defines, " ")));
     }
 
     // log file and dephash file can be renamed after compilation, but the .o file
@@ -704,7 +889,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella);
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -993,16 +1178,16 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
-    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
-    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
+    // Per-kernel RVV opt-in: only processors the HAL gives vector flags to (TRISC2 on Blackhole,
+    // TRISC0 on Quasar) change; the kernel's other compiles are unchanged. Compile-only: lflags_ is
     // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
-    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
-        TT_FATAL(
-            !this->rvv_cflags_.empty(),
-            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
-            "generation on the pack processor",
-            settings->get_full_kernel_name());
+    if (settings != nullptr && settings->get_rvv_enabled()) {
         target.cflags += this->rvv_cflags_;
+    }
+    // Per-kernel opt-out of the SFPI compiler's replay optimization (tenstorrent/tt-metal#58433).
+    if (settings != nullptr && this->is_compute_ && settings->get_sfpu_replay_optimization_disabled()) {
+        target.cflags += " -mno-tt-tensix-optimize-replay ";
     }
     target.lflags = lflags_;
     target.linker_script = linker_script_;
@@ -1125,6 +1310,15 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     if (!JitBuildCache::inst().build_once(hash, build_fn)) {
         BuildCacheTelemetry::inst().record_jit_once_dedup();
     }
+}
+
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    const auto status = JitBuildCache::inst().build_once_no_wait(hash, build_fn);
+    // An in-progress caller records its dedup later, when it joins through jit_build_once().
+    if (status == JitBuildCache::BuildOnceStatus::AlreadyBuilt) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
+    return status != JitBuildCache::BuildOnceStatus::InProgress;
 }
 
 void jit_build_cache_clear() {

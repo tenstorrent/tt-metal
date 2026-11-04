@@ -10,11 +10,11 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_binary_bcast.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_reduce.h"
 #include "lltt.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel
@@ -22,7 +22,7 @@ namespace ckernel
 namespace sfpu
 {
 
-// sfpu/ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
+// ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
 // LTILEID-derived lane masks and dropped them. Values carried over verbatim. SFPCONFIG target index used
 // with an immediate mask to force LReg[11] = 1.0 on specific SFPU instances (= specific "SFPU columns"
 // within each 8-lane group) and 0.0 on the others. Bit N of the mask corresponds to SFPU instance N; the
@@ -60,10 +60,7 @@ inline void _zero_paired_odd_tail_lane_()
         TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
         TTI_SFPENCC(0, 0, 0, 0);
 
-        // Restore LREG11 to its hardware-default -1.0 value.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-        TTI_SFPCONFIG(all_instances_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
+        _restore_lconst_neg1_();
     }
 }
 
@@ -102,14 +99,15 @@ inline void _softmax_k_()
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     TTI_SFPLOADI(p_sfpu::LREG4, 0, 0);
     TTI_SFPNOP;
-    sfpu::horizontal_reduce<false>();
+    sfpu::horizontal_reduce();
 
-    // Broadcast the column-0 sum across all eight SFPU columns.
+    // Broadcast the column-0 sum across all eight SFPU columns. LREG_MASK is
+    // all ones in SFPU col 0 and zero elsewhere, so one SFPAND zeroes the
+    // discarded cols 1..7 bitwise (a multiply would make an Inf/NaN there NaN).
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
     _build_lane_mask_col0_();
     TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, LREG_MASK, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
+    TTI_SFPAND(0, LREG_MASK, p_sfpu::LREG0, 0);
 
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;

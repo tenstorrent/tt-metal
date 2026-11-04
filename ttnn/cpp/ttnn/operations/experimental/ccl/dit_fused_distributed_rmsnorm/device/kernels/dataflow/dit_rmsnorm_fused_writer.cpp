@@ -89,12 +89,12 @@ void kernel_main() {
     // size_t arg_idx (not uint32_t) so it can bind to FabricConnectionManager::build_from_args
     // which takes the index by reference and advances it past the fabric rt args.
     size_t arg_idx = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     // trans_mat base address for the writer-side scalar/trans_mat population
     // (only read when fuse_rope). 0 when no RoPE.
-    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
 
     Noc noc;
     CircularBuffer cb_output(output_cb);
@@ -120,9 +120,9 @@ void kernel_main() {
     if constexpr (is_tp_1 == 0) {
         // The next runtime args carry the GlobalSemaphore L1 address + fabric
         // connection setup info. Layout (set by host):
-        //   [3]  out_ready_sem_bank_addr  (L1 address of the GlobalSemaphore
+        //   [2]  out_ready_sem_bank_addr  (L1 address of the GlobalSemaphore
         //                                  on this core, same on every chip)
-        //   [4]  has_forward_fabric (0/1)
+        //   [3]  has_forward_fabric (0/1)
         //   ...  forward fabric connection rt args (if has_forward_fabric)
         //   [N]  has_backward_fabric (0/1)
         //   ...  backward fabric connection rt args (if has_backward_fabric)

@@ -4,11 +4,30 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <enchantum/entries.hpp>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <vector>
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}
 
 namespace tt::tt_metal::distributed {
 
@@ -199,8 +218,8 @@ private:
         config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void process_host_ranks();
-    void process_mesh_ids();
+    void process_host_ranks(const tt::tt_fabric::ControlPlane& control_plane);
+    void process_mesh_ids(const tt::tt_fabric::ControlPlane& control_plane);
     static SocketConfig populate_mesh_ids(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,

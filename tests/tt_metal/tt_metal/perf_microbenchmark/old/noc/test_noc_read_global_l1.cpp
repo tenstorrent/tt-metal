@@ -38,6 +38,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -175,7 +176,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         CoreCoord start_core = {0, 0};
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
         const CoreRange all_cores(start_core, end_core);
@@ -327,8 +328,7 @@ int main(int argc, char** argv) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
-                    tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                    slow_dispatch::ReadFromL1(*device, core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                     int tensors_idx = (single_read || one_buffer_share) ? (0) : ((r * num_cores_c) + c);

@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import ttnn
 
-from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
+from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
 
 # ff2 per-device K = 14336 / tp 4 = 3584; N = 5376 is the full hidden size (the reduce-scatter
 # fractures it back to 1344 per device on the way out).
@@ -70,7 +70,7 @@ _TILE = 32
 # rule engine guarantees the same for its own picks (K_block is chosen among divisors of K/32).
 
 
-def has_mmrs_config(m: int, k: int, n: int) -> bool:
+def has_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:
     """Whether the fused MM+RS+addcmul path should be taken for this shape. Pure query, no side effects.
 
     Gate the fused path on this, and call `register_mmrs_config` before running the fused op. A shape
@@ -85,11 +85,26 @@ def has_mmrs_config(m: int, k: int, n: int) -> bool:
     a partial trailing block along M is fine, unlike along K, where the ring delivers the gathered
     input in fixed chunks; requiring divisibility here would silently disable the fused path for
     most durations.
+
+    `core_grid` is the device's compute grid, and it is load-bearing rather than decorative: *both*
+    ways of resolving a real blocking are architecture-specific -- `_SWEPT_BLOCKINGS` is only valid
+    on `_DEVICE_GRID`, and the v2.3 rule engine is Blackhole-only. Gating on the shape alone accepted
+    every tile-aligned M on Wormhole too, where neither source can hit, so all 50 ff2 blocks per
+    denoise step silently ran the very fallback this gate exists to avoid. Ask
+    `resolves_fused_mmrs_config` about the real grid instead of assuming the answer from (m, k, n).
     """
-    return k == _K and n == _N and m % _TILE == 0
+    if not (k == _K and n == _N and m % _TILE == 0):
+        return False
+
+    # The swept blocking is not in the global table until `register_mmrs_config` installs it, so
+    # anticipate it here; otherwise the gate would answer on the pre-registration state.
+    if m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
+        return True
+
+    return resolves_fused_mmrs_config(m, _K, _N, core_grid)
 
 
-def register_mmrs_config(m: int, k: int, n: int) -> None:
+def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> None:
     """Register the swept blocking for this shape into the global fused-MMRS table, if one exists.
 
     Call at the site that is about to take the fused path (idempotent, cheap), for a shape
@@ -98,8 +113,11 @@ def register_mmrs_config(m: int, k: int, n: int) -> None:
     `get_fused_mmrs_config` then resolves it with the v2.3 rule engine, which beats reusing a
     neighboring swept blocking (see the module docstring for the measured comparison).
     """
-    if not has_mmrs_config(m, k, n):
+    if not has_mmrs_config(m, k, n, core_grid):
         msg = f"No fused MMRS blocking for (M, K, N) = ({m}, {k}, {n}); gate on has_mmrs_config first"
         raise ValueError(msg)
-    if m in _SWEPT_BLOCKINGS:
-        register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): _SWEPT_BLOCKINGS[m]}})
+    # The swept blocking hardcodes a 12x8 matmul grid, so it is only meaningful on the grid it was
+    # swept on -- registering it under any other key would hand that device a blocking off the end
+    # of its own core grid.
+    if m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
+        register_fused_mmrs_configs({core_grid: {(m, _K, _N): _SWEPT_BLOCKINGS[m]}})

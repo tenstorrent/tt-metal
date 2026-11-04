@@ -17,13 +17,13 @@ namespace ttnn::operations::moreh::moreh_sum_backward {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
-    const auto rank = padded_shape.rank();
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape, uint32_t rank) {
+    TT_FATAL(rank <= padded_shape.rank(), "rank {} must be <= padded rank {}", rank, padded_shape.rank());
     for (auto i = 0; i < rank; ++i) {
-        auto idx = rank - 1 - i;
+        const auto idx = -1 - i;
 
         // last 2-dim
-        if (idx == rank - 1 || idx == rank - 2) {
+        if (i < 2) {
             dim[i] = padded_shape[idx] / tt::constants::TILE_HEIGHT;
         } else {
             dim[i] = padded_shape[idx];
@@ -45,14 +45,16 @@ std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
     auto logical_shape = input_grad.logical_shape();
     auto padded_shape = input_grad.padded_shape();
     auto rank = logical_shape.rank();
+    // dims count logical dims. A rank-1 tensor has one more padded dim at the front.
+    const auto padded_offset = padded_shape.rank() - rank;
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         logical_shape[dim] = 1;
         if (is_tile_dim) {
-            padded_shape[dim] = tt::constants::TILE_HEIGHT;
+            padded_shape[dim + padded_offset] = tt::constants::TILE_HEIGHT;
         } else {
-            padded_shape[dim] = 1;
+            padded_shape[dim + padded_offset] = 1;
         }
     }
 
@@ -105,24 +107,23 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
 
     const auto& input_grad_shape = input_grad.padded_shape();
     const auto& input_grad_shape_wo_padding = input_grad.logical_shape();
-    const uint32_t input_grad_rank = input_grad_shape.rank();
+    const uint32_t input_grad_rank = input_grad_shape_wo_padding.rank();
 
     ttsl::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
-    get_tensor_dim(input_grad_dim, input_grad_shape);
+    get_tensor_dim(input_grad_dim, input_grad_shape, input_grad_rank);
     const auto [output_grad_shape_wo_padding, output_grad_shape] =
         get_output_grad_shape(output_grad, input_grad, dims, keepdim);
 
     ttsl::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");
-    get_tensor_dim(output_grad_dim, output_grad_shape);
+    get_tensor_dim(output_grad_dim, output_grad_shape, input_grad_rank);
 
     ttsl::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
-        auto idx = input_grad_rank - 1 - i;
-        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
+        const auto idx = -1 - i;
 
-        if (is_tile_dim) {
+        if (i < 2) {
             need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
         } else {
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
@@ -191,10 +192,10 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
     //                      Compute hardware config
     ////////////////////////////////////////////////////////////////////////////
     // Style B: the legacy factory built a Metal ComputeConfigDescriptor directly from the
-    // resolved compute-kernel-config scalars. Reproduce those exact values on ComputeGen1Config,
+    // resolved compute-kernel-config scalars. Reproduce those exact values on ComputeHardwareConfig,
     // minding the two non-1:1 transforms (math_approx_mode bool->Precision; dst_full_sync_en
     // inverted into double_buffer_dest).
-    ComputeGen1Config compute_cfg{
+    ComputeHardwareConfig compute_cfg{
         .fpu_math_fidelity = math_fidelity,
         .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -226,7 +227,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD, .accessor_name = "output_grad"}},
         .compile_time_args = {{"input_grad_rank", input_grad_rank}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_output_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The three variable-length per-dim RTA blocks (output_grad_dim, input_grad_dim, need_bcast_dim,
     // each of length input_grad_rank) are passed as positional runtime varargs (read kernel-side via
@@ -240,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
             .dfb_spec_name = C16_OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD, .accessor_name = "input_grad"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t num_output_tiles) {
@@ -257,7 +258,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
             .compile_time_args =
                 {{"num_output_tiles", num_output_tiles},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim[1]}},
+                 {"ht_need_bcast", get_ht_need_bcast(need_bcast_dim)}},
             .hw_config = ComputeHardwareConfig{compute_cfg},
         };
     };

@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from loguru import logger
 
 
@@ -343,6 +343,62 @@ def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mea
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@pytest.mark.parametrize(
+    "N, C_num_groups, HW",
+    [
+        [2, [8, 4], [32, 32]],
+        [1, [32, 8], [64, 64]],
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_configs",
+    [
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+    ],
+    ids=[
+        "out_dram_mean_l1_rstd_l1",
+        "out_l1_mean_dram_rstd_dram",
+        "out_dram_mean_l1_rstd_dram",
+        "out_l1_mean_l1_rstd_dram",
+    ],
+)
+def test_moreh_group_norm_mean_rstd_memory_config(N, C_num_groups, HW, memory_configs, device):
+    torch.manual_seed(2024)
+    C, num_groups = C_num_groups
+    H, W = HW
+    memory_config, mean_memory_config, rstd_memory_config = memory_configs
+
+    cpu_input = torch.randn(N, C, H, W, dtype=torch.bfloat16).float()
+    _, expected_mean, expected_rstd = torch_group_norm(cpu_input, num_groups)
+
+    npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.group_norm(
+        to_ttnn(cpu_input, device=device),
+        num_groups,
+        1e-05,
+        are_required_outputs=(True, True, True),
+        memory_config=memory_config,
+        mean_memory_config=mean_memory_config,
+        rstd_memory_config=rstd_memory_config,
+    )
+
+    assert npu_output.memory_config().buffer_type == memory_config.buffer_type
+    assert npu_mean.memory_config().buffer_type == mean_memory_config.buffer_type
+    assert npu_rstd.memory_config().buffer_type == rstd_memory_config.buffer_type
+
+    actual_mean = to_torch(npu_mean).reshape(-1)[: N * num_groups].view(N, num_groups)
+    actual_rstd = to_torch(npu_rstd).reshape(-1)[: N * num_groups].view(N, num_groups)
+    rtol = atol = 0.1
+    pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
+    logger.debug(f"mean: {out_mean}")
+    assert pass_mean
+    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
+    logger.debug(f"rstd: {out_rstd}")
+    assert pass_rstd
+
+
 def run_test_moreh_group_norm_backward(
     N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):
@@ -626,3 +682,63 @@ def test_moreh_group_norm_backward_large_algorithm(
     run_test_moreh_group_norm_backward(
         N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
     )
+
+
+# Regression test for the gamma_grad reader's wrong group index (#51278 item 5, fixed by the
+# core-local -> global channel index rework). The plain parametrized suite above never catches it
+# because uniform_(-2, 2) data gives near-identical per-group mean/rstd, so reading the wrong
+# group's statistics still lands close to the reference. Scaling one group's channels by 100 pulls
+# the per-group mean/rstd far apart, which makes the wrong-index path produce a gamma_grad that is
+# wrong by orders of magnitude. G=2 with C=4 also covers the exact shape reported in the issue.
+def run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device):
+    H, W = HW
+    C, num_groups = C_num_groups
+    input_shape = (N, C, H, W)
+
+    torch.manual_seed(20240510)
+    cpu_input, cpu_gamma, _, cpu_output_grad = make_input_tensors(input_shape, affine=True, do_backward=True)
+    # Pull per-group statistics apart: scale the second group's channels by 100.
+    cpu_input[:, C // num_groups :] *= 100.0
+
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_group_norm_backward(
+        cpu_input,
+        cpu_output_grad,
+        num_groups,
+        input_requires_grad=False,
+        gamma_requires_grad=True,
+        beta_requires_grad=False,
+        gamma=cpu_gamma,
+        eps=1e-05,
+    )
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_group_norm_backward(
+        cpu_input,
+        cpu_output_grad,
+        num_groups,
+        input_requires_grad=False,
+        gamma_requires_grad=True,
+        beta_requires_grad=False,
+        gamma=cpu_gamma,
+        eps=1e-05,
+        device=device,
+    )
+
+    assert actual_input_grad is None and actual_beta_grad is None
+
+    # gamma_grad sums over N*H*W per channel; compare with a tolerance that scales with the
+    # magnitudes involved (bf16 accumulation over the 100x-scaled group).
+    Ht = (H + TILE_HEIGHT - 1) // TILE_HEIGHT
+    Wt = (W + TILE_WIDTH - 1) // TILE_WIDTH
+    divisor = N * C * Ht * Wt
+    rtol = atol = 0.1
+    pass_gamma_grad, out_gamma_grad = comp_allclose(
+        expected_gamma_grad / divisor, actual_gamma_grad / divisor, rtol=rtol, atol=atol
+    )
+    logger.debug(f"gamma_grad's {out_gamma_grad}")
+    assert pass_gamma_grad
+
+
+@pytest.mark.parametrize("N", [1, 2])
+@pytest.mark.parametrize("C_num_groups", [[4, 2], [8, 4]])
+@pytest.mark.parametrize("HW", [[32, 32], [23, 23]])
+def test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device):
+    run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device)

@@ -251,6 +251,12 @@ uint64_t get_l1_noc_addr(
     return noc_address_backend::bank_address<false>(bank_index, addr, noc);
 }
 
+#if defined(NOC_ATT_ENABLED)
+// System memory (PCIe) has no ATT window on any configured map; any use fails
+// to compile until a map binds one.
+template <typename... Args>
+uint64_t get_system_memory_noc_addr(Args...) = delete;
+#else
 uint64_t get_system_memory_noc_addr(
     const uint32_t id,
     const uint32_t page_size,
@@ -260,6 +266,7 @@ uint64_t get_system_memory_noc_addr(
     uint32_t addr = base_addr + page_size * id + offset;
     return noc_address_backend::system_memory_address(addr, noc);
 }
+#endif
 
 FORCE_INLINE
 std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
@@ -507,6 +514,14 @@ FORCE_INLINE uint64_t get_noc_addr(
 template <bool DRAM>
 FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
+#if defined(NOC_ATT_ENABLED)
+    // Typed bank operands: a DRAM bank resolves directly to its selector, an L1
+    // bank's packed word through the frame-corrected worker lookup.
+    if constexpr (DRAM) {
+        bank_address_offset += bank_to_dram_offset[bank_id];
+    }
+    return noc_address_backend::bank_address<DRAM>(bank_id, bank_address_offset, noc);
+#else
     // Look up the bank destination before the DRAM offset add, matching the
     // load order (and object code) of the pre-backend implementation.
     const uint32_t packed_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_id, noc);
@@ -514,6 +529,7 @@ get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_
         bank_address_offset += bank_to_dram_offset[bank_id];
     }
     return noc_address_backend::packed_worker_address(packed_xy, bank_address_offset);
+#endif
 }
 
 template <bool DRAM, uint32_t page_size>

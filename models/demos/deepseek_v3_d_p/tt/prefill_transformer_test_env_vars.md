@@ -110,11 +110,13 @@ attention + absolute-position RoPE), so they are identical whether the full sequ
 just its first `isl_total` tokens are prefilled. The per-layer hidden-state PCC and the
 KVPE PCC checks therefore remain valid on the sliced reference.
 
-**Caveat:** the trace's stored `logits` / `next_token_id` belong to the *full* sequence's
-final position, so they are meaningless for a shorter prefill. For a sliced trace,
-`slice_debug_trace()` drops `logits` (→ `None`) and the test **skips the logits PCC and
-first-token-match checks** (per-layer + KVPE PCC still run). An exact-length match keeps
-all checks.
+**Note:** the trace's stored `logits` / `next_token_id` belong to the *full* sequence's final
+position. `logits.safetensors` is not read at all: the prefill transformer has no norm / LM-head /
+sampling tail (the populated KV cache is its output). On a **full-model, unsliced** run the test
+derives the first token on the host (final norm + LM head on the CPU over the last layer's hidden
+state) and compares it with the trace's `next_token_id` (from `metadata.json` or
+`output_metadata.json`); a trace that records neither logs N/A and does not fail, and a sliced
+trace skips the check.
 
 Requesting an `isl_total` **larger** than every available trace still yields no trace
 (the test then falls back to reference cache / live HF compute).
@@ -129,7 +131,7 @@ the loader reads by **fixed filenames/keys**, not by searching:
 - KV cache: `kv_cache/layer_{i}.safetensors` or flat `kv_cache.safetensors`, preferring
   the key `kv_post_transform_layer_{i}` and falling back to `compressed_kv_layer_{i}`
   (with a warning that PCC will be unreliable).
-- Optional `logits.safetensors`.
+- A `logits.safetensors`, if present, is ignored.
 
 **What this means for you:**
 
@@ -165,10 +167,6 @@ Root dir for CI summary files, one per-kind subdir: `PREFILL_SUMMARIES/pcc` (per
 `PREFILL_SUMMARIES/perf` (chunk-timing tables). One file per parameterized run; a CI step globs a subdir
 and concatenates into `$GITHUB_STEP_SUMMARY`. Default `/tmp/prefill_summaries_<user>`. (PCC PNG plots are
 separate and still go to the trace dir, not here.)
-
-### `<NAME>_OUTPUT_DIR`
-Per-stage dump dir for `save_intermediate_output` — e.g. `NORM_OUTPUT_DIR`,
-`LM_HEAD_OUTPUT_DIR`. Default `/tmp/{name}_outputs`.
 
 ### `DEEPSEEK_V3_MLA_REF_CACHE`  (`variant.mla_ref_cache_env`)
 MLA-layer reference cache dir. Primarily exercised by `test_mla.py`, defined on the variant.

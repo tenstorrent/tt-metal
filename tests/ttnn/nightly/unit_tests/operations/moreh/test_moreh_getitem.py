@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import to_ttnn
@@ -23,6 +23,18 @@ def to_output_5d_shape(shape, index_dims, index_size):
     output_5d_shape[index_dims[-1]] = index_size
 
     return output_5d_shape
+
+
+def test_moreh_getitem_golden_uses_paired_negative_indices():
+    input_tensor = torch.arange(24).reshape(2, 3, 4)
+    first_index = torch.tensor([0, -1])
+    second_index = torch.tensor([1, 2])
+    golden_function = ttnn.get_golden_function(ttnn.moreh_getitem)
+
+    actual = golden_function(input_tensor, [first_index, second_index], [1, 2])
+    expected = input_tensor[:, first_index, second_index]
+
+    assert torch.equal(actual, expected)
 
 
 @skip_for_blackhole("Mismatching on Blackhole, see #12349")
@@ -286,7 +298,6 @@ def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",
     [

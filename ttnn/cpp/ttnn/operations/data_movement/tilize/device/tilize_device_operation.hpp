@@ -40,10 +40,6 @@ struct TilizeDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
-// hooks so the slot layout the factories all bake has a single home.
-void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address);
-
 ttnn::Tensor tilize(
     const Tensor& input_tensors,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,

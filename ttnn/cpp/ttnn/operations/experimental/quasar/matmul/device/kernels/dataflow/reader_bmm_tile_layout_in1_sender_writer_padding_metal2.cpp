@@ -184,16 +184,17 @@ void kernel_main() {
 
     //  WRITER
     // Used only when the output-write path below is compiled in (some mcast configs write via DFB
-    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable, matching s_sparsity below.
+    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable.
     [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
     // the Metal 2.0 DM-kernel self-loop validator, so it is gated behind SPARSITY — never defined by
     // the non-sparse mcast factories that build this kernel (batchB is always 0 here). tensor::sparsity
-    // stays referenced so the factory's inert sparsity tensor binding remains valid.
-    [[maybe_unused]] const auto s_sparsity = TensorAccessor(tensor::sparsity);
+    // is gated with it: those factories declare no sparsity tensor binding, so the token only exists
+    // when a factory that defines SPARSITY also binds a real sparsity tensor.
 #ifdef SPARSITY
+    const auto s_sparsity = TensorAccessor(tensor::sparsity);
     constexpr uint32_t cb_id_sparsity = dfb::cb_sparsity;
     DataflowBuffer cb_sparsity(cb_id_sparsity);
 #endif
@@ -494,8 +495,14 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // The sharded output stays in place, so this kernel only waits for compute to finish it. Pop what it
+    // waited for so the buffer is left balanced.
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr uint32_t out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint32_t out_sharded_num_tiles = batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles;
+    cb_out.wait_front(out_sharded_num_tiles);
+    cb_out.pop_front(out_sharded_num_tiles);
 #endif
     // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. in1 hangs
     // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).

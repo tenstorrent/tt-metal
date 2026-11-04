@@ -37,9 +37,9 @@ ALWI void REL() {
 // RMSNorm normalizes x directly, so the un-normalized input doubles as the normalization operand.
 constexpr auto dfb_norm_x_input = dfb::inp;
 
-// The normalized result goes straight to the output unless gamma still has to be applied to it.
+// The normalized result goes straight to the output unless gamma or beta still has to be applied to it.
 // Only the buffers this build binds have handles, so the choice is made at the preprocessor.
-#ifdef FUSE_GAMMA
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
 constexpr auto normed_output_dfb = dfb::x_normed;
 #else
 constexpr auto normed_output_dfb = dfb::out;
@@ -52,13 +52,18 @@ constexpr auto dfb_times_gamma_out = dfb::times_gamma_out;
 constexpr auto dfb_times_gamma_out = dfb::out;
 #endif
 
+#ifdef FUSE_GAMMA
+constexpr auto dfb_in_beta = dfb_times_gamma_out;
+#else
+constexpr auto dfb_in_beta = normed_output_dfb;
+#endif
+
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dtype) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -77,19 +82,18 @@ void kernel_main() {
 #endif
 #ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb::beta);
-#endif
-    // beta is applied only in the company of gamma, so the output buffer is driven directly only on
-    // that combined path. Without gamma the normalized result is already packed into the output, and
-    // dfb_normed_output is the handle for it.
-#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
     DataflowBuffer dfb_out(dfb::out);
+#ifdef FUSE_GAMMA
+    auto& dfb_in_beta_obj = dfb_times_gamma;
+#else
+    auto& dfb_in_beta_obj = dfb_normed_output;
+#endif
 #endif
 
     dfb_reduce.wait_front(1);  // comes from the reader
     dfb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
         /*
@@ -112,8 +116,8 @@ void kernel_main() {
         add_init(dfb::var, dfb::eps);
         ACQ();
         add_tiles(dfb::var, dfb::eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
         pack_tile(0, dfb::recip_sqrt_var);
         REL();
         dfb_recip_sqrt_var.push_back(1);
@@ -161,28 +165,28 @@ void kernel_main() {
             dfb_times_gamma.push_back(blk);
             dfb_normed_output.pop_front(blk);
         }
+#endif
 
 #ifdef FUSE_BETA
         /*
-         * x_normed * gamma + beta
+         * x_normed (* gamma) + beta
          */
-        reconfig_data_format(dfb_times_gamma_out, dfb::beta);
+        reconfig_data_format(dfb_in_beta, dfb::beta);
         pack_reconfig_data_format(dfb::out);
         dfb_beta.wait_front(Wt);
-        add_bcast_rows_init(dfb_times_gamma_out, dfb::beta);
+        add_bcast_rows_init(dfb_in_beta, dfb::beta);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_times_gamma.wait_front(blk);
+            dfb_in_beta_obj.wait_front(blk);
             dfb_out.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                add_tiles_bcast_rows(dfb_times_gamma_out, dfb::beta, wtr, wt + wtr, wtr);
+                add_tiles_bcast_rows(dfb_in_beta, dfb::beta, wtr, wt + wtr, wtr);
                 pack_tile(wtr, dfb::out);
             }
             REL();
             dfb_out.push_back(blk);
-            dfb_times_gamma.pop_front(blk);
+            dfb_in_beta_obj.pop_front(blk);
         }
-#endif
 #endif
     }
     dfb_eps.pop_front(1);

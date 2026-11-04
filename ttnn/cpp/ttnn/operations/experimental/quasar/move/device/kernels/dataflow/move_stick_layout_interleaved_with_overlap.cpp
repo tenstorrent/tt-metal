@@ -32,7 +32,7 @@ void kernel_main() {
     uint32_t range_2_end_noc_x = get_arg(args::range_2_end_noc_x);
     uint32_t range_2_end_noc_y = get_arg(args::range_2_end_noc_y);
     uint32_t range_2_size = get_arg(args::range_2_size);
-    bool do_third_multicast = get_arg(args::do_third_multicast) == 1;
+    uint32_t num_multicast_regions = get_arg(args::num_multicast_regions);
     uint32_t aligned_page_size = get_arg(args::aligned_page_size);
 
     constexpr uint32_t page_size = get_arg(args::page_size);
@@ -62,12 +62,16 @@ void kernel_main() {
     if (is_controller) {
         sem.wait(control_value);
 
-        // signal to cores that write to dst can begin
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
-        if (do_third_multicast) {
+        // Signal the writers. Narrow grids can have fewer than 3 regions, so skip the empty ones.
+        if (num_multicast_regions > 0) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
+        }
+        if (num_multicast_regions > 1) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
+        }
+        if (num_multicast_regions > 2) {
             sem.set_multicast<NocOptions::DEFAULT>(
                 noc, range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, range_2_size);
         }

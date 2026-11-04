@@ -20,6 +20,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    bf16_conv_via_fp32,
     check_ttnn_output,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
@@ -132,7 +133,7 @@ def test_ttnn_semseg(device, pcc_values, skip_check, model_location_generator):
 
     # Test semantic segmentation head
     logger.info("Running PyTorch semantic segmentation head test...")
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         torch_out, _ = pytorch_model.semantic_head(torch_features)
 
     logger.info("Running TTNN semantic segmentation head test...")

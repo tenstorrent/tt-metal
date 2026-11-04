@@ -107,6 +107,29 @@ def load_gdn_layer(ckpt_dir, layer_idx):
     )
 
 
+def random_gdn_state_dict(args, seed=0):
+    """One GDN layer's linear_attn.* weights with the checkpoint's keys, shapes and dtype but random values, for
+    tests of device mechanics (trace safety, buffer reuse) that need the model's config.json and nothing else.
+    Magnitudes follow the trained weights so activations stay in bf16 range."""
+    g = torch.Generator().manual_seed(seed)
+
+    def w(*shape, scale=0.02):
+        return (torch.randn(*shape, generator=g) * scale).to(torch.bfloat16)
+
+    dim, nv = args.dim, args.gdn_nv
+    return {
+        "linear_attn.in_proj_qkv.weight": w(args.gdn_qkv_dim, dim),
+        "linear_attn.in_proj_z.weight": w(args.gdn_z_dim, dim),
+        "linear_attn.in_proj_a.weight": w(nv, dim),
+        "linear_attn.in_proj_b.weight": w(nv, dim),
+        "linear_attn.out_proj.weight": w(dim, args.gdn_value_dim),
+        "linear_attn.conv1d.weight": w(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size, scale=0.3),
+        "linear_attn.A_log": w(nv, scale=1.0),
+        "linear_attn.dt_bias": w(nv, scale=1.0),
+        "linear_attn.norm.weight": (1 + w(args.gdn_dv, scale=0.1).float()).to(torch.bfloat16),
+    }
+
+
 def load_mlp_layer(ckpt_dir, layer_idx):
     """SwiGLU MLP layer weights — keys ``gate_proj.weight``/``up_proj.weight``/``down_proj.weight``."""
     return load_layer_weights(
@@ -115,6 +138,92 @@ def load_mlp_layer(ckpt_dir, layer_idx):
         ["gate_proj", "up_proj", "down_proj"],
         search_prefix="mlp.",
     )
+
+
+def load_moe_layer(ckpt_dir, layer_idx):
+    """Qwen3.5-MoE layer weights — router + fused experts + gated shared expert.
+
+    Output keys match exactly the ``layers.<i>.mlp`` substate Qwen36MoE consumes:
+      ``gate.weight`` (router), ``experts.gate_up_proj`` / ``experts.down_proj``
+      (fused 3D nn.Parameters — no ``.weight`` suffix), ``shared_expert.{gate,up,down}_proj.weight``,
+      ``shared_expert_gate.weight``.
+    """
+    return load_layer_weights(
+        ckpt_dir,
+        layer_idx,
+        [
+            "gate",
+            ("experts.gate_up_proj", False),
+            ("experts.down_proj", False),
+            "shared_expert.gate_proj",
+            "shared_expert.up_proj",
+            "shared_expert.down_proj",
+            "shared_expert_gate",
+        ],
+        search_prefix="mlp.",
+    )
+
+
+def torch_moe_reference(moe_state, x, top_k, norm_topk_prob=True):
+    """Reference forward for a Qwen3.5-MoE layer (matches HF modeling_qwen3_5_moe).
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. Returns [S, H].
+    router (fp32 softmax -> topk -> sum-normalize) + routed SwiGLU experts + gated
+    shared expert: out = experts + sigmoid(shared_gate(x)) * shared_mlp(x).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+    gate_w = moe_state["gate.weight"].float()  # [E, H]
+
+    logits = x @ gate_w.T
+    probs = torch.softmax(logits, dim=-1)
+    top_v, top_i = torch.topk(probs, top_k, dim=-1)
+    if norm_topk_prob:
+        top_v = top_v / top_v.sum(dim=-1, keepdim=True)
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for j in range(top_k):
+            e = int(top_i[s, j])
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += top_v[s, j] * (h @ down[e].T)[0]
+
+    sg = moe_state["shared_expert.gate_proj.weight"].float()
+    su = moe_state["shared_expert.up_proj.weight"].float()
+    sd = moe_state["shared_expert.down_proj.weight"].float()
+    s_gate = moe_state["shared_expert_gate.weight"].float()  # [1, H]
+    shared = (F.silu(x @ sg.T) * (x @ su.T)) @ sd.T
+    shared = torch.sigmoid(x @ s_gate.T) * shared
+    return out + shared
+
+
+def torch_routed_experts_reference(moe_state, x, routing):
+    """Routed-experts-only reference (no shared expert), driven by an explicit dense routing.
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. routing: [S, E] float32,
+    zero outside each row's selected experts. Returns [S, H].
+
+    Isolating the routed path matters because the shared expert contributes a large,
+    always-correct term: an aggregate PCC over ``experts + shared`` can stay high while
+    the routed branch itself is wrong (e.g. a per-user/per-expert axis mix-up).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for e in torch.nonzero(routing[s], as_tuple=True)[0].tolist():
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += float(routing[s, e]) * (h @ down[e].T)[0]
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -139,6 +248,42 @@ def compare_tensors(tt_tensor, torch_tensor, pcc_threshold=0.99):
     passing, pcc = comp_pcc(torch_tensor, tt, pcc_threshold)
     logger.info(f"PCC={pcc} (threshold={pcc_threshold}) [{'PASS' if passing else 'FAIL'}]")
     return passing, pcc
+
+
+# --------------------------------------------------------------------------- #
+# Near-tie discriminator (argmax comparisons)
+# --------------------------------------------------------------------------- #
+# Mirrors gemma4's GEMMA4_SPEC_NEAR_TIE_GAP contract: when two paths pick different
+# tokens, that is only acceptable where the REFERENCE distribution is a near-tie. A
+# flip at a confident token is a real bug, not kernel noise. Bare argmax-equality
+# asserts are too strict to be useful and bare PCC floors are too loose to catch
+# anything, so token comparisons should go through this.
+NEAR_TIE_GAP = float(os.environ.get("QWEN36_NEAR_TIE_GAP", 2.0))
+
+
+def top2_gap(logits_row):
+    """Reference confidence: top-1 minus top-2 logit."""
+    top2 = torch.topk(logits_row.float().reshape(-1), 2)
+    return float(top2.values[0] - top2.values[1])
+
+
+def assert_argmaxes_match_except_near_ties(ref_logits, got_logits, context, near_tie_gap=None):
+    """Allow argmax drift only where the reference distribution is a near-tie.
+
+    ref_logits/got_logits: sequences of per-position logit rows. Logs PCC + top-2 gap for
+    every position and fails listing only the confident divergences.
+    """
+    from loguru import logger
+
+    gap_limit = NEAR_TIE_GAP if near_tie_gap is None else near_tie_gap
+    failures = []
+    for idx, (ref_row, got_row) in enumerate(zip(ref_logits, got_logits)):
+        ref_tok, got_tok = int(ref_row.float().argmax()), int(got_row.float().argmax())
+        gap, pcc = top2_gap(ref_row), compute_pcc(ref_row, got_row)
+        logger.info(f"[{context}] idx={idx} ref={ref_tok} got={got_tok} pcc={pcc:.5f} ref_top2_gap={gap:.4f}")
+        if ref_tok != got_tok and gap >= gap_limit:
+            failures.append(f"idx={idx}: ref={ref_tok} got={got_tok} gap={gap:.4f} pcc={pcc:.5f}")
+    assert not failures, f"{context} diverged at CONFIDENT tokens (gap >= {gap_limit}):\n" + "\n".join(failures)
 
 
 @lru_cache(maxsize=1)

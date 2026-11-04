@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "single_host_context.hpp"
+#include "dtype_size.hpp"
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstring>
@@ -43,7 +44,6 @@ void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
 void SingleHostContext::barrier() const { return; }
 
-  /* Remaining methods throw for single-host context */
 void SingleHostContext::send(
     ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");
@@ -74,11 +74,24 @@ void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Ra
 }
 
 void SingleHostContext::all_reduce(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    ReduceOp op [[maybe_unused]],
-    DType dtype [[maybe_unused]]) const {
-    TT_THROW("method all_reduce is unsupported for single-host distributed contexts.");
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op [[maybe_unused]], DType dtype) const {
+    // MPI defines a reduction over a one-rank communicator as that rank's input for every operator, so op is
+    // not consulted.
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+    const std::size_t element_size = dtype_size(dtype);
+    TT_FATAL(
+        send_buf.size() % element_size == 0,
+        "all_reduce: buffer size {} is not a multiple of element size {}",
+        send_buf.size(),
+        element_size);
+
+    if (send_buf.data() != recv_buf.data()) {
+        std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
+    }
 }
 
 void SingleHostContext::reduce(

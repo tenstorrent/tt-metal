@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -133,7 +138,7 @@ void kernel_main() {
         }
 
         // dfb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
-        // commit the reservation so the CB is left balanced.
+        // push the reserved pages so the buffer is left balanced.
         dfb_in1.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads

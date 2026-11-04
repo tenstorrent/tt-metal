@@ -11,6 +11,7 @@
 #include "device/gather_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -48,6 +49,49 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 /**
+ * @brief For rank > 4, slices the dims the 4D fold merges (all but the last three) to the index tensor's extents,
+ * so input and index fold identically.
+ *
+ * @throws TT_FATAL if the index is larger than the input on one of those dims
+ */
+Tensor slice_merged_dims_to_index(
+    const Tensor& transposed_input,
+    const int8_t dim,
+    const bool is_dim_last_idx,
+    const ttnn::Shape& index_tensor_lshape) {
+    const auto& input_lshape = transposed_input.logical_shape();
+    const auto rank = input_lshape.rank();
+
+    // The index tensor's extents in the input's transposed layout
+    ttsl::SmallVector<uint32_t> index_extents(index_tensor_lshape.cbegin(), index_tensor_lshape.cend());
+    if (!is_dim_last_idx) {
+        std::swap(index_extents[dim], index_extents[rank - 1]);
+    }
+
+    ttsl::SmallVector<uint32_t> end_index(input_lshape.cbegin(), input_lshape.cend());
+    for (size_t i = 0; i < rank - 3; ++i) {
+        // Position dim holds the caller's last dimension after the transpose
+        const size_t caller_dim = (!is_dim_last_idx && i == static_cast<size_t>(dim)) ? rank - 1 : i;
+        TT_FATAL(
+            index_extents[i] <= input_lshape[i],
+            "gather: index tensor size {} on dimension {} exceeds the input tensor size {}; only dimension {} may be "
+            "larger",
+            index_extents[i],
+            caller_dim,
+            input_lshape[i],
+            dim);
+        end_index[i] = index_extents[i];
+    }
+    if (ttnn::Shape{end_index} == input_lshape) {
+        return transposed_input;
+    }
+
+    const ttsl::SmallVector<uint32_t> start_index(rank, 0);
+    const ttsl::SmallVector<uint32_t> step(rank, 1);
+    return ttnn::slice(transposed_input, start_index, end_index, step);
+}
+
+/**
  * @brief Transforms an input tensor for gather operation by applying necessary preprocessing steps.
  *
  * This function prepares the input tensor for gather operations by performing several transformations:
@@ -62,6 +106,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  * @param is_rank_le_4d Flag indicating if the tensor rank is less than or equal to 4
  * @param padding_index_tensor Optional flag to indicate if this is an index tensor requiring padding (default: false)
  * @param index_tensor_padded_shape Optional shape of the padded index tensor used for slicing (default: empty)
+ * @param index_tensor_lshape Optional untransformed index tensor shape, used for rank > 4 inputs (default: empty)
  *
  * @return Tensor The transformed tensor ready for gather operation
  *
@@ -75,14 +120,18 @@ Tensor pre_gather_transform_tensor(
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
     const bool padding_index_tensor = false,
-    const ttnn::Shape& index_tensor_padded_shape = {}) {
+    const ttnn::Shape& index_tensor_padded_shape = {},
+    const ttnn::Shape& index_tensor_lshape = {}) {
     if (input_tensor.logical_shape() == ttnn::Shape{1}) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
     }
 
     // If dim is not last dimension transpose it
-    const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    if (!padding_index_tensor && !is_rank_le_4d) {
+        transposed_tensor = slice_merged_dims_to_index(transposed_tensor, dim, is_dim_last_idx, index_tensor_lshape);
+    }
     // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
@@ -121,8 +170,7 @@ Tensor pre_gather_transform_tensor(
  * The transformation process handles two main scenarios:
  * 1. For tensors with rank <= 4: Squeezes the tensor from 4D representation back to original rank,
  *    and optionally transposes if the gather dimension wasn't the last index.
- * 2. For tensors with rank > 4: Performs transpose operations with adjusted dimension indices to account
- *    for rank differences, then reshapes to match the original input shape.
+ * 2. For tensors with rank > 4: Reshapes back to the transposed original-rank shape, then transposes if needed.
  *
  * @param index_tensor The original index tensor used in the gather operation (used for shape reference and memory
  * config)
@@ -156,14 +204,16 @@ Tensor post_gather_transform_tensor(
         }
     } else if (orig_rank > 4) {
         // For tensors above rank 4: reverse the order of pre_gather_transform_tensor
-        // First transpose while still in 4D, then reshape to original higher-dimensional form
+        // First reshape back to the transposed higher-dimensional form, then transpose at that rank
+        ttsl::SmallVector<uint32_t> transposed_shape(input_shape.cbegin(), input_shape.cend());
         if (!is_dim_last_idx) {
             const auto index_dim = (dim < 0) ? (orig_rank + dim) : dim;
-            const auto dim_adj = index_dim + (output_tensor.padded_shape().rank() - orig_rank);
-            output_tensor = ttnn::transpose(output_tensor, dim_adj, -1, index_tensor.memory_config());
+            std::swap(transposed_shape[index_dim], transposed_shape[orig_rank - 1]);
         }
-        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{result_shape});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{transposed_shape});
+        if (!is_dim_last_idx) {
+            output_tensor = ttnn::transpose(output_tensor, dim, -1, index_tensor.memory_config());
+        }
     }
 
     TT_FATAL(
@@ -248,6 +298,13 @@ Tensor gather_dispatch(
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
 
+    // Checked before the early exits and transforms: the device op only ever sees 4D operands.
+    TT_FATAL(
+        input_tensor_rank == index_tensor_rank,
+        "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
+        input_tensor_rank,
+        index_tensor_rank);
+
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
@@ -279,6 +336,11 @@ Tensor gather_dispatch(
         const auto tile_out =
             gather_native(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
+        // Like the native op, `out` takes precedence over memory_config: write straight into it.
+        if (optional_output_tensor.has_value()) {
+            return ttnn::to_memory_config(
+                rm_out, optional_output_tensor->memory_config(), std::nullopt, optional_output_tensor);
+        }
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
         if (requested_mc.is_sharded() && !requested_mc.shard_spec().has_value()) {
@@ -314,7 +376,8 @@ Tensor gather_dispatch(
         input_tensor_is_dim_last_idx,
         input_tensor_is_rank_le_4d,
         false,
-        padded_index_tensor.padded_shape());
+        padded_index_tensor.padded_shape(),
+        original_index_tensor_lshape);
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {
@@ -322,6 +385,50 @@ Tensor gather_dispatch(
         output_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
             output_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
         optional_output_tensor_value = output_tensor;
+    }
+
+    // The native RM factories need every BLOCK/WIDTH-sharded shard row to be a multiple of the buffer
+    // alignment (see has_subaligned_shard_row). An input or index tensor whose shard row fails this
+    // check is moved to interleaved memory of the same buffer type. An output whose shard row fails
+    // this check is computed in interleaved memory and then moved to the memory config the device op
+    // would have given it.
+    auto native_memory_config = memory_config_value;
+    auto native_output_tensor = optional_output_tensor_value;
+    std::optional<tt::tt_metal::MemoryConfig> rerouted_output_memory_config;
+    if (!use_codegen && padded_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        auto interleaved_same_buffer_type = [](const tt::tt_metal::MemoryConfig& mc) {
+            return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, mc.buffer_type());
+        };
+        const bool output_is_sharded = optional_output_tensor_value.has_value()
+                                           ? optional_output_tensor_value->is_sharded()
+                                           : memory_config_value.is_sharded();
+        if (output_is_sharded) {
+            // Taken before the operands move, because a sharded output with no shard spec derives
+            // its spec from the index and input tensors. The device op gets this spec rather than
+            // re-deriving it from operands that may have moved.
+            const auto output_spec = ttnn::prim::GatherDeviceOperation::compute_output_specs(
+                ttnn::prim::GatherParams{normalized_dim, sparse_grad, memory_config_value, sub_core_grids},
+                ttnn::prim::GatherInputs{padded_input_tensor, padded_index_tensor, optional_output_tensor_value});
+            uint32_t output_elem_size = padded_input_tensor.element_size();
+            if (optional_output_tensor_value.has_value()) {
+                output_elem_size = optional_output_tensor_value->element_size();
+            } else {
+                native_memory_config = output_spec.memory_config();
+            }
+            if (has_subaligned_shard_row(output_spec.memory_config(), output_elem_size)) {
+                rerouted_output_memory_config = output_spec.memory_config();
+                native_memory_config = interleaved_same_buffer_type(output_spec.memory_config());
+                native_output_tensor = std::nullopt;
+            }
+        }
+        if (has_subaligned_shard_row(padded_input_tensor.memory_config(), padded_input_tensor.element_size())) {
+            padded_input_tensor = ttnn::to_memory_config(
+                padded_input_tensor, interleaved_same_buffer_type(padded_input_tensor.memory_config()));
+        }
+        if (has_subaligned_shard_row(padded_index_tensor.memory_config(), padded_index_tensor.element_size())) {
+            padded_index_tensor = ttnn::to_memory_config(
+                padded_index_tensor, interleaved_same_buffer_type(padded_index_tensor.memory_config()));
+        }
     }
 
     Tensor gather_tensor = use_codegen ? ttnn::prim::gather_codegen(
@@ -337,9 +444,13 @@ Tensor gather_dispatch(
                                              normalized_dim,
                                              padded_index_tensor,
                                              sparse_grad,
-                                             memory_config_value,
-                                             optional_output_tensor_value,
+                                             native_memory_config,
+                                             native_output_tensor,
                                              sub_core_grids);
+    if (rerouted_output_memory_config.has_value()) {
+        gather_tensor = ttnn::to_memory_config(
+            gather_tensor, rerouted_output_memory_config.value(), std::nullopt, optional_output_tensor_value);
+    }
 
     return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor,
@@ -434,6 +545,7 @@ Tensor gather(
     namespace gather_ns = operations::data_movement::gather;
 
     const bool use_codegen =
+        operations::data_movement::codegen_supported_on_arch(input_tensor) &&
         detail::codegen_can_serve(input_tensor, dim, input_index_tensor, memory_config, optional_output_tensor) &&
         !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
 

@@ -26,7 +26,7 @@ import pytest
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 
-_OP = ttnn.add
+_OP = ttnn.experimental.quasar.add
 
 CASES = [
     {
@@ -148,7 +148,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 1, 1024, 2048],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },

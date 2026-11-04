@@ -69,7 +69,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -92,8 +92,15 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor;
     const uint32_t seq_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
 
+    // When the (batch, sequence tile) split leaves most cores idle, they split the heads too. Every head-split core
+    // re-reads the same cos/sin rows, so the split is only worth it when it multiplies the busy cores several times.
+    constexpr uint32_t kMinIdleRatioForHeadSplit = 4;
+    const uint32_t idle_ratio = num_cores / (batch_parallel_factor * seq_parallel_factor);
+    const uint32_t head_parallel_factor = idle_ratio >= kMinIdleRatioForHeadSplit ? std::min(n_heads, idle_ratio) : 1;
+    const uint32_t heads_per_core = (n_heads + head_parallel_factor - 1) / head_parallel_factor;
+
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
-    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * n_heads;
+    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * heads_per_core;
 
     uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
 
@@ -154,11 +161,13 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = output_cb_data_format};
-    DataflowBufferSpec zero_dfb{
-        .unique_id = ZERO_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = num_interm_tiles,
-        .data_format_metadata = output_cb_data_format};
+    // Zero-fill staging region for the writer (legacy c_27). Ported first as a self-looped DFB
+    // (writer = PRODUCER + CONSUMER), a shape Gen2 rejects on DM kernels; now a Scratchpad
+    // (dm_self_loop_dfbs.md). The writer only ever used it as raw local memory (fill once, read
+    // repeatedly from the base), so no FIFO semantics are lost. data_format_metadata had no
+    // consumer: the writer takes raw addresses / NOC-sources it, and no LLK touches it.
+    ScratchpadSpec zero_scratchpad{
+        .unique_id = ZERO_SCRATCH, .size_per_node = output_single_tile_size * num_interm_tiles};
 
     // ------------------------------------------------------------------
     // Tensor parameters (all Case 1 — accessor-read; legacy Buffer* RTAs + TensorAccessorArgs collapse).
@@ -170,14 +179,22 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // ------------------------------------------------------------------
-    // hw_config. Style B (build ComputeGen1Config directly): the legacy ComputeConfigDescriptor set
+    // hw_config. Style B (build ComputeHardwareConfig directly): the legacy ComputeConfigDescriptor set
     // only math_fidelity + fp32_dest_acc_en, leaving the rest at descriptor defaults. Routing through
     // to_compute_hardware_config would instead translate the *resolved* math_approx_mode (default true)
     // into sfpu_precision_mode=Approximate, which the legacy descriptor discarded (Precise). All DFBs
     // are bfloat16, so no unpack_modes entry is required even when enable_32_bit_dest is true.
     // ------------------------------------------------------------------
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config =
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
 
@@ -210,24 +227,26 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              {"cos_Ht", cos_seq_len_t},
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_reader_datamovement_config(device->arch())};
+        .runtime_arg_schema = {.runtime_arg_names = kPrefillRangeArgNames},
+        // This reader manages its DFBs with explicit reserve/push; leaving the implicit-sync ISR on would
+        // double-bump the Gen2 tile counter (posted vs acked mismatch), so disable it (ignored on WH/BH).
+        .hw_config = create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true)};
 
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = kWriterSource,
         .compiler_options = {.defines = reload_define},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             // ZERO is a single-toucher (writer fills + reads it) → self-loop (PRODUCER + CONSUMER).
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        // ZERO is a single-toucher (writer fills + reads it): a Scratchpad, not a DFB (see above).
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "zero"}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_writer_datamovement_config(device->arch())};
+        .runtime_arg_schema = {.runtime_arg_names = kPrefillRangeArgNames},
+        // This writer explicitly wait_front/pop_front's OUT_DFB; leaving the implicit-sync ISR on would
+        // double-bump the Gen2 tile counter (acked = posted + 2 seen on craq-sim), so disable it.
+        .hw_config = create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true)};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -268,8 +287,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
                  .dfb_spec_name = SIN_INTERM_DFB,
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = kPrefillComputeArgNames},
         .hw_config = compute_hw_config};
 
     // ------------------------------------------------------------------
@@ -282,23 +301,30 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         uint32_t end_batch = 0;
         uint32_t start_seq = 0;
         uint32_t end_seq = 0;
+        uint32_t start_head = 0;
+        uint32_t end_head = 0;
     };
     std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
+        uint32_t start_batch = batch_parallel * batch_per_core;
+        uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
-            uint32_t core_idx = (batch_parallel * seq_parallel_factor) + seq_parallel;
-            uint32_t start_batch = batch_parallel * batch_per_core;
-            uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
             uint32_t start_seq = seq_parallel * seq_per_core;
             uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
+            for (uint32_t head_parallel = 0; head_parallel < head_parallel_factor; head_parallel++) {
+                uint32_t core_idx =
+                    ((batch_parallel * seq_parallel_factor) + seq_parallel) * head_parallel_factor + head_parallel;
+                uint32_t start_head = head_parallel * heads_per_core;
+                uint32_t end_head = std::min(start_head + heads_per_core, n_heads);
 
-            if (start_seq >= seq_len_t || start_batch >= batch) {
-                // Important to skip cores which have no work to do, otherwise they will wait
-                // on cos/sin data which will never arrive.
-                continue;
+                if (start_seq >= seq_len_t || start_batch >= batch || start_head >= n_heads) {
+                    // Important to skip cores which have no work to do, otherwise they will wait
+                    // on cos/sin data which will never arrive.
+                    continue;
+                }
+                per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq, start_head, end_head};
             }
-            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
@@ -308,27 +334,24 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
         const NodeCoord node = cores[i];
-        AddRuntimeArgsForNode(
-            reader_run.runtime_arg_values,
-            node,
-            {{"batch_start", a.start_batch},
-             {"batch_end", a.end_batch},
-             {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
-        AddRuntimeArgsForNode(
-            writer_run.runtime_arg_values,
-            node,
-            {{"batch_start", a.start_batch},
-             {"batch_end", a.end_batch},
-             {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+        const std::initializer_list<std::pair<std::string, ArgValue>> range_args = {
+            {"batch_start", a.start_batch},
+            {"batch_end", a.end_batch},
+            {"seq_t_start", a.start_seq},
+            {"seq_t_end", a.end_seq},
+            {"head_start", a.start_head},
+            {"head_end", a.end_head}};
+        for (auto* run : {&reader_run, &writer_run}) {
+            AddRuntimeArgsForNode(run->runtime_arg_values, node, range_args);
+        }
         AddRuntimeArgsForNode(
             compute_run.runtime_arg_values,
             node,
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"n_heads", a.end_head - a.start_head}});
     }
 
     // ------------------------------------------------------------------
@@ -338,15 +361,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .name = "rotary_embedding_llama_multi_core",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
-            {input_dfb,
-             cos_dfb,
-             sin_dfb,
-             trans_mat_dfb,
-             rotated_interm_dfb,
-             cos_interm_dfb,
-             sin_interm_dfb,
-             out_dfb,
-             zero_dfb},
+            {input_dfb, cos_dfb, sin_dfb, trans_mat_dfb, rotated_interm_dfb, cos_interm_dfb, sin_interm_dfb, out_dfb},
+        .scratchpads = {zero_scratchpad},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 

@@ -14,6 +14,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt::tt_metal;
 

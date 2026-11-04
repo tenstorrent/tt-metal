@@ -103,9 +103,13 @@ struct TensorAccessorArgs {
 
     // Non-sharded payload is the config word + the aligned_page_size word, or just the config word
     // when the page size is a runtime field. Sharded derives from the offset chain above.
-    static constexpr uint32_t NumArgsCT =
-        is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET)
-                   : (page_size_is_crta ? 1 : 2);
+    static constexpr uint32_t NumArgsCT = [] {
+        if constexpr (is_sharded) {
+            return BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET;
+        } else {
+            return page_size_is_crta ? 1u : 2u;
+        }
+    }();
 
 private:
     uint32_t crta_offset_rt_;

@@ -103,6 +103,9 @@ def _host_case(op, seed=0):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
+# The mesh-8x4 variant needs roughly 3 min on a warm JIT cache and considerably more on a cold one,
+# against pytest.ini's blanket 300 s. The torus variants happen to fit; this one does not.
+@pytest.mark.timeout(1800)
 def test_transformer_loop_matches_reference(mesh_device, device_params):
     """A caller-owned layer loop over all 93 layers, and what it hands a pipeline boundary.
 

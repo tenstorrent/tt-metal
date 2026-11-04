@@ -119,7 +119,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
 void bind_sdpa(nb::module_& mod) {
     const auto* const doc =
         R"doc(
-        Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
+        Causal scaled dot product attention. `is_causal` defaults to `true` and is mutually exclusive
+        with `attn_mask`, so pass `is_causal=False` when supplying a mask.
         The implementation is FlashAttention-2."
 
         Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.
@@ -231,7 +232,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::kw_only(),
         nb::arg("chunk_start_idx_tensor") = nb::none(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
@@ -281,7 +282,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const mla_doc =

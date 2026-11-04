@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
+
 #include <cstdint>
+
+#include "api/tile_constants.h"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
@@ -13,9 +19,9 @@
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
-template <typename Accessor>
+template <typename Accessor, typename DFB>
 FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
+    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t page, uint32_t tiles) {
     for (uint32_t tile = 0; tile < tiles; tile++) {
         noc.async_read(
             accessor,
@@ -26,13 +32,9 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
-template <uint32_t Kt, uint32_t Vt>
+template <uint32_t Kt, uint32_t Vt, typename SendA, typename SendB, typename RemoteAffine>
 FORCE_INLINE void issue_affine_pair_send(
-    Noc& noc,
-    uint32_t destination_worker,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& remote_affine) {
+    Noc& noc, uint32_t destination_worker, SendA& send_a, SendB& send_b, RemoteAffine& remote_affine) {
     const uint32_t target_x = worker_x(destination_worker);
     const uint32_t target_y = worker_y(destination_worker);
     const uint32_t tile_bytes = remote_affine.get_entry_size();
@@ -59,13 +61,14 @@ FORCE_INLINE void complete_affine_pair_send(Noc& noc, ReadySem& ready, uint32_t 
     ready.up(noc, worker_x(destination_worker), worker_y(destination_worker), 1);
 }
 
+template <typename SendA, typename SendB, typename LocalA, typename LocalB>
 FORCE_INLINE void issue_affine_pair_loopback(
     Noc& noc,
     uint32_t worker_index,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& local_a,
-    DataflowBuffer& local_b,
+    SendA& send_a,
+    SendB& send_b,
+    LocalA& local_a,
+    LocalB& local_b,
     uint32_t a_tiles,
     uint32_t b_tiles) {
     local_a.reserve_back(a_tiles);
@@ -86,10 +89,11 @@ FORCE_INLINE void issue_affine_pair_loopback(
         {.noc_x = local_x, .noc_y = local_y, .addr = local_b.get_write_ptr()});
 }
 
-template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
+template <typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
+    uint32_t active,
     uint32_t& completed_stages,
     Noc& noc,
     ArrivalSem& arrival,
@@ -100,8 +104,8 @@ FORCE_INLINE void synchronize_head_stage(
     const uint32_t coordinator_y = worker_y(coordinator);
     arrival.up(noc, coordinator_x, coordinator_y, 1);
     if (group == 0) {
-        arrival.wait_min(completed_stages * G);
-        for (uint32_t worker = coordinator; worker < coordinator + G; worker++) {
+        arrival.wait_min(completed_stages * active);
+        for (uint32_t worker = coordinator; worker < coordinator + active; worker++) {
             release.up(noc, worker_x(worker), worker_y(worker), 1);
         }
         noc.async_atomic_barrier();
@@ -109,15 +113,24 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t BH,
+    uint32_t G,
+    uint32_t has_tail,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
     constexpr uint32_t worker_count = BH * G;
     static_assert(worker_count <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
 
-    const auto a_accessor = TensorAccessor(tensor::a);
-    const auto b_accessor = TensorAccessor(tensor::b);
+    constexpr uint32_t affine_tiles = affine_a_tiles + affine_b_tiles;
+    const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
     const auto output_accessor = TensorAccessor(tensor::output);
     DataflowBuffer initial_a(dfb::initial_a);
@@ -129,30 +142,107 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
+    DataflowBuffer tail_affine(dfb::tail_affine);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
     Semaphore release(sem::release);
 
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        chronology.reserve_back(1);
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
+        const uint32_t start = words[0];
+        if constexpr (has_actual_end) {
+            const auto end = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
+            noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+            noc.async_read_barrier();
+            topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+        } else {
+            topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+        }
+        kda_chronology::store(words, topology);
+        chronology.push_back(1);
+    }
+    const uint32_t active = topology.active_groups(G);
+    if (group >= active) {
+        return;
+    }
+    // An exclusive scan passes each worker's transition to the next group. For a
+    // group-aligned split, the preceding worker therefore publishes the tail seed.
+    const uint32_t reset_group = topology.reset_group(G);
+    const bool aligned_reset = topology.local_split && topology.split_in_group(G) == 0;
+
     initial_a.reserve_back(affine_a_tiles);
-    initial_b.reserve_back(affine_b_tiles);
+    const bool reset_worker = group == reset_group;
+    if (!reset_worker) {
+        initial_b.reserve_back(affine_b_tiles);
+    }
     initial_state.reserve_back(affine_b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    if (reset_worker) {
+        noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
+    } else if (has_tail && group > reset_group) {
+        // Slot 1 exists only with tail transforms; an S = 1 kernel never addresses it.
+        kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_count + worker_index);
+    } else {
+        kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
+    }
+    // Only a rank holding a valid tail has a reset worker, and its summaries then carry the tail slot.
+    if constexpr (has_tail) {
+        if (reset_worker) {
+            if (!aligned_reset) {
+                // The tail transform's packed [A | B] rows are contiguous pages of slot 1.
+                tail_affine.reserve_back(affine_tiles);
+                issue_tensor_block_read(
+                    noc,
+                    summaries_accessor,
+                    tail_affine,
+                    kda::summary_row_page<Kt, Vt>(worker_count + worker_index, 0),
+                    affine_tiles);
+            }
+            const auto tail_entry_states_accessor =
+                TensorAccessor(*tensor::get_token_if_present<"tail_entry_states">());
+            tail_entry_states.reserve_back(affine_b_tiles);
+            issue_tensor_block_read(
+                noc,
+                tail_entry_states_accessor,
+                tail_entry_states,
+                (worker_index / G) * affine_b_tiles,
+                affine_b_tiles);
+        }
+    }
+    if (reset_worker) {
+        noc.write_zeros_l1_barrier();
+    }
     issue_tensor_block_read(
         noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
     noc.async_read_barrier();
     initial_a.push_back(affine_a_tiles);
-    initial_b.push_back(affine_b_tiles);
+    if (!reset_worker) {
+        initial_b.push_back(affine_b_tiles);
+    }
     initial_state.push_back(affine_b_tiles);
+    if constexpr (has_tail) {
+        if (reset_worker) {
+            if (!aligned_reset) {
+                tail_affine.push_back(affine_tiles);
+            }
+            tail_entry_states.push_back(affine_b_tiles);
+        }
+    }
 
     uint32_t completed_stages = 0;
 
     uint32_t expected_ready_events = 0;
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         to_remote_a.wait_front(affine_a_tiles);
         to_remote_b.wait_front(affine_b_tiles);
-        const bool sends = group + distance < G;
+        const bool sends = group + distance < active;
         const bool receives = group >= distance;
         if (sends) {
             issue_affine_pair_send<Kt, Vt>(noc, worker_index + distance, to_remote_a, to_remote_b, from_remote_affine);
@@ -184,15 +274,15 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             to_remote_a.wait_front(affine_a_tiles);
             to_remote_b.wait_front(affine_b_tiles);
         }
-        // Each head is an independent G-worker scan. Do not release its next NoC stage until all G workers have
+        // Each head is an independent scan. Do not release its next NoC stage until all active workers have
         // consumed their remote buffers and produced the next prefix; otherwise that head can overwrite a mailbox
         // while compute is still reading it. Arrival and release semaphore targets stay monotonic across stages.
-        synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
+        synchronize_head_stage(worker_index, group, active, completed_stages, noc, arrival, release);
     }
 
     to_remote_a.wait_front(affine_a_tiles);
     to_remote_b.wait_front(affine_b_tiles);
-    if (group + 1 < G) {
+    if (group + 1 < active) {
         const uint32_t destination_worker = worker_index + 1;
         issue_affine_pair_send<Kt, Vt>(noc, destination_worker, to_remote_a, to_remote_b, from_remote_affine);
         complete_affine_pair_send(noc, ready, destination_worker);

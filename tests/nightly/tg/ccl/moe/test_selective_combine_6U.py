@@ -323,6 +323,7 @@ def gen_tensors(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -395,11 +396,18 @@ FABRIC_PACKET_SIZE_BYTES = 4096
 ELM_SIZE_BYTES = 2
 
 
+def effective_data_parallel_core_dim(hidden_size, data_parallel_core_dim):
+    """Data-parallel split the host layout uses: a token row is cut into at most one fabric packet per core, so a
+    hidden size below data_parallel_core_dim packets gets fewer cores (bf16 4096 = two packets = 2 cores). The op
+    must be called with this value and a worker grid sized by it, or its split disagrees with the sharded input."""
+    hidden_bytes = hidden_size * ELM_SIZE_BYTES
+    return min(data_parallel_core_dim, math.ceil(hidden_bytes / FABRIC_PACKET_SIZE_BYTES))
+
+
 def get_sharded_dense_input(
     dense_contribs_tensor, core_range, token_parallel_core_dim, data_parallel_core_dim, device, cluster_axis
 ):
-    hidden_bytes = dense_contribs_tensor.shape[-1] * ELM_SIZE_BYTES
-    data_parallel_core_dim = min(data_parallel_core_dim, math.ceil(hidden_bytes / FABRIC_PACKET_SIZE_BYTES))
+    data_parallel_core_dim = effective_data_parallel_core_dim(dense_contribs_tensor.shape[-1], data_parallel_core_dim)
 
     tt_dense_contribs = ttnn.from_torch(
         dense_contribs_tensor,
@@ -446,7 +454,7 @@ def _get_tt_sharded_dense_input(
     return ttnn.interleaved_to_sharded(tt_dense_contribs, mem_config)
 
 
-def _get_tt_dense_metadata(dense_metadata_tensor, mesh_device):
+def _get_tt_dense_metadata(dense_metadata_tensor, mesh_device, memory_config=None):
     shape = dense_metadata_tensor.shape
     dense_metadata_tensor = dense_metadata_tensor.reshape([shape[0], shape[-2] * shape[-1]])
     return ttnn.from_torch(
@@ -454,6 +462,7 @@ def _get_tt_dense_metadata(dense_metadata_tensor, mesh_device):
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
+        memory_config=memory_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
@@ -556,6 +565,8 @@ def _run_test(
     trace_mode,
     profiler=None,
     scheme="random",
+    topology=ttnn.Topology.Ring,
+    metadata_memory_config=None,
 ):
     mesh_shape = tuple(mesh_device.shape)
     devices = math.prod(mesh_shape)
@@ -589,7 +600,7 @@ def _run_test(
         mesh_device,
         cluster_axis,
     )
-    tt_dense_metadata = _get_tt_dense_metadata(dense_metadata_tensor, mesh_device)
+    tt_dense_metadata = _get_tt_dense_metadata(dense_metadata_tensor, mesh_device, metadata_memory_config)
     tt_dense_token_maps = _get_tt_dense_token_maps(dense_token_maps, mesh_device)
 
     tt_token_counts = ttnn.from_torch(
@@ -629,7 +640,7 @@ def _run_test(
                 seq,
                 select_experts_k,
                 cluster_axis,
-                topology=ttnn.Topology.Ring,
+                topology=topology,
                 num_links=num_links,
                 token_parallel_core_dim=token_parallel_core_dim,
                 data_parallel_core_dim=data_parallel_core_dim,
@@ -658,6 +669,7 @@ def _run_test(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -752,6 +764,7 @@ def test_decode(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
@@ -820,3 +833,94 @@ def test_deepseek_perf(
             scheme=scheme,
         )
         logger.info(f"Decode iter: {i} success")
+
+
+# Regression test for #56769. With l1_small_size = 0 the carried barrier semaphore is allocated in general L1, and
+# the op must keep its count intact across iterations.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 0,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    indirect=True,
+    ids=["l1_small_0"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("batch", [48])
+@pytest.mark.parametrize("select_experts_k", [1])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("token_parallel_core_dim", [4])
+@pytest.mark.parametrize("data_parallel_core_dim", [4])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
+@pytest.mark.parametrize("num_test_iters", [5])
+def test_zero_l1_small(
+    mesh_device,
+    mesh_shape,
+    batch,
+    select_experts_k,
+    hidden_size,
+    seq,
+    cluster_axis,
+    experts_per_device,
+    worker_core_range,
+    token_parallel_core_dim,
+    data_parallel_core_dim,
+    num_links,
+    mux_core_range,
+    num_test_iters,
+):
+    experts = experts_per_device * mesh_shape[cluster_axis]
+
+    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+
+    _run_test(
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq,
+        cluster_axis,
+        worker_cores,
+        data_parallel_core_dim,
+        token_parallel_core_dim,
+        num_links,
+        mux_cores,
+        mesh_device,
+        num_test_iters,
+        False,
+        scheme="random",
+    )
