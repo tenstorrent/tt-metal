@@ -1,0 +1,79 @@
+# Change the SFPU DEST exponent family A -> B -> A in a 16-bit DEST.
+supported_archs: [blackhole]
+dest_acc: false
+
+operands:
+  - name: input_0
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16
+  - name: output_0
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16
+  - name: input_1
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16_b
+  - name: output_1
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16_b
+  - name: input_2
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16
+  - name: output_2
+    tile_dims: [32, 32]
+    dims: [64, 64]
+    format: Float16
+
+operations:
+  - math:
+      - type: Fpu
+        block_tiles: [1, 2]
+        in0: input_0
+        operation: Datacopy
+        unpacker: UnpackerA
+        math_fidelity: LoFi
+      - type: UnarySfpu
+        block_tiles: [1, 2]
+        operation: Tanh
+        approximation_mode: false
+        iterations: 32
+    pack:
+      - output: output_0
+        block_tiles: [1, 2]
+        packer: Packer
+  - math:
+      - type: Fpu
+        block_tiles: [1, 2]
+        in0: input_1
+        operation: Datacopy
+        unpacker: UnpackerA
+        math_fidelity: LoFi
+      - type: UnarySfpu
+        block_tiles: [1, 2]
+        operation: Tanh
+        approximation_mode: false
+        iterations: 32
+    pack:
+      - output: output_1
+        block_tiles: [1, 2]
+        packer: Packer
+  - math:
+      - type: Fpu
+        block_tiles: [1, 2]
+        in0: input_2
+        operation: Datacopy
+        unpacker: UnpackerA
+        math_fidelity: LoFi
+      - type: UnarySfpu
+        block_tiles: [1, 2]
+        operation: Tanh
+        approximation_mode: false
+        iterations: 32
+    pack:
+      - output: output_2
+        block_tiles: [1, 2]
+        packer: Packer

@@ -1204,46 +1204,12 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (MathOperation.Rpow, None, None, None, None): 10,
 }
 
-# The same pins where another architecture's table parks a different number of cells
-# under a wildcard acknowledgement. On Blackhole: no fp16-in-Dest cell is swept
-# (ulp_sweep.fp16_dest_unusable), which drops the Exp/ExpWithBase/Expm1Cw/Polygamma
-# Float16 cells; I1 parks the same ten cells as on Wormhole, but its in-range figures
-# differ with the approximation mode there, so each parked cell is one row per
-# `approx`; and Polygamma also parks five cells on its pole at 0 (see its
-# acknowledgement).
+# Architecture-specific row counts: the tables fold approximation modes differently
+# for I1, and Blackhole has additional nonfinite Polygamma cells near its poles.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
     ChipArchitecture.BLACKHOLE: {
-        (
-            MathOperation.Exp,
-            DataFormat.Float16,
-            DataFormat.Float16,
-            ApproximationMode.Yes,
-            None,
-        ): 1,
-        (
-            MathOperation.Exp,
-            DataFormat.Float32,
-            DataFormat.Float16,
-            ApproximationMode.Yes,
-            None,
-        ): 1,
-        (
-            MathOperation.ExpWithBase,
-            DataFormat.Float16,
-            DataFormat.Float16,
-            ApproximationMode.Yes,
-            None,
-        ): 1,
-        (
-            MathOperation.ExpWithBase,
-            DataFormat.Float32,
-            DataFormat.Float16,
-            ApproximationMode.Yes,
-            None,
-        ): 1,
-        (MathOperation.Expm1Cw, None, None, None, None): 13,
         (MathOperation.I1, None, None, None, None): 20,
-        (MathOperation.Polygamma, None, None, None, None): 12,
+        (MathOperation.Polygamma, None, None, None, None): 16,
     },
 }
 
