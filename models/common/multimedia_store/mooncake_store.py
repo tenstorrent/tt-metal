@@ -45,8 +45,9 @@ _REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
 
 def _check_key(media_key: str) -> str:
-    if not media_key.isascii():
-        raise ValueError(f"media key {media_key!r} is not ASCII")
+    # A str, since Mooncake returns lookups keyed by str: a bytes key would never match and always read as Missing.
+    if not isinstance(media_key, str) or not media_key.isascii():
+        raise ValueError(f"media key {media_key!r} is not an ASCII str")
     return media_key
 
 

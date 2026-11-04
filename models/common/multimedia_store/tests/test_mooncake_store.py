@@ -102,8 +102,9 @@ def setup():
 
 def test_key_must_be_ascii(setup):
     _, reader, _, _ = setup
-    with pytest.raises(ValueError, match="not ASCII"):
-        reader.fetch("media-\u00e9")
+    for bad in ("media-\u00e9", b"media-1"):
+        with pytest.raises(ValueError, match="not an ASCII str"):
+            reader.fetch(bad)
 
 
 @pytest.mark.parametrize(
