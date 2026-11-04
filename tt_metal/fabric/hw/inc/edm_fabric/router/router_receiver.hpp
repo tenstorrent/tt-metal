@@ -676,8 +676,8 @@ FORCE_INLINE bool vc0_register_empty() { return read_stream_count<ReceiverChanne
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Every serviced VC's receiver channel state (get<VC>()) and where it lives. The loop-local VC's progress is copied
-// into a local of run()'s loop, so the compiler can keep it in registers; every other VC's state stays in memory, kept
-// there after each of its steps (keep_in_memory), so it does not take the loop-local VC's registers on its packet path.
+// into a local of run()'s loop, so the compiler can keep it in registers; every other VC's state is stepped in place,
+// in memory.
 // A one-ERISC router keeps every state in memory and steps the loop-local VC's progress in place (router_single.hpp).
 // The accessors are templates on the VC so that an absent channel's state is named only in template-dependent code.
 struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
@@ -705,14 +705,6 @@ struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
             return this->template get<VC>().progress;
         }
     }
-
-    // After VC's step: a later VC's state is kept in memory; nothing for the loop-local VC.
-    template <size_t VC>
-    FORCE_INLINE void after_step() {
-        if constexpr (VC != loop_local_vc) {
-            keep_in_memory(this->template get<VC>());
-        }
-    }
 };
 
 // VC's step, on its progress where ReceiverChannelStates places it. None where VC's channel does not run.
@@ -734,7 +726,6 @@ FORCE_INLINE void step_channel(
             credit_frame_due,
             arrived_raw,
             my_chip);
-        states.template after_step<VC>();
     }
 }
 

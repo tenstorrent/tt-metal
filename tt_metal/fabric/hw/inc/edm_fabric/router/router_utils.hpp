@@ -108,7 +108,7 @@ struct Each<0, T> {
 // Keeps `obj` in memory at this point: its current value is stored before it and read back after it (GCC's documented
 // semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
 // share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
-// passes (a forwarding channel's record, a later VC's receiver state), so the registers go to the state every pass
+// passes (a forwarding channel's record, or a later VC's worker channel's), so the registers go to the state every pass
 // touches.
 template <typename T>
 FORCE_INLINE void keep_in_memory(T& obj) {
