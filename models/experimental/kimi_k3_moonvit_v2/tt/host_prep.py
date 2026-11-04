@@ -123,10 +123,18 @@ def prepare_host_inputs(
 ) -> dict:
     """Everything the device needs for one image, in window order and padded to `config.max_patches` rows.
 
+    `pixel_values` and `grid_thws` are the processor's output (`image_prep.image_to_patches`), which
+    already holds the first layer of padding: black pixels (-1.0 after normalization) to a multiple of
+    28 px. Those patches are real tokens, inside `logical_n` and attended to. This function adds the
+    second layer: zero rows after the last patch up to `max_patches`, which attention masks.
+
     Returns `patches` (S, padded_patch_dim), `pos_emb` (S, hidden), `cos` and `sin` (S, head_dim) and
-    `logical_n`, the number of real rows.
+    `logical_n` = h*w, the number of real rows.
     """
     h, w = check_grid(grid_thws, config)
+    expected = (h * w, config.in_channels, config.patch_size, config.patch_size)
+    if tuple(pixel_values.shape) != expected:
+        raise ValueError(f"pixel_values {tuple(pixel_values.shape)} != {expected} for grid {h}x{w}")
     cos, sin = rope_tables(config, h, w)
     pos_emb = pos_embeds(pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     rows = config.max_patches

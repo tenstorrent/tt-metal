@@ -49,9 +49,12 @@ class MoonViTConfig:
     rope_theta: float = 10000.0
     # Upstream norms use nn.RMSNorm(eps=None), i.e. finfo(bf16).eps for bf16 activations.
     norm_eps: float = 2.0**-7
-    # Processor caps: `patch_limit_on_one_side` (also the RoPE table size) and `in_patch_limit`.
-    # Every image is padded to `max_patches` rows on device; ring attention masks the padding.
+    # Processor (`preprocessor_config.json`): `patch_limit_on_one_side` (also the RoPE table size) and
+    # `in_patch_limit`, which only sets the resize (`image_prep.resize_plan`).
     max_side_patches: int = 512
+    in_patch_limit: int = 65536
+    # Device row count: every image is padded to `max_patches` rows, and ring attention masks the
+    # padding. Images whose grid exceeds it are rejected, never shrunk to fit.
     max_patches: int = 65536
     # Patch merger (`sd2_tpool`): each 2x2 window of patches becomes one token.
     merge_kernel_size: tuple[int, int] = (2, 2)
@@ -98,6 +101,7 @@ class MoonViTConfig:
         A missing key takes upstream's effective default, which is `KimiK3VisionConfig`'s and also
         this class's (the K3 values). Upstream's modeling code has other fallbacks (`bicubic`,
         biases on), but they never apply: the vision config always sets those attributes.
+        The processor fields (`in_patch_limit`) are not in `config.json` and always keep their defaults.
         """
         if not isinstance(config, dict):
             path = Path(config)
@@ -158,8 +162,8 @@ def check_grid(grid_thws: torch.Tensor, config: MoonViTConfig) -> tuple[int, int
     if t != 1:
         raise ValueError(f"video is not supported, got t={t}")
     kh, kw = config.merge_kernel_size
-    if h % kh or w % kw:
-        raise ValueError(f"grid {h}x{w} is not a multiple of the {kh}x{kw} merge kernel")
+    if h < kh or w < kw or h % kh or w % kw:
+        raise ValueError(f"grid {h}x{w} is not a positive multiple of the {kh}x{kw} merge kernel")
     if h > config.max_side_patches or w > config.max_side_patches or h * w > config.max_patches:
         raise ValueError(f"grid {h}x{w} exceeds {config.max_side_patches} per side or {config.max_patches} patches")
     return h, w

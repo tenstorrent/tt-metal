@@ -87,10 +87,11 @@ def test_from_hf_config_rejects_null_qkv_hidden_size(expect_error):
         ([(1, 8, 8), (1, 4, 4)], "one image"),
         ([(2, 8, 8)], "video"),
         ([(1, 7, 8)], "merge kernel"),
+        ([(1, 0, 8)], "merge kernel"),
         ([(1, 2, 514)], "exceeds"),
         ([(1, 512, 130)], "exceeds"),
     ],
-    ids=["two_images", "video", "odd", "too_wide", "too_many"],
+    ids=["two_images", "video", "odd", "zero_side", "too_wide", "too_many"],
 )
 def test_rejects_unsupported_grids(config, expect_error, grid, message):
     with expect_error(ValueError, message):
