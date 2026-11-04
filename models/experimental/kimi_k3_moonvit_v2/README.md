@@ -25,12 +25,11 @@ needs `transformers`, as upstream does; tests also use `models.common.utility_fu
 
 | Path | Contents |
 |---|---|
-| `reference/modeling_kimi_k3.py` | Upstream `modeling_kimi_k3.py` without the language model (`KimiK3PreTrainedModel`, `KimiK3ForConditionalGeneration` and their imports) |
-| `reference/configuration_kimi_k3.py` | Upstream `configuration_kimi_k3.py`, unchanged |
+| `reference/modeling_kimi_k3.py`, `reference/configuration_kimi_k3.py` | Copied from [moonshotai/Kimi-K3](https://huggingface.co/moonshotai/Kimi-K3); the language model is removed |
 | `reference/kimi_k3_vision.py` | `KimiK3VisionModel`: the vision path of `KimiK3ForConditionalGeneration` (tower, then `mm_projector`), and `load_vision_config`, which selects upstream's `eager` attention |
 | `reference/checkpoint.py` | Reads `vision_tower.*` and `mm_projector.*` from a Kimi-K3 HF checkpoint |
-| `reference/config.json`, `LICENSE-Kimi-K3` | The K3 `vision_config` and the license of the vendored code |
-| `reference/media_utils.py`, `reference/kimi_k3_vision_processing.py`, `reference/preprocessor_config.json` | Upstream's image processor (`KimiK3VisionProcessor`) and its config, unchanged: the golden for `tt/image_prep.py` |
+| `reference/config.json`, `LICENSE-Kimi-K3` | The K3 `vision_config` and the upstream license |
+| `reference/media_utils.py`, `reference/kimi_k3_vision_processing.py`, `reference/preprocessor_config.json` | Upstream's image processor and its config, copied: the golden for `tt/image_prep.py` |
 | `tt/image_prep.py` | A PIL image to `(pixel_values, grid_thws)` as the HF processor makes them: resize, black padding to a multiple of 28 px, normalize, patchify |
 | `tt/host_prep.py` | Host prep for the device, torch only: patch rows, position embeddings, RoPE cos/sin, window order, padding to `max_patches` rows |
 | `tt/model_config.py` | `MoonViTConfig`, the grid check, `VisionParallel`, the compute kernel config |

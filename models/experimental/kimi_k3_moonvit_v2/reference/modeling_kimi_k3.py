@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team and The HuggingFace Inc. team.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Copied from huggingface.co/moonshotai/Kimi-K3. LICENSE-Kimi-K3 in this folder is "the LICENSE file
-# in this repository" that the notice below refers to.
-# Omitted from upstream (the language model): the LlavaCausalLMOutputWithPast and KimiLinearForCausalLM
-# imports, KimiK3PreTrainedModel and KimiK3ForConditionalGeneration. Everything else is unchanged.
+# Modified: language model removed (KimiK3PreTrainedModel, KimiK3ForConditionalGeneration and their imports).
 
 # coding=utf-8
 # Copyright 2025-2026 The Moonshot AI Team and HuggingFace Inc. team. All rights reserved.
