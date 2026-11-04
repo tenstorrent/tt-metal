@@ -181,7 +181,7 @@ class TernaryDecodeLinear3:
         glu = getattr(self, "glu", False)
         if glu:
             # (gate, up) record pairs -> silu(gate) * up, one output tile per pair (pack_glu_records).
-            assert dm_defines and ("PAGE_SPLIT", "1") in dm_defines and not split, "GLU needs the page-split path"
+            assert self.inline_scales and self.group16 and not split, "GLU needs inline group16 records"
             dm_defines = list(dm_defines) + [("GLU_PAIRS", "1")]
             extra_defines = list(extra_defines) + [("GLU_PAIRS", "1")]
         Kt, Nt, KB = K // TILE, N // TILE, K // KBLOCK

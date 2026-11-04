@@ -16,7 +16,6 @@ import numpy as np
 import ttnn
 from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import (
-    PAGE_SPLIT,
     TernaryDecodeLinear3,
     pack_glu_records,
     pack_records_inline,
@@ -37,7 +36,7 @@ class TernaryMLP:
         self.gate, self.up, self.down = (lin(s) for s in STEMS)
         self.rot_in, self.rot_hidden = rotations[self.gate.K], rotations[self.down.K]
         self.gateup = None
-        if os.environ.get("BONSAI_GLU", "0") == "1" and PAGE_SPLIT:
+        if os.environ.get("BONSAI_GLU", "1") == "1":
             # gate and up in one ternary pass that also applies silu(gate) * up
             (rg, ppr, K, N), (ru, _, _, _) = packed["ffn_gate"], packed["ffn_up"]
             self.gateup = TernaryDecodeLinear3.from_packed(device, pack_glu_records(rg, ru, ppr), ppr, K, 2 * N)

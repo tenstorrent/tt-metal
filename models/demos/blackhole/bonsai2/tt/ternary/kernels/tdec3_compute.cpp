@@ -350,7 +350,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_nt; ++i) {
         DeviceZoneScopedN("TD-NT");
         const uint32_t cb_w = (i & 1) ? cb_w1 : cb_w0;
+#ifdef GLU_PAIRS
+        // (gate, up) record pairs: gate accumulates in DEST tile 3, up in tile 0; one output silu(gate) * up per pair
+        const uint32_t acc = (i & 1) ? 0 : 3;
+        if ((i & 1) == 0) {
+            tile_regs_acquire();
+        }
+#else
+        const uint32_t acc = 0;
         tile_regs_acquire();
+#endif
         for (uint32_t g = 0; g < G; ++g) {
             {
                 DeviceZoneScopedN("TD-GSETUP");
@@ -380,7 +389,7 @@ void kernel_main() {
                 for (uint32_t m = 0; m < 4; ++m) {
                     custom_mm_block<LAYOUT, false>(cb_x, cb_w, (kb + m) * 4, m * 4, 4 + m, 4);
                 }
-                scale_acc_quad(j, kb == 0);
+                scale_acc_quad(j, kb == 0, acc);
                 MATH((llk_math_custom_mm_init<false, LAYOUT>(cb_x, cb_w, 1)));
                 cb_pop_front(cb_w, 16);
             }
@@ -436,6 +445,15 @@ void kernel_main() {
             cb_wait_front(cb_w, pad);
             cb_pop_front(cb_w, pad);
         }
+#endif
+#ifdef GLU_PAIRS
+        if ((i & 1) == 0) {
+            continue;
+        }
+        silu_tile_init();
+        MATH((
+            SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, glu_row0, 0, 1, 3, 0, VectorMode::None)));
+        addcmul_tile_init();
 #endif
         tile_regs_commit();
         tile_regs_wait();
