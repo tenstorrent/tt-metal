@@ -59,3 +59,21 @@ def test_backbone_fpn(device, reset_seeds):
 
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
         assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), BACKBONE_FPN_PCC)
+
+
+def test_to_conv_layout_rounds_as_from_torch():
+    """to_conv_layout casts to bfloat16 in torch before from_torch; the images must come out bit for
+    bit as from_torch's own float32 conversion makes them. Host only: no device."""
+    torch.manual_seed(0)
+    nchw = torch.randn(2, 3, 32, 48) * 3
+    # Every float32 exactly halfway between two bfloat16 values, which only the tie rule decides.
+    ties = (torch.arange(1 << 16, dtype=torch.int32) << 16 | 0x8000).view(torch.float32)
+    ties = ties[torch.isfinite(ties)]
+    ties = ties[: ties.numel() // 3 * 3].view(1, 3, -1, 1)
+    for image in (nchw, ties):
+        n, c, h, w = image.shape
+        reference = ttnn.from_torch(
+            image.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        got = to_conv_layout(image, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        assert torch.equal(ttnn.to_torch(got).view(torch.int16), ttnn.to_torch(reference).view(torch.int16))

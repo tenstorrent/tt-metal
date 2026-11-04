@@ -634,6 +634,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // onto writer_rt.
         tt::tt_metal::KernelHandle writer_kernel_handle = writer_kernel_id;
         append_routing_plane_connection_manager_rt_args(
+            *mesh_device,
             sender_fabric_node_id,
             dst_nodes,
             link_indices,

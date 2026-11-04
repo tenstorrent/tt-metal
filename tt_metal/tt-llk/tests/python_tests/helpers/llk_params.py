@@ -845,6 +845,15 @@ class BlocksCalculationAlgorithm(Enum):
     Untilize = "UNTILIZE"
 
 
+class PackUntilizeBenchmark(str, Enum):
+    Functional = "functional"
+    Standard = "standard"
+    FastUntilizeBaseline = "fast_untilize_baseline"
+
+    def __str__(self):
+        return self.value
+
+
 class PerfRunType(Enum):
     L1_TO_L1 = 1
     UNPACK_ISOLATE = 2

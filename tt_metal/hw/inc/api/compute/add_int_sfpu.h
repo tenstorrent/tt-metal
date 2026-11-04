@@ -9,7 +9,7 @@
 #ifdef ARCH_QUASAR
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #else
-#include "sfpu/ckernel_sfpu_add_int.h"
+#include "ckernel_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #endif

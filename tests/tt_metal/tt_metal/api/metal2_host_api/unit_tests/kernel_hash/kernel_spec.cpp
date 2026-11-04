@@ -6,11 +6,15 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cstdint>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -92,6 +96,94 @@ TEST_F(ProgramSpecTestGen1, CPU_CommonRuntimeArgNamePartitionAffectsKernelHash) 
     EXPECT_NE(
         prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+// ----------------------------------------------------------------------------
+// Kernel hash sensitivity to array args
+// ----------------------------------------------------------------------------
+//
+// An RTA/CRTA array's name and size are baked into the generated header (its accessor type and byte
+// offset), and so are a CTA array's values. Its runtime values are not.
+
+ProgramSpec MakeArrayArgSpec(const std::function<void(KernelSpec&)>& declare_args) {
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    declare_args(dm_kernel);
+    ProgramSpec spec;
+    spec.name = "array_arg_hash";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+    return spec;
+}
+
+uint64_t DMKernelHash(const Program& program) {
+    return program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_RuntimeArraySizeAffectsKernelHash) {
+    Program prog_2 = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 2}};
+    }));
+    Program prog_3 = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 3}};
+    }));
+    EXPECT_NE(DMKernelHash(prog_2), DMKernelHash(prog_3));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_CommonRuntimeArraySizeAffectsKernelHash) {
+    Program prog_2 = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 2}};
+    }));
+    Program prog_3 = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 3}};
+    }));
+    EXPECT_NE(DMKernelHash(prog_2), DMKernelHash(prog_3));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_RuntimeScalarVersusSizeOneArrayAffectsKernelHash) {
+    // Same name, same word in the dispatch buffer, but a different accessor type in the generated header.
+    Program prog_scalar = MakeProgramFromSpec(
+        *mesh_device_, MakeArrayArgSpec([](KernelSpec& k) { k.runtime_arg_schema.runtime_arg_names = {"x"}; }));
+    Program prog_array = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 1}};
+    }));
+    EXPECT_NE(DMKernelHash(prog_scalar), DMKernelHash(prog_array));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArrayValueAffectsKernelHash) {
+    Program prog_a = MakeProgramFromSpec(
+        *mesh_device_, MakeArrayArgSpec([](KernelSpec& k) { k.compile_time_array_args = {{"sizes", {1, 2}}}; }));
+    Program prog_b = MakeProgramFromSpec(
+        *mesh_device_, MakeArrayArgSpec([](KernelSpec& k) { k.compile_time_array_args = {{"sizes", {1, 3}}}; }));
+    EXPECT_NE(DMKernelHash(prog_a), DMKernelHash(prog_b));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArrayPartitionAffectsKernelHash) {
+    // The same words split differently between two arrays.
+    Program prog_left = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.compile_time_array_args = {{"a", {1}}, {"b", {2, 3}}};
+    }));
+    Program prog_right = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.compile_time_array_args = {{"a", {1, 2}}, {"b", {3}}};
+    }));
+    EXPECT_NE(DMKernelHash(prog_left), DMKernelHash(prog_right));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_RuntimeArrayValuesDoNotAffectKernelHash) {
+    const NodeCoord node{0, 0};
+    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayArgSpec([](KernelSpec& k) {
+        k.runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 2}};
+        k.runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 2}};
+    }));
+    const uint64_t hash_before = DMKernelHash(program);
+
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs args{.kernel = KernelSpecName{"dm_kernel"}};
+    args.runtime_array_arg_values["x"][node] = {7, 8};
+    args.common_runtime_array_arg_values["dims"] = {32, 64};
+    params.kernel_run_args.push_back(std::move(args));
+    SetProgramRunArgs(program, params);
+
+    EXPECT_EQ(DMKernelHash(program), hash_before);
 }
 
 }  // namespace
