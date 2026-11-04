@@ -181,7 +181,9 @@ void validate_matmul_tiny_tile_constraints(
     // support smaller tile_h with Bfp dtypes, so this check is scoped to the mcast configs.
     // See #42927. This is a "not currently supported" throw, not a permanent fatal — it
     // should be removed when the underlying kernel limitation is resolved.
-    const bool in1_is_bfp = is_block_float(input_tensor_b.dtype());
+    const bool in1_is_bfp = (input_tensor_b.dtype() == DataType::BFLOAT8_B) ||
+                            (input_tensor_b.dtype() == DataType::BFLOAT4_B) ||
+                            (input_tensor_b.dtype() == DataType::BFLOAT2_B);
     const bool is_mcast_config =
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
@@ -3334,7 +3336,11 @@ MatmulParams create_matmul_attributes(
             parameters.user_core_coord->y);
     }
     const bool has_program_config = parameters.program_config.has_value();
-    bool are_inputs_low_precision_df = is_block_float(input_tensor_a.dtype()) && is_block_float(input_tensor_b.dtype());
+    bool are_inputs_low_precision_df =
+        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B ||
+          input_tensor_a.dtype() == DataType::BFLOAT2_B) &&
+         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B ||
+          input_tensor_b.dtype() == DataType::BFLOAT2_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);

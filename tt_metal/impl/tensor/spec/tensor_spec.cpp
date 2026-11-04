@@ -115,7 +115,8 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
         TT_FATAL(
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
-             dtype == DataType::BFLOAT16 || is_block_float(dtype) || dtype == DataType::FP8_E4M3 || is_mx(dtype)),
+             dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
+             dtype == DataType::BFLOAT2_B || dtype == DataType::FP8_E4M3 || is_mx(dtype)),
             "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, FP8_E4M3, or "
             "MX dtypes are supported on device!");
     };

@@ -191,7 +191,10 @@ Tensor full_impl(
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
-        return (is_block_float(dtype_value) || is_mx(dtype_value)) ? ttnn::TILE_LAYOUT : ttnn::ROW_MAJOR_LAYOUT;
+        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B ||
+                dtype_value == DataType::BFLOAT2_B || is_mx(dtype_value))
+                   ? ttnn::TILE_LAYOUT
+                   : ttnn::ROW_MAJOR_LAYOUT;
     };
 
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
@@ -380,7 +383,9 @@ Tensor from_buffer(
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-    TT_ASSERT(!is_block_float(dtype), "Unsupported DataType!");
+    TT_ASSERT(
+        dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B && dtype != DataType::BFLOAT2_B,
+        "Unsupported DataType!");
     tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(
@@ -397,7 +402,9 @@ Tensor from_buffer(
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-    TT_ASSERT(!is_block_float(dtype), "Unsupported DataType!");
+    TT_ASSERT(
+        dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B && dtype != DataType::BFLOAT2_B,
+        "Unsupported DataType!");
     tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(

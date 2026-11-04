@@ -121,7 +121,8 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (is_block_float(spec.data_type()) || is_mx(spec.data_type())) {
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B ||
+        spec.data_type() == DataType::BFLOAT2_B || is_mx(spec.data_type())) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types are only supported in TILE layout");
     }
     if (auto packed = detail::try_encode_bfp_matrix(buffer, spec)) {
@@ -177,7 +178,8 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
-    if (is_block_float(spec.data_type()) || is_mx(spec.data_type())) {
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B ||
+        spec.data_type() == DataType::BFLOAT2_B || is_mx(spec.data_type())) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types only supported in TILE layout");
     }
     if (auto packed = detail::try_encode_bfp_matrix(ttsl::make_const_span(buffer), spec)) {

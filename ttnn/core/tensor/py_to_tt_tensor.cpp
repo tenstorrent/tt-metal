@@ -377,7 +377,9 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
     // Block formats are packed from a plain host buffer. MX goes through FLOAT32 because the MX packers only
     // take float, and a BFLOAT16 hop would round twice.
     const DataType mapped_dst_type =
-        is_block_float(dst_dtype) ? DataType::BFLOAT16 : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B or dst_dtype == DataType::BFLOAT2_B)
+            ? DataType::BFLOAT16
+            : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
@@ -411,8 +413,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool col_tilize,
     bool enable_bfloat_opt) {
     ZoneScoped;
-    if (is_block_float(dst_dtype)) {
-        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for {}!", dst_dtype);
+    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT2_B) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b, bfloat4_b or bfloat2_b!");
     }
     if (is_mx(dst_dtype)) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for {}!", dst_dtype);

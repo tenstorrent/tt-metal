@@ -559,7 +559,10 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     auto input_buffer =
         CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
 
-    const auto layout = (is_block_float(dtype) || is_mx(dtype)) ? Layout::TILE : input_tensor.layout();
+    const auto layout =
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT2_B || is_mx(dtype))
+            ? Layout::TILE
+            : input_tensor.layout();
 
     tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
 
@@ -670,7 +673,11 @@ template <typename T>
 void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
-        TT_FATAL(dtype == DataType::UINT32 or is_block_float(dtype) or is_mx(dtype), "Incorrect data type {}", dtype);
+        TT_FATAL(
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or
+                dtype == DataType::BFLOAT2_B or is_mx(dtype),
+            "Incorrect data type {}",
+            dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {
         TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, int8_t>) {

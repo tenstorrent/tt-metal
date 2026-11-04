@@ -286,7 +286,9 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
         if (tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
             return tensor;
         }
-        if (tt::tt_metal::is_block_float(tensor.dtype()) || tt::tt_metal::is_mx(tensor.dtype())) {
+        if (tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT2_B || tt::tt_metal::is_mx(tensor.dtype())) {
             return tt::tt_metal::to_layout(
                 ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32), tt::tt_metal::Layout::ROW_MAJOR);
         }

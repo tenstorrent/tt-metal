@@ -793,7 +793,9 @@ void pytensor_module(nb::module_& mod) {
                 auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
-                const bool tile_layout_by_default = is_block_float(dst_dtype) || is_mx(dst_dtype);
+                const bool tile_layout_by_default =
+                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B ||
+                     dst_dtype == DataType::BFLOAT2_B || is_mx(dst_dtype));
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
                 const auto shape = CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor);
