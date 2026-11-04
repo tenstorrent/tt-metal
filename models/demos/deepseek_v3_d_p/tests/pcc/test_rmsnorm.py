@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_pa
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -41,7 +40,8 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "isl_per_chip, emb_dim, epsilon, num_links",
-    with_sp4_depth([(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 1e-6, 1)], ids=["isl_5k"]),
+    [(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 1e-6, 1)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, tp_axis",

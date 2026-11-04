@@ -2,8 +2,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 
+import faulthandler
 import os
 import resource
+import signal
+import sys
+import threading
 from pathlib import Path
 
 from loguru import logger
@@ -26,6 +30,35 @@ def raise_nproc_limit(tag: str = "prefill") -> None:
             logger.info(f"[{tag}] raised RLIMIT_NPROC soft {soft} -> {hard}")
         except (ValueError, OSError) as e:
             logger.warning(f"[{tag}] could not raise RLIMIT_NPROC (soft={soft}): {e}")
+
+
+# run_multirank_pcc.sh's rank-crash watchdog keys on this line. Only an exception that escapes a thread prints it:
+# a handled one (logger.exception, a retry path) or an "Exception ignored in" at shutdown never does.
+UNCAUGHT_EXCEPTION_MARKER = "PREFILL_UNCAUGHT_EXCEPTION"
+
+
+def install_crash_diagnostics() -> None:
+    """SIGUSR1 prints every thread's Python stack to stderr and keeps running (run_multirank_pcc.sh's stall
+    watchdog sends it to a hung run), and an exception that escapes any thread prints
+    UNCAUGHT_EXCEPTION_MARKER after its traceback. Call it first thing in main()."""
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    prev_sys_hook, prev_thread_hook = sys.excepthook, threading.excepthook
+
+    def _mark(exc_type):
+        if not issubclass(exc_type, KeyboardInterrupt):
+            print(f"{UNCAUGHT_EXCEPTION_MARKER}: {exc_type.__name__}", file=sys.stderr, flush=True)
+
+    def _sys_hook(exc_type, exc, tb):
+        prev_sys_hook(exc_type, exc, tb)
+        _mark(exc_type)
+
+    def _thread_hook(hook_args):
+        prev_thread_hook(hook_args)
+        if hook_args.exc_type is not SystemExit:
+            _mark(hook_args.exc_type)
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
 
 
 def _create_fabric_router_config(max_payload_size):

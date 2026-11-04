@@ -127,7 +127,8 @@ struct QueryGeometryRanks {
     uint32_t tp_index;
 };
 
-// (SP rank, TP window) that causal geometry sees for a canonical row-major tensor rank.
+// (SP rank, TP window) that causal geometry sees for a canonical tensor rank (row-major, or column-major with
+// full_mesh_outer_axis 1).
 inline QueryGeometryRanks query_geometry_ranks(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index) {
     const uint32_t split = query_geometry_split(args);
@@ -144,8 +145,9 @@ inline DeviceCausalGeometry device_causal_geometry(
     const uint32_t split = has_bc ? query_geometry_split(args) : 1u;
     TT_FATAL(
         !has_bc || args.block_cyclic->sp % split == 0,
-        "indexer_score: full-mesh block-cyclic sp={} must be a multiple of mesh_cols={}",
+        "indexer_score: full-mesh block-cyclic sp={} must be a multiple of the inner mesh dim ({})={}",
         has_bc ? args.block_cyclic->sp : 0u,
+        (args.has_fused_ring() && args.fused_ring->column_major) ? "mesh_rows" : "mesh_cols",
         split);
     const uint32_t sp = has_bc ? args.block_cyclic->sp / split : 1u;
     // Stored block-cyclic geometry is in compressed K rows; causal ownership remains in query-token units.

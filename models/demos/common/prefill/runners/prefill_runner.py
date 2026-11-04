@@ -4,7 +4,6 @@
 
 
 import contextlib
-import faulthandler
 import json
 import os
 import signal
@@ -51,6 +50,7 @@ from models.demos.common.prefill.runners.runner_utils import d2d_activation_widt
 from models.demos.common.prefill.runners.runner_utils import (
     export_d2d_pipeline_descriptor,
     indexer_indices_global_spec,
+    install_crash_diagnostics,
     make_h2d_spec,
     num_mtp_tokens,
     open_mesh_device,
@@ -1165,9 +1165,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
-    # SIGUSR1 prints every thread's Python stack to stderr and keeps running: run_multirank_pcc.sh's
-    # stall watchdog sends it to a hung run before tearing it down.
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
+    install_crash_diagnostics()
 
     _print_config()
 

@@ -491,18 +491,21 @@ cd "${TT_METAL_HOME}"
 # A rank that dies leaves its peers blocked on it: mpirun waits for every rank, and a rank whose
 # device timed out can hang in teardown and never exit (run 40947298596 sat two hours after rank 1's
 # dispatch timeout until the job timeout killed the container, so the EXIT trap never copied the
-# rank logs). On the first traceback in any rank's stderr, give the other ranks a grace period to
-# write theirs, then stop both launches; the script then fails through the EXIT trap as usual.
+# rank logs). On the first uncaught exception in any rank or producer (the marker runner_utils'
+# install_crash_diagnostics prints; a handled exception's traceback does not count), give the other ranks a
+# grace period to write theirs, then stop both launches, killing a runner still alive 10 s after SIGTERM, as
+# cleanup() does; the script then fails through the EXIT trap as usual.
 RANK_CRASH_GRACE_SECS="${RANK_CRASH_GRACE_SECS:-60}"
 (
   while kill -0 "${RUNNER_PID}" 2>/dev/null; do
     CRASHED=$(find "${RANKLOGS}" -type f \( -name stderr -o -name '*.err' \) \
-      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
+      -exec grep -l -F "PREFILL_UNCAUGHT_EXCEPTION" {} + 2>/dev/null || true)
     if [ -n "${CRASHED}" ]; then
       printf '%s\n' "${CRASHED}" > "${CRASH_FLAG}"
       echo "a rank crashed: ${CRASHED//$'\n'/ }; stopping all ranks in ${RANK_CRASH_GRACE_SECS}s" >&2
       sleep "${RANK_CRASH_GRACE_SECS}"
       kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
       # The producer may not have launched yet; keep stopping it until the EXIT trap stops us.
       while :; do
         pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true

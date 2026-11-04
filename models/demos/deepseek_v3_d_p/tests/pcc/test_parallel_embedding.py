@@ -27,20 +27,17 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
     "isl_per_chip, vocab_size, emb_dim",
-    with_sp4_depth(
-        [
-            (PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
-            (PREFILL_CHUNK_TOKENS_PER_CHIP, MistralSmall4Config.VOCAB_SIZE, MistralSmall4Config.EMB_SIZE),
-            (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.VOCAB_SIZE, KimiK3Config.EMB_SIZE),
-        ],
-        ids=["isl_5k", "mistral4", "kimi_k3"],
-    ),
+    [
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, MistralSmall4Config.VOCAB_SIZE, MistralSmall4Config.EMB_SIZE),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.VOCAB_SIZE, KimiK3Config.EMB_SIZE),
+    ],
+    ids=["isl_5k", "mistral4", "kimi_k3"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, sp_axis",
