@@ -1408,7 +1408,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
     };
     std::vector<std::optional<BankDestination>> bank_destinations;
     std::vector<std::reference_wrapper<const MeshBufferPatch>> device_patches;
-    in_use_ = true;
+    this->mark_in_use();
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         if (!mesh_device_->impl().is_local(coord)) {
             continue;
