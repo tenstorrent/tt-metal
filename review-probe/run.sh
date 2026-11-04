@@ -71,9 +71,13 @@ if [ "${MERGED:-}" = true ]; then
             export MERGED_SHA=$(cat "$WS/merged.sha")
             if setup_side merged; then SIDES="$SIDES merged"; if [ -s "$WS/pr.diff" ]; then note merged applied; else note merged "applied (no head changes)"; fi; else note merged "not applied: setup failed"; fi
         else
-            # git apply lists every file it applied cleanly before the one that failed: keep the lines that say why
-            err=$(printf '%s\n' "$why" | grep -Ei "error|conflict|^U |does not|fatal|already exists" | head -5)
-            note merged "not applied: ${err:-$(printf '%s' "$why" | tail -c 380)}"
+            # name the files that conflict with main; else the error lines, without git apply's harmless notes for
+            # new files ("does not exist in index ... Falling back to direct application") and its clean-file lines
+            conf=$(cd "$WS/merged" 2>/dev/null && git diff --name-only --diff-filter=U 2>/dev/null | head -10 | tr '\n' ' ')
+            err=$(printf '%s\n' "$why" | grep -Ei "error|conflict|fatal|already exists" \
+                | grep -Evi "does not exist in index|cannot read the current contents|falling back to direct" | head -5)
+            if [ -n "$conf" ]; then note merged "not applied: conflicts with main in ${conf% }"
+            else note merged "not applied: ${err:-$(printf '%s' "$why" | tail -c 380)}"; fi
             rm -rf "$WS/merged"
         fi
     fi
