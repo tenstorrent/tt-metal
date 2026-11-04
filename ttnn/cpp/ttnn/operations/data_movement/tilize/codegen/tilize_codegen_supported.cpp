@@ -15,6 +15,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -40,7 +41,7 @@ constexpr uint32_t kDoubleBuffered = 2;
 constexpr uint32_t kSingleBuffered = 1;
 constexpr uint32_t kMinColumnBlocks = 2;
 
-// Route and split tunings below are empirical, measured on Blackhole (P150); performance choices, not hardware or
+// Route and split tunings below are empirical, measured on Blackhole; performance choices, not hardware or
 // correctness limits.
 // Widest tile row, in tiles, that the compact reader takes; wider rows use the chunked reader.
 constexpr uint32_t kCompactReaderMaxWt = 8;
@@ -218,6 +219,11 @@ std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usa
 
 }  // namespace
 
+void require_allocated_device_input(const Tensor& input) {
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_FATAL(input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
+}
+
 TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
     using namespace tt::constants;
 
@@ -290,7 +296,7 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// Nothing is demoted: on p100a every in-scope case, down to a single tile, measures at or above native.
+// Every in-scope case, down to a single tile, routes to codegen.
 bool is_demoted(const Tensor& /*input*/, DataType /*output_dtype*/) { return false; }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

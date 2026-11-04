@@ -148,8 +148,11 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     writer.config = WriterConfigDescriptor{};
     writer.emplace_common_runtime_args({out_buf});
 
+    // A 16-bit DEST would truncate 32-bit datums, float or integer, on their way to the packer.
     const bool wide_dtype = elem_size == k32BitElemSize || tensor_return_value.element_size() == k32BitElemSize;
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    // The tilize unpacker sends INT32/UINT32 straight to DEST on its own; FLOAT32 does so only when its unpack
+    // destination format stays FLOAT32, which this mode requests.
     if (dtype == DataType::FLOAT32) {
         unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
     }

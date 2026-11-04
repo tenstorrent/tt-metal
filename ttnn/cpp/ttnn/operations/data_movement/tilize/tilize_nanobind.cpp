@@ -19,9 +19,13 @@ void bind_tilize(nb::module_& mod) {
     const auto* doc = R"doc(
         Changes data layout of input tensor to TILE.
 
-        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16, FLOAT32, INT32,
+        UINT32, UINT16, UINT8 or FP8_E4M3 data type.
 
-        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+        Output tensor will be on TT accelerator device, in TILE layout, with the input's data type unless `dtype`
+        is given. A BFLOAT16 to INT32 conversion is not guaranteed to give the same result on every call: depending
+        on free L1 it either truncates toward zero and saturates at the INT32 limits, or uses a conversion that is
+        not exact.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -55,6 +59,8 @@ void bind_tilize(nb::module_& mod) {
     mod.def(
         "tilize_force_native",
         &tilize_force_native,
+        "Verification only: forces the native tilize implementation, with the same arguments as ttnn.tilize. Not "
+        "part of the public API.",
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
@@ -67,6 +73,8 @@ void bind_tilize(nb::module_& mod) {
     mod.def(
         "tilize_force_codegen",
         &tilize_force_codegen,
+        "Verification only: forces the codegen tilize implementation and raises if codegen does not support the "
+        "case, rather than falling back to native. Not part of the public API.",
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),

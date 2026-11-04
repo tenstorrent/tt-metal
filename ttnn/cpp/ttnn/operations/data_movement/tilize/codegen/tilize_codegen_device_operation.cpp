@@ -17,31 +17,47 @@ namespace {
 
 namespace codegen = ttnn::operations::data_movement::tilize_codegen;
 
-// Asserted before the support check so a host or unallocated input gets native's error message rather than
-// "not supported".
-void require_allocated_device_input(const Tensor& input) {
-    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to tilize need to be on device!");
-    TT_FATAL(input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
-}
-
 }  // namespace
 
 void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    require_allocated_device_input(input);
+    codegen::require_allocated_device_input(input);
     TT_FATAL(
         codegen::supported_by_codegen(input, operation_attributes.output_mem_config, operation_attributes.output_dtype),
         "TilizeCodegenDeviceOperation invoked for a case not supported by the codegen implementation");
-    const auto unsupported_control = codegen::unsupported_execution_control(
-        operation_attributes.use_multicore,
-        operation_attributes.use_low_perf,
-        input.tensor_spec().tile(),
-        operation_attributes.sub_core_grids);
+
+    // The factory and kernels trust the plan; these are the properties they rely on.
+    const auto& plan = operation_attributes.plan;
+    const auto geometry = codegen::tilize_geometry(input, operation_attributes.output_dtype);
     TT_FATAL(
-        !unsupported_control.has_value(),
-        "The codegen tilize runs on the full compute grid with the default tile and cannot honour {}",
-        unsupported_control.value_or(""));
+        plan.chunk_wt > 0 && plan.chunk_wt * plan.num_col_chunks == geometry.block_wt,
+        "Tilize codegen plan: {} chunks of {} tiles do not cover the {}-tile column block",
+        plan.num_col_chunks,
+        plan.chunk_wt,
+        geometry.block_wt);
+    // Readers, compute and the typecast stage move whole chunks as contiguous page runs from the FIFO pointer, so a
+    // chunk must never straddle the end of a CB.
+    TT_FATAL(
+        plan.cb_in_depth >= plan.chunk_wt && plan.cb_in_depth % plan.chunk_wt == 0 &&
+            plan.cb_out_depth >= plan.chunk_wt && plan.cb_out_depth % plan.chunk_wt == 0,
+        "Tilize codegen plan: CB depths (in {}, out {} tiles) must be non-zero multiples of the {}-tile chunk",
+        plan.cb_in_depth,
+        plan.cb_out_depth,
+        plan.chunk_wt);
+    if (plan.write_batch > 1) {
+        // The batched writer addresses each batch from the FIFO read pointer without wrapping, which holds only
+        // when the core writes a single block that fits the output CB.
+        const auto grid = input.device()->compute_with_storage_grid_size();
+        const bool one_row_per_core = geometry.route == codegen::TilizeRoute::Column2D ||
+                                      geometry.tile_rows <= static_cast<uint32_t>(grid.x * grid.y);
+        TT_FATAL(
+            one_row_per_core && plan.cb_out_depth >= geometry.block_wt,
+            "Tilize codegen plan: batched writes need one tile row per core and an output CB of at least {} tiles, "
+            "got {}",
+            geometry.block_wt,
+            plan.cb_out_depth);
+    }
 }
 
 TilizeCodegenDeviceOperation::spec_return_value_t TilizeCodegenDeviceOperation::compute_output_specs(
@@ -65,19 +81,11 @@ Tensor tilize_codegen(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     tt::tt_metal::DataType output_dtype,
-    bool use_multicore,
-    bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const codegen::TilizeCodegenPlan& plan) {
-    require_allocated_device_input(input);
+    codegen::require_allocated_device_input(input);
     return ttnn::device_operation::launch<TilizeCodegenDeviceOperation>(
         TilizeCodegenOperationAttributes{
-            .output_mem_config = std::move(output_mem_config),
-            .output_dtype = output_dtype,
-            .use_multicore = use_multicore,
-            .use_low_perf = use_low_perf,
-            .sub_core_grids = sub_core_grids,
-            .plan = plan},
+            .output_mem_config = std::move(output_mem_config), .output_dtype = output_dtype, .plan = plan},
         TilizeCodegenTensorArgs{.input = input});
 }
 

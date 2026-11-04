@@ -32,7 +32,8 @@ void kernel_main() {
     uint32_t tile_id = start_id;
 
     if constexpr (BATCH > 1) {
-        // Needs cb_out depth >= 2 * BATCH so batch N drains while N+1 is produced.
+        // Each batch is read from the FIFO read pointer without wrapping, so the host admits batching only when a
+        // core's num_tiles fit cb_out from its base: no batch ever crosses the end of the FIFO.
         uint32_t tiles_left = num_tiles;
 
         uint32_t batch = (tiles_left < BATCH) ? tiles_left : BATCH;

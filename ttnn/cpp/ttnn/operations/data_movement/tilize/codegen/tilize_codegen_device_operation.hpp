@@ -25,9 +25,6 @@ struct TilizeCodegenTensorArgs {
 struct TilizeCodegenOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
-    bool use_multicore = true;
-    bool use_low_perf = false;
-    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
     ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan plan;
 };
 
@@ -48,13 +45,13 @@ struct TilizeCodegenDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// `plan` is tilize_codegen::plan_codegen's for the same input, output memory config and output dtype. The
+// execution controls (use_multicore, use_low_perf, tile, sub_core_grids) are gated by the caller: this prim always
+// runs on the full compute grid with the default tile.
 Tensor tilize_codegen(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     tt::tt_metal::DataType output_dtype,
-    bool use_multicore,
-    bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan& plan);
 
 }  // namespace ttnn::prim

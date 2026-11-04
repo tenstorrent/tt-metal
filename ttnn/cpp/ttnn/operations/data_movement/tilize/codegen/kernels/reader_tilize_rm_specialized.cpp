@@ -26,7 +26,7 @@ void kernel_main() {
 
     // Keep the per-tile-row reads in a lambda that takes the stick id by value. Written inline, the
     // compiler reloads the accessor from the stack and updates the issued-read counter in L1 on every
-    // stick, which costs about 90 ns per core on these short reads.
+    // stick, which is significant overhead on these short reads.
     auto read_tile_row = [&](uint32_t stick_id) {
         cb_in0.reserve_back(num_tiles_per_block);
         uint32_t l1_write_addr = cb_in0.get_write_ptr();

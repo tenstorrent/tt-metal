@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -19,6 +20,8 @@ void kernel_main() {
     CircularBuffer cb_out_exp(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
+    // tilize_init leaves the Src zero-substitution flag alone; copy_init sets it to preserve, so a bf16 -0.0 or
+    // subnormal passes the SrcA-to-DEST move bit-exact instead of flushing to +0.
     copy_init(cb_in);
     tilize_init(cb_in, chunk_Wt, cb_out);
 

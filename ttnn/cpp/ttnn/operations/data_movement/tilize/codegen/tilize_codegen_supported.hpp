@@ -43,6 +43,10 @@ struct TilizeCodegenPlan {
     bool operator==(const TilizeCodegenPlan&) const = default;
 };
 
+// Asserted before the support check so a host or unallocated input gets native's error message rather than
+// "not supported".
+void require_allocated_device_input(const Tensor& input);
+
 // Only valid for an input that already passed plan_codegen's scope checks.
 TilizeGeometry tilize_geometry(const Tensor& input, tt::tt_metal::DataType output_dtype);
 
@@ -64,13 +68,16 @@ std::optional<std::string_view> unsupported_execution_control(
     const tt::tt_metal::Tile& tile,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
+// Checked by ttnn::tilize before routing. The codegen prim carries no execution controls, so its validate has
+// nothing to check; tilize_force_codegen exposes none.
 bool supported_execution_controls(
     bool use_multicore,
     bool use_low_perf,
     const tt::tt_metal::Tile& tile,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Routing-only: true for in-scope cases where codegen is correct but does not beat native.
+// The routing hook for performance demotion: true would send an in-scope case to native although codegen is
+// correct. No tilize case is demoted, so it returns false.
 bool is_demoted(const Tensor& input, tt::tt_metal::DataType output_dtype);
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

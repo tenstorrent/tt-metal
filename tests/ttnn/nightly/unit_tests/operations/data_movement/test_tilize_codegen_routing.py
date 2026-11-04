@@ -4,9 +4,10 @@
 
 # --- BEGIN GENERATED (agentic_port phase 8) ---
 # Contracts: (1) every case the codegen gate rejects falls back to native; (2) an accepted case
-# dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) a
-# perf-demoted case still lands on native. This block is emitted from the port's coverage ledger
-# and is regenerated on every port update; hand-add off-grid regressions after its END line.
+# dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) no
+# case is perf-demoted, so small inputs are asserted to stay on codegen in the small-cases section.
+# This block is emitted from the port's coverage ledger and is regenerated on every port update;
+# hand-add off-grid regressions after its END line.
 # Contract (4), for the cache-transition legs: earlier tensors stay alive across later calls, and
 # program-cache entries are counted around the op call alone.
 
@@ -250,9 +251,6 @@ def test_tilize_codegen_cache_survives_a_program_switch(
 # --- Off-grid regressions (hand-added; edit here, not the emitter) ---
 
 
-# --- END GENERATED ---
-
-
 # --- Hand-written cases ---
 
 
@@ -271,28 +269,78 @@ def _height_sharded_l1(shape, num_cores):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-# (shape, input placement, tilize kwargs): each case is outside the codegen scope for one reason.
+# (shape, input placement, input dtype, tilize kwargs): each case is outside the codegen scope for one reason.
+_SUB_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 _FALLBACK = {
-    "sharded_input": ([1, 1, 64, 64], _height_sharded_l1([1, 1, 64, 64], 2), {"memory_config": ttnn.L1_MEMORY_CONFIG}),
-    "block_float_output": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, {"dtype": ttnn.bfloat8_b}),
-    "use_multicore_false": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, {"use_multicore": False}),
+    "sharded_input": (
+        [1, 1, 64, 64],
+        _height_sharded_l1([1, 1, 64, 64], 2),
+        ttnn.bfloat16,
+        {"memory_config": ttnn.L1_MEMORY_CONFIG},
+    ),
+    "block_float_output": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"dtype": ttnn.bfloat8_b}),
+    "use_multicore_false": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"use_multicore": False}),
+    "sub_core_grids": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"sub_core_grids": _SUB_GRID}),
+    "use_low_perf": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"use_low_perf": True}),
+    "tile_16x32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"tile": ttnn.Tile([16, 32])}),
+    "float32_to_int32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.float32, {"dtype": ttnn.int32}),
 }
+_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
 
 
 @pytest.mark.parametrize("case", list(_FALLBACK))
 def test_tilize_out_of_scope_case_falls_back_to_native(device, case):
-    shape, placement, kwargs = _FALLBACK[case]
+    shape, placement, in_dtype, kwargs = _FALLBACK[case]
     torch.manual_seed(0)
-    host = torch.rand(shape, dtype=torch.bfloat16)
-    xt = ttnn.from_torch(
-        host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement
-    )
+    host = torch.rand(shape, dtype=_TORCH_DTYPE[in_dtype])
+    xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
     golden, out, added = _native_route(device, xt, **kwargs)
     assert added == 0, "auto built a new program for an out-of-scope case; expected native's cached program"
     assert out.layout == ttnn.TILE_LAYOUT
     assert_equal(golden, ttnn.to_torch(out))
     if "dtype" not in kwargs:
         assert_equal(host, ttnn.to_torch(out))
+
+
+# The forced codegen entry raises instead of falling back to native.
+@pytest.mark.parametrize("case", ["sharded_input", "block_float_output"])
+def test_tilize_force_codegen_raises_out_of_scope(device, case, expect_error):
+    shape, placement, in_dtype, kwargs = _FALLBACK[case]
+    host = torch.rand(shape, dtype=_TORCH_DTYPE[in_dtype])
+    xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)
+
+
+# One tile row wide enough to split across cores (Column2D), with and without the dtype conversion; the generated
+# legs above run on the cases in _CACHE_HIT, so these reuse their bodies.
+_CACHE_HIT_COLUMN2D = [
+    (
+        [1, 1, 32, 1024],
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
+    (
+        [1, 1, 32, 1024],
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
+]
+_CACHE_HIT_COLUMN2D_IDS = ["column2d_bfloat16", "column2d_bfloat16_to_int32"]
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT_COLUMN2D, ids=_CACHE_HIT_COLUMN2D_IDS)
+def test_tilize_codegen_column2d_auto_routes_to_codegen(device, shape, kwargs, dtype, layout, placement):
+    test_tilize_codegen_auto_routes_to_codegen(device, shape, kwargs, dtype, layout, placement)
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT_COLUMN2D, ids=_CACHE_HIT_COLUMN2D_IDS)
+def test_tilize_codegen_column2d_program_cache_hit(device, shape, kwargs, dtype, layout, placement):
+    test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, placement)
 
 
 # --- Live-L1 CB plan ---
