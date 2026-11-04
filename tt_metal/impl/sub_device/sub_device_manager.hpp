@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "allocator.hpp"
@@ -63,6 +62,7 @@ public:
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
+    std::size_t num_traces() const { return trace_buffer_pool_.size(); }
     DeviceAddr get_max_trace_high_water_mark() const;
 
     uint8_t num_sub_devices() const;

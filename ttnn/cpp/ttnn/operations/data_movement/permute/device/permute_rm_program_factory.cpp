@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -301,19 +302,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
-                            cb_data_format_output == tt::DataFormat::Int32 ||
-                            cb_data_format_output == tt::DataFormat::UInt32;
-    // Style B compute config: build ComputeHardwareConfig directly, matching the legacy
-    // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
+    // 8-bit ints go through 32-bit Dest; BH RM UInt8 is routed via UInt8->UInt32 at the user API.
+    bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format_output);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
-    // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
-    // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
-    // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
-    // already sets UnpackToDest on the same two CBs.
-    // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // UnpackToDest lowers to UnpackToDestFp32; only safe for 32-bit formats. 8-bit ints must
+    // stay on SrcA/int-FPU, otherwise BuildUnpackToDestModeVector corrupts the integer unpack.
+    if (requires_unpack_to_dest(cb_data_format_output)) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 

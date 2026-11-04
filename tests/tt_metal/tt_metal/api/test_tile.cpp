@@ -106,6 +106,14 @@ TEST(TileConstructor, CustomFaceShapeRejectsUnknownTileShape) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Tile size is not valid for our hardware")));
 }
 
+TEST(TileConstructor, CustomFaceShapeRejectsZeroDimensions) {
+    constexpr std::array<Tile::FaceShape, 3> zero_face_shapes = {{{0, 0}, {0, 16}, {16, 0}}};
+    for (const auto& face_shape : zero_face_shapes) {
+        SCOPED_TRACE(::testing::PrintToString(face_shape));
+        EXPECT_THAT([&] { Tile({32, 32}, face_shape); }, ThrowsMessage<std::runtime_error>(HasSubstr("face shape")));
+    }
+}
+
 TEST(TileConstructor, CustomFaceShapeRejectsFaceThatDoesNotTileEvenly) {
     EXPECT_THAT(
         [] { Tile({32, 32}, {16, 12}); },
@@ -168,6 +176,14 @@ TEST(TileFromFaceGrid, CustomFaceMatchesEquivalentConstructor) {
     const Tile from_grid = Tile::from_face_grid(2, 2, face_shape);
     const Tile from_ctor({16, 32}, face_shape);
     EXPECT_EQ(from_grid, from_ctor);
+}
+
+TEST(TileFromFaceGrid, RejectsZeroFaceDimensions) {
+    constexpr std::array<Tile::FaceShape, 3> zero_face_shapes = {{{0, 0}, {0, 16}, {16, 0}}};
+    for (const auto& face_shape : zero_face_shapes) {
+        SCOPED_TRACE(::testing::PrintToString(face_shape));
+        EXPECT_THROW((void)Tile::from_face_grid(1, 1, face_shape), std::runtime_error);
+    }
 }
 
 TEST(TileFromFaceGrid, RejectsGridThatExceedsMaxFaces) {

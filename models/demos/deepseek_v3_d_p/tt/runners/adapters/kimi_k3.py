@@ -34,7 +34,7 @@ from typing import Callable
 
 from loguru import logger
 
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -50,6 +50,23 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Inherited
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
+
+    # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
+
+    # D2D relay with inter-mesh fabric traffic on VC0, as GLM-5.3. TT_METAL_FABRIC_DISABLE_INTERMESH_VC=0 rolls back.
+    d2d_relay_default = True
+
+    # RadixArk's Kimi-K3-DSpark: a DFlash-style drafter (num_target_layers=93) tapping 7/23/51/67/83.
+    # Its golden is keyed to prefill_trace_default's prompt, so the two move together.
+    supports_dflash = True
+    # The drafter partial is one more handoff plane (TtKimiK3Runtime._pack_activation), not a 2H width.
+    dflash_partial_separate_plane = True
+    dflash_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark"
+    dflash_golden_default = (
+        "/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv"
+    )
 
     # --- test metadata ---
     hf_repo_id = "moonshotai/Kimi-K3"
@@ -145,7 +162,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
         A K3 rank can legitimately hold ZERO full-attention layers — a 1-layer bring-up run is layer
         0, which is KDA, and then there is no KV cache to allocate; the KDA state slabs still are.
         """
-        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
+        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
         from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
@@ -161,20 +179,17 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=schedule.num_mla_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
 
-        # The KDA layers' migration state: one consolidated slab per state kind, sized to this rank's
-        # KDA layers, allocated from the config alone (the model's own carries are built later and
-        # bound to these at compile()). Allocated after the KV cache so both bases stay stable and low.
+        # The KDA carries' one store: a consolidated slab per state kind over this rank's KDA layers and
+        # every slot, allocated from the config alone and handed to the model at compile(). Allocated
+        # after the KV cache so both bases stay stable and low.
         kda_states = None
         kda_layer_ids = schedule.rank_kda_layer_ids()
         if kda_layer_ids:
-            geometry = KdaContractGeometry.from_kda_config(
-                kimi_k3_kda_config(),
-                mesh_shape=tuple(params.mesh_shape),
-                sp_axis=params.sp_axis,
-                tp_axis=params.tp_axis,
-            )
+            geometry = kimi_k3_kda_geometry(params.mesh_shape, params.sp_axis, params.tp_axis)
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
         return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
 
@@ -270,18 +285,15 @@ class KimiK3Adapter(MLAPrefillAdapter):
         return None
 
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
-        """MLA layers migrate the request's tokens; a KDA layer migrates the version window decode reads
-        next, `[v * W, (v + 1) * W)` with `v = (real_len - 1) % 8` (k3_disagg_contract.md, section 5)."""
+        """MLA layers migrate the request's tokens; a KDA layer migrates its whole state, the one window
+        `[0, W)` its Snapshot configs span, whatever the prompt length."""
         if layer_idx in KimiK3Config.mla_layer_ids():
             return 0, real_len
-        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import KDA_VERSIONS, kda_window
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_window
 
         # The window depends on the global head count only; any legal mesh gives the same value.
-        geometry = KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(1, 1), sp_axis=0, tp_axis=1)
-        window = kda_window(geometry)
-        version = (real_len - 1) % KDA_VERSIONS
-        return version * window, (version + 1) * window
+        return 0, kda_window(kimi_k3_kda_geometry((1, 1), sp_axis=0, tp_axis=1))
 
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
@@ -332,10 +344,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             dflash_enabled=params.dflash_enabled,
+            dflash_checkpoint_path=params.dflash_checkpoint_path,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtKimiK3Runtime(
             mesh_device=mesh_device,

@@ -69,7 +69,8 @@ struct ExpRingJointSDPAParams {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
-    // for Program-cache hash calculation
+    // for Program-cache hash calculation. topology decides which devices have a fabric neighbour, and
+    // num_buffers_per_channel sizes the fabric MUX channels; both are baked into the program.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
@@ -79,7 +80,9 @@ struct ExpRingJointSDPAParams {
         "program_config",
         "dim",
         "num_links",
-        "cluster_axis");
+        "topology",
+        "cluster_axis",
+        "num_buffers_per_channel");
     auto attribute_values() const {
         return std::forward_as_tuple(
             joint_strategy,
@@ -90,7 +93,9 @@ struct ExpRingJointSDPAParams {
             program_config,
             dim,
             num_links,
-            cluster_axis);
+            topology,
+            cluster_axis,
+            num_buffers_per_channel);
     }
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }

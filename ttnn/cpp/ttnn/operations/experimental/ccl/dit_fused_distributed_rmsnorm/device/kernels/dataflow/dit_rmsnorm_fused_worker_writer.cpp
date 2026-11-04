@@ -15,7 +15,7 @@
  *      has landed in this chip's DRAM scratch).
  *   3. Reads its ring_size gathered sticks from DRAM (page(d, forwarder, round)
  *      + slot*128 B for each device d) into ROW 0 of stats_transposed_gathered_cb
- *      tiles, and pushes them to compute (which FPU-adds + transpose_wh_dest).
+ *      tiles, and pushes them to compute (which FPU-adds + transpose_dest).
  *   4. Drains the row's output_cb tiles to the output tensor.
  *
  * Also populates compute's reduce-scalar / epsilon / trans_mat CBs up front

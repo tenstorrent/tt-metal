@@ -26,6 +26,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+# Imported with the real ttnn before any stubbed adapter import below replaces ``ttnn`` in sys.modules: the
+# production modules reach it through models.common, and a first import under the stub fails on ``ttnn.device``
+# (the file-alone and first-in-session case; a run that collected another test module first hid it).
+import models.common.utility_functions  # noqa: E402,F401
+
 _ROOT = Path(__file__).resolve().parents[5]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -40,11 +45,20 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (  # noqa: E4
     _unused,
 )
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state  # noqa: E402
+from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the stubbed generator keeps
+    filter_warmup_sampling_params,
+    items_within_prefill_window,
+    merge_soft_tokens,
+)
+from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV  # noqa: E402
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
+    # Read at import by the class bodies (the base's resident-decode declaration and the MTP contract's
+    # deferred-verify declaration); cleared so the shell cannot leak into the capability tests.
+    "GEMMA4_SUPPORTS_ASYNC_DECODE",
+    "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE",
     "GEMMA4_DFLASH_MAX_SPEC_ISL",
-    "GEMMA4_DFLASH_SERVE_BLOCK",
     "GEMMA4_DFLASH_WIDTH_SET",
     "GEMMA4_DFLASH_PACKED",
     "GEMMA4_DFLASH_WARMUP_DECODE",
@@ -52,6 +66,17 @@ _ENV_CLEARED = (
     "GEMMA4_BOUNDED_SLIDING_KV_CACHE",
     "GEMMA4_SPEC_RING_HEADROOM_BLOCKS",
 )
+
+
+def _set_module(patch, name, module):
+    """Install ``module`` as ``sys.modules[name]``, and under its ``models.tt_transformers`` alias too.
+
+    Code that still imports the old path would otherwise get whatever an earlier test cached under
+    the old name, and an entry the alias adds during the test would outlive ``patch``.
+    """
+    patch.setitem(sys.modules, name, module)
+    if name.startswith("models.ttt_compat."):
+        patch.setitem(sys.modules, "models.tt_transformers." + name[len("models.ttt_compat.") :], module)
 
 
 def _stub_runtime(patch):
@@ -79,6 +104,29 @@ def _stub_runtime(patch):
         bfloat16=object(),
     )
     patch.setitem(sys.modules, "ttnn", runtime)
+    # generator_vllm imports vLLM's Gemma 4 processor classes and the multimodal
+    # registry at module scope. Stub them only where vLLM is absent (the tt-metal
+    # unit-test runners), so the host tests import the real ones everywhere else.
+    try:
+        importlib.import_module("vllm.multimodal")
+    except ImportError:
+        registry = SimpleNamespace(register_processor=lambda *args, **kwargs: (lambda cls: cls))
+        vllm_stubs = {
+            "vllm": {"__path__": []},
+            "vllm.model_executor": {"__path__": []},
+            "vllm.model_executor.models": {"__path__": []},
+            "vllm.model_executor.models.gemma4_mm": {
+                name: type(name, (), {})
+                for name in ("Gemma4DummyInputsBuilder", "Gemma4MultiModalProcessor", "Gemma4ProcessingInfo")
+            },
+            "vllm.model_executor.models.gemma4_unified": {
+                "Gemma4UnifiedProcessingInfo": type("Gemma4UnifiedProcessingInfo", (), {})
+            },
+            "vllm.model_executor.models.interfaces": {"SupportsMultiModal": type("SupportsMultiModal", (), {})},
+            "vllm.multimodal": {"MULTIMODAL_REGISTRY": registry},
+        }
+        for name, members in vllm_stubs.items():
+            patch.setitem(sys.modules, name, _module(name, **members))
     lower_modules = {
         "ttnn.tools": {"trace_allocation_tracker": SimpleNamespace()},
         "models.common.sampling.tt_log_probs": {
@@ -109,24 +157,51 @@ def _stub_runtime(patch):
         "models.demos.gemma4.tt.generator": {
             "SDPA_CHUNK_ALIGN": 128,
             "ChunkedPrefillPageTableGuardMixin": type("ChunkedPrefillPageTableGuardMixin", (), {}),
+            # the pure helpers (host-tested without vLLM) are the real ones
+            "filter_warmup_sampling_params": filter_warmup_sampling_params,
+            "items_within_prefill_window": items_within_prefill_window,
+            "merge_soft_tokens": merge_soft_tokens,
             "align_num_cached_tokens_to_sdpa": _align_down,
             # Pass-through: the stubbed prefill carries no stale page-table columns.
             "mask_page_table_columns_past_allocation": lambda tables, prompt_lens, block_sizes: (tables, 0),
             "max_batched_prefill_users": _unused,
             "resolve_batched_prefill_chunk_users": _unused,
+            # Packed multi-prompt prefill is an eager-path policy the contract tests never engage.
+            "gemma4_packed_prefill_enabled": lambda: False,
+            # The multimodal entry points (vision / audio weights) are never reached by the contract tests.
+            "_build_vision_state_dict": _unused,
+            "_vision_encoder_seq_len": _unused,
+            "vision_state_dict_for": _unused,
         },
+        # The on-device multimodal embedders generator_vllm imports at module scope.
+        "models.demos.gemma4.tt.vision.embedders": {
+            "Gemma4MultimodalEmbedder": _unused,
+            "Gemma4UnifiedAudioEmbedder": _unused,
+            "Gemma4UnifiedVisionEmbedder": _unused,
+            "has_unified_audio_weights": _unused,
+            "has_unified_vision_weights": _unused,
+        },
+        "models.demos.gemma4.tt.vision.vision_model_config": {"VisionModelArgs": _unused},
+        "models.demos.gemma4.tt.vision.vision_tower": {"VisionTower": _unused},
         "models.demos.gemma4.tt.generator_trace": {
-            name: _unused
-            for name in (
-                "maybe_disable_pli_prefill_trace",
-                "patch_gemma4_trace_model_args",
-                "resolve_gemma4_prefill_chunk_size",
-                "resolve_gemma4_prefill_trace_enable",
-                "should_auto_enable_bounded_sliding",
-                "warmup_gemma4_model_prefill",
-            )
+            **{
+                name: _unused
+                for name in (
+                    "maybe_disable_pli_prefill_trace",
+                    "patch_gemma4_trace_model_args",
+                    "resolve_gemma4_prefill_chunk_size",
+                    "resolve_gemma4_prefill_trace_enable",
+                    "should_auto_enable_bounded_sliding",
+                    "warmup_gemma4_model_prefill",
+                )
+            },
+            # The short-prefill trace opt-in is off for the contract tests (the stubbed prefill is eager).
+            "trace_short_prefill_max": lambda: 128,
+            "trace_short_prefill_opt_in": lambda prefill_seq_len=None, batch_size=1: False,
+            # The boot-captured batched prefill buckets never admit the stubbed prefill (no bucket matches).
+            "batched_prefill_trace_bucket": lambda batch, empty_slots, max_batch, padded_len: None,
         },
-        "models.tt_transformers.tt.common": {
+        "models.ttt_compat.tt.common": {
             "get_padded_prefill_len": _padded_length,
             **{
                 name: _unused
@@ -140,7 +215,7 @@ def _stub_runtime(patch):
                 )
             },
         },
-        "models.tt_transformers.tt.generator_vllm": {
+        "models.ttt_compat.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
                 "HybridAttentionForCausalLM",
                 (),
@@ -155,10 +230,11 @@ def _stub_runtime(patch):
             "bounded_ring_modulo": lambda window: window,
         },
         "models.demos.gemma4.tt.ccl": {"ccl_allgather": _unused, "ccl_allreduce": _unused},
-        "models.demos.gemma4.utils.general_utils": {"get_cache_file_name": _unused},
+        "models.tt_transformers.tt.ccl": {"TT_CCL": _unused},
+        "models.demos.gemma4.utils.general_utils": {"cast_host_for_ttnn": _unused, "get_cache_file_name": _unused},
     }
     for name, members in lower_modules.items():
-        patch.setitem(sys.modules, name, _module(name, **members))
+        _set_module(patch, name, _module(name, **members))
     try:
         importlib.import_module("loguru")
     except ImportError:
@@ -170,7 +246,7 @@ def _stub_runtime(patch):
     for name, (owner, attribute) in sampling_package._EXPORTS.items():
         if owner == ".generator":
             patch.setitem(sampling_package.__dict__, name, getattr(sampling, attribute))
-    _fresh_import(patch, "models.tt_transformers.tt.generator")
+    _set_module(patch, "models.ttt_compat.tt.generator", _fresh_import(patch, "models.ttt_compat.tt.generator"))
     try:
         importlib.import_module("vllm_tt_plugin.spec_decode")
     except ImportError:
@@ -190,6 +266,7 @@ def _stub_runtime(patch):
         class VerifyOutput:
             spec_mode: str
             argmax_ids: object = None
+            logits: object = None
             hidden: object = None
 
         @dataclass
@@ -202,11 +279,12 @@ def _stub_runtime(patch):
             drafter_state: str
             drafter_target_cache_requires: tuple
             supports_narrow_decode: bool = False
+            k_by_rows: tuple = ()
 
         @dataclass
         class SpecReject:
             reason: str
-            supported_k: tuple
+            supported_k: tuple = ()
 
         patch.setitem(sys.modules, "vllm_tt_plugin", _module("vllm_tt_plugin", __path__=[]))
         patch.setitem(
@@ -257,24 +335,56 @@ def drafter_module():
         yield _fresh_import(patch, "models.demos.gemma4.tt.dflash_drafter")
 
 
-def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
-    """A contract-rail model over recording stubs, after a solo-capable warmup."""
-    cls = adapter.Gemma4DFlashContractForCausalLM
+def _base_stub(name):
+    """The base-class entry point ``name`` routed to the instance's own ``_harness_<name>`` stub."""
+
+    def call(self, *args, **kwargs):
+        stub = self.__dict__.get("_harness_" + name)
+        assert stub is not None, f"{type(self).__name__} has no harness stub for {name}"
+        return stub(self, *args, **kwargs)
+
+    call.__name__ = name
+    return call
+
+
+def install_base_stubs(adapter, monkeypatch):
+    """Route the base ``Gemma4ForCausalLM`` serving entry points to per-instance recorders.
+
+    The contract classes reach the plain prefill / decode / read / warmup through the base class, so the
+    stubs live on it; dispatching on the instance lets a dFlash model and an MTP model built in the same
+    test keep their own recorders (each harness sets ``model._harness_<name>``).
+    """
+    base = adapter.Gemma4ForCausalLM
+    for name in ("prefill_forward", "decode_forward", "read_decode_output", "warmup_model_decode"):
+        monkeypatch.setattr(base, name, _base_stub(name), raising=False)
+
+
+def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, env=None):
+    """A contract-rail model over recording stubs, after a solo-capable warmup.
+
+    ``cls`` selects the dFlash contract class to build (the text class by default, or its
+    composed vision class); ``env`` holds the policy knobs the model reads at construction.
+    """
+    cls = cls or adapter.Gemma4DFlashContractForCausalLM
     model = cls.__new__(cls)
     model.events = []
+    model.prefill_kwargs = []
+    model.is_multimodal = False
+    model.image_token_id = None
+    model.video_token_id = None
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
     model.kv_cache = [[("k", "v"), ("k", "v")]]
     model._spec_decoder = Decoder(model.events, widths=widths)
     model._spec_width_set = True
     model._spec_width_ladder = list(widths)
     model._spec_horizon = 256
     model._spec_active = False
-    model._spec_active_owner = None
     model._spec_owner_slot = None
     model._spec_pending = None
-    model._spec_pending_owner = None
     model._spec_first_step = True
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None
@@ -282,6 +392,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model.results = []
     model.reloads = []
     model.decode_commands = []
+    for name in SPEC_POLICY_ENV:  # the policy knobs are read at init: the shell's values are cleared, ``env`` wins
+        monkeypatch.delenv(name, raising=False)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
     model._dflash_init_state()
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._effective_paged_block_size = lambda kv_cache: 64
@@ -292,7 +406,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def bootstrap(anchor, start, page_table, kv_cache, page_tables_per_layer=None):
         taps, n = model._spec_pending
         model._spec_pending = None
-        model._spec_pending_owner = None
         dec = model._spec_decoder
         row = page_table[:1]
         dec.refresh_page_tables(row)
@@ -305,7 +418,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
 
     def release_decoder(drop_page_tables=True, teardown=False):
         model._spec_active = False
-        model._spec_active_owner = None
         model.events.append(("release_decoder", bool(teardown)))
 
     monkeypatch.setattr(model, "_spec_bootstrap", bootstrap)
@@ -314,6 +426,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def prefill(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs["tokens"]
         model.events.append(("prefill", int(tokens.shape[0]), kwargs.get("prompt_lens"), kwargs.get("enable_trace")))
+        model.prefill_kwargs.append(sorted(kwargs))
         model.last_prefill_tables = (kwargs.get("page_table"), page_tables_per_layer)
         target = model.model[0]
         if target.tap_layers is not None:
@@ -367,10 +480,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
         model.events.append(("read", bool(async_read)))
         return [tt_out]
 
-    base = adapter.Gemma4ForCausalLM
-    monkeypatch.setattr(base, "prefill_forward", prefill)
-    monkeypatch.setattr(base, "decode_forward", decode)
-    monkeypatch.setattr(base, "read_decode_output", read, raising=False)
+    install_base_stubs(adapter, monkeypatch)
+    model._harness_prefill_forward = prefill
+    model._harness_decode_forward = decode
+    model._harness_read_decode_output = read
     model.tap_counter = [0]
 
     def harness_taps(rows, group):
@@ -391,3 +504,27 @@ def model(adapter, monkeypatch):
 @pytest.fixture
 def device_result():
     return DeviceResult
+
+
+@pytest.fixture
+def expect_error():
+    """The repo-root conftest's ``expect_error`` (``with expect_error(Error, "message"):`` around an expected raise,
+    logged for the CI triager), provided here too so the unit host suite runs under
+    ``--confcutdir=models/demos/gemma4/tests/unit`` without the root conftest."""
+    import contextlib
+
+    from loguru import logger
+
+    @contextlib.contextmanager
+    def expect_error_(error, message):
+        names = ", ".join(e.__name__ for e in (error if isinstance(error, tuple) else (error,)))
+        logger.info(f'[EXPECTED_ERROR BEGIN] {names} message="{message}"')
+        try:
+            with pytest.raises(  # allow-pytest.raises (predates the expect_error rule)
+                error, match=message
+            ) as exc_info:  # allow-pytest.raises (this IS the expect_error fixture)
+                yield exc_info
+        finally:
+            logger.info(f'[EXPECTED_ERROR END] {names} message="{message}"')
+
+    return expect_error_

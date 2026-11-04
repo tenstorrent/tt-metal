@@ -26,11 +26,14 @@ void kernel_main() {
 
     constexpr uint32_t total_tiles = get_compile_time_arg_val(0);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::IterationShape::tiles(total_tiles),
-        compute_kernel_lib::CopyTile<compute_kernel_lib::input(cb_in)>{},
+        compute_kernel_lib::CopyTile<compute_kernel_lib::input(cb_in)>{cb_in_obj},
         RogueElement{},
-        compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_out)>{});
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_out)>{cb_out_obj});
 }

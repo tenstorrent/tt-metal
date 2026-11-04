@@ -25,7 +25,9 @@ Tensor preprocess_input_tensor(
     const int32_t& cum_axis,
     permutation_t& permutation,
     int32_t& accumulation_axis,
-    std::optional<DataType>& dtype);
+    std::optional<DataType>& dtype,
+    bool reverse_order,
+    ttnn::prim::AccumulationOp op);
 
 Tensor postprocess_output_tensor(
     const Tensor& output_tensor,

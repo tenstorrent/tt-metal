@@ -8,7 +8,7 @@ import torch
 import ttnn
 import math
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     _nearest_y,
     is_wormhole_b0,
     torch2tt_tensor,
@@ -136,8 +136,14 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         diff = torch.abs(torch_output_tensor - tt_output_tensor) / torch_output_tensor.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
-        # bfloat16 and float32 are both bit-exact for this copy-only op (the reference and the
-        # device output share the input dtype), so assert exact equality.
+        # bfloat16 and float32 are both bit-exact on this path (the reference and the device
+        # output share the input dtype, and fold only moves elements), so assert exact equality.
+        #
+        # Scope: this parametrization runs on DRAM (input_memory_config above). The guarantee is
+        # not general - an L1 height-sharded TILE input with padding goes through halo's untilize
+        # instead, which unpacks a Float32 input via SrcA as Tf32 and loses mantissa bits. That is
+        # intended: halo is a staging op whose consumers narrow to Tf32 anyway. See #60778,
+        # #58402 item 14 and #60731.
         assert torch.equal(
             torch_output_tensor, tt_output_tensor
         ), f"Expected: {torch_output_tensor}, Actual: {tt_output_tensor}"
@@ -495,3 +501,16 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+def test_fold_transpose_rejects_empty_grid(device, expect_error):
+    x = torch.rand((1, 3, 32, 32), dtype=torch.bfloat16)
+    in_sharded_memory_config = ttnn.create_sharded_memory_config(
+        x.shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config)
+    with expect_error(RuntimeError, "core_grid must contain at least one core"):
+        ttnn.fold(tt_in, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 1], grid_size=ttnn.CoreRangeSet([]))

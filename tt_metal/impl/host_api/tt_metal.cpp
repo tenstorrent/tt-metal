@@ -5,7 +5,6 @@
 #include <allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
-#include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
@@ -21,17 +20,13 @@
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
-#include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <type_traits>
 #include <variant>
@@ -39,8 +34,8 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
@@ -65,7 +60,7 @@
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -74,7 +69,6 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
@@ -218,6 +212,11 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
+bool DispatchStateCheck(bool isFastDispatch) {
+    MetalContext::instance().device_manager()->check_dispatch_mode(isFastDispatch);
+    return isFastDispatch;
+}
+
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     return slow_dispatch::WriteToDeviceDRAMChannel(*device, dram_channel, address, host_buffer);
@@ -244,7 +243,6 @@ bool WriteToDeviceL1(
     CoreType core_type) {
     ZoneScoped;
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -284,7 +282,6 @@ bool ReadFromDeviceL1(
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -306,7 +303,6 @@ bool ReadFromDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
         }
@@ -597,6 +593,10 @@ std::string SerializeClusterDescriptor() {
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
 
 Program CreateProgram() { return Program(); }
+
+Program CreateProgram(distributed::MeshDevice& mesh_device) {
+    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+}
 
 KernelHandle CreateDataMovementKernel(
     Program& program,
@@ -970,12 +970,12 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
-    detail::DispatchStateCheck(metal_ctx.rtoptions().get_fast_dispatch());
+    MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
+    metal_ctx.device_manager()->check_dispatch_mode(metal_ctx.rtoptions().get_fast_dispatch());
     program.impl().add_buffer(buffer);
 }
 

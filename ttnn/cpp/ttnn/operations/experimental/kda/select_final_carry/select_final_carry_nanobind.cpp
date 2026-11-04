@@ -20,7 +20,7 @@ void bind_select_final_carry(nb::module_& mod) {
         that owns that tail: that rank multicasts its ``rank_final`` along the sequence-parallel line
         over the fabric. Otherwise every rank copies its replicated ``prefix_final``, with no
         collective traffic. The chronology is derived on device from ``actual_start`` and the
-        optional ``actual_end``, exactly as ``chronological_selections`` derives it, so the choice
+        optional ``actual_end``, exactly as the other KDA operations derive it, so the choice
         follows the bounds on every trace replay.
 
         Args:

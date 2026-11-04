@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from functools import partial
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 pytestmark = pytest.mark.use_module_device

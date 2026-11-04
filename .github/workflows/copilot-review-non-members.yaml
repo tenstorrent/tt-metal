@@ -1,0 +1,75 @@
+name: Request Copilot review for non-org-member PRs
+
+# Copilot auto-review only fires for authors who hold an org Copilot seat.
+# Contractors without a TT email are GitHub outside collaborators (SSO cannot
+# cover them), so their same-repo-branch PRs never get an automatic review.
+# This workflow requests the review on their behalf so those PRs are not
+# scrutinized less than employees' PRs.
+#
+# GITHUB_TOKEN cannot request a Copilot review, so this reuses the existing
+# codeowners-group-analysis PAT (same one auto-approve.yaml uses). That PAT's
+# account must have a Copilot seat for the request to be honored.
+#
+# Security note: pull_request_target runs the workflow file from the base
+# branch, so a PR author with write access to branches here cannot edit this
+# workflow to exfiltrate the PAT (which is also the account auto-approve.yaml
+# uses to approve PRs). It is safe because:
+#   1. No checkout and no PR code is ever executed — API calls only
+#   2. It only runs for PRs whose head branch lives in this repo
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  request-copilot-review:
+    name: Request Copilot review
+    runs-on: ubuntu-slim
+    if: |
+      !github.event.pull_request.draft &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Request Copilot review if author is not an org member
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          # 204 = member; 404 = not a member. 302 means the PAT owner itself is not an
+          # org member, which makes the lookup unreliable for every author — fail loudly.
+          STATUS=$(curl -s -g -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/orgs/${ORG}/members/${AUTHOR}")
+          echo "Org membership check for ${AUTHOR}: HTTP ${STATUS}"
+          if [ "$STATUS" = "204" ]; then
+            echo "Author is an org member — Copilot auto-review applies, nothing to do."
+            exit 0
+          fi
+          if [ "$STATUS" != "404" ]; then
+            echo "::error::Unexpected membership response ${STATUS}; not requesting review."
+            exit 1
+          fi
+
+          # Skip if Copilot already reviewed or was already requested.
+          # Copilot's login is "Copilot" on reviews and "Copilot" on requested_reviewers.
+          REQUESTED=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            --jq '[.users[].login | ascii_downcase | select(startswith("copilot"))] | length')
+          REVIEWED=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
+            --jq '.[] | select(.user.login | ascii_downcase | startswith("copilot")) | .id' | wc -l)
+          if [ "${REQUESTED:-0}" != "0" ] || [ "${REVIEWED:-0}" != "0" ]; then
+            echo "Copilot already requested/reviewed — nothing to do."
+            exit 0
+          fi
+
+          gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+          echo "Requested Copilot review on PR #${PR_NUMBER} (author ${AUTHOR} is not an org member)."

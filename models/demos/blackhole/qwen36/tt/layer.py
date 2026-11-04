@@ -8,11 +8,51 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
+
+
+class _FusedDistRMSNorm(RMSNorm):
+    """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
+    (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # The fused op wants gamma TILE [1,1,dim] sharded on dim 2 (weight_distributed is ROW_MAJOR [1,1,dim/32,32]).
+        dim, device, cache = kwargs["dim"], kwargs["device"], kwargs.get("weight_cache_path")
+        name = f"{kwargs['state_dict_prefix']}{kwargs['weight_key']}.weight"
+        self.weight_fused = ttnn.as_tensor(
+            kwargs["state_dict"][name].unsqueeze(0).view(1, 1, dim) + 1.0,  # same +1 as the base weight
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=None if cache is None else cache / (name + "_fused_tile"),
+            mesh_mapper=tpc.tp_shard_mapper(device, 2),
+        )
+
+    def _distributed_rmsnorm(
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
+        output_memory_config=None,
+    ):
+        assert program_config is None and memory_config is None, "Distributed RMSNorm does not support sharded I/O"
+        mc = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        shape = tuple(inp.shape)
+        x = inp if len(shape) == 4 else ttnn.reshape(inp, (1,) * (4 - len(shape)) + shape)  # the op needs rank 4
+        out = tpc.fused_distributed_rmsnorm(
+            x, self.weight_fused, epsilon, self.tt_ccl, self.ccl_topology, compute_kernel_config, mc
+        )
+        return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
 
 class Qwen36DecoderLayer:
@@ -138,7 +178,13 @@ class Qwen36DecoderLayer:
         path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
         decoder.py and handles the fractured->replicated transition.
         """
-        norm = RMSNorm(
+        fused = getattr(args, "prefill_fused_dist_norm", False) and self.num_devices > 1
+        # RMSNorm's distributed path gathers its statistics with no cluster_axis, i.e. over the whole mesh; on a
+        # 2D (rows, tp) mesh that mixes the rows' tokens, so only the fused norm (TP-axis gather) is correct there.
+        if tpc.is_2d_mesh(mesh_device) and not fused:
+            raise ValueError("2D meshes need the fused distributed RMSNorm (QWEN36_FUSED_DIST_NORM=1)")
+        norm_cls = _FusedDistRMSNorm if fused else RMSNorm
+        norm = norm_cls(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
@@ -186,6 +232,9 @@ class Qwen36DecoderLayer:
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
+        gdn_capture_state=True,
+        gdn_carry_state=True,
+        sp=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
@@ -212,9 +261,13 @@ class Qwen36DecoderLayer:
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
-            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
+            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM
+            # (DRAM above S=2048: the norm output stays resident through the whole attention, clashing with its CBs).
             if _norm_mode == Mode.PREFILL:
-                _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
+                _attn_norm_config = {
+                    **_attn_norm_config,
+                    "distributed_output_mem_config": tpc.prefill_act_mem(x.shape[-2], ttnn.L1_MEMORY_CONFIG),
+                }
             # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
             if _norm_mode == Mode.DECODE:
                 _ff_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -246,6 +299,7 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
+                            sp=sp,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
@@ -296,7 +350,12 @@ class Qwen36DecoderLayer:
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input,
+                            chunk_size=chunk_size,
+                            valid_len=valid_len,
+                            capture_state=gdn_capture_state,
+                            carry_state=gdn_carry_state,
+                            sp=sp,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

@@ -1,19 +1,46 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase A (prep) reader: constants (eye, tril, ones) once, then per-chunk q,k,v,g,beta.
+// Phase A (prep) reader: the constants (eye, tril, ones, masks) built in L1 once, then per-chunk q,k,v,g,beta. g and
+// beta are token-major [B, T, HV] (chunk_gdn_gate_read.hpp); q/k/v are head-major per chunk or flat (V_FLAT/QK_FLAT).
 // No initial state — the prep phase is state-independent. Device 2.0 API.
+// The reads of one item are issued as one flight behind a single read barrier: the compute cannot start an
+// item before q and k have landed, and at kickoff every producer of the fused program reads at once, so each
+// extra barrier is a contended round trip. The constants are not read from DRAM: every producer would fetch
+// the same few pages from one bank at kickoff.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if defined(GDN_FUSED_PRODUCER)
+#include "chunk_gdn_fused_map.hpp"
+#include "chunk_gdn_fused_rt_args.hpp"
+#endif
+#include "chunk_gdn_handoff.hpp"
+#include "chunk_gdn_gate_read.hpp"
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
 constexpr uint32_t cb_mask = 17;
+
+// The constants are built in L1 from one face of ones (kernel_main): these two NoC helpers sit out of line because
+// the prep program's binaries run close to the kernel-config budget in watcher builds.
+constexpr uint32_t kFaceWords = 256, kFaceBytes = kFaceWords * 4;
+__attribute__((noinline)) static void zero_cb(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
+    noc.async_write_zeros(cb, bytes);
+}
+// Loopback copy of the face at src_addr (this core's L1) to byte offset `offset` of cb's write slot.
+__attribute__((noinline)) static void copy_face(
+    const Noc& noc, uint32_t src_addr, const CircularBuffer& cb, uint32_t offset) {
+    UnicastEndpoint self;
+    const auto src = noc_traits_t<UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr};
+    noc.async_read(self, cb, kFaceBytes, src, {.offset_bytes = offset});
+}
+static_assert(cb_mask == gdn_handoff::kCbU, "mask CB index drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -25,48 +52,66 @@ void kernel_main() {
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto g_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
     constexpr auto b_a = TensorAccessorArgs<g_a.next_compile_time_args_offset()>();
-    constexpr auto eye_a = TensorAccessorArgs<b_a.next_compile_time_args_offset()>();
-    constexpr auto tril_a = TensorAccessorArgs<eye_a.next_compile_time_args_offset()>();
-    constexpr auto ones_a = TensorAccessorArgs<tril_a.next_compile_time_args_offset()>();
-    constexpr auto mask_a = TensorAccessorArgs<ones_a.next_compile_time_args_offset()>();
     // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
-    constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
-    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+    constexpr uint32_t V_FLAT = get_compile_time_arg_val(b_a.next_compile_time_args_offset());
+    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(b_a.next_compile_time_args_offset() + 1);
 
-    // Chunk-parallel: this core handles the contiguous work-item slice [wi_start, wi_start+wi_count).
-    // A work-item is a flat (head, chunk) index; it is exactly the DRAM tile-group index (h*NC + c).
+    // A work-item is a flat (head, chunk) index — exactly the DRAM tile-group index h*NC + c.
+#if defined(GDN_FUSED_PRODUCER)
+    // Fused producer p of the map (chunk_gdn_fused_map.hpp): its wi_count items in map order.
+    const uint32_t p = get_arg_val<uint32_t>(0);
+#else
+    // Chunk-parallel: this core handles the work-items wi_start + n * wi_stride, n < wi_count.
     const uint32_t wi_start = get_arg_val<uint32_t>(0);
+#endif
     const uint32_t wi_count = get_arg_val<uint32_t>(1);
     const uint32_t q_addr = get_arg_val<uint32_t>(2);
     const uint32_t k_addr = get_arg_val<uint32_t>(3);
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
     const uint32_t g_addr = get_arg_val<uint32_t>(5);
     const uint32_t b_addr = get_arg_val<uint32_t>(6);
-    const uint32_t eye_addr = get_arg_val<uint32_t>(7);
-    const uint32_t tril_addr = get_arg_val<uint32_t>(8);
-    const uint32_t ones_addr = get_arg_val<uint32_t>(9);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(10);
     // Flat metadata (used by V_FLAT/QK_FLAT): NC = chunks/head, HV = value-head count, Hk = key-head count.
-    const uint32_t NC = get_arg_val<uint32_t>(11);
-    const uint32_t HV = get_arg_val<uint32_t>(12);
-    const uint32_t Hk = get_arg_val<uint32_t>(13);
-    // Work-item stride: 1 for a contiguous slice (phased prep), NP for the fused NP>1 producer
-    // split, where producer p of head h owns the interleaved chunks c = p, p+NP, ... (wi stays the
-    // flat h*NC + c, so every DRAM index below is unchanged).
-    const uint32_t wi_stride = get_arg_val<uint32_t>(14);
+    const uint32_t NC = get_arg_val<uint32_t>(7);
+    const uint32_t HV = get_arg_val<uint32_t>(8);
+    const uint32_t Hk = get_arg_val<uint32_t>(9);
+    // Cycles to wait before the first read: the fused factory's kickoff stagger, 0 for the phased prep.
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(11);
+    // The gates' source: tokens T (rows past it are zero) and the tile size of each tensor (fp32 or bf16).
+    const uint32_t T = get_arg_val<uint32_t>(16);
+    const uint32_t g_tile_bytes = get_arg_val<uint32_t>(17);
+    const uint32_t b_tile_bytes = get_arg_val<uint32_t>(18);
+#if defined(GDN_FUSED_PRODUCER)
+    // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
+    const GdnFusedMap map{
+        get_arg_val<uint32_t>(10),
+        NC,
+        get_arg_val<uint32_t>(12),
+        get_arg_val<uint32_t>(13),
+        get_arg_val<uint32_t>(14),
+        get_arg_val<uint32_t>(15)};
+    // The DRAM row of this program's head 0: the map's heads start at 0, the tensors' at head_offset.
+    const uint32_t head_offset = get_arg_val<uint32_t>(fused_rt::kPrepReaderHeadOffsetArg);
+    auto item_wi = [&](uint32_t n) {
+        const GdnFusedItem it = gdn_fused_item(map, p, n);
+        return (head_offset + it.h) * NC + it.c;
+    };
+#else
+    // Work-item stride: 1 for a contiguous slice (phased prep).
+    const uint32_t wi_stride = get_arg_val<uint32_t>(10);
+    auto item_wi = [&](uint32_t n) { return wi_start + n * wi_stride; };
+#endif
 
-    // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
+    // Mixed precision: q/k/v are bf16; the constants are fp32, as are the gate CBs the compute reads (their
+    // sources are fp32 or bf16; the accessors page at the source's tile size).
     const uint32_t tb_io = get_tile_size(cb_q);
     const uint32_t tb_f = get_tile_size(cb_g);
     const auto q_acc = TensorAccessor(q_a, q_addr, tb_io);
     const auto k_acc = TensorAccessor(k_a, k_addr, tb_io);
     const auto v_acc = TensorAccessor(v_a, v_addr, tb_io);
-    const auto g_acc = TensorAccessor(g_a, g_addr, tb_f);
-    const auto b_acc = TensorAccessor(b_a, b_addr, tb_f);
-    const auto eye_acc = TensorAccessor(eye_a, eye_addr, tb_f);
-    const auto tril_acc = TensorAccessor(tril_a, tril_addr, tb_f);
-    const auto ones_acc = TensorAccessor(ones_a, ones_addr, tb_f);
-    const auto mask_acc = TensorAccessor(mask_a, mask_addr, tb_f);
+    const auto g_acc = TensorAccessor(g_a, g_addr, g_tile_bytes);
+    const auto b_acc = TensorAccessor(b_a, b_addr, b_tile_bytes);
+    const gdn_gate::Source g_src = gdn_gate::source(T, HV, g_tile_bytes);
+    const gdn_gate::Source b_src = gdn_gate::source(T, HV, b_tile_bytes);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -74,27 +119,22 @@ void kernel_main() {
 
     Noc noc;
 
-    auto read_into = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n, uint32_t tb) {
+    // Reserve `n` tiles of a CB and post their reads; no barrier, no push. The caller ends a flight with
+    // `noc.async_read_barrier()` and pushes every CB it reserved.
+    auto issue = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n, uint32_t tb) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(n);
         for (uint32_t t = 0; t < n; t++) {
             noc.async_read(acc, cb, tb, {.page_id = base + t}, {.offset_bytes = t * tb});
         }
-        noc.async_read_barrier();
-        cb.push_back(n);
     };
-
-    // constants (once)
-    read_into(eye_acc, cb_eye, 0, cc, tb_f);
-    read_into(tril_acc, cb_tril, 0, cc, tb_f);
-    read_into(ones_acc, cb_ones, 0, cc, tb_f);
-    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    auto publish = [](uint32_t cb_id, uint32_t n) { CircularBuffer(cb_id).push_back(n); };
 
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
     // cb_v in the SAME row-major order the head-major read produces (CB idx rt*Vt+ct) — so the
     // compute sees byte-identical tiles regardless of source layout. Requires pad==0 (T=NC*Ct*32).
-    auto read_v_flat = [&](uint32_t hc) {
+    auto issue_v_flat = [&](uint32_t hc) {
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
         const uint32_t hv = bh % HV;
@@ -109,14 +149,12 @@ void kernel_main() {
                 noc.async_read(v_acc, cbv, tb_io, {.page_id = page}, {.offset_bytes = (rt * Vt + ct) * tb_io});
             }
         }
-        noc.async_read_barrier();
-        cbv.push_back(cv);
     };
 
     // Flat-q/k token-major read: work-item is value-head hv; its key-head is hk = hv / G (GQA group
     // size G = HV/Hk). Fetch [Ct,Kt] for (hk, chunk c) from the flat [B,T,Hk*K] grid (row stride Hk*Kt,
     // col offset hk*Kt), packed row-major into `cb` — identical layout to the head-major read.
-    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+    auto issue_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
         const uint32_t G = HV / Hk;
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
@@ -133,25 +171,134 @@ void kernel_main() {
                 noc.async_read(acc, cb, tb_io, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_io});
             }
         }
-        noc.async_read_barrier();
-        cb.push_back(ck);
     };
 
-    for (uint32_t i = 0; i < wi_count; i++) {
-        const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
+    // One item's inputs, q and k first (the norm consumes them first), as one flight. The gates come from the
+    // token-major [B, T, HV] tensors: the tile holding the head's column, settled into column 0 after the barrier.
+    // The three per-item lambdas run at the kickoff and in the loop: out of line, one copy each (the prep program's
+    // binaries sit close to the kernel-config budget in watcher builds).
+    auto issue_item = [&](uint32_t hc) __attribute__((noinline)) {
         if constexpr (QK_FLAT) {
-            read_qk_flat(q_acc, cb_q, hc);
-            read_qk_flat(k_acc, cb_k, hc);
+            issue_qk_flat(q_acc, cb_q, hc);
+            issue_qk_flat(k_acc, cb_k, hc);
         } else {
-            read_into(q_acc, cb_q, hc * ck, ck, tb_io);
-            read_into(k_acc, cb_k, hc * ck, ck, tb_io);
+            issue(q_acc, cb_q, hc * ck, ck, tb_io);
+            issue(k_acc, cb_k, hc * ck, ck, tb_io);
         }
         if constexpr (V_FLAT) {
-            read_v_flat(hc);
+            issue_v_flat(hc);
         } else {
-            read_into(v_acc, cb_v, hc * cv, cv, tb_io);
+            issue(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
-        read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        gdn_gate::issue(noc, g_acc, cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
+        gdn_gate::issue(noc, b_acc, cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
+    };
+    auto settle_item = [&](uint32_t hc) __attribute__((noinline)) {
+        gdn_gate::settle(cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
+        gdn_gate::settle(cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
+    };
+    auto publish_item = [&]() __attribute__((noinline)) {
+        publish(cb_q, ck);
+        publish(cb_k, ck);
+        publish(cb_v, cv);
+        publish(cb_g, Ct);
+        publish(cb_beta, Ct);
+    };
+
+    // Constants in L1: eye and tril (diagonal included) [Ct x Ct tiles], ones [Ct x Ct tiles], the quadrant masks
+    // Qtl, Qbr, Q10 (tiles 0, 1, 2). An fp32 tile is four 16x16 faces: (0) rows 0-15 cols 0-15, (1) rows 0-15
+    // cols 16-31, (2) rows 16-31 cols 0-15, (3) rows 16-31 cols 16-31. zero_constants: reserve and zero fill (own
+    // barrier). fill_constants: one face of ones by RISC stores, NoC loopback copies of that face, the diagonal
+    // patterns by RISC stores; the caller ends the copies with a read barrier and pushes the four CBs.
+    constexpr uint32_t kOne = 0x3F800000u;
+    CircularBuffer eye(cb_eye), tril(cb_tril), ones(cb_ones), mask(cb_mask);
+    auto zero_constants = [&]() {
+        eye.reserve_back(cc);
+        tril.reserve_back(cc);
+        ones.reserve_back(cc);
+        mask.reserve_back(3);
+        zero_cb(noc, eye, cc * tb_f);
+        zero_cb(noc, tril, cc * tb_f);
+        zero_cb(noc, mask, 3 * tb_f);
+        noc.write_zeros_l1_barrier();
+    };
+    auto fill_constants = [&]() {
+        const uint32_t ones_face = ones.get_write_ptr();
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_face);
+        for (uint32_t i = 0; i < kFaceWords; i++) {
+            w[i] = kOne;
+        }
+        for (uint32_t t = 0; t < Ct; t++) {
+            volatile tt_l1_ptr uint32_t* e =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr() + (t * Ct + t) * tb_f);
+            volatile tt_l1_ptr uint32_t* l =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril.get_write_ptr() + (t * Ct + t) * tb_f);
+            for (uint32_t f = 0; f < 4 * kFaceWords; f += 3 * kFaceWords) {  // faces 0 and 3
+                for (uint32_t r = 0; r < 16; r++) {
+                    e[f + r * 17] = kOne;
+                    for (uint32_t q = 0; q <= r; q++) {
+                        l[f + r * 16 + q] = kOne;
+                    }
+                }
+            }
+        }
+        asm volatile("fence");
+        auto copy = [&](const CircularBuffer& cb, uint32_t tile, uint32_t face) {
+            copy_face(noc, ones_face, cb, tile * tb_f + face * kFaceBytes);
+        };
+        for (uint32_t t = 0; t < cc; t++) {
+            for (uint32_t f = (t == 0) ? 1u : 0u; f < 4; f++) {
+                copy(ones, t, f);
+            }
+        }
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            for (uint32_t ct = 0; ct < rt; ct++) {
+                for (uint32_t f = 0; f < 4; f++) {
+                    copy(tril, rt * Ct + ct, f);
+                }
+            }
+            copy(tril, rt * Ct + rt, 2);
+        }
+        constexpr uint32_t kMaskFaces[3] = {0, 3, 2};  // Qtl, Qbr, Q10: the all-ones quadrant of each mask tile
+        for (uint32_t t = 0; t < 3; t++) {
+            copy(mask, t, kMaskFaces[t]);
+        }
+    };
+    auto publish_constants = [&]() {
+        eye.push_back(cc);
+        tril.push_back(cc);
+        ones.push_back(cc);
+        mask.push_back(3);
+    };
+
+    // Kickoff: the first item's reads in flight while the constants are filled; one barrier for both.
+    zero_constants();
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    const uint32_t hc0 = wi_count > 0 ? item_wi(0) : 0;
+    {
+        DeviceZoneScopedN("rd_kick");
+        if (wi_count > 0) {
+            issue_item(hc0);
+        }
+        fill_constants();
+        noc.async_read_barrier();
+    }
+    if (wi_count > 0) {
+        settle_item(hc0);
+        publish_item();
+    }
+    publish_constants();
+
+    for (uint32_t i = 1; i < wi_count; i++) {
+        const uint32_t hc = item_wi(i);
+        {
+            DeviceZoneScopedN("rd_item");
+            issue_item(hc);
+            noc.async_read_barrier();
+        }
+        settle_item(hc);
+        publish_item();
     }
 }
