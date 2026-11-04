@@ -2895,6 +2895,8 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
         checks.append(tray_power_check(tray, hscs, reader.cpld(bus), why=reader.stopped))
         if reader.reads_ok == 0:
             break
+    if reader.stopped:
+        log(f"tray_power: stopped reading: {reader.stopped}")
     if reader.reads_ok == 0:
         # No route at all (no ipmitool, no sudo, no BMC): one SKIP, not four WARNs.
         first = reader.errors[0] if reader.errors else "no reply"

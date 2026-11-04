@@ -15,6 +15,8 @@ feeds. VIN_UV_FAULT has not been seen latched, so its vector is synthetic."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import subprocess
 import sys
 import unittest
@@ -169,7 +171,10 @@ class TestTrayPowerPhase(unittest.TestCase):
 
     def test_clean_passes(self):
         bmc = FakeBmc(hsc={(t, 0x42): {"word": 0x0002, "input": 0x00, "iout": 0x00} for t in TRAY_POWER_BUS})
-        phase = run_phase(bmc)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            phase = run_phase(bmc)
+        self.assertNotIn("tray_power: stopped", err.getvalue())
         phase.rollup()
         self.assertEqual([c.status for c in phase.checks], [PASS] * 4)
         self.assertEqual(phase.status, PASS)
@@ -280,7 +285,12 @@ class TestTrayPowerPhase(unittest.TestCase):
                 clock.t = TRAY_POWER_PHASE_S
             return cp
 
-        checks = by_tray(run_phase(runner, clock=clock))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            checks = by_tray(run_phase(runner, clock=clock))
+        self.assertEqual(
+            err.getvalue(), f"[diag] tray_power: stopped reading: phase time limit of {TRAY_POWER_PHASE_S:g} s spent\n"
+        )
         self.assertEqual(len(clean.calls), 32)
         self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS, PASS, WARN, WARN])
         for t in (3, 4):
