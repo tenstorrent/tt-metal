@@ -83,3 +83,18 @@ chain, a served smoke) and measured on the per-layer profile
 
 About two weeks of focused kernel work in its own worktree (`wt_perf_mhc` is ready), while the per-cluster branch
 keeps serving the gates and the release.
+
+## Step 1 as built (2026-11-04 04:30, `custom_ops/moe_persistent`, knob `GLM53_MOE_PERSIST=1`)
+
+One program per chip: the gather phase on the 10 cores the fused expert placement leaves idle, a multicast release
+(a 1 written into semaphores 12-15 of every core of the grid: one per expert dataflow kernel) once the gathered
+tiles are written, the fused gate|up + down kernels unchanged except for a wait at their start, the down cores
+counting their written output tiles on the combine workers' semaphore 2, and the reduce phase on the same 10 cores.
+Program semaphores are re-initialised by the dispatch per launch and reset by their waiters; the two exchanges keep
+their persistent receive stagings and arrival semaphores. Data still crosses the gathered and expert-output
+tensors.
+
+Step 2 (next): the gathered rows multicast straight into the expert cores' L1. Every core's first CB becomes a
+256 KB landing zone (the gate|up cores' resident x; a dummy on the down and exchange cores), so one multicast per
+worker chunk to the whole grid rectangle lands x in every gate|up core at the same address, and the gate|up writer
+skips its 256 KB read of the x tensor. The routing matrix (9 tiles) rides the same way into a second zone.
