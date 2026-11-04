@@ -121,7 +121,7 @@ struct ErfcBwBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_erfc_bw_bf16() {
+__attribute__((noinline)) inline void calculate_erfc_bw_bf16() {
     ckernel::sfpu::bf16::erfc_bw::calculate_config_tile<ckernel::sfpu::ErfcBwBf16Config, ITERATIONS>();
 }
 inline void init_erfc_bw_bf16() { ckernel::sfpu::bf16::erfc_bw::init_config_tile<ckernel::sfpu::ErfcBwBf16Config>(); }
