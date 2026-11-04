@@ -65,12 +65,16 @@ TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     EXPECT_EQ(apply("precision: ~"), std::nullopt);
     EXPECT_EQ(apply("precision: {master_dtype: }"), std::nullopt);
     EXPECT_EQ(apply("precision: {master_dtype: ~}"), std::nullopt);
+    // reduce_dtype is a known key of the block too.
+    EXPECT_EQ(apply("precision: {master_dtype: float32, reduce_dtype: float32}"), ttnn::DataType::FLOAT32);
     EXPECT_THAT(
         [&] { apply("precision: {params_dtype: float32}"); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("Unknown key precision.params_dtype (supported: master_dtype)")));
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Unknown key precision.params_dtype (supported: master_dtype, reduce_dtype)")));
     EXPECT_THAT(
         [&] { apply("precision: float32"); },
         ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
+    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
