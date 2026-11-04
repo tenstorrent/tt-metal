@@ -892,7 +892,7 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
 
     // 3. Default fallback (also searched in both grouping dirs).
     if (auto loaded = load_from_grouping_dirs("default_physical_grouping_descriptor.textproto")) {
-        log_info(tt::LogFabric, "No specific Physical Grouping Descriptor found; using default.");
+        log_debug(tt::LogFabric, "No specific Physical Grouping Descriptor found; using default.");
         return loaded;
     }
 

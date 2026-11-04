@@ -31,6 +31,9 @@ class Unpacker:
     Set `per_block_init = True` if init() needs block dimensions and must
     be called per-block inside the batch loop rather than hoisted out.
 
+    Set `emits_dummy_srcb_valid = True` when calls publish dummy SrcB valids
+    that must be deferred until the unpack-to-dest section is ready for math.
+
     To create a new unpacker:
         1. Subclass Unpacker
         2. Set `granularity` to the tiles one call covers
@@ -44,7 +47,7 @@ class Unpacker:
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
     reverse_operands: bool = False
-    supports_dest_offset: bool = True
+    emits_dummy_srcb_valid: bool = False
 
     def physical_order(self, src_a, src_b):
         return (src_b, src_a) if self.reverse_operands else (src_a, src_b)
