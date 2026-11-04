@@ -8,6 +8,7 @@
 #include "api/dataflow/noc_semaphore.h"
 
 #include "fetch_gate_up.h"
+#include "../persistent.h"
 
 // Reader kernel (runs on every compute core except the two senders {0,0} and {1,0}).
 //
@@ -62,6 +63,9 @@
 //   9: hub1_noc_x     10: hub1_noc_y
 //   11: down_local    (this core's down slot in its expert group; see run_reader_loop)
 //   12: shared gate_up base address   13: shared down base address
+//
+// FE_PERSISTENT: one pass per iteration (see persistent.h), with the shared expert's addresses taken
+// from the header and the routed weights' from the leader's broadcast.
 void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(0);
     constexpr uint32_t sem_input_id = get_compile_time_arg_val(1);
@@ -113,7 +117,14 @@ void kernel_main() {
     constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
     constexpr uint32_t gate_up_col_shards =
         get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
-    const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
+    SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
+#if defined(FE_PERSISTENT)
+    constexpr uint32_t kHitGateUpAddrs = num_weights + num_active * batch;
+    constexpr uint32_t kHitDownAddrs = kHitGateUpAddrs + num_active;
+#else
+    constexpr uint32_t kHitGateUpAddrs = kGateUpAddrBase;
+    constexpr uint32_t kHitDownAddrs = kDownAddrBase;
+#endif
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
     const uint32_t hub0_noc_x = get_arg_val<uint32_t>(1);
@@ -128,77 +139,92 @@ void kernel_main() {
     const uint32_t hub1_noc_y = get_arg_val<uint32_t>(10);
 
     const ActGatherConfig gather{hub_role, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
+    Noc noc;
 
-    // Activation: publish it to the compute kernel.
+    auto iteration = [&](uint32_t iter) {
+#if defined(FE_PERSISTENT)
+        shared.gate_up_addr = fe_header(kFeHdrSharedGateUp);
+        shared.down_addr = fe_header(kFeHdrSharedDown);
+#endif
+        // Activation: publish it to the compute kernel.
 #if defined(INPUT_RM_ROWS)
-    // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
-    (void)sem_input_id;
-    (void)cb_input_id;
+        // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
+        (void)sem_input_id;
+        (void)cb_input_id;
 #elif defined(INPUT_REPLICATED)
-    // Already in this core's L1 as a ROW_MAJOR HEIGHT_SHARDED replica, with cb_input aliased over
-    // its shard -- nothing was broadcast, so there is nothing to wait for.
-    publish_input(cb_input_id, k_tiles);
-    (void)sem_input_id;
+        // Already in this core's L1 as a ROW_MAJOR HEIGHT_SHARDED replica, with cb_input aliased over
+        // its shard -- nothing was broadcast, so there is nothing to wait for.
+        publish_input(cb_input_id, k_tiles);
+        (void)sem_input_id;
 #else
-    // Arrived via the {1,0} input sender's multicast.
-    {
-        DeviceZoneScopedN("FE_WAIT_INPUT");
-        Semaphore<>(sem_input_id).wait(1);
-    }
-    publish_input(cb_input_id, k_tiles);
+        // Arrived via the {1,0} input sender's multicast.
+        {
+            DeviceZoneScopedN("FE_WAIT_INPUT");
+            Semaphore<>(sem_input_id).wait(1);
+        }
+        publish_input(cb_input_id, k_tiles);
 #endif
 
-    // The reader loop waits for the expert ids itself, after any shared-expert gate_up.
-    Noc noc;
-    run_reader_loop(
-        noc,
-        num_active,
-        core_index,
-        i_tiles,
-        k_tiles,
-        gate_up_tile_bytes,
-        down_slice_tiles,
-        down_tile_bytes,
-        act_tile_bytes,
-        num_producers,
-        cb_bcast_id,
-        cb_weights_id,
-        cb_down_w_id,
-        cb_act_id,
-        sem_gather_id,
-        sem_bcast_id,
-        group_mcast_start_x,
-        group_mcast_start_y,
-        group_mcast_end_x,
-        group_mcast_end_y,
-        group_num_dests,
-        gate_up_args,
-        kGateUpAddrBase,
-        down_args,
-        kDownAddrBase,
-        cb_rscalar_id,
-        num_weights,
-        down_prefetch,
-        batch,
-        experts_block,
-        gate_up_reserve_tiles,
-        down_reserve_tiles,
-        rscalar_tile_h,
-        rscalar_face_r_dim,
-        rscalar_num_face_rows,
-        rscalar_tile_bytes,
-        cores_per_expert,
-        shards_per_core,
-        i_shards_per_core,
-        num_expert_groups,
-        gather,
-        sem_reduce_id,
-        cb_reduce_id,
-        get_arg_val<uint32_t>(11),
-        shared,
-        shared_gate_up_args,
-        shared_down_args,
-        gate_up_k_shards,
-        gate_up_col_shards,
-        sem_id);
+        // The reader loop waits for the expert ids itself, after any shared-expert gate_up.
+        run_reader_loop(
+            noc,
+            num_active,
+            core_index,
+            i_tiles,
+            k_tiles,
+            gate_up_tile_bytes,
+            down_slice_tiles,
+            down_tile_bytes,
+            act_tile_bytes,
+            num_producers,
+            cb_bcast_id,
+            cb_weights_id,
+            cb_down_w_id,
+            cb_act_id,
+            sem_gather_id,
+            sem_bcast_id,
+            group_mcast_start_x,
+            group_mcast_start_y,
+            group_mcast_end_x,
+            group_mcast_end_y,
+            group_num_dests,
+            gate_up_args,
+            kHitGateUpAddrs,
+            down_args,
+            kHitDownAddrs,
+            cb_rscalar_id,
+            num_weights,
+            down_prefetch,
+            batch,
+            experts_block,
+            gate_up_reserve_tiles,
+            down_reserve_tiles,
+            rscalar_tile_h,
+            rscalar_face_r_dim,
+            rscalar_num_face_rows,
+            rscalar_tile_bytes,
+            cores_per_expert,
+            shards_per_core,
+            i_shards_per_core,
+            num_expert_groups,
+            gather,
+            sem_reduce_id,
+            cb_reduce_id,
+            get_arg_val<uint32_t>(11),
+            shared,
+            shared_gate_up_args,
+            shared_down_args,
+            gate_up_k_shards,
+            gate_up_col_shards,
+            sem_id,
+            iter);
+    };
+
+#if defined(FE_PERSISTENT)
+    for (uint32_t iter = 0; fe_begin_iteration(iter, cb_input_id, k_tiles, /*has_writer=*/true); ++iter) {
+        iteration(iter);
+    }
+#else
+    iteration(0);
+#endif
 }

@@ -28,6 +28,21 @@ struct FusedAllReduceParams {
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
 };
 
+// The persistent op: launched once, it serves one token row per page of each chip's H2D socket --
+// a 64-byte header whose first word is the layer id, then the [1, H] bf16 row -- until a page whose
+// layer id is not below num_layers (0xFFFFFFFF by convention) stops every kernel. The all-reduce
+// becomes a reduce to mesh coordinate (0, 0), whose D2H socket returns each summed [1, H] row.
+//
+// The socket objects are the caller's; the op only takes their config buffer addresses.
+struct FusedPersistentParams {
+    uint32_t num_layers{};
+    // The control core (logical), outside the worker grid, where every socket lives.
+    tt::tt_metal::CoreCoord socket_core;
+    // Per chip of the mesh, in row-major order.
+    std::vector<uint32_t> h2d_socket_config_addresses;
+    uint32_t d2h_socket_config_address{};
+};
+
 // Non-tensor parameters of the fused routed-expert FFN.
 struct operation_attributes_t {
     // Number of routing-selected experts to actually run: the size of the union of the token rows'
@@ -82,6 +97,9 @@ struct operation_attributes_t {
 
     // Set when the op all-reduces its output over a mesh axis itself (MultiCoreAllReduce).
     std::optional<FusedAllReduceParams> all_reduce;
+
+    // Set for the persistent op (MultiCoreAllReduce over the whole mesh, with `layer_table`).
+    std::optional<FusedPersistentParams> persistent;
 };
 
 // All tensors flowing in/out of the operation. This op is the concrete example of an op that takes
@@ -156,6 +174,13 @@ struct tensor_args_t {
     // the [1, 1, 1, E] bfloat16 ROW_MAJOR bias row, DRAM interleaved. Both or neither are given.
     std::optional<Tensor> router_weight;
     std::optional<Tensor> router_bias;
+
+    // Persistent op only: [num_layers, 16 + 2E] uint32 ROW_MAJOR, DRAM interleaved, one row per layer:
+    // [layer id, shared gate_up, shared down, router gate, router bias, 0 x 11, E gate_up, E down] buffer
+    // addresses. Every layer's weights share the layouts of the tensors above (which are any one layer's)
+    // and stay resident while the op runs; mesh buffers sit at one address on every chip, so one table
+    // serves the whole mesh.
+    std::optional<Tensor> layer_table;
 };
 
 using spec_return_value_t = tt::tt_metal::TensorSpec;
