@@ -9,7 +9,9 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"
 #include "tt-metalium/global_circular_buffer.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
 
@@ -30,6 +32,11 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
+    // B delivered over PrefetcherPipes instead of read from DRAM (MatmulUnifiedProgramConfig only): every pipe of one
+    // create_prefetcher_pipes_for_tensor_prefetcher call, or worker-sender pipes. Their receivers are the cores, and
+    // receiver i (in the config's core order) gets the K chunks of C slice i in K order. Empty means none. The pipes'
+    // geometry and addresses are in the cache key, and a cache hit rebinds the program to the pipes passed.
+    ttnn::PrefetcherPipeList prefetcher_pipes;
 
     // Compile-time reflection used by the program-cache key (both the 64-bit hash and the
     // collision-free canonical key). Mirrors the Quasar Conv2dDeviceOperation migration
@@ -60,7 +67,8 @@ struct MatmulParams {
         "transpose_b",
         "output_tile",
         "global_cb",
-        "sub_device_id");
+        "sub_device_id",
+        "prefetcher_pipes");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->program_config),
@@ -76,7 +84,8 @@ struct MatmulParams {
             this->transpose_b,
             std::cref(this->output_tile),
             std::cref(this->global_cb),
-            std::cref(this->sub_device_id));
+            std::cref(this->sub_device_id),
+            std::cref(this->prefetcher_pipes));
     }
 };
 
