@@ -40,8 +40,8 @@ from .test_perf_ideogram4_gpu_bench import SectionTimer
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
 )
-# Room for one step trace per warmed size; the test reports how much is used.
-_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 240000000}
+# The four 2K step traces use 11 MB together (job 171244); the test reports the measured use.
+_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 60000000}
 
 DEFAULT_SIZES = "2048x2048,2048x1152,1152x2048,1360x2048"
 SEED = 123
