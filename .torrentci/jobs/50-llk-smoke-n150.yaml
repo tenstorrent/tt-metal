@@ -9,72 +9,71 @@
 #   requirements go into a venv at job time (llk-ci bakes them in).
 # - Python 3.10 comes from uv, not the image.
 # - nofile is raised in the step (GitHub passes --ulimit nofile=4096).
-# Run it by hand.
+# - The checkout (minus .git) is copied to the guest's local disk first: the
+#   guest /workspace is a 9p share, about 3x slower for kernel builds
+#   (torrentci#2327). The copy goes once the VM workspace is a block device.
+# - pytest logs to a file and the step prints its tail, because per-dot output
+#   used to exhaust the runner's event budget (torrentci#2321).
+# The two pytest-split groups run as separate jobs on two cards, as on GitHub.
+# Run them by hand.
 jobs:
-  - id: llk-smoke-n150
-    description: "Run the PR Gate LLK smoke tests on one n150 (VM path, vfio-vm)"
-    timeout: 150m
-    runs-on:
-      kubernetes:
-        os: linux
-        arch: amd64
-        image: {from-job: ci-build-image, image: tt-metal-ci-build}
-        accelerator: {type: n150, count: 1}
-        resources:
-          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
-          limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
-    env:
-      - {name: HOME, value: /tmp/home}
-      - {name: CHIP_ARCH, value: wormhole}
-      - {name: PYTEST_MARKERS, value: "not perf and not nightly and not quasar and not accuracy"}
-    steps:
-      - id: setup
-        kind: shell
-        shell:
-          run:
-            - mkdir -p "$HOME"
-            - ls -l /dev/tenstorrent/
-            # Where does the time go? vCPUs, CPU model, memory, and what backs
-            # the workspace and /tmp (kernel builds go to /tmp/tt-llk-build).
-            - nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo
-            - free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true
-            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
-            # llk-ci is Ubuntu 22.04 (Python 3.10); the tests' dataclasses use
-            # defaults that Python 3.11+ refuses, so pin 3.10 through uv.
-            - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
-            - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
-            - >-
-              /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python
-              --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
-            # The guest's /workspace is a 9p share, slow for the many small
-            # reads of kernel compiles: run from a local copy (torrentci#2327).
-            # Kernel builds include headers from across the tree (tt_metal/hw,
-            # hostdevcommon, ttnn), so copy the whole checkout minus .git to the
-            # guest's local disk and time it: the copy-in cost for torrentci#2327.
-            - 'mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"'
-            - du -sh /tmp/ws
-            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
-      - id: group-1
-        kind: shell
-        shell:
-          run:
-            # pytest's progress dots are one output event each and exhaust the
-            # runner's event cap (torrentci#2321): log to a file, print the tail.
-            - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests &&
-              rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
-              -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --durations=25
-              --junitxml=pytest-report-wormhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?;
-              tail -c 12000 /tmp/pytest-1.log; exit $rc
-      - id: group-2
-        kind: shell
-        shell:
-          run:
-            # pytest's progress dots are one output event each and exhaust the
-            # runner's event cap (torrentci#2321): log to a file, print the tail.
-            - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests &&
-              rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
-              -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --durations=25
-              --junitxml=pytest-report-wormhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?;
-              tail -c 12000 /tmp/pytest-2.log; exit $rc
+- id: llk-smoke-n150-g1
+  description: Run PR Gate LLK smoke tests group 1/2 on one n150 (VM path, vfio-vm)
+  timeout: 90m
+  runs-on:
+    kubernetes:
+      os: linux
+      arch: amd64
+      image: {from-job: ci-build-image, image: tt-metal-ci-build}
+      accelerator: {type: n150, count: 1}
+      resources:
+        requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+  env:
+  - {name: HOME, value: /tmp/home}
+  - {name: CHIP_ARCH, value: wormhole}
+  - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+  steps:
+  - id: setup
+    kind: shell
+    shell:
+      run: [mkdir -p "$HOME", ls -l /dev/tenstorrent/, nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo, 'free -g; df -hT . /tmp;
+          grep -E '' (/|/tmp|/workspace[^ ]*) '' /proc/mounts || true', 'python3 -c ''import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))''', python3 -m venv /tmp/uv
+          && /tmp/uv/bin/pip install -q uv, /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv, /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt,
+        'mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"', du -sh /tmp/ws, . /tmp/venv/bin/activate
+          && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh]
+  - id: group-1
+    kind: shell
+    shell:
+      run: ['ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+          --splits 2 --group 1 --timeout=60 --durations=25 --junitxml=pytest-report-wormhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-1.log; exit $rc']
+- id: llk-smoke-n150-g2
+  description: Run PR Gate LLK smoke tests group 2/2 on one n150 (VM path, vfio-vm)
+  timeout: 90m
+  runs-on:
+    kubernetes:
+      os: linux
+      arch: amd64
+      image: {from-job: ci-build-image, image: tt-metal-ci-build}
+      accelerator: {type: n150, count: 1}
+      resources:
+        requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+  env:
+  - {name: HOME, value: /tmp/home}
+  - {name: CHIP_ARCH, value: wormhole}
+  - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+  steps:
+  - id: setup
+    kind: shell
+    shell:
+      run: [mkdir -p "$HOME", ls -l /dev/tenstorrent/, nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo, 'free -g; df -hT . /tmp;
+          grep -E '' (/|/tmp|/workspace[^ ]*) '' /proc/mounts || true', 'python3 -c ''import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))''', python3 -m venv /tmp/uv
+          && /tmp/uv/bin/pip install -q uv, /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv, /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt,
+        'mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"', du -sh /tmp/ws, . /tmp/venv/bin/activate
+          && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh]
+  - id: group-2
+    kind: shell
+    shell:
+      run: ['ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+          --splits 2 --group 2 --timeout=60 --durations=25 --junitxml=pytest-report-wormhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-2.log; exit $rc']
