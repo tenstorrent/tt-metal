@@ -40,7 +40,6 @@ from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUn
 OBJECT_NOT_FOUND = -704
 
 _ENV_PREFIX = "PREFILL_MEDIA_STORE_"
-_DEFAULT_HTTP_METADATA_PORT = 8080  # mooncake_master's --http_metadata_server_port default
 _DEFAULT_SEGMENT_BYTES = "1G"
 _REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
@@ -84,7 +83,7 @@ class MediaEmbeddingStoreConfig:
         PREFILL_MEDIA_STORE_MASTER    master address, host:port (turns the store on)
         PREFILL_MEDIA_STORE_SEGMENT   this host's address, host:port or host (required)
         PREFILL_MEDIA_STORE_BYTES     segment size (default 1G)
-        PREFILL_MEDIA_STORE_METADATA  metadata server (default http://<master host>:8080/metadata)
+        PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
         """
@@ -98,14 +97,14 @@ class MediaEmbeddingStoreConfig:
             return None
         if ":" not in master:
             raise ValueError(f"{_ENV_PREFIX}MASTER={master!r}: want host:port")
-        if get("SEGMENT") is None:
-            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {_ENV_PREFIX}SEGMENT must be set too")
-        master_host = master.rsplit(":", 1)[0]
+        missing = [_ENV_PREFIX + n for n in ("SEGMENT", "METADATA") if get(n) is None]
+        if missing:
+            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
         return cls(
             master=master,
             segment=get("SEGMENT"),
             segment_bytes=parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES)),
-            metadata=get("METADATA", f"http://{master_host}:{_DEFAULT_HTTP_METADATA_PORT}/metadata"),
+            metadata=get("METADATA"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
         )
