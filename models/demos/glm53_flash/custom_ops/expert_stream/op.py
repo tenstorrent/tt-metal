@@ -883,6 +883,16 @@ class ExpertGateUpStream(_BankStreamOp):
         return act
 
 
+# GLM53_STREAM_DOWN_FIDELITY: the down op's matmul fidelity (bf16 act x bfp8 w2, fp32 accumulation): hifi2 (default,
+# two FPU passes) | lofi (one pass: the activation's low mantissa bits dropped; an A/B under the chain-pcc gate) |
+# hifi4
+DOWN_FIDELITY = {
+    "hifi2": ttnn.MathFidelity.HiFi2,
+    "lofi": ttnn.MathFidelity.LoFi,
+    "hifi4": ttnn.MathFidelity.HiFi4,
+}[os.environ.get("GLM53_STREAM_DOWN_FIDELITY", "hifi2")]
+
+
 class ExpertDownStream(_BankStreamOp):
     """(act, routing, w2, out) -> out. act [1, E, 32, I] BF16 TILE (the gate|up stream's output), routing as above,
     w2: ``upload_stream_weights(down_stream_layout(...))``, out [1, 1, 32, H] BF16 TILE DRAM (the expert sum).
@@ -998,6 +1008,7 @@ class ExpertDownStream(_BankStreamOp):
             defines=defines,
             reader_common=src.down_addrs if src is not None else None,
             compute_defines=[REGIONS_DEFINE] if src is not None else (),
+            fidelity=DOWN_FIDELITY,
         )
         return cbs, kernels
 
