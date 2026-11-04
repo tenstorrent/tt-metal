@@ -209,11 +209,12 @@ class Qwen36MLP:
         gu_dtype = ttnn.bfloat8_b if T <= 1 else None
         if T > 512 and x.shape[-2] == 2048 and x.shape[-1] == 5120 and w.w1.shape[-1] == 17408:
             # prefill 2048 tokens: auto config picks 2D 13x10 with in0_block_w=1 (160 K-steps);
-            # same geometry with in0_block_w=4 cuts the per-block sync overhead.
+            # same geometry with in0_block_w=10 (sweep on Blackhole: 1508.8 vs 2447.5 us/call at in0_block_w=4;
+            # 16/20/32 fail circular-buffer allocation) cuts the per-block sync overhead.
             def _gu_pc(act):
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
-                    in0_block_w=4,
+                    in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=3,
                     out_block_h=7,
