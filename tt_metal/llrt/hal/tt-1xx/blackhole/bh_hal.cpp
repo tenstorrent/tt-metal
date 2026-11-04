@@ -509,6 +509,7 @@ void Hal::initialize_bh(
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->eth_base_firmware_ = true;
     this->eth_interrupt_mode_base_reg_ = ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR;
     this->eth_interrupt_num_vecs_ = ETH_RISC_NUM_INTERRUPT_VECS;
     this->virtualized_core_types_ = {

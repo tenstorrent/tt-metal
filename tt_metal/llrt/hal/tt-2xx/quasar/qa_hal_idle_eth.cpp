@@ -37,7 +37,10 @@ namespace idle_eth_realtime_profiler_msgs {
 #include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
-HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
+namespace {
+
+HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool programmable) {
+    const bool linked = core_type == HalProgrammableCoreType::ACTIVE_ETH;
     static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS);
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
@@ -58,8 +61,10 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_KERNEL_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        tt::align(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS, max_alignment);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] = tt::align(
+        linked ? MEM_IERISC_ROUTER_UNRESERVED_BASE
+               : MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS,
+        max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -67,6 +72,13 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
+    if (linked) {
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_IERISC_FABRIC_TELEMETRY_BASE;
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_IERISC_FABRIC_ROUTER_STATE_BASE;
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] =
+            MEM_IERISC_FABRIC_ROUTER_COMMAND_BASE;
+    }
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -84,6 +96,13 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+    if (linked) {
+        static_assert(sizeof(::tt::tt_fabric::fabric_telemetry::FabricTelemetry) <= MEM_IERISC_FABRIC_TELEMETRY_SIZE);
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_IERISC_FABRIC_TELEMETRY_SIZE;
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(std::uint32_t);
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(std::uint32_t);
+    }
 
     assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "ethernet");
 
@@ -91,8 +110,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
     std::vector<uint8_t> processor_classes_num_fw_binaries;
-    // An empty ethernet list leaves this slot with no processors. Nothing is built or loaded, and
-    // the active slot stays the on-package image.
+    // An empty ethernet list leaves this slot with no processors. Nothing is built or loaded.
     if (programmable) {
         std::vector<HalJitBuildConfig> processors;
         std::vector<std::pair<std::string, std::string>> names;
@@ -117,7 +135,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     }
 
     return {
-        HalProgrammableCoreType::IDLE_ETH,
+        core_type,
         CoreType::ETH,
         std::move(processor_classes),
         std::move(processor_classes_num_fw_binaries),
@@ -131,6 +149,16 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         idle_eth_dev_msgs::create_factory(),
         idle_eth_fabric_telemetry::create_factory(),
         idle_eth_realtime_profiler_msgs::create_factory()};
+}
+
+}  // namespace
+
+HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
+    return create_eth_mem_map(HalProgrammableCoreType::IDLE_ETH, programmable);
+}
+
+HalCoreInfoType create_active_eth_mem_map(bool programmable) {
+    return create_eth_mem_map(HalProgrammableCoreType::ACTIVE_ETH, programmable);
 }
 
 }  // namespace tt::tt_metal::quasar

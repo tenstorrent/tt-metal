@@ -390,6 +390,7 @@ void Hal::initialize_wh(
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
+    this->eth_base_firmware_ = true;
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     // Wormhole addresses its PCIE/DRAM non-worker cores physically.
     this->virtualizes_non_worker_cores_ = false;

@@ -342,8 +342,7 @@
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
-// Eight ethernet harts instantiate the same mailboxes_t as a CCE. The active slot has no
-// processors; this size is what lets that translation unit's static_assert accept the struct.
+// Eight ethernet harts instantiate the same mailboxes_t as a CCE.
 #define MEM_ERISC_MAILBOX_SIZE 32768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0

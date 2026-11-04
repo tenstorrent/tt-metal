@@ -479,6 +479,7 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool eth_base_firmware_ = true;
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     // Whether this arch addresses its PCIE/DRAM non-worker cores through virtual coordinates
     // (Blackhole, Quasar) rather than physical ones (Wormhole). ETH is virtualized on every arch.
@@ -669,6 +670,9 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
+    // True when base Ethernet firmware runs on a linked (ACTIVE_ETH) core beside metal: its mailbox, routing info,
+    // retrain and link-status words exist. False on Quasar, whose linked Ethernet cores are Keraunos CCEs.
+    bool has_eth_base_firmware() const { return this->eth_base_firmware_; }
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }

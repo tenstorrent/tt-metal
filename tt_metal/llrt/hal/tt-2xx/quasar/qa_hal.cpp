@@ -440,16 +440,14 @@ public:
     }
 
     std::vector<std::string> srcs(const Params& params) const override {
-        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+        // Linked or not, a Quasar Ethernet core is a Keraunos CCE and runs the shared CCE image.
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
+            params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             return {
                 params.is_fw ? "tt_metal/hw/firmware/src/tt-2xx/idle_erisc.cc"
                              : "tt_metal/hw/firmware/src/tt-2xx/idle_erisck.cc"};
         }
-        auto srcs = HalJitBuildQueryBase::srcs(params);
-        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            TT_FATAL(false, "Active ethernet is not supported for Quasar yet");
-        }
-        return srcs;
+        return HalJitBuildQueryBase::srcs(params);
     }
 
     std::string common_flags(const Params& params) const override {
@@ -463,7 +461,8 @@ public:
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
         if (params.core_type == HalProgrammableCoreType::DRAM ||
-            params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            params.core_type == HalProgrammableCoreType::IDLE_ETH ||
+            params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // A hart addresses its own SRAM from 0, so low addresses are real memory here and a
             // store through one must not be folded away as a null dereference.
             cflags += "-fno-delete-null-pointer-checks ";
@@ -508,8 +507,6 @@ public:
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
-                return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_aerisc.ld"
-                                    : "runtime/hw/toolchain/quasar/kernel_aerisc.ld";
             case HalProgrammableCoreType::IDLE_ETH:
                 return fmt::format("runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
             case HalProgrammableCoreType::DISPATCH:
@@ -543,10 +540,8 @@ public:
             return params.is_fw ? "erisc" : fmt::format("erisc{}", params.processor_id);
         }
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            // build.cpp used to distinguish "active_erisc" and "erisc" and use
-            // that to determine what object files to link.
-            // This is no longer necessary, but only to keep the target names unchanged.
-            return "active_erisc";
+            // Binaries are keyed by target name alone, so the active slot's names differ from the idle slot's.
+            return params.is_fw ? "active_erisc" : fmt::format("active_erisc{}", params.processor_id);
         }
         return HalJitBuildQueryBase::target_name(params);
     }
@@ -554,6 +549,9 @@ public:
     std::string weakened_firmware_target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             return "erisc";
+        }
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            return "active_erisc";
         }
         return HalJitBuildQueryBase::weakened_firmware_target_name(params);
     }
@@ -577,7 +575,7 @@ void Hal::initialize_qa(
 
     this->quasar_arch_variant_ = quasar_arch_variant;
     this->core_info_.push_back(quasar::create_tensix_mem_map());
-    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map(enable_ethernet_cores));
     this->core_info_.push_back(quasar::create_idle_eth_mem_map(enable_ethernet_cores));
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
     if (enable_dram_programmable_cores) {
@@ -721,6 +719,7 @@ void Hal::initialize_qa(
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->eth_base_firmware_ = false;
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
