@@ -112,6 +112,14 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
     const std::uint32_t partial_stats_size = 2 * intermediate_tile_size;
     const std::uint32_t global_stats_size = partial_stats_size * geometry.groups_per_core;
     const std::uint32_t normalisation_stats_size = intermediate_tile_size * geometry.groups_per_core;
+    const auto math_fidelity =
+        std::get<0>(get_compute_kernel_config_args(input.device()->arch(), args.compute_kernel_config));
+    const bool row_stats = input.device()->arch() == tt::ARCH::WORMHOLE_B0 && num_batches < geometry.num_virtual_rows &&
+                           input.layout() == Layout::TILE && math_fidelity == MathFidelity::HiFi4 &&
+                           !groupnorm_needs_fp32_reconfig(
+                               {input_format, output_format, intermediate_format, gamma_beta_format, mask_format});
+    const std::uint32_t row_stats_size =
+        row_stats ? ((2 * geometry.per_core_width_tiles) + 2) * intermediate_tile_size : 0;
 
     const auto fits_group = [&](std::uint32_t block_height) {
         if (block_height == 0) {
@@ -134,6 +142,7 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
             .partial_stats = partial_stats_size,
             .global_stats = global_stats_size,
             .normalisation_stats = normalisation_stats_size,
+            .row_stats = row_stats_size,
         };
         const std::uint64_t replay_size =
             static_cast<std::uint64_t>(block_height) * geometry.per_core_width_tiles * input_tile_size;

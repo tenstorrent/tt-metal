@@ -135,7 +135,8 @@ def test_dram_group_norm_vae_two_pass_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1236000  # Wormhole two-pass VAE: ~1.236 ms, confirmed locally and in CI.
+    # Wormhole two-pass VAE: wh_n150 median 550.3 us (2026-11-04) scaled by main's CI / wh_n150 ratio (1236 / 1252).
+    expected_duration_ns = 543300
 
     # Log the performance result
     print(
