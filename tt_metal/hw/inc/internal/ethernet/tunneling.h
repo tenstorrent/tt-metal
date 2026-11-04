@@ -16,17 +16,21 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
-#if !defined(ARCH_QUASAR)
-static volatile uint32_t* const fabric_postcode_ptr =
-    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE));
+#if defined(ARCH_QUASAR)
+// The host polls the postcode and scratch words; a Keraunos CCE stores them through its uncached alias.
+constexpr uintptr_t fabric_status_word_alias = MEM_L1_UNCACHED_BASE;
+#else
+constexpr uintptr_t fabric_status_word_alias = 0;
+#endif
+static volatile uint32_t* const fabric_postcode_ptr = reinterpret_cast<volatile uint32_t*>(
+    static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE) + fabric_status_word_alias);
 
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
-static volatile uint32_t* const fabric_scratch_ptr =
-    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE));
+static volatile uint32_t* const fabric_scratch_ptr = reinterpret_cast<volatile uint32_t*>(
+    static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE) + fabric_status_word_alias);
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
-#endif
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
@@ -57,6 +61,13 @@ struct erisc_info_t {
         channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS];  // user_buffer_bytes_sent
 };
 
+#if defined(ARCH_QUASAR)
+// These name base Ethernet firmware's L1 and jump table, which a Keraunos CCE does not have. Declared so the legacy
+// Ethernet APIs still parse; any use fails to link.
+extern erisc_info_t* erisc_info;
+extern routing_info_t* routing_info;
+extern tt_l1_ptr mailboxes_t* const mailboxes;
+#else
 erisc_info_t* erisc_info = (erisc_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 routing_info_t* routing_info = (routing_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 
@@ -67,6 +78,7 @@ tt_l1_ptr mailboxes_t* const mailboxes =
 extern uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =
     (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
+#endif
 
 namespace internal_ {
 
