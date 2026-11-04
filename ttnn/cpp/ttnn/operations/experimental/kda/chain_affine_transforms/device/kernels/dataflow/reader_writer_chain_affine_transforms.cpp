@@ -58,7 +58,6 @@ TT_KERNEL void dataflow(
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
     const auto entry_state_accessor = TensorAccessor(tensor::entry_state);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
-    DataflowBuffer initial(dfb::initial);
     DataflowBuffer initial_exact(dfb::initial_exact);
     DataflowBuffer e(dfb::e);
     DataflowBuffer b(dfb::b);
@@ -88,10 +87,8 @@ TT_KERNEL void dataflow(
         noc.async_write_barrier();
     };
 
-    // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
-    initial.reserve_back(state_tiles);
-    issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial, state_page, Vt_full);
-    // The same state again for the complement-form add, which reads it losslessly into DST.
+    // The initial state does not depend on the chronology, so its reads share one barrier with actual_start. Compute
+    // reads it losslessly into DST and seeds its matmul and exact views of the state from it.
     initial_exact.reserve_back(state_tiles);
     issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial_exact, state_page, Vt_full);
     kda_chronology::Topology topology{};
@@ -110,11 +107,10 @@ TT_KERNEL void dataflow(
     const uint32_t entry_step = (topology.rank + sp_size - topology.first_rank) % sp_size;
 
     if (entry_step == 0) {
-        // initial is used once and holds exactly state_tiles entries, so its read pointer (the NoC source) still
-        // equals the write pointer the tiles were read into.
-        write_state(initial, entry_state_accessor);
+        // initial_exact is used once and holds exactly state_tiles entries, so its read pointer (the NoC source)
+        // still equals the write pointer the tiles were read into.
+        write_state(initial_exact, entry_state_accessor);
     }
-    initial.push_back(state_tiles);
     initial_exact.push_back(state_tiles);
 
     for (uint32_t step = 0; step < sp_size; ++step) {

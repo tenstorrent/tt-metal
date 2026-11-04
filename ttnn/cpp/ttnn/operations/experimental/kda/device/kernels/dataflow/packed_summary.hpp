@@ -46,19 +46,24 @@ FORCE_INLINE void read_summary_transform(Noc& noc, const Accessor& summaries, DF
     }
 }
 
+// Write FP32 1.0 on the diagonal of a zeroed FP32 32x32 tile. A tile's diagonal lies in its top-left and bottom-right
+// faces.
+template <typename VolatileWords>
+FORCE_INLINE void write_identity_diagonal(VolatileWords tile) {
+    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+        tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
+        tile[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_fp32;
+    }
+}
+
 // One FP32 32x32 identity tile, with which compute converts between A and E = A - I on diagonal tiles in FP32 DST.
 template <typename DFB>
 FORCE_INLINE void seed_identity_tile(Noc& noc, DFB& identity) {
-    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     identity.reserve_back(1);
     noc.async_write_zeros(identity, identity.get_entry_size());
     noc.write_zeros_l1_barrier();
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(identity.get_write_ptr());
-    // A tile's diagonal lies in its top-left and bottom-right faces.
-    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
-        words[row * tt::constants::FACE_WIDTH + row] = one_fp32;
-        words[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_fp32;
-    }
+    write_identity_diagonal(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(identity.get_write_ptr()));
     identity.push_back(1);
 }
 
