@@ -309,6 +309,8 @@ class TPAttention:
     # QWEN36_ATTN_KV_SPLIT=user class defaults (set per instance in __init__; modules built without it read these)
     _kv_split_ctx = None
     _kv_split_ready = False
+    # QWEN36_ROPE_PERM: set per instance in __init__ from tw["_rope_perm"]; modules built without it (host stubs) read this
+    rope_perm = False
 
     def __init__(self, mesh, args, tw, tt_ccl):
         self.mesh = mesh
@@ -1609,7 +1611,7 @@ class TPAttention:
         Never with rope_perm (the dense path's partial RoPE / norm rows assume unpermuted channels)."""
         return (
             tpc.verify_heads_dense_enabled()
-            and not self.rope_perm
+            and not getattr(self, "rope_perm", False)
             and "qk_norm_dense" in self.tw
             and B <= tpc.TILE_SIZE
             and 0 < self.rope_dim < self.HD
@@ -1830,7 +1832,7 @@ class TPAttention:
         )
         ttnn.deallocate(qkv3)
         if kv_only:
-            assert not self.rope_perm, "kv_only with rope_perm: the MTP drafter must keep rope_perm=False"
+            assert not getattr(self, "rope_perm", False), "kv_only with rope_perm: the MTP drafter keeps rope_perm=False"
             ttnn.deallocate(q)
             ttnn.deallocate(gate)
             k = ttnn.sharded_to_interleaved(k, _L1)

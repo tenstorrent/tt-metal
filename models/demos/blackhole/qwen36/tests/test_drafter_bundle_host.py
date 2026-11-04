@@ -305,8 +305,9 @@ def _build_layer(monkeypatch, **kw):
             self.qkv_cfg = self.wo_cfg = "HIFI2"
             seen["tw"] = tw
 
-    def _load(mesh, sd, args, cache_dir=None, attn_dtype=None):
+    def _load(mesh, sd, args, cache_dir=None, rope_perm=False, attn_dtype=None):
         seen["attn_dtype"] = attn_dtype
+        seen["rope_perm"] = rope_perm
         return {"w": 1}
 
     monkeypatch.setattr(tp_mod, "TPAttention", _FakeAttn)
@@ -315,6 +316,7 @@ def _build_layer(monkeypatch, **kw):
     monkeypatch.setattr(Qwen36DecoderLayer, "_make_norm", lambda self, *a, **k: "NORM")
     monkeypatch.setattr(tpc, "get_decode_allreduce", lambda args, ccl: None)
     monkeypatch.setattr(layer_mod, "substate", lambda sd, key: sd)
+    kw.setdefault("rope_perm", False)  # as the MTP drafter layer (mtp.py): own un-permuted weights, no QWEN36_ROPE_PERM
     lay = Qwen36DecoderLayer("mesh", _Args(), {}, layer_num=3, tensor_cache_path=None, tt_ccl="ccl", **kw)
     return lay, seen
 
