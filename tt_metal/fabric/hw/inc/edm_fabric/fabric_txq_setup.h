@@ -74,6 +74,10 @@ typedef union {
 } ETH_TXQ_CTRL_reg_u;
 
 static void eth_enable_packet_mode(uint32_t qnum) {
+#if defined(ARCH_QUASAR)
+    // A Keraunos link's packet mode is set by link bring-up, and the CCE has no TX-queue registers.
+    (void)qnum;
+#else
     // enable packet resend
     ETH_TXQ_CTRL_reg_u txq_ctrl_reg;
     txq_ctrl_reg.f.packet_resend_mode_active = 1;
@@ -131,4 +135,5 @@ static void eth_enable_packet_mode(uint32_t qnum) {
     enable_packet_mode_rxq(ETH_CORE_A_ETH_RXQ_1_CTRL_REG_ADDR);
 
     map_tx_queues_to_rx_queues();
+#endif
 }
