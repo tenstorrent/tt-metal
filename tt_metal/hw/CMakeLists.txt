@@ -464,7 +464,14 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                 ${GPP_FLAGS_common}
             )
             if(CPU STREQUAL "tt-qsr32")
-                list(APPEND GPP_FLAGS -DCOMPILE_FOR_TRISC)
+                # sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb (issue 61945); a later -march
+                # replaces the ISA and keeps the -mcpu tuning.
+                list(
+                    APPEND
+                    GPP_FLAGS
+                    -march=rv32im_zaamo_zba_zbb_xttzbkb
+                    -DCOMPILE_FOR_TRISC
+                )
             endif()
             add_custom_command(
                 OUTPUT

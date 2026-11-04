@@ -141,7 +141,7 @@ class TestConfig:
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
     QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
+        "-march=rv32im_zmmul_zaamo_zba_zbb_zve32f_zvl128b_xtttensixqsr_xttzbkb"
     )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
@@ -365,8 +365,11 @@ class TestConfig:
                 TestConfig.DATA_FORMAT_ENUM = BLACKHOLE_DATA_FORMAT_ENUM_VALUES
                 TestConfig.PROCESSOR_COUNT = 5
             case ChipArchitecture.QUASAR:
-                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
-                TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
+                # sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb (issue 61945).
+                TestConfig.ARCH_NON_COMPUTE = (
+                    "-mcpu=tt-qsr32 -march=rv32im_zaamo_zba_zbb_xttzbkb"
+                )
+                TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix -march=rv32im_zaamo_zba_zbb_xtttensixqsr_xttzbkb"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
@@ -1862,7 +1865,7 @@ class TestConfig:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
-                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                # ARCH_COMPUTE so it replaces the -march there and keeps the -mcpu tuning.
                 if self.requires_vector_ext and name == "unpack":
                     optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 

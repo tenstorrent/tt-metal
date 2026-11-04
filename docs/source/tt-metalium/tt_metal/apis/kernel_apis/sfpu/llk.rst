@@ -26,7 +26,7 @@ where ``cpu`` is one of:
   * tt-bh-tensix
   * tt-qsr32-tensix
 
-Note that the arch specification above overrides any ``-march=<xyz>`` that comes after it on the command line.
+A ``-march=<xyz>`` that comes after ``-mcpu`` on the command line replaces the ISA string implied by ``-mcpu``, while ``-mcpu`` still sets the tuning.
 
 Further, the following options disable parts of the SFPI enabled compiler:
 
