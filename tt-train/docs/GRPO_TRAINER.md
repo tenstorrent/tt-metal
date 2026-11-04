@@ -763,15 +763,15 @@ python3 boolq/boolq_training_example.py \
 Remote rollouts (`rollout_backend: "ttt_remote_sync"`): the
 same script on two tt-run ranks, with rank 1 generating through
 `tt-transformers` inside a captured ttnn trace (much faster than ttml decode).
-[`boolq/run_remote_rollout.sh`](../sources/examples/grpo/boolq/run_remote_rollout.sh)
+[`run_remote_rollout.sh`](../sources/examples/grpo/run_remote_rollout.sh)
 launches it with
 [`grpo_boolq_llama_1b_remote_rollout.yaml`](../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml)
-and the rank bindings in `boolq/configurations/`; see
+and the rank bindings in `configurations/`; see
 [Rollout modes](#rollout-modes) and the examples README for adapting it to
 other hardware.
 
 ```bash
-./tt-train/sources/examples/grpo/boolq/run_remote_rollout.sh
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example boolq
 ```
 
 ### BoolQ Accuracy Evaluation
@@ -809,7 +809,7 @@ chip), rewarding the correct answer and the `<think>`/`<answer>` format. See the
 [examples README](../sources/examples/grpo/README.md#gsm8k-qwen3-06b-remote-rollouts).
 
 ```bash
-./tt-train/sources/examples/grpo/gsm8k/run_remote_rollout.sh
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example gsm8k
 ```
 
 ### Plotting

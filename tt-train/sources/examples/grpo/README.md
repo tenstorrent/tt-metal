@@ -100,13 +100,12 @@ number in `<answer>`, tag counts, loose and strict `<think>`/`<answer>` format,
 and an integer answer.
 
 ```bash
-./tt-train/sources/examples/grpo/gsm8k/run_remote_rollout.sh
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example gsm8k
 ```
 
-[`gsm8k/run_remote_rollout.sh`](gsm8k/run_remote_rollout.sh) uses the rank
-bindings in [`gsm8k/configurations/split_1_1/`](gsm8k/configurations/split_1_1/)
-(one P150 per rank) and takes the same `--config`, `--script`, `--hostfile` and
-`--rank-bindings` overrides as the BoolQ launcher.
+[`run_remote_rollout.sh`](run_remote_rollout.sh) uses the rank bindings in
+[`configurations/split_1_1/`](configurations/split_1_1/) (one P150 per rank)
+for this example. It takes the same overrides as for BoolQ.
 
 [`gsm8k/eval_gsm8k.py`](gsm8k/eval_gsm8k.py) prints pass@k tables (correct
 answer, tags present, tags exactly once, format regex) on the GSM8K test split
@@ -159,14 +158,14 @@ the BoolQ training script runs on two tt-run ranks: rank 0 trains the ttml
 policy, rank 1 generates with `tt-transformers` (`TTTRolloutSampler`).
 
 ```bash
-./tt-train/sources/examples/grpo/boolq/run_remote_rollout.sh
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example boolq
 ```
 
-[`boolq/run_remote_rollout.sh`](boolq/run_remote_rollout.sh) launches
+[`run_remote_rollout.sh`](run_remote_rollout.sh) launches
 `boolq/boolq_training_example.py --config <remote yaml>` on both ranks with
 the rank bindings in
-[`boolq/configurations/split_2_2/`](boolq/configurations/split_2_2/)
-(2 TTML chips + 2 TTT chips on one host). `--config`, `--script`,
+[`configurations/split_2_2/`](configurations/split_2_2/)
+(2 TTML chips + 2 TTT chips on one host). `--split`, `--config`, `--script`,
 `--hostfile` and `--rank-bindings` override the defaults. `HF_TOKEN` must be
 set: both ranks load `meta-llama/Llama-3.2-1B-Instruct`.
 
@@ -198,7 +197,7 @@ until rank 0 pushes its weights as version 0, before the first batch.
 
 ### Adapting the rank bindings to other hardware
 
-The default `configurations/split_2_2` targets a Blackhole loudbox or
+The BoolQ default, `configurations/split_2_2`, targets a Blackhole loudbox or
 quietbox with P100 / P150 cards: 4 single-chip PCIe devices, 2 pinned to
 each rank. Two files encode the host-specific assumptions:
 
@@ -214,9 +213,8 @@ For a `[1, 4]` mesh per rank (8 chips), set `device_config.mesh_shape` and
 (`hosts.txt`, `mgd.textproto` with `device_topology { dims: [ 1, 4 ] }`,
 `rank_bindings.yaml` with 4 chips per rank). The weight-transfer test's
 [`configurations/4-4/`](../../../tests/python/remote_rollout/weight_transfer/configurations/4-4/)
-is a working `[1, 4]` template. Point `CONFIG_DIR` in
-`run_remote_rollout.sh` (or `--rank-bindings` / `--hostfile`) at the new
-directory.
+is a working `[1, 4]` template. Pass `--split split_4_4` (or `--rank-bindings` /
+`--hostfile`) to `run_remote_rollout.sh`.
 
 ### Limitations
 

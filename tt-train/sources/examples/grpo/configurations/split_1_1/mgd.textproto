@@ -1,11 +1,8 @@
-# Mesh Graph Descriptor for the 1->1 GRPO GSM8K example: two [1, 1]
-# meshes (one per MPI rank), each covering one P150 card; the FABRIC graph wires
-# them together for the cross-rank transport.
+# Mesh Graph Descriptor for a 1->1 GRPO split: two [1, 1] meshes (one per MPI
+# rank), each covering one P150 card.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# The full physical eth topology must be declared here or
-# ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned for
-# ASIC id ...`. Adjust this file (and rank_bindings.yaml) for your machine.
+# Adjust this file (and rank_bindings.yaml) for your machine.
 
 mesh_descriptors {
   name: "M0"

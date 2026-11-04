@@ -1,6 +1,6 @@
 # Two-rank Qwen3-0.6B GRPO on GSM8K with remote rollouts: 1 TTML training chip
 # (rank 0) + 1 TTT rollout chip (rank 1), 2 chips total on one host.
-# Launch with grpo/gsm8k/run_remote_rollout.sh.
+# Launch with grpo/run_remote_rollout.sh --example gsm8k.
 
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
