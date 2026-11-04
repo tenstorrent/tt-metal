@@ -2,18 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
-// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
-// RUN: %{blackhole_compare_codegen} %t.dump
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %t/asserts.cpp -o %t/assert.o
+// RUN: %{blackhole_objdump} -d %t/assert.o | FileCheck %s --check-prefix=ASSERT
 
 // Compare each HAL function with its adjacent reference_ function. Disable
 // identical-code folding so both bodies are emitted independently.
-// LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
+// codegen.cpp is compiled without LLK_ASSERT so runtime paths contain only the
+// issued instruction; asserts.cpp checks the runtime operand asserts.
 // Semaphore selectors are one bit per semaphore: S<n> is bit n.
+
+//--- common.h
+#pragma once
 
 #include "hal/sync.h"
 
 namespace sync = hal::sync;
+
+//--- codegen.cpp
+#include "common.h"
 
 extern "C" __attribute__((noinline, used)) void stall_variants()
 {
@@ -88,3 +98,38 @@ extern "C" __attribute__((noinline, used)) void reference_semaphore_runtime(
 {
     TT_SEMWAIT(hal::to_underlying(targets), 1u << hal::to_underlying(semaphore), hal::to_underlying(conditions));
 }
+
+//--- asserts.cpp
+#include "common.h"
+
+// Invalid runtime operands must trap before the immediate instruction is issued;
+// valid boundaries must not trap.
+
+extern "C" void reject_invalid_runtime_stall_targets()
+{
+    sync::wait::stall(static_cast<sync::StallTarget>(512), sync::StallCondition::MathIdle);
+}
+
+// ASSERT-LABEL: <reject_invalid_runtime_stall_targets>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void reject_invalid_runtime_stall_conditions()
+{
+    sync::wait::stall(sync::StallTarget::Math, static_cast<sync::StallCondition>(8192));
+}
+
+// ASSERT-LABEL: <reject_invalid_runtime_stall_conditions>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void accept_runtime_stall_boundaries()
+{
+    sync::wait::stall(sync::StallTarget::All, sync::StallCondition::All);
+}
+
+// ASSERT-LABEL: <accept_runtime_stall_boundaries>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret

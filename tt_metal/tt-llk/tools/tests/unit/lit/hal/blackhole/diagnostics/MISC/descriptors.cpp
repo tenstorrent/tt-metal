@@ -6,10 +6,12 @@
 // RUN: %split-file %s %t
 // RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/valid.cpp
 // RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT %t/valid.cpp
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=1 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=2 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=3 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} -DINVALID_CASE=4 %t/invalid.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/flush-scope.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/resource-class.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/resource-selection.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/resource-linger.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/flush-all-first.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/flush-all-last.cpp 2>&1 | FileCheck %s --check-prefix=INVALID
 // clang-format on
 
 // INVALID: error: {{.*}}__builtin_trap(){{.*}} is not a constant expression
@@ -33,15 +35,32 @@ static_assert(hm::ResourceDeclaration {15, 511, 15}.operation() == 0x0501ffffu);
 static_assert(hm::ResourceDeclaration {15, 511, 15}.get_operation() == 0x0501ffffu);
 static_assert(hm::flush_tdma_operation<hm::FlushScope::All>() == 0x46000000u);
 
-//--- invalid.cpp
+//--- flush-scope.cpp
 #include "common.h"
 
-#if INVALID_CASE == 1
 constexpr auto invalid = hm::FlushTdma {static_cast<hm::FlushScope>(16)}.operation();
-#elif INVALID_CASE == 2
+
+//--- resource-class.cpp
+#include "common.h"
+
 constexpr auto invalid = hm::ResourceDeclaration {16, 0, 1}.operation();
-#elif INVALID_CASE == 3
+
+//--- resource-selection.cpp
+#include "common.h"
+
 constexpr auto invalid = hm::ResourceDeclaration {0, 512, 1}.operation();
-#elif INVALID_CASE == 4
+
+//--- resource-linger.cpp
+#include "common.h"
+
 constexpr auto invalid = hm::ResourceDeclaration {0, 0, 16}.operation();
-#endif
+
+//--- flush-all-first.cpp
+#include "common.h"
+
+constexpr auto invalid = hm::FlushScope::All | hm::FlushScope::Packer;
+
+//--- flush-all-last.cpp
+#include "common.h"
+
+constexpr auto invalid = hm::FlushScope::Packer | hm::FlushScope::All;
