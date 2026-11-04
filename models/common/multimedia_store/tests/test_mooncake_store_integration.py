@@ -34,6 +34,7 @@ from models.common.multimedia_store.reader import FetchRequest, Missing
 if not sys.platform.startswith("linux"):
     pytest.skip("Mooncake and the 127.0.0.2 loopback address are Linux only", allow_module_level=True)
 try:
+    import mooncake
     import mooncake.store as mooncake_store
 except ImportError as e:  # a broken env, so it fails rather than skips
     pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
@@ -49,13 +50,16 @@ def _free_port(host: str = "127.0.0.1") -> int:
 
 
 def _master_binary() -> str:
-    found = shutil.which("mooncake_master")
-    if found:
-        return found
-    bundled = os.path.join(os.path.dirname(mooncake_store.__file__), "mooncake_master")
-    if not os.access(bundled, os.X_OK):
-        pytest.skip("mooncake_master not found")
-    return bundled
+    """mooncake_master from PATH, the venv's bin, or the wheel's package directory."""
+    candidates = [
+        shutil.which("mooncake_master"),
+        os.path.join(os.path.dirname(sys.executable), "mooncake_master"),
+        os.path.join(os.path.dirname(mooncake.__file__), "mooncake_master"),
+    ]
+    for path in candidates:
+        if path and os.access(path, os.X_OK):
+            return path
+    pytest.fail(f"mooncake_master not found in {candidates}")
 
 
 def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> None:

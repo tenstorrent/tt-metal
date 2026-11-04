@@ -267,7 +267,7 @@ def test_plain_tuples_and_an_empty_batch(setup):
 
 @pytest.mark.parametrize("rc", [-800, -900], ids=["peer_gone", "master_gone"])
 def test_failed_remote_read_is_unavailable(setup, rc):
-    """The codes Mooncake 0.3.13.post1 returns when the host holding the value, or the master, has died."""
+    """The codes Mooncake returns when the host holding the value, or the master, has died."""
     client, reader, _, _ = setup
     client.get_into_ranges = lambda *args: [[[rc]]]
     with pytest.raises(StoreUnavailable, match=f"read {rc} of"):
