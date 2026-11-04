@@ -270,6 +270,29 @@ static xt::xarray<float> create_causal_mask(size_t seq_len) {
     return mask;
 }
 
+// Zig-zag layout: the sequence is cut into 2N chunks and rank d holds chunks [d | 2N-1-d].
+// Reorders (B, H, S, D) along S: forward maps natural order to the zig-zag device order,
+// inverse maps it back.
+static xt::xarray<float> zigzag_permute(const xt::xarray<float>& x, size_t ring_size, bool forward) {
+    const size_t B = x.shape()[0], H = x.shape()[1], S = x.shape()[2], D = x.shape()[3];
+    const size_t num_chunks = 2 * ring_size;
+    const size_t chunk = S / num_chunks;
+    std::vector<size_t> order;
+    for (size_t d = 0; d < ring_size; ++d) {
+        order.push_back(d);
+        order.push_back(num_chunks - 1 - d);
+    }
+    xt::xarray<float> out = xt::empty<float>(x.shape());
+    for (size_t bh = 0; bh < B * H; ++bh) {
+        for (size_t i = 0; i < num_chunks; ++i) {
+            const size_t from = forward ? order[i] : i;
+            const size_t to = forward ? i : order[i];
+            std::copy_n(x.data() + (bh * S + from * chunk) * D, chunk * D, out.data() + (bh * S + to * chunk) * D);
+        }
+    }
+    return out;
+}
+
 static void TestRingAttention(
     const size_t batch,
     const size_t num_heads,
@@ -277,8 +300,11 @@ static void TestRingAttention(
     const size_t head_dim,
     const bool test_backward = false,
     const float rtol = 1e-2F,
-    const float atol = 5e-1F) {
+    const float atol = 5e-1F,
+    const ttml::ops::distributed::RingAttentionLayout layout =
+        ttml::ops::distributed::RingAttentionLayout::Contiguous) {
     using namespace ttml;
+    const bool zigzag = layout == ops::distributed::RingAttentionLayout::ZigZag;
 
     auto* device = &autograd::ctx().get_device();
     auto mesh_shape = device->shape();
@@ -311,12 +337,17 @@ static void TestRingAttention(
     const auto key_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
     const auto value_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
 
-    auto query_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(query_xt, device, ttnn::Layout::TILE, query_mapper.get());
-    auto key_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(key_xt, device, ttnn::Layout::TILE, key_mapper.get());
-    auto value_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value_xt, device, ttnn::Layout::TILE, value_mapper.get());
+    // The device sees the sequence in the layout under test; the reference stays in natural order.
+    auto to_device_layout = [&](const xt::xarray<float>& x) { return zigzag ? zigzag_permute(x, cp_size, true) : x; };
+    auto from_device_layout = [&](const xt::xarray<float>& x) {
+        return zigzag ? zigzag_permute(x, cp_size, false) : x;
+    };
+    auto query_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(query_xt), device, ttnn::Layout::TILE, query_mapper.get());
+    auto key_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(key_xt), device, ttnn::Layout::TILE, key_mapper.get());
+    auto value_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(value_xt), device, ttnn::Layout::TILE, value_mapper.get());
 
     auto query_tensor = autograd::create_tensor(query_tt, /* requires_grad */ true);
     auto key_tensor = autograd::create_tensor(key_tt, /* requires_grad */ true);
@@ -325,7 +356,7 @@ static void TestRingAttention(
     // No explicit mask tensor: the op rejects one in CP mode; causal masking comes from
     // mask_type and is generated on device.
     auto output_tensor = ops::distributed::ring_attention_sdpa(
-        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal);
+        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, layout);
 
     // Gather output from all devices
     auto output_xtensors = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
@@ -347,6 +378,7 @@ static void TestRingAttention(
         }
     }
 
+    gathered_output = from_device_layout(gathered_output);
     EXPECT_TRUE(xt::allclose(ref_result.output, gathered_output, rtol, atol))
         << "Ring attention output does not match reference SDPA output";
 
@@ -360,7 +392,7 @@ static void TestRingAttention(
 
         const auto grad_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
         auto grad_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-            grad_output_xt, device, ttnn::Layout::TILE, grad_mapper.get());
+            to_device_layout(grad_output_xt), device, ttnn::Layout::TILE, grad_mapper.get());
 
         output_tensor->set_grad(grad_tt);
         output_tensor->backward();
@@ -399,6 +431,10 @@ static void TestRingAttention(
         // implementation at <= 0.7x of this grade across 32 seeds, while softmax-backward
         // math errors (wrong u, double scale) overshoot it 25-1000x, so detection
         // power is intact.
+        gathered_dQ = from_device_layout(gathered_dQ);
+        gathered_dK = from_device_layout(gathered_dK);
+        gathered_dV = from_device_layout(gathered_dV);
+
         const float bw_rtol = 3e-2F;
         const float bw_atol = 5e-2F;
         // dK is the only gradient whose accumulation length is the query sequence
@@ -489,6 +525,43 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*batch=*/2,
         /*num_heads=*/4,
         /*seq_len=*/256,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// Zig-zag layout (causal load balancing): rank d holds chunks [d | 2N-1-d]. The host permutes
+// Q/K/V/dO into that layout and un-permutes the results, so the reference is unchanged.
+// S_local = 128 (two 64-token halves).
+TEST_F(GalaxyRingSDPATest, ZigZagCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/1024,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/5e-1F,
+        ttml::ops::distributed::RingAttentionLayout::ZigZag);
+}
+
+TEST_F(GalaxyRingSDPATest, ZigZagLargerBatchCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/4,
+        /*num_heads=*/8,
+        /*seq_len=*/1024,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/5e-1F,
+        ttml::ops::distributed::RingAttentionLayout::ZigZag);
+}
+
+// Contiguous counterpart at the zig-zag test size, so both layouts are graded on the same problem.
+TEST_F(GalaxyRingSDPATest, ContiguousCausalMaskBackwardSeq1024) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/1024,
         /*head_dim=*/64,
         /*test_backward=*/true);
 }

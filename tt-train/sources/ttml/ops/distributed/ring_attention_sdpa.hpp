@@ -10,6 +10,14 @@
 
 namespace ttml::ops::distributed {
 
+// How the global sequence is laid out across the CP ring.
+// - Contiguous: rank d holds tokens [d*S_local, (d+1)*S_local).
+// - ZigZag (causal load balancing): the sequence is cut into 2N chunks of S_local/2 tokens and
+//   rank d holds chunks [d | 2N-1-d], concatenated in that order. Every rank then does the same
+//   attention work at every ring step instead of the last rank working every step. The caller
+//   (data loader, RoPE positions) must lay tokens out this way; this op only schedules the work.
+enum class RingAttentionLayout : uint8_t { Contiguous = 0, ZigZag = 1 };
+
 /**
  * Ring Attention SDPA for Context Parallelism.
  *
@@ -40,6 +48,8 @@ namespace ttml::ops::distributed {
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param layout Sequence layout across the ring (see RingAttentionLayout). ZigZag requires a
+ *             causal mask and S_local to be a multiple of 64 (two tile-aligned halves).
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,6 +60,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    RingAttentionLayout layout = RingAttentionLayout::Contiguous);
 
 }  // namespace ttml::ops::distributed

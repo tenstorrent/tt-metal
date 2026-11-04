@@ -187,6 +187,15 @@ target_link_libraries(
 )
 tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
 
+add_executable(ring_attention_benchmark benchmark/ring_attention_benchmark.cpp)
+target_link_libraries(
+    ring_attention_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+tt_reuse_precompile_headers(ring_attention_benchmark ttml_pch)
+
 add_executable(swiglu_packed_benchmark benchmark/swiglu_packed_benchmark.cpp)
 target_link_libraries(
     swiglu_packed_benchmark
