@@ -137,6 +137,19 @@ void bind_fused_experts(nb::module_& mod) {
             all_reduce_num_links: Fabric links the all-reduce uses. Defaults to 1.
             all_reduce_topology: Fabric topology of the all-reduce (``ttnn.Topology``). Defaults to
                 ``ttnn.Topology.Linear``.
+            persistent_layer_table: Run the op persistently (launched once, looping on device) over
+                the layers of this [num_layers, 16 + 2E] uint32 ROW_MAJOR DRAM table, one row per
+                layer: [layer id, shared gate_up, shared down, router gate, router bias, 0 x 11,
+                E gate_up, E down] buffer addresses. Each chip reads [64-byte header (layer id in
+                word 0) | bf16 token row] pages from its H2D socket and the MoE output, reduced onto
+                mesh coordinate (0, 0), comes back on that chip's D2H socket. A layer id >=
+                num_layers (0xFFFFFFFF) stops the kernels. Needs the whole-mesh all-reduce, the router
+                with a DRAM gate, the shared expert and the one-row replica; the returned tensor is
+                the op's scratch, and results arrive only on the D2H socket.
+            persistent_socket_core: Logical core every socket lives on, outside the worker grid.
+            persistent_h2d_socket_addresses: Each chip's H2D socket config buffer address, mesh
+                row-major.
+            persistent_d2h_socket_address: The D2H socket config buffer address on (0, 0).
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -162,7 +175,11 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("router_bias") = std::nullopt,
         nb::arg("all_reduce_cluster_axes") = std::nullopt,
         nb::arg("all_reduce_num_links") = 1,
-        nb::arg("all_reduce_topology") = tt::tt_fabric::Topology::Linear);
+        nb::arg("all_reduce_topology") = tt::tt_fabric::Topology::Linear,
+        nb::arg("persistent_layer_table") = std::nullopt,
+        nb::arg("persistent_socket_core") = std::nullopt,
+        nb::arg("persistent_h2d_socket_addresses") = std::nullopt,
+        nb::arg("persistent_d2h_socket_address") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

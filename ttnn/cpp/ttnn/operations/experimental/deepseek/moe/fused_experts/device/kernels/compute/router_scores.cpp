@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "../persistent.h"
 
 // Router compute kernel (runs on the router cores, the row below the expert grid).
 //
@@ -28,6 +29,8 @@
 //
 // Runtime args:
 //   0: first_tile (this core's first tile column)   1: n_tiles
+//
+// FE_PERSISTENT: the body runs once per iteration (see persistent.h); popping the row stays last.
 
 namespace {
 constexpr uint32_t kOneBits = 0x3f800000u;        // softplus beta and 1/beta: 1.0f
@@ -60,86 +63,101 @@ void kernel_main() {
     // SrcOrder::Reverse: SrcA holds the weight (in1), SrcB the activation (in0).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_rin_id, cb_rw_id, cb_rout_id);
 
-    out_cb.reserve_back(2u * n_tiles);
-    tile_regs_acquire();
+    auto iteration = [&]() {
+        out_cb.reserve_back(2u * n_tiles);
+        tile_regs_acquire();
 
-    // The bias goes into dst n_tiles + n first, so custom_mm is the last FPU op ahead of the SFPU tail.
-    // reconfig_full_operand_srca, not reconfig_data_format_srca: SrcA's face geometry changes between the
-    // 32x32 weight and the 1x32 bias, and a format-only reconfig would unpack one as the other.
-    bias_cb.wait_front(bias_tiles);
-    copy_init(cb_rbias_id);
-    reconfig_full_operand_srca(cb_rbias_id);
-    for (uint32_t n = 0; n < n_tiles; ++n) {
-        copy_tile(cb_rbias_id, first_tile + n * col_stride, n_tiles + n);
-    }
-    reconfig_full_operand_srca(cb_rw_id);
-
-    custom_mm_block_init_short<transpose, layout>(cb_rin_id, cb_rw_id, cb_rout_id, 1);
-    in_cb.wait_front(k_tiles);
-    {
-        DeviceZoneScopedN("FE_R_MM");
-        // A DRAM gate arrives piece by piece (an L1 one all at once); only a column's last piece finalizes.
-        constexpr uint32_t pieces_per_col = k_tiles / piece_tiles;
+        // The bias goes into dst n_tiles + n first, so custom_mm is the last FPU op ahead of the SFPU tail.
+        // reconfig_full_operand_srca, not reconfig_data_format_srca: SrcA's face geometry changes between the
+        // 32x32 weight and the 1x32 bias, and a format-only reconfig would unpack one as the other.
+        bias_cb.wait_front(bias_tiles);
+        copy_init(cb_rbias_id);
+        reconfig_full_operand_srca(cb_rbias_id);
         for (uint32_t n = 0; n < n_tiles; ++n) {
-            for (uint32_t p = 0; p < pieces_per_col; ++p) {
-                const uint32_t k0 = p * piece_tiles;
-                w_cb.wait_front(n * k_tiles + k0 + piece_tiles);
-                if (p + 1u == pieces_per_col) {
-                    custom_mm_block<layout, true>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
-                } else {
-                    custom_mm_block<layout, false>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+            copy_tile(cb_rbias_id, first_tile + n * col_stride, n_tiles + n);
+        }
+        reconfig_full_operand_srca(cb_rw_id);
+
+        custom_mm_block_init_short<transpose, layout>(cb_rin_id, cb_rw_id, cb_rout_id, 1);
+        in_cb.wait_front(k_tiles);
+        {
+            DeviceZoneScopedN("FE_R_MM");
+            // A DRAM gate arrives piece by piece (an L1 one all at once); only a column's last piece finalizes.
+            constexpr uint32_t pieces_per_col = k_tiles / piece_tiles;
+            for (uint32_t n = 0; n < n_tiles; ++n) {
+                for (uint32_t p = 0; p < pieces_per_col; ++p) {
+                    const uint32_t k0 = p * piece_tiles;
+                    w_cb.wait_front(n * k_tiles + k0 + piece_tiles);
+                    if (p + 1u == pieces_per_col) {
+                        custom_mm_block<layout, true>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                    } else {
+                        custom_mm_block<layout, false>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                    }
                 }
             }
         }
-    }
-    custom_mm_block_uninit<layout>(cb_rout_id);
+        custom_mm_block_uninit<layout>(cb_rout_id);
 
-    softplus_tile_init();
-    for (uint32_t n = 0; n < n_tiles; ++n) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_softplus,
-            (APPROX, DST_ACCUM_MODE, kTinyTileIterations),
-            n,
-            VectorMode::R,
-            kOneBits,
-            kOneBits,
-            kThresholdBits));
-    }
-    sqrt_tile_init();
-    for (uint32_t n = 0; n < n_tiles; ++n) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sqrt,
-            (APPROX, kTinyTileIterations, DST_ACCUM_MODE, false),
-            n,
-            VectorMode::R));
-    }
+        softplus_tile_init();
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_softplus,
+                (APPROX, DST_ACCUM_MODE, kTinyTileIterations),
+                n,
+                VectorMode::R,
+                kOneBits,
+                kOneBits,
+                kThresholdBits));
+        }
+        sqrt_tile_init();
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_sqrt,
+                (APPROX, kTinyTileIterations, DST_ACCUM_MODE, false),
+                n,
+                VectorMode::R));
+        }
 
-    add_binary_tile_init();
-    for (uint32_t n = 0; n < n_tiles; ++n) {
-        MATH((SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sfpu_binary,
-            (APPROX, ckernel::BinaryOp::ADD, kTinyTileIterations, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
-            n,
-            n_tiles + n,
-            n_tiles + n,
-            VectorMode::R)));
-    }
-    tile_regs_commit();
+        add_binary_tile_init();
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            MATH((SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_sfpu_binary,
+                (APPROX,
+                 ckernel::BinaryOp::ADD,
+                 kTinyTileIterations,
+                 DST_ACCUM_MODE,
+                 ckernel::DstRoundingMode::Default),
+                n,
+                n_tiles + n,
+                n_tiles + n,
+                VectorMode::R)));
+        }
+        tile_regs_commit();
 
-    tile_regs_wait();
-    for (uint32_t t = 0; t < 2u * n_tiles; ++t) {
-        pack_tile<true>(t, cb_rout_id, t);
-    }
-    tile_regs_release();
-    out_cb.push_back(2u * n_tiles);
+        tile_regs_wait();
+        for (uint32_t t = 0; t < 2u * n_tiles; ++t) {
+            pack_tile<true>(t, cb_rout_id, t);
+        }
+        tile_regs_release();
+        out_cb.push_back(2u * n_tiles);
 
-    bias_cb.pop_front(bias_tiles);
-    w_cb.pop_front(n_tiles * k_tiles);
-    in_cb.pop_front(k_tiles);
+        bias_cb.pop_front(bias_tiles);
+        w_cb.pop_front(n_tiles * k_tiles);
+        in_cb.pop_front(k_tiles);
+    };
+
+#if defined(FE_PERSISTENT)
+    for (uint32_t iter = 0; fe_wait_go(iter); ++iter) {
+        fe_rewind_cbs();
+        iteration();
+    }
+#else
+    iteration();
+#endif
 }

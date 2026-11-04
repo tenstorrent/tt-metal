@@ -1175,7 +1175,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
         ``routing`` may instead be the router itself (:class:`RouterWeights`, ``t == 1`` with
         :attr:`fuses_router`), which the op runs on the grid row below its experts; ``x_tok`` is then
-        the replica over :meth:`core_grid` with ``router=True``.
+        either the replica over :meth:`core_grid` with ``router=True`` or the bare row, which the op
+        broadcasts onto those cores itself.
         """
         scores = None
         indices = None
@@ -1442,12 +1443,19 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         x_flat = ttnn.reshape(hidden, [1, 1, t, h])
         rows = x_flat
         fuse_router = self.fused_router and t == 1
-        # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode RMSNorm already
-        # leaves that; an interleaved tensor is width-sharded over one tile row first, and h must
-        # be tile-aligned for that.
-        if not x_flat.is_sharded():
-            x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(t, h, self.device))
-        x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, self.experts.core_grid(router=fuse_router))
+        # With the router and the shared expert both inside ``fused_experts`` the whole block is that
+        # one op, which broadcasts the row onto its cores itself, so it takes ``x_flat`` as it is -- if
+        # it is ROW_MAJOR: the op's output tile follows its input's, and the width-sharded TP partial's
+        # [1, H/16] shards only fit 1x32 tiles.
+        if not (fuse_router and self.fused_shared is not None and x_flat.layout == ttnn.ROW_MAJOR_LAYOUT):
+            # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode RMSNorm already
+            # leaves that; an interleaved tensor is width-sharded over one tile row first, and h must
+            # be tile-aligned for that.
+            if not x_flat.is_sharded():
+                x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(t, h, self.device))
+            x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(
+                x_flat, self.experts.core_grid(router=fuse_router)
+            )
         # The learned router has no separate trace-safe variant: it allocates every operand
         # it uses, so :meth:`DeepSeekV4TopKRouter.forward` is already capture-safe.
         if self.is_hash:

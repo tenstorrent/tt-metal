@@ -117,10 +117,16 @@ inline void fetch_weight_one(
 
     CircularBuffer cb_bcast(cb_bcast_id);
     CoreLocalMem<volatile uint32_t> ids(cb_bcast.get_write_ptr());
+#if defined(FE_PERSISTENT)
+    // The layer changes per iteration, so the leader broadcasts the hits' addresses with their ids:
+    // here `ct_w_addr_base` is where they start in cb_bcast, in hit order.
+    const uint32_t w_addr = ids[ct_w_addr_base + i];
+#else
     const uint32_t expert = ids[i];
     // Weight base addresses live in the compile-time args (in expert-id order); index the
     // resident kernel_compile_time_args array by the runtime-selected expert id directly.
     const uint32_t w_addr = kernel_compile_time_args[ct_w_addr_base + expert];
+#endif
     const auto w = TensorAccessor(weight_args, w_addr);
 
     CircularBuffer cb_weights(cb_weights_id);
@@ -639,14 +645,17 @@ inline void run_reader_loop(
     const SharedDownArgs& shared_down_args,
     uint32_t gate_up_k_shards,
     uint32_t gate_up_col_shards,
-    uint32_t sem_ids_id) {
+    uint32_t sem_ids_id,
+    // The persistent op's iteration: every semaphore below counts up across iterations, so the
+    // 6-expert path waits for (iter + 1) times its one-shot target.
+    uint32_t iter = 0) {
     constexpr uint32_t kOutTilesPerCore = 2;
     const bool is_hub = gather.role != 0;
     // Everything but the shared expert's gate_up depends on the expert ids broadcast by {0,0}
     // (whose own copy is already set when it gets here).
     auto wait_for_ids = [&]() {
         DeviceZoneScopedN("FE_WAIT_IDS");
-        Semaphore<>(sem_ids_id).wait(1);
+        Semaphore<>(sem_ids_id).wait(iter + 1u);
     };
 
     // ---- 6-expert path: 16 or 18 gate_up cores per expert, 16 down cores. ----
@@ -789,10 +798,10 @@ inline void run_reader_loop(
                     act_tiles,
                     region_first,
                     region_cols,
-                    /*gather_target=*/num_producers + shared_tiles,
+                    /*gather_target=*/(num_producers + shared_tiles) * (iter + 1u),
                     sem_gather_id,
                     sem_bcast_id,
-                    /*blocks_done=*/gather.num_hubs,
+                    /*blocks_done=*/gather.num_hubs * (iter + 1u),
                     num_dests,
                     gather,
                     /*send_slot_free_ack=*/false,
@@ -807,7 +816,7 @@ inline void run_reader_loop(
                     act_tiles,
                     sem_bcast_id,
                     sem_gather_id,
-                    /*blocks_done=*/gather.num_hubs,
+                    /*blocks_done=*/gather.num_hubs * (iter + 1u),
                     /*send_slot_free_ack=*/false,
                     gather);
             }
@@ -832,7 +841,7 @@ inline void run_reader_loop(
         }
 
         if (is_root) {
-            Semaphore<>(sem_reduce_id).wait(num_expert_groups - 1u);
+            Semaphore<>(sem_reduce_id).wait((num_expert_groups - 1u) * (iter + 1u));
             CircularBuffer cb_reduce(cb_reduce_id);
             cb_reduce.push_back(reduce_tiles);
         }
