@@ -371,7 +371,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
         _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            start_dst_index + tile, src_format, dst_format, num_faces);
+            start_dst_index + tile, src_format, dst_format, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces));
     }
 }
 
