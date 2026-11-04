@@ -22,7 +22,8 @@ namespace tt::tt_metal::experimental {
 struct CompileSessionOptions {
     // Worker threads that build queued kernels. 0 uses the hardware concurrency.
     std::size_t workers = 0;
-    // JIT compile-server endpoints ("host:port"). Empty means every kernel builds locally.
+    // JIT compile-server endpoints ("host:port"). Empty means every kernel builds locally. If a server cannot be
+    // reached or a reply does not arrive within TT_METAL_JIT_SERVER_TIMEOUT_S, the session stops using them.
     std::vector<std::string> remote_endpoints;
     // Kernels go to the compile server only once the session has queued at least this many;
     // below that, the round trips cost more than they save.
@@ -30,17 +31,18 @@ struct CompileSessionOptions {
 };
 
 struct CompileSessionStats {
-    std::size_t programs_added = 0;     // add() calls that resolved at least one kernel
-    std::size_t programs_deduped = 0;   // add() calls skipped because their key was already added
-    std::size_t kernels_queued = 0;     // distinct kernels queued
-    std::size_t kernels_built = 0;      // built by a session worker (on-disk cache hits included)
-    std::size_t kernels_preempted = 0;  // built or being built by another thread when a worker reached them
-    std::size_t kernels_remote = 0;     // of kernels_built, the ones the compile server built
-    std::size_t kernels_failed = 0;     // build threw; the kernel compiles inline later
-    std::size_t kernels_dropped = 0;    // still queued when the session closed
-    std::size_t kernels_pending = 0;    // queued, not started yet
-    std::size_t kernels_running = 0;    // being built right now
-    double busy_seconds = 0.0;          // worker time spent building, summed over workers
+    std::size_t programs_added = 0;           // add() calls that resolved at least one kernel
+    std::size_t programs_deduped = 0;         // add() calls skipped because their key was already added
+    std::size_t kernels_queued = 0;           // distinct kernels queued
+    std::size_t kernels_built = 0;            // built by a session worker (on-disk cache hits included)
+    std::size_t kernels_preempted = 0;        // built or being built by another thread when a worker reached them
+    std::size_t kernels_remote = 0;           // of kernels_built, the ones the compile server built
+    std::size_t kernels_remote_fallback = 0;  // remote build failed and the kernel was built here instead
+    std::size_t kernels_failed = 0;           // build threw; the kernel compiles inline later
+    std::size_t kernels_dropped = 0;          // still queued when the session closed
+    std::size_t kernels_pending = 0;          // queued, not started yet
+    std::size_t kernels_running = 0;          // being built right now
+    double busy_seconds = 0.0;                // worker time spent building, summed over workers
 };
 
 // Builds the kernels of programs that were constructed but not compiled, ahead of the run that needs them.

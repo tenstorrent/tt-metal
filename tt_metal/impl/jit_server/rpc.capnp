@@ -47,6 +47,10 @@ struct CompileRequest {
 
     # Generated files to write before compiling (shared by all targets).
     generatedFiles @4 :List(GeneratedFile);
+
+    # The client's tree (TT_METAL_HOME, with a trailing slash). Paths in the request start with it; a
+    # server whose tree is elsewhere swaps in its own. Empty means use the paths as sent.
+    clientRoot @5 :Text;
 }
 
 struct ElfBlob {

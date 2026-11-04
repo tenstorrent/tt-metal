@@ -316,6 +316,7 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
+    desc.request.client_root = build_env.build_env.get_root_path();
     static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
     // Non-preprocess mode ships the generated source tree for the server to compile. In
     // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so

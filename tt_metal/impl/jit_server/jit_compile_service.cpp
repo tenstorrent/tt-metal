@@ -158,7 +158,7 @@ std::uint64_t JitCompileService::estimate_compile_request_bytes_in(const Compile
     //   * all per-target string fields (`target_name`, flags, includes, linker fields, and list string entries)
     //   * generated file names and generated file content bytes
     // This intentionally excludes scalar fields and container overhead.
-    std::uint64_t bytes = request.gpp.size() + request.kernel_name.size();
+    std::uint64_t bytes = request.gpp.size() + request.kernel_name.size() + request.client_root.size();
 
     for (const auto& target : request.targets) {
         bytes += target.target_name.size();
@@ -213,6 +213,7 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
     request.build_key = reader.getBuildKey();
     request.kernel_name = reader.getKernelName().cStr();
     request.gpp = reader.getGpp().cStr();
+    request.client_root = reader.getClientRoot().cStr();
     for (auto target : reader.getTargets()) {
         TargetRecipe t;
         t.target_name = target.getTargetName().cStr();
@@ -290,6 +291,14 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
             } catch (const std::exception& e) {
                 response.success = false;
                 response.error_message = e.what();
+            } catch (const kj::Exception& e) {
+                // Not a std::exception. Every exception must be caught here: one that escapes skips the
+                // fulfill below and the client waits for a reply that never comes.
+                response.success = false;
+                response.error_message = e.getDescription().cStr();
+            } catch (...) {
+                response.success = false;
+                response.error_message = "unknown exception during compile";
             }
 
             if (!was_dedup_owner) {
@@ -350,6 +359,12 @@ kj::Promise<void> JitCompileService::uploadFirmware(UploadFirmwareContext contex
         } catch (const std::exception& e) {
             response.success = false;
             response.error_message = e.what();
+        } catch (const kj::Exception& e) {
+            response.success = false;
+            response.error_message = e.getDescription().cStr();
+        } catch (...) {
+            response.success = false;
+            response.error_message = "unknown exception during firmware upload";
         }
         (*fulfiller)->fulfill(kj::mv(response));
     });

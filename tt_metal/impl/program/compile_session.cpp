@@ -20,6 +20,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/jit_server/jit_compile_rpc_client.hpp"
 #include "impl/program/kernel_build_job.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
@@ -53,6 +54,9 @@ struct CompileSession::Impl {
     std::size_t priority = 0;
     std::uint64_t seq = 0;
     bool closing = false;
+    // Set when the compile server could not be reached or stopped replying; the session's remaining kernels
+    // build locally rather than each waiting out the failure again.
+    bool remote_down = false;
     CompileSessionStats stats;
     std::vector<std::thread> workers;
     std::mutex join_mutex;  // a second close() waits here until the first has joined the workers
@@ -83,15 +87,28 @@ struct CompileSession::Impl {
                 queue.pop();
                 --stats.kernels_pending;
                 ++stats.kernels_running;
-                remote = !options.remote_endpoints.empty() && stats.kernels_queued >= options.remote_min_kernels;
+                remote = !options.remote_endpoints.empty() && !remote_down &&
+                         stats.kernels_queued >= options.remote_min_kernels;
             }
             const auto start = std::chrono::steady_clock::now();
             std::optional<detail::KernelBuildResult> result;
+            bool remote_failed = false;
             try {
                 if (remote) {
                     try {
                         result = detail::run_kernel_build_job(*job, options.remote_endpoints);
+                    } catch (const jit_server::RemoteCompileTransportError& e) {
+                        remote_failed = true;
+                        std::lock_guard lock(mutex);
+                        if (!remote_down) {
+                            remote_down = true;
+                            log_warning(
+                                tt::LogBuildKernels,
+                                "CompileSession: {}; this session builds its remaining kernels locally",
+                                e.what());
+                        }
                     } catch (const std::exception& e) {
+                        remote_failed = true;
                         log_warning(
                             tt::LogBuildKernels,
                             "CompileSession: remote build of kernel {} failed, building it locally: {}",
@@ -123,6 +140,7 @@ struct CompileSession::Impl {
                 if (!result) {
                     ++stats.kernels_failed;
                 } else {
+                    stats.kernels_remote_fallback += remote_failed ? 1 : 0;
                     switch (*result) {
                         case detail::KernelBuildResult::Built: ++stats.kernels_built; break;
                         case detail::KernelBuildResult::BuiltRemotely:

@@ -5,12 +5,11 @@
 #include "impl/jit_server/jit_compile_server_controller.hpp"
 
 #include <capnp/rpc-twoparty.h>
+#include <kj/async.h>
 #include <kj/async-io.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <chrono>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
 namespace tt::tt_metal::jit_server {
@@ -35,7 +34,6 @@ void JitCompileServerController::start(std::string address) {
 
     address_ = std::move(address);
     jit_compile_service_.set_listen_address(address_);
-    should_stop_ = false;
     is_running_ = true;
     server_start_finished_ = false;
     server_thread_ = std::thread(&JitCompileServerController::run_server, this);
@@ -60,7 +58,12 @@ void JitCompileServerController::stop() {
         return;
     }
 
-    should_stop_ = true;
+    {
+        std::lock_guard wake_lock(wake_mutex_);
+        if (wake_) {
+            wake_();
+        }
+    }
     if (server_thread_.joinable()) {
         server_thread_.join();
     }
@@ -81,27 +84,30 @@ void JitCompileServerController::run_server() {
         capnp::TwoPartyServer server(::kj::Own<JitCompileService>(&jit_compile_service_, ::kj::NullDisposer::instance));
         auto listen_promise = server.listen(*listener);
 
+        // The loop blocks until there is work: socket I/O, or a compile finishing on a pool thread (its
+        // cross-thread fulfill wakes the loop). stop() wakes it the same way.
+        auto stop_paf = kj::newPromiseAndCrossThreadFulfiller<void>();
+        {
+            std::lock_guard lock(wake_mutex_);
+            wake_ = [fulfiller = std::make_shared<kj::Own<kj::CrossThreadPromiseFulfiller<void>>>(
+                         kj::mv(stop_paf.fulfiller))]() { (*fulfiller)->fulfill(); };
+        }
+
         {
             std::lock_guard lock(server_start_mutex_);
             server_start_finished_ = true;
         }
         server_start_cv_.notify_one();
 
-        auto last_events = std::chrono::high_resolution_clock::now();
-        while (!should_stop_) {
-            auto count = wait_scope.poll();
-            listen_promise.poll(wait_scope);
-
-            if (count > 0) {
-                last_events = std::chrono::high_resolution_clock::now();
-            } else if (std::chrono::high_resolution_clock::now() - last_events > std::chrono::milliseconds(10)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        }
+        listen_promise.exclusiveJoin(kj::mv(stop_paf.promise)).wait(wait_scope);
     } catch (const kj::Exception& e) {
         server_start_error_message_ = e.getDescription().cStr();
     } catch (const std::exception& e) {
         server_start_error_message_ = e.what();
+    }
+    {
+        std::lock_guard lock(wake_mutex_);
+        wake_ = nullptr;
     }
     is_running_ = false;
 
