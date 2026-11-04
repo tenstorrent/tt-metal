@@ -53,7 +53,8 @@ _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
 )
 
-_RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 60000000}
+# Room for a step trace at each of the four 2K release sizes (66 MB together, job 172299).
+_RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 100000000}
 
 SEED = 123
 WARMUP_PRESET = "V4_TURBO_12"  # presets differ only outside the transformers; any one warms the program cache

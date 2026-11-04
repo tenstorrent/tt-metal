@@ -40,8 +40,8 @@ from ....utils.tracing import Tracer
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
 )
-# The four 2K step traces use 11 MB together (job 171244); the test reports the measured use.
-_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 60000000}
+# The four 2K step traces need 66 MB together (job 172299); the test reports the measured use.
+_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 100000000}
 
 DEFAULT_SIZES = "2048x2048,2048x1152,1152x2048,1360x2048"
 SEED = 123
@@ -115,7 +115,8 @@ def test_serving(*, mesh_device, expect_error) -> None:
         "dram_per_bank_after_warmup": _dram_allocated(dev),
         "dram_bank_size": ttnn.get_memory_view(dev, ttnn.BufferType.DRAM).total_bytes_per_bank,
         "dram_banks": ttnn.get_memory_view(dev, ttnn.BufferType.DRAM).num_banks,
-        "trace_region_used": ttnn.get_memory_view(dev, ttnn.BufferType.TRACE).total_bytes_allocated_per_bank,
+        "trace_region_used_per_bank": ttnn.get_memory_view(dev, ttnn.BufferType.TRACE).total_bytes_allocated_per_bank,
+        "trace_region_banks": ttnn.get_memory_view(dev, ttnn.BufferType.TRACE).num_banks,
         "trace_region_size": _SERVE_PIPE["trace_region_size"],
         "requests": [],
     }
