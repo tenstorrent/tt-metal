@@ -1035,6 +1035,14 @@ class Orchestrator:
             self.echo(f"  [{tid}] problem: {p}")
         return problems
 
+    def is_knowledge_format(self, problem: str) -> bool:
+        """F247: a problem line from knowledge_errors (a known_issues.md entry's format, an id clash): fixable by hand,
+        it never invalidates an attempt's code or measurements (DeepSeek-V4.1 P.30: a missing 'Found:' cost a whole
+        second agent attempt)."""
+        return problem.startswith(("known_issues.md: ", "knowledge ids: ")) or problem.startswith(
+            f"{rel(self.spec, self.spec.bringup_dir)}/known_issues.md: "
+        )
+
     def knowledge_errors(self) -> list[str]:
         """The shared and the model's known-issues files' format errors and the knowledge id clashes, as problem lines."""
         ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
@@ -1558,7 +1566,11 @@ class Orchestrator:
                     return None
                 continue
             used += 1
-            if not problems:
+            blocking = [p for p in problems if not self.is_knowledge_format(p)]
+            if not blocking:
+                if problems:  # F247: a knowledge-file format slip is for review, not another agent attempt
+                    self.led.update(tid, review=problems)
+                    self.echo(f"  [{tid}] knowledge format problems for review: {len(problems)} (no new attempt)")
                 return sorted(changed)
         why = f"perf failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
         self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
