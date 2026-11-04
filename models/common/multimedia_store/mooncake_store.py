@@ -43,7 +43,6 @@ OBJECT_NOT_FOUND = -704
 
 _ENV_PREFIX = "PREFILL_MEDIA_STORE_"
 _DEFAULT_SEGMENT_BYTES = "1G"
-_REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
 
 def _check_key(media_key: str) -> str:
@@ -191,10 +190,7 @@ class MooncakeEmbeddingReader:
         try:
             from mooncake.store import MooncakeDistributedStore
         except ImportError as e:
-            raise StoreUnavailable(
-                f"{_ENV_PREFIX}MASTER is set but this Python env has no Mooncake client: "
-                f"uv pip install -r {_REQUIREMENTS}"
-            ) from e
+            raise StoreUnavailable(f"{_ENV_PREFIX}MASTER is set but this Python env has no Mooncake client") from e
         client = MooncakeDistributedStore()
         t0 = time.perf_counter()
         # local_buffer_size 0: reads from other hosts land in this reader's own registered read buffer.
