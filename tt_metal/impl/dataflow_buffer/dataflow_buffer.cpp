@@ -82,9 +82,7 @@ void validate_borrowed_memory_address(const DataflowBufferImpl& dfb, uint32_t al
 // CACHED view. Every cached region starts on a cache line for max performance. The sizer
 // (compute_dfb_config_serialized_size) and the emitter (serialize_dfb_config_for_core) must align
 // identically, or the sizer under-allocates and the signal region runs off the end.
-constexpr uint32_t kDfbCacheLineBytes = 64;
-
-uint32_t dfb_align_cl(uint32_t offset) { return (offset + kDfbCacheLineBytes - 1u) & ~(kDfbCacheLineBytes - 1u); }
+uint32_t dfb_align_cl(uint32_t offset) { return (offset + DFB_CACHE_LINE_BYTES - 1u) & ~(DFB_CACHE_LINE_BYTES - 1u); }
 
 uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) {
     if (payload_bytes == 0) {
@@ -1145,14 +1143,14 @@ size_t serialize_dfb_config_for_core(
     // Every CACHED region starts on a cache line, and the hart blobs are whole numbers of lines, so
     // no two harts ever touch the same line.
     TT_FATAL(
-        (dm1_off + DFB_DM1_CACHED_PAYLOAD_OFFSET) % kDfbCacheLineBytes == 0 &&
-            (dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET) % kDfbCacheLineBytes == 0,
+        (dm1_off + DFB_DM1_CACHED_PAYLOAD_OFFSET) % DFB_CACHE_LINE_BYTES == 0 &&
+            (dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET) % DFB_CACHE_LINE_BYTES == 0,
         "DFB config: DM1/DM0 cached payloads ({}, {}) are not cache-line aligned",
         dm1_off + DFB_DM1_CACHED_PAYLOAD_OFFSET,
         dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET);
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         TT_FATAL(
-            hart_blob_starts[h] % kDfbCacheLineBytes == 0 && hart_blob_sizes[h] % kDfbCacheLineBytes == 0,
+            hart_blob_starts[h] % DFB_CACHE_LINE_BYTES == 0 && hart_blob_sizes[h] % DFB_CACHE_LINE_BYTES == 0,
             "hart {} blob [{}, +{}) is not a whole number of cache lines",
             h,
             hart_blob_starts[h],

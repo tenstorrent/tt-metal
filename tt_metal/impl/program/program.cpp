@@ -3863,14 +3863,13 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         // then starts on a line and finalize_dfbs' line-relative alignment of the DFB config holds in
         // absolute L1 terms in order to achieve best performance.
         if (device->arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            constexpr uint32_t kConfigCacheLineBytes = 64;
             const uint32_t ring_base = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
             TT_FATAL(
-                ring_base % kConfigCacheLineBytes == 0,
+                ring_base % DFB_CACHE_LINE_BYTES == 0,
                 "Tensix KERNEL_CONFIG base {:#x} must be {}B aligned",
                 ring_base,
-                kConfigCacheLineBytes);
-            state.offset = tt::align(state.offset, kConfigCacheLineBytes);
+                DFB_CACHE_LINE_BYTES);
+            state.offset = tt::align(state.offset, DFB_CACHE_LINE_BYTES);
         }
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
