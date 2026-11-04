@@ -96,6 +96,11 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
         determinism_check_interval=determinism_check_interval,
     )
 
+    # Per-core output block (row-wise core order), used to map non-deterministic elements back to the core that produced them
+    lm_head_test.nd_core_block = (seq_len, 32 * per_core_N)
+    lm_head_test.nd_core_linear_x = compute_grid.x
+    lm_head_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     # Run test
     lm_head_test.run_op_test()
 
