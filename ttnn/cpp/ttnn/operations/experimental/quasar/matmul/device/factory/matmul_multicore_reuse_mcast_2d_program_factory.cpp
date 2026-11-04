@@ -144,12 +144,16 @@ namespace reuse_mcast_optimized_helpers {
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
 
     // A sharded output can share its region with the partials only when the core computes a single output
     // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
@@ -1668,12 +1672,16 @@ create_program_mcast_in0_in1(
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::experimental::quasar::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -3371,12 +3379,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
 
     // A sharded output can share its region with the partials only when the core computes a single output
     // block: spill and reload advance the region's pointers by one block, which only wraps back to the start

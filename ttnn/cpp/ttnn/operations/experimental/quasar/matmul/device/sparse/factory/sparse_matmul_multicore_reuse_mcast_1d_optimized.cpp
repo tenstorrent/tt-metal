@@ -89,10 +89,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    // Quasar: tiles sit in the ring at their own size (the shared mcast-1D readers lay them out at that stride);
-    // see the dense factories for why a DRAM-aligned stride breaks MX tiles.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     auto* const in0_buffer = a.buffer();

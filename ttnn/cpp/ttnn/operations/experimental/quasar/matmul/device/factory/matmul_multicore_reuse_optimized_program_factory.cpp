@@ -150,12 +150,16 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
 
     // DFB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;

@@ -72,11 +72,12 @@ void kernel_main() {
     cb_in1.push_back(in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in1_aligned_tile_size_bytes = in1_single_tile_size_bytes;
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    const uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                 NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
     const auto s1 = TensorAccessor(tensor::in1);
 #endif  // IN1_SHARDED
 

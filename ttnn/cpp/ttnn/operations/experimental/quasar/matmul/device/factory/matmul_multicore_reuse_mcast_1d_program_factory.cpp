@@ -169,12 +169,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::experimental::quasar::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
@@ -1200,12 +1204,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical =
@@ -2996,12 +3002,16 @@ void override_program_parameters(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -4023,12 +4033,14 @@ void override_program_parameters(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -5430,12 +5442,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -6512,12 +6528,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
 
-    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
-    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
-    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
-    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
-    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
-    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
