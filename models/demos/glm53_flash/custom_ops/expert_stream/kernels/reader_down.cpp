@@ -27,6 +27,13 @@
 #include "regions_src.hpp"
 #include "routing_scan.hpp"
 
+// profiler zones (tracy -p builds only; each DeviceZoneScopedN needs its own scope)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define EX_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define EX_ZONE(name)
+#endif
+
 void kernel_main() {
 #ifdef PERSIST_WAIT_SEM
     {
@@ -34,6 +41,7 @@ void kernel_main() {
         // phase; the exchange core multicasts a 1 into this kernel's semaphore when they are written
         volatile tt_l1_ptr uint32_t* psem =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        EX_ZONE("DN_R_WAIT");
         noc_semaphore_wait_min(psem, 1);
         noc_semaphore_set(psem, 0);
     }
@@ -115,8 +123,11 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
-    constexpr uint32_t num_buffers = 3;
-    constexpr uint32_t extra_in_flight = 1;
+#ifndef DOWN_RING
+#define DOWN_RING 3
+#endif
+    constexpr uint32_t num_buffers = DOWN_RING;  // W2 block ring (the plain stream: 3 blocks, 1 extra in flight)
+    constexpr uint32_t extra_in_flight = DOWN_RING - 2;
     cb_reserve_back(cb_w, block_tiles * (extra_in_flight + 1));
     uint32_t l1_write = get_write_ptr(cb_w);
     const uint32_t cb_base = l1_write;
@@ -127,6 +138,7 @@ void kernel_main() {
     uint32_t pushed = 0;
 
     for (uint32_t i = 0; i < n; ++i) {
+        EX_ZONE("DN_R_EXPERT");
         noc_async_read_set_trid(trid);
 #ifdef REGIONS_SRC
         uint32_t src = get_common_arg_val<uint32_t>(active[i]) + c0 * tile_bytes;
@@ -153,6 +165,7 @@ void kernel_main() {
         }
     }
     while (pushed < n) {
+        EX_ZONE("DN_R_DRAIN");
         noc_async_read_barrier_with_trid(trid_to_wait);
         cb_push_back(cb_w, block_tiles);
         ++pushed;

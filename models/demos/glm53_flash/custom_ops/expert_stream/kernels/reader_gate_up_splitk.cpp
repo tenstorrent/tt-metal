@@ -12,11 +12,19 @@
 #include "regions_src.hpp"
 #include "routing_scan.hpp"
 
+// profiler zones (tracy -p builds only; each DeviceZoneScopedN needs its own scope)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define EX_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define EX_ZONE(name)
+#endif
+
 void kernel_main() {
 #ifdef PERSIST_WAIT_SEM
     {
         volatile tt_l1_ptr uint32_t* psem =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        EX_ZONE("GU_R_WAIT");
         noc_semaphore_wait_min(psem, 1);
         noc_semaphore_set(psem, 0);
     }
@@ -115,6 +123,7 @@ void kernel_main() {
         const uint32_t expert_base = static_cast<uint32_t>(active[i]) * expert_stride;
 #endif
         for (uint32_t c = 0; c < 2; ++c) {
+            EX_ZONE("GU_R_COL");
 #ifdef REGIONS_SRC
             uint32_t src = (c ? up_addr : gate_addr) + k0 * src_step;
 #else
@@ -151,6 +160,7 @@ void kernel_main() {
         }
     }
     while (pushed < issued) {
+        EX_ZONE("GU_R_DRAIN");
         noc_async_read_barrier_with_trid(trid_to_wait);
         cb_push_back(cb_w, KS_MAX);
         ++pushed;

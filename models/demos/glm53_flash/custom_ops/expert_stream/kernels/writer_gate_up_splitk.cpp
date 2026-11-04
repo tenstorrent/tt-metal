@@ -16,11 +16,19 @@
 #include "regions_src.hpp"
 #include "routing_scan.hpp"
 
+// profiler zones (tracy -p builds only; each DeviceZoneScopedN needs its own scope)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define EX_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define EX_ZONE(name)
+#endif
+
 void kernel_main() {
 #ifdef PERSIST_WAIT_SEM
     {
         volatile tt_l1_ptr uint32_t* psem =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        EX_ZONE("GU_W_WAIT");
         noc_semaphore_wait_min(psem, 1);
         noc_semaphore_set(psem, 0);
     }
@@ -93,10 +101,13 @@ void kernel_main() {
     // this core's K slice of x, resident for the whole op (the slot is KS_MAX tiles, ks valid)
     cb_reserve_back(cb_x, KS_MAX);
     const uint32_t x_l1 = get_write_ptr(cb_x);
-    for (uint32_t k = 0; k < ks; ++k) {
-        noc_async_read(s_x.get_noc_addr(k0 + k), x_l1 + k * tile_page, tile_page);
+    {
+        EX_ZONE("GU_W_X");
+        for (uint32_t k = 0; k < ks; ++k) {
+            noc_async_read(s_x.get_noc_addr(k0 + k), x_l1 + k * tile_page, tile_page);
+        }
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
     cb_push_back(cb_x, KS_MAX);
 
     volatile tt_l1_ptr uint16_t* routing = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1);
@@ -118,6 +129,7 @@ void kernel_main() {
     constexpr uint32_t ARG_XY = ARG_NEXT + 3;
 #endif
     for (uint32_t i = 0; i < n; ++i) {
+        EX_ZONE("GU_W_EXPERT");
         const uint32_t owner = i % groups;
         const uint32_t slot = (i / groups) & 1;
         const bool mine = owner == group;
@@ -150,6 +162,7 @@ void kernel_main() {
         // the owner: the G partials have landed when the slot's count reaches G
         cb_reserve_back(cb_recv, 2 * groups);
         {
+            EX_ZONE("GU_W_ARRIVE");
             volatile tt_l1_ptr uint32_t* sem =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM0 + slot));
             noc_semaphore_wait_min(sem, groups);

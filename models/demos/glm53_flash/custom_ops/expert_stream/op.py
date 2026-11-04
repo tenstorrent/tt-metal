@@ -914,6 +914,7 @@ class ExpertDownStream(_BankStreamOp):
         assert self.cols <= 8, f"{self.cols} output columns per core exceed the 8 fp32 DST tiles"
         self.seg_bytes = self.seg_tiles * BFP8_TILE_BYTES
         self.block_tiles = self.cols * self.seg_tiles
+        self.ring = 3  # W2 block ring slots (``set_ring``: the split-K fused op deepens it to 6)
         self.regions_src = bool(regions_src)
         if self.regions_src:
             self.regions_plan = plan_regions_stream(H, I, H, banks=self.banks, down_readers=readers)
@@ -935,7 +936,7 @@ class ExpertDownStream(_BankStreamOp):
         r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles
         cbs = [
             self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, 2 * self.seg_tiles),
-            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, 3 * self.block_tiles),
+            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, self.ring * self.block_tiles),
             self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
             self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
             self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, self.cols),
@@ -983,6 +984,8 @@ class ExpertDownStream(_BankStreamOp):
             writer_ct += [self.H // TILE, self.banks]
         compute_ct = [cb_a, cb_w, cb_out, self.seg_tiles, self.cols]
         defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_WAIT" if fused_rt is not None else None)
+        if self.ring != 3:
+            defines = list(defines) + [("DOWN_RING", str(self.ring))]
         if src is not None:
             defines.append(REGIONS_DEFINE)
         kernels = self._kernels(
@@ -1064,6 +1067,8 @@ class ExpertStreamFused:
             regions_src=regions_src,
             split_k=split_k,
         )
+        if split_k:
+            self.down.ring = 6  # the down stream keeps 4 expert blocks in flight (the chain is latency bound)
         assert not (self.gate_up.core_set & self.down.core_set), "fused placement: the two kernel sets overlap"
         self.E, self.K, self.I, self.H = E, K, I, H
         self.banks = banks

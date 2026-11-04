@@ -35,6 +35,13 @@
 #include "regions_src.hpp"
 #include "routing_scan.hpp"
 
+// profiler zones (tracy -p builds only; each DeviceZoneScopedN needs its own scope)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define EX_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define EX_ZONE(name)
+#endif
+
 #ifdef PERSIST_SIGNAL_SEM
 // persistent MoE program (custom_ops/moe_persistent): this core's output tiles are written and acknowledged; count
 // it on every combine worker (both exits of kernel_main call this)
@@ -60,6 +67,7 @@ void kernel_main() {
         // phase; the exchange core multicasts a 1 into this kernel's semaphore when they are written
         volatile tt_l1_ptr uint32_t* psem =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PERSIST_WAIT_SEM));
+        EX_ZONE("DN_W_WAIT");
         noc_semaphore_wait_min(psem, 1);
         noc_semaphore_set(psem, 0);
     }
@@ -146,8 +154,10 @@ void kernel_main() {
 #endif
 
     for (uint32_t i = 0; i < n; ++i) {
+        EX_ZONE("DN_W_EXPERT");
 #ifdef FUSED_WAIT
         {
+            EX_ZONE("DN_W_ARRIVE");
             // expert rank i = gate|up group i % G, its (i / G)-th expert: wait for the banks' tiles
             const uint32_t g = i % gu_groups;
             const uint32_t k = i / gu_groups;

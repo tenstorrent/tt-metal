@@ -18,6 +18,13 @@
 #include "api/compute/tile_move_copy.h"
 #include "ckernel.h"
 
+// profiler zones (tracy -p builds only; each DeviceZoneScopedN needs its own scope)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define EX_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define EX_ZONE(name)
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -35,9 +42,12 @@ void kernel_main() {
     uint32_t n = 0;
     UNPACK(n = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId);)
     MATH(n = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId);)
-    PACK(n = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId);)
-    cb_wait_front(cb_x, KS_MAX);
+    PACK(n = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId);) {
+        EX_ZONE("GU_C_X");
+        cb_wait_front(cb_x, KS_MAX);
+    }
     for (uint32_t i = 0; i < n; ++i) {
+        EX_ZONE("GU_C_EXPERT");
         // ---- this core's partial products of expert i (gate -> DST 0, up -> DST 1)
         tile_regs_acquire();
         fill_tile_init();
@@ -63,8 +73,12 @@ void kernel_main() {
             continue;
         }
         // ---- the owner: sum the G partials (fp32 in DST), SwiGLU, the routing diagonal, the output tile
-        cb_wait_front(cb_d, 1);
-        cb_wait_front(cb_recv, 2 * groups);
+        {
+            EX_ZONE("GU_C_OWNER_WAIT");
+            cb_wait_front(cb_d, 1);
+            cb_wait_front(cb_recv, 2 * groups);
+        }
+        EX_ZONE("GU_C_OWNER");
         tile_regs_acquire();
         reconfig_data_format_srca(cb_w, cb_recv);  // fp32 partials (the unpacker held the weight CB's format)
         copy_init(cb_recv);
