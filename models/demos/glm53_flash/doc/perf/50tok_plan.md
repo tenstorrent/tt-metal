@@ -319,3 +319,6 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   `gate84_B4_persist_g11b` strictly behind `gate84_B4_fabar_g11` and `gate84_B1_fabar` (one chip waiter at a time);
   on a pass the same chain runs step 2 (`gate84_B4_persist2`), the 8-user persistent point (`gate84_B1_persist_g11b`)
   and the two layer profiles.
+- 2026-11-04 05:17 `gate84_B4_fabar_g11` (11 gate|up groups, no persistent program): ids bit-identical to
+  `gate84_B4_fabar_r2` (12 groups), per-user pcc min 0.794 / chain 0.9547 both, step 37.34 vs 37.69 ms. The group
+  count moves neither the rounding nor the step at 32 users; the persistent gates keep fabar_r2's ids as the target.
