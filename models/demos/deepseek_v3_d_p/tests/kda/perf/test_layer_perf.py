@@ -54,8 +54,7 @@ _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
 # through device synchronization.
-# TODO: re-baseline the KDA layer gates below (SP8xTP1, SP4xTP1) from CI. The gated call became
-# ttKDA.forward_slot (+ TP all-gather where TP > 1, + slab import/export), so the references predate it.
+# TODO: measure the SP8xTP1 and SP4xTP1 references for the forward_slot gate.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
         "SP8xTP1": 1.30,
@@ -85,9 +84,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-# Measured on bh-glx-120-b07u02 (torus XY), forward_slot: 1.515 / 1.521 / 1.521 ms traced over three runs (1.337 for
-# ttKDA.forward alone before the gated call took in the all-gather and the slab import/export). Untraced it pays the
-# host dispatch of every op too: 2.09 / 2.23 / 2.09 ms.
+# Untraced also pays the host dispatch of every op, hence its own reference.
 _GALAXY_PERF_REFERENCE_MS = 1.521
 _GALAXY_UNTRACED_PERF_REFERENCE_MS = 2.14
 _GALAXY_TP = 4
