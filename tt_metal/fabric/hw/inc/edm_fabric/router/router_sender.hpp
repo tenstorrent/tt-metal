@@ -194,8 +194,9 @@ public:
 
     FORCE_INLINE bool has_room(uint32_t n) const { return free_slots() >= n; }
 
-    // The next slot's address: the high half times 16, which is word >> 12 because the low half stays below 4096.
-    FORCE_INLINE uint32_t next_slot_addr() const { return word >> 12; }
+    // The next slot's address: the high half in bytes, word >> ADDR_SHIFT (the free-slot count stays below
+    // 1 << ADDR_SHIFT, so it shifts out).
+    FORCE_INLINE uint32_t next_slot_addr() const { return word >> ADDR_SHIFT; }
 
     // After a send into the next slot: the next slot advances (after the last, back to the first) and one free slot is
     // taken, in one add. The next slot is the last one exactly when the word is at least the last slot's high half.
@@ -213,19 +214,29 @@ public:
     FORCE_INLINE bool operator!=(const RemoteReceiverChannelProgress& other) const { return word != other.word; }
 
 private:
+    // The word: the free-slot count in the low FREE_SLOTS_BITS, the next slot's address in 16 B units above it.
+    static constexpr uint32_t FREE_SLOTS_BITS = 16;
+    static constexpr uint32_t SLOT_ADDR_UNIT_BITS = 4;
+    static constexpr uint32_t ADDR_SHIFT = FREE_SLOTS_BITS - SLOT_ADDR_UNIT_BITS;
     static constexpr uint32_t encode(uint32_t free_slots, uint32_t slot_addr) {
-        return (slot_addr / 16) << 16 | free_slots;
+        return (slot_addr >> SLOT_ADDR_UNIT_BITS) << FREE_SLOTS_BITS | free_slots;
     }
     static constexpr uint32_t last_slot_word = encode(0, RemoteReceiverChannel<VC>::last_slot_addr);
     static constexpr uint32_t advance_add = encode(0, channel_buffer_size) - 1;
     static constexpr uint32_t wrap_add =
         encode(0, RemoteReceiverChannel<VC>::first_slot_addr) - last_slot_word - 1;  // mod 2^32
-    static_assert(RemoteReceiverChannel<VC>::first_slot_addr % 16 == 0 && channel_buffer_size % 16 == 0);
-    static_assert(RemoteReceiverChannel<VC>::last_slot_addr / 16 < (1u << 16), "a slot address / 16 fits in 16 bits");
-    static_assert(RemoteReceiverChannel<VC>::num_slots < (1u << 12), "the free-slot count stays below bit 12");
+    static constexpr uint32_t SLOT_ADDR_UNIT_MASK = (1u << SLOT_ADDR_UNIT_BITS) - 1;
+    static_assert(
+        (RemoteReceiverChannel<VC>::first_slot_addr & SLOT_ADDR_UNIT_MASK) == 0 &&
+        (channel_buffer_size & SLOT_ADDR_UNIT_MASK) == 0);
+    static_assert(
+        (RemoteReceiverChannel<VC>::last_slot_addr >> SLOT_ADDR_UNIT_BITS) < (1u << (32 - FREE_SLOTS_BITS)),
+        "a slot address fits in the high half");
+    static_assert(
+        RemoteReceiverChannel<VC>::num_slots < (1u << ADDR_SHIFT), "the free-slot count stays below 1 << ADDR_SHIFT");
 
     constexpr explicit RemoteReceiverChannelProgress(uint32_t w) : word(w) {}
-    FORCE_INLINE uint32_t free_slots() const { return word & 0xFFFFu; }
+    FORCE_INLINE uint32_t free_slots() const { return word & ((1u << FREE_SLOTS_BITS) - 1); }
 
     uint32_t word;
 };
@@ -296,7 +307,7 @@ struct SenderChannelInterfaces {
                 tt::tt_fabric::worker_handshake_noc,
                 SENDER_NUM_BUFFERS_ARRAY[CH]>(
                 info,
-                0,
+                /*remote_producer_write_counter (unused)=*/0,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
                 CommandBuffers::worker_credits[CH],
                 worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],

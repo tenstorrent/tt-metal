@@ -112,14 +112,18 @@ FORCE_INLINE void finish_phase() {
 // default off Blackhole) leaves the firmware's value.
 constexpr uint32_t keepalive_timeout = eth_txq_seq_update_timeout;
 constexpr bool sets_keepalive = keepalive_timeout != 0 && is_teardown_master;
-uint32_t firmware_keepalive[2];
+struct FirmwareKeepalive {
+    uint32_t sender_queue;
+    uint32_t receiver_queue;
+};
+FirmwareKeepalive firmware_keepalive;  // the firmware's values, restored at teardown
 
 __attribute__((noinline)) void set_keepalive() {
     if constexpr (sets_keepalive) {
-        firmware_keepalive[0] = eth_txq_reg_read(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
+        firmware_keepalive.sender_queue = eth_txq_reg_read(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
         eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, keepalive_timeout);
         if constexpr (receiver_txq_id != sender_txq_id) {
-            firmware_keepalive[1] = eth_txq_reg_read(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
+            firmware_keepalive.receiver_queue = eth_txq_reg_read(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
             eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, keepalive_timeout);
         }
     }
@@ -127,9 +131,9 @@ __attribute__((noinline)) void set_keepalive() {
 
 __attribute__((noinline)) void restore_keepalive() {
     if constexpr (sets_keepalive) {
-        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive[0]);
+        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive.sender_queue);
         if constexpr (receiver_txq_id != sender_txq_id) {
-            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive[1]);
+            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive.receiver_queue);
         }
     }
 }

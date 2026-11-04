@@ -61,15 +61,14 @@ struct DownstreamTraits {
     template <size_t ENTRY>
     static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[VC][ENTRY];
     // Entry ENTRY's sender channel for traffic arriving from this router's direction, by its fabric position: VC's
-    // first forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's index among the
-    // downstream's other directions (each router lists the other directions in enum order, skipping its own facing).
-    // A 1D downstream has one forwarding channel.
+    // first forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's compact index
+    // on the downstream. A 1D downstream has one forwarding channel.
     template <size_t ENTRY>
     static constexpr size_t forwarding_position() {
         constexpr size_t first = VC == 0 ? 1 : VC1_FABRIC_POSITION_START;
         if constexpr (is_2d) {
             constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
-            return first + (my_direction < facing ? my_direction : my_direction - 1);
+            return first + compact_index_on(facing, static_cast<size_t>(my_direction));
         } else {
             return first;
         }
@@ -354,8 +353,9 @@ using ForwardCommands = std::conditional_t<
 
 // UDM's relay: a ring of LOCAL_RELAY_NUM_BUFFERS slots in the relay's L1 that takes the whole packet, and a free-slots
 // register the relay increments as it frees slots, of which this router keeps a local copy. Its forwards are stateless,
-// on VC0's forward command buffer (UDM routers have VC0 only).
+// on its VC's forward command buffer.
 struct Relay {
+    static constexpr size_t vc = 0;  // UDM routers have VC0 only
     static constexpr uint32_t num_slots = LOCAL_RELAY_NUM_BUFFERS;
     static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
     static constexpr uint32_t local_credit_stream = tensix_relay_local_free_slots_stream_id;
@@ -375,7 +375,7 @@ struct Relay {
     // The whole packet into the relay's next slot, tagged with `trid` (the slot's completion waits for it), then its
     // credits.
     FORCE_INLINE void forward(uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
-        using Traits = DownstreamTraits<0>;
+        using Traits = DownstreamTraits<vc>;
         const uint32_t dst = progress.next_slot_addr;
         forward_stateless<Traits::noc, Traits::data_cmd_buf>(link, dst, src_addr, size_bytes, trid);
         progress.next_slot_addr = slot_after(dst, link.first_slot_addr, last_slot_offset);

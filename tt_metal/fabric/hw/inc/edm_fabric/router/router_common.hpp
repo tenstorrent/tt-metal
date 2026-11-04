@@ -135,11 +135,13 @@ constexpr uint32_t max_downstreams = downstream_directions.size();
 
 constexpr eth_chan_directions downstream_direction(size_t compact) { return downstream_directions[compact]; }
 
-// The compact index of downstream direction `dir` (dir != my_direction): a router lists the other directions in enum
-// order, skipping its own facing.
+// The compact index of direction `dir` on a router facing `facing` (dir != facing): a router lists the other
+// directions in enum order, skipping its own facing.
+constexpr size_t compact_index_on(size_t facing, size_t dir) { return dir < facing ? dir : dir - 1; }
+
+// The compact index of downstream direction `dir` (dir != my_direction), on this router.
 constexpr size_t downstream_compact_index(eth_chan_directions dir) {
-    return static_cast<size_t>(dir) < static_cast<size_t>(my_direction) ? static_cast<size_t>(dir)
-                                                                        : static_cast<size_t>(dir) - 1;
+    return compact_index_on(static_cast<size_t>(my_direction), static_cast<size_t>(dir));
 }
 
 // Routing names a downstream by its direction (2D: action bit d is direction d); 1D's one downstream is named 0. The

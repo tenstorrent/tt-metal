@@ -128,7 +128,13 @@ constexpr bool runs_vc(size_t vc) {
 }
 
 // The VCs whose receiver channel this router runs, one bit each (ReceiverChannelStates).
-constexpr uint32_t receiver_vcs = (runs_vc(0) ? 1u : 0u) | (runs_vc(1) ? 2u : 0u) | (runs_vc(2) ? 4u : 0u);
+constexpr uint32_t receiver_vcs = [] {
+    uint32_t vcs = 0;
+    for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
+        vcs |= runs_vc(vc) ? 1u << vc : 0u;
+    }
+    return vcs;
+}();
 
 // VC's receiver channel: its ring and packets-received register, and its features, which are its VC's.
 template <size_t VC>
@@ -341,7 +347,9 @@ FORCE_INLINE void record_forwarded(uint32_t forward_to) {
                 ReceiverChannel<VC>::rx,
                 tt::tt_fabric::forwarded_slots_to_sender_mask(static_cast<uint8_t>(entries), packed));
         } else {
-            channel_trimming_usage_recorder.set_sender_channel_forwarded_to(ReceiverChannel<VC>::rx, 1);
+            channel_trimming_usage_recorder.set_sender_channel_forwarded_to(
+                ReceiverChannel<VC>::rx,
+                DownstreamTraits<ReceiverChannel<VC>::forwards_on_vc>::template forwarding_position<0>());
         }
     }
 }
@@ -556,13 +564,15 @@ FORCE_INLINE void accumulate_completion_credits(
         // One sender channel when every byte of `group` equals the first: `one_per_slot` holds a 1 in each of the
         // group's bytes. Slot first + k's sender channel is in byte k.
         const uint32_t group = sources.completion_group_sources(first, count);
-        const uint32_t first_source = group & 0xFF;
-        const uint32_t one_per_slot = count == 4 ? 0x01010101u : 0x01010101u & ((1u << (8 * count)) - 1);
+        constexpr uint32_t BYTE_MASK = 0xFF;
+        constexpr uint32_t ONE_PER_BYTE = 0x01010101u;
+        const uint32_t first_source = group & BYTE_MASK;
+        const uint32_t one_per_slot = count == 4 ? ONE_PER_BYTE : ONE_PER_BYTE & ((1u << (8 * count)) - 1);
         if (group == first_source * one_per_slot) {
             credits.accumulate_completion_credit(static_cast<uint8_t>(first_source), count);
         } else {
             for (uint32_t k = 0; k < count; k++) {
-                credits.accumulate_completion_credit(static_cast<uint8_t>((group >> (8 * k)) & 0xFF), 1);
+                credits.accumulate_completion_credit(static_cast<uint8_t>((group >> (8 * k)) & BYTE_MASK), 1);
             }
         }
     }
@@ -655,7 +665,9 @@ FORCE_INLINE bool send_credit_frame(Credits& credits, uint32_t txq_status_at_pas
     return true;
 }
 
-// Whether VC0's packets-received register reads 0 (telemetry's RX heartbeat, once per round).
+// Whether VC0's packets-received register reads 0: the receiver's idle test for telemetry's RX heartbeat, once per
+// round. It reads VC0's channel only, whichever VCs this router runs, so the heartbeat also moves while another VC's
+// channel is stuck.
 FORCE_INLINE bool vc0_register_empty() { return read_stream_count<ReceiverChannel<0>::packets_received_stream>() == 0; }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -808,7 +820,7 @@ FORCE_INLINE void wait_for_downstream_muxes() {
 // After the Ethernet handshake: the downstream connections, opened when the host's open gate says so. VC0's when
 // receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections with
 // crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
-// serviced (channel 0 with crossover, else channel 1; channel trimming may leave a crossover router's channel 1
+// serviced (VC0's with crossover, else VC1's; channel trimming may leave a crossover router's VC1 channel
 // unserviced). In Tensix mux mode the downstreams are the other directions' muxes, opened once they are set up; in UDM
 // the relay is opened after the downstream routers, once it is set up.
 FORCE_INLINE void open_connections(const RuntimeArgs& args) {
