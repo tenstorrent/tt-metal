@@ -5,6 +5,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 constexpr uint32_t cb_eout = get_compile_time_arg_val(0);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(1);
@@ -67,10 +68,7 @@ void kernel_main() {
     cb_pop_front(cb_eout, state_tiles);
     if (position == 0) {
         // The first rank's split tail enters at the final state, which the last rank sends here.
-        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_semaphore);
-        noc_semaphore_wait_min(landed, kt);
-        // Subtract instead of clearing: a faster last rank may already be counting the next call's columns.
-        noc_semaphore_inc(get_noc_addr(final_semaphore), 0u - kt);
+        kda_counter::wait_and_consume(final_semaphore, kt);
         for (uint32_t i = 0; i < state_tiles; ++i) {
             noc_async_write_page(page(i), final_state, final_landing + i * tile_bytes);
         }

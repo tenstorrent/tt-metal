@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -110,8 +111,6 @@ class _HistoryExchange:
             mesh_device.compute_with_storage_grid_size()
         )
         exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
-        l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
-        semaphore_buffer_type = ttnn.BufferType.L1_SMALL if l1_small.total_bytes_per_bank > 0 else ttnn.BufferType.L1
         return cls(
             buffer=ttnn.zeros(
                 (1, KDA_HISTORY_EXCHANGE_ROWS, width),
@@ -120,10 +119,7 @@ class _HistoryExchange:
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
-            semaphores=[
-                ttnn.create_global_semaphore(mesh_device, exchange_cores, 0, semaphore_buffer_type)
-                for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
-            ],
+            semaphores=persistent_semaphores(mesh_device, KDA_HISTORY_EXCHANGE_SEMAPHORES, exchange_cores),
         )
 
 

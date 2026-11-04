@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 using namespace qkv_conv;
@@ -248,22 +249,13 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
                 successor_hops);
             noc_async_writes_flushed();
         };
-        // Wait for one arrival on a persistent semaphore, then rearm it. Only this core waits on it, and no rank sends
-        // the next call's arrival before every rank has passed the next call's entry barrier.
-        const auto wait_for_arrival = [](uint32_t semaphore) {
-            auto* value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore);
-            noc_semaphore_wait_min(value, 1);
-            noc_semaphore_set(value, 0);
-        };
+        const auto wait_for_arrival = [](uint32_t semaphore) { kda_counter::wait_and_consume(semaphore, 1); };
 
-        // Entry barrier. A peer may already be bumping the next call's arrival, so consume this call's arrivals with an
-        // atomic decrement rather than a reset.
+        // Entry barrier: every other rank's arrival.
         multicast_increment(entry_semaphore);
         staged.wait_min(num_convolution_cores);
         read_rows(outgoing_page, outgoing);
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(entry_semaphore), sp_size - 1);
-        noc_semaphore_inc(get_noc_addr(entry_semaphore), static_cast<uint32_t>(-static_cast<int32_t>(sp_size - 1)));
-        noc_async_atomic_barrier();
+        kda_counter::wait_and_consume(entry_semaphore, sp_size - 1);
         noc.async_read_barrier();
 
         unicast_rows(outgoing, predecessor_page, predecessor_semaphore);
