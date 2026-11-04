@@ -431,6 +431,20 @@ void kernel_main() {
             open_ |= cred[ci] != used[ci];
         }
     }
+    // fence: every ring-layout packet addressed to this port has landed before it ends. A home chip h forwards one
+    // packet to this port every call (its port facing my chip on my link: send_layouts), whatever rows this port sends
+    // it - exactly the homes this port returns credits to (sx[h] != 0, the same first-hop rule from my side). A home
+    // this port sends no rows to may forward after this port's work is done, and its packet must not reach the arena
+    // once the program has ended (the arena's L1 is another op's then). The packet carries this call's words (tag)
+    // for every accumulator o on my link, (o + me + h) % L == lnk (the host keeps A >= L: there is one)
+    for (uint32_t h = 0; h < N; ++h) {
+        if (sx[h]) {
+            const uint32_t o = (lnk + L - (me + h) % L) % L;
+            while ((lay_r[h * AP + o] >> 24) != tag) {
+                invalidate_l1_cache();
+            }
+        }
+    }
     conn.close();
     noc_async_atomic_barrier();
 }

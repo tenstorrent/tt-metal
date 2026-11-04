@@ -242,6 +242,9 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     const uint32_t A = plan->accs.begin()->second.size();
     TT_FATAL(A <= kAccMax, "routed_experts_combine: {} accumulators > {}", A, kAccMax);
     plan->A = A;
+    // (the ports' end fence checks one layout word of each home on their link: an accumulator o with
+    // (o + src + home) % L == link exists for every residue when A >= L)
+    TT_FATAL(N == 1 || A >= plan->L, "routed_experts_combine: {} accumulators < {} links", A, plan->L);
     plan->MAXT = (in.S + A - 1) / A;
     plan->collector = plan->accs.begin()->second.at(0);
     for (const auto& [ch, v] : plan->accs) {
