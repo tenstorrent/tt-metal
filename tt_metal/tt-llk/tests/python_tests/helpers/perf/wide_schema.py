@@ -162,6 +162,11 @@ DB_SCHEMA = [
     Column("use_runtime", "bool", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
     Column("zero_point_bits", "int64", True, "configuration"),
+    Column("dest_layout", "string", True, "configuration"),
+    Column("num_calls", "int64", True, "configuration"),
+    Column("preserve", "bool", True, "configuration"),
+    Column("rearm", "bool", True, "configuration"),
+    Column("transpose", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
