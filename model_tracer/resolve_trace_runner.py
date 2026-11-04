@@ -42,8 +42,13 @@ def resolve_sku(label, skus):
         known = ", ".join(sorted(set(LABEL_ALIASES) | set(skus)))
         raise ValueError(f"unknown runner-label {label!r}; use a SKU from .github/sku_config.yaml or one of: {known}")
     entry = skus[sku]
-    if not entry.get("runs_on"):
+    runs_on = entry.get("runs_on")
+    if not runs_on:
         raise ValueError(f"SKU {sku} has no runs_on in .github/sku_config.yaml")
+    # Same rule as .github/scripts/utils/prepare_test_matrix.py. Multihost pools need the worker
+    # setup from models-e2e-tests-multihost-impl.yaml, which the trace job does not do.
+    if "allocation" in entry or any(isinstance(label, str) and "exabox-multihost" in label for label in runs_on):
+        raise ValueError(f"SKU {sku} is a multihost pool; model tracing supports single-host SKUs only")
     return sku, entry
 
 

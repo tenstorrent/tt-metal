@@ -19,6 +19,8 @@ SKUS = {
     "bh_loudbox": {"runs_on": ["arch-blackhole", "BH-LoudBox"], "weights-cache-mode": "cloud-mlperf"},
     "bh_p150_perf": {"runs_on": ["arch-blackhole", "P150"], "weights-cache-mode": "local-disk"},
     "cpu_medium": {"runs_on": ["tt-ubuntu-2204-medium-stable"]},
+    "bh_sc4": {"runs_on": ["exabox-multihost-ci-sc4-8kw"]},
+    "bh_legacy_alloc": {"runs_on": ["arch-blackhole"], "allocation": {"hosts": 2}},
 }
 
 
@@ -34,6 +36,12 @@ def test_sku_name_accepted_directly():
 def test_unknown_label_rejected(expect_error):
     with expect_error(ValueError, "unknown runner-label"):
         resolve_sku("N999", SKUS)
+
+
+@pytest.mark.parametrize("sku", ["bh_sc4", "bh_legacy_alloc"])
+def test_multihost_sku_rejected(sku, expect_error):
+    with expect_error(ValueError, "multihost pool"):
+        resolve_sku(sku, SKUS)
 
 
 def test_arch_from_prefix_and_rejects_cpu(expect_error):
