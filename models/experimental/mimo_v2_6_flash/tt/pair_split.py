@@ -270,6 +270,7 @@ class PairSplit:
                 )
                 program = ttnn.ProgramDescriptor(kernels=list(kernels) + [send], cbs=list(cbs), semaphores=[])
                 fabric_args = ttnn.setup_fabric_connection(
+                    mesh_device=self.plan.mesh_device,
                     src_fabric_node_id=row_nodes[c],
                     dst_fabric_node_id=row_nodes[c ^ 1],
                     link_idx=0,
