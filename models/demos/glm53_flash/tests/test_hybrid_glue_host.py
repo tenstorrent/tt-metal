@@ -409,7 +409,7 @@ def test_c2_call_sites_hand_the_same_placement():
         src = (MD / rel).read_text()
         assert needle in src, rel
         after = src[src.index(needle) :]
-        assert "all_reduce_cols(y)" in after[:600], rel
+        assert "all_reduce_cols(y" in after[:600], rel  # (y) or (y, tag=...): the fabric all-reduce names its call site
     from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 
     src = inspect.getsource(DecodeLinear.__call__)
