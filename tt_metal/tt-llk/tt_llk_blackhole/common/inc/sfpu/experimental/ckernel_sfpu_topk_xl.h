@@ -1925,7 +1925,7 @@ inline void transpose_dest_face_32b()
 template <std::uint32_t N>
 inline void transpose_faces_from_dst()
 {
-    lltt::record<lltt::Exec>(0, transpose_face_body_len);
+    ckernel::record_replay<lltt::Exec>(0, transpose_face_body_len);
     transpose_dest_face_32b_body();
     for (std::uint32_t face = 1; face < N; face++)
     {
@@ -3615,7 +3615,7 @@ inline void _topk_xl_add_lsb_indices_()
 
         // ── OR the precomputed indices into the low 16 bits of every DST word.
         // Same 16-slot record/replay shape as the column-major body below.
-        lltt::record<lltt::Exec>(0, 16);
+        ckernel::record_replay<lltt::Exec>(0, 16);
         TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
         TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
@@ -3698,7 +3698,7 @@ inline void _topk_xl_add_lsb_indices_()
     // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
     // recorded into replay slots [0..15] once and replayed for the
     // remaining iters.
-    lltt::record<lltt::Exec>(0, 16);
+    ckernel::record_replay<lltt::Exec>(0, 16);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
@@ -3786,7 +3786,7 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    lltt::record<lltt::Exec>(0, 16);
+    ckernel::record_replay<lltt::Exec>(0, 16);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
@@ -3882,7 +3882,7 @@ inline void _topk_xl_remove_msb_values_()
     {
         // Caller must quiesce MATH and retain ADDR_MOD_7 = zero advance while
         // PACK owns LREG0 and replay slots [0, 3). SyncHalf alone is insufficient.
-        lltt::record<lltt::Exec>(0, 3);
+        ckernel::record_replay<lltt::Exec>(0, 3);
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
@@ -4220,7 +4220,7 @@ inline void _topk_xl_separate_indices_()
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
     constexpr int indices_offset         = num_tiles_per_sequence * 64;
 
-    lltt::record<lltt::Exec>(0, 9);
+    ckernel::record_replay<lltt::Exec>(0, 9);
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
