@@ -12,6 +12,8 @@ set_target_properties(
             api
 )
 
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
+
 target_sources(
     ttnn_op_experimental_tensor_prefetcher
     PUBLIC
@@ -19,6 +21,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_TENSOR_PREFETCHER_SRCS}
 )
@@ -29,6 +35,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_tensor_prefetcher
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_tensor_prefetcher LIBRARY COMPONENT tar)

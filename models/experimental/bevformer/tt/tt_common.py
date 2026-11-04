@@ -34,7 +34,8 @@ def signpost(header, message=None):
 
 
 def layer_norm(x, params, residual=None, memory_config=None):
-    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.
+    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from,
+    in ``memory_config`` (None: the input's).
 
     ttnn defaults to epsilon=1e-12; ``preprocess_layer_norm_parameters`` records the
     module's own (1e-5 for nn.LayerNorm). The residual add runs inside the norm's kernel.
@@ -148,6 +149,43 @@ def _linear_compute_config(arch, fp32_output):
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_output,
         packer_l1_acc=not fp32_output,
+    )
+
+
+# Share of the device's L1 a group of intermediates that live at once may take; the rest holds
+# the programs' circular buffers, which sit below the lowest L1 buffer.
+L1_INTERMEDIATE_SHARE = 0.75
+
+
+def l1_if_fits(device, nbytes):
+    """``ttnn.L1_MEMORY_CONFIG`` for ``nbytes`` of intermediates that live at once when they fit
+    ``L1_INTERMEDIATE_SHARE`` of the device's L1, else ``ttnn.DRAM_MEMORY_CONFIG``.
+
+    A static budget against the L1's capacity, not its free space: the caller counts everything
+    of its own that lives at once, and the order of the groups keeps others' buffers out of the
+    way (``tt_encoder.TTBEVFormerLayer``)."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    capacity = view.num_banks * view.total_bytes_per_bank
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= L1_INTERMEDIATE_SHARE * capacity else ttnn.DRAM_MEMORY_CONFIG
+
+
+def grid_linear_kwargs(device):
+    """``ttnn.linear`` keyword arguments that keep the gridless default's HiFi2 on a full core grid.
+
+    Without a core grid, an activation runs as a separate unary op over the whole output and an
+    L1 output picks a config that post-processes the bias. A core grid fuses both, but defaults
+    to LoFi.
+    """
+    grid = device.compute_with_storage_grid_size()
+    return dict(
+        core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
     )
 
 

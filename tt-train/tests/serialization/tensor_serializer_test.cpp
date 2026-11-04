@@ -12,11 +12,11 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 #include "test_utils/optimizer_state.hpp"
@@ -204,32 +204,21 @@ protected:
         EXPECT_TRUE(compare_tensors(saved, trained)) << key << " in the checkpoint does not match the trained value";
     }
 
-    // Checks every model weight against its bf16 HALF view, and every optimizer state tensor against its
-    // `state_precision` view. The default fits AdamW's moments, which the fused kernel updates in place in bf16;
-    // AdamWFullPrecision passes FULL for its fp32 master weights and moments.
+    // Checks every model weight and every optimizer state tensor against the tensor as stored: bf16, or fp32 for
+    // fp32 parameters and their moments.
     static void expect_checkpoint_matches(
         const std::filesystem::path& path,
         const ttml::serialization::NamedParameters& params,
-        const ttml::optimizers::OptimizerBase& optimizer,
-        ttml::autograd::PreferredPrecision state_precision = ttml::autograd::PreferredPrecision::HALF) {
+        const ttml::optimizers::OptimizerBase& optimizer) {
         ttml::serialization::FlatBufferFile file;
         file.deserialize(path.string());
         for (const auto& [name, param] : params) {
-            expect_saved(file, "model/" + name, param->get_value(ttml::autograd::PreferredPrecision::HALF));
+            expect_saved(file, "model/" + name, param->get_value(ttml::autograd::PreferredPrecision::NATIVE));
         }
         const auto state = ttml::test_utils::state_tensors(optimizer);
         ASSERT_FALSE(state.empty());
         for (const auto& [name, value] : state) {
-            expect_saved(file, "optimizer/" + name, value->get_value(state_precision));
-        }
-    }
-
-    // Stores every parameter as `dtype`, as a run that trains in that precision does. New parameters are bf16.
-    static void store_as(const ttml::serialization::NamedParameters& params, ttnn::DataType dtype) {
-        const auto precision = dtype == ttnn::DataType::FLOAT32 ? ttml::autograd::PreferredPrecision::FULL
-                                                                : ttml::autograd::PreferredPrecision::HALF;
-        for (const auto& [name, param] : params) {
-            param->set_value(param->get_value(precision));
+            expect_saved(file, "optimizer/" + name, value->get_value(ttml::autograd::PreferredPrecision::NATIVE));
         }
     }
 
@@ -252,14 +241,14 @@ protected:
     void expect_resume_keeps_the_models_dtype(ttnn::DataType saved, ttnn::DataType resumed) {
         ttml::modules::LinearLayer model(32, 64);
         auto params = model.parameters();
-        store_as(params, saved);
+        ttml::core::store_trainable_parameters_as(params, saved);
         ttml::optimizers::AdamW optimizer(params, adamw_config());
         step_with_random_grads(params, optimizer, 1);
         const auto path = save("saved", model, optimizer);
 
         ttml::modules::LinearLayer resumed_model(32, 64);
         auto resumed_params = resumed_model.parameters();
-        store_as(resumed_params, resumed);
+        ttml::core::store_trainable_parameters_as(resumed_params, resumed);
         ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
         ttml::serialization::FlatBufferFile file;
         file.deserialize(path.string());
@@ -321,18 +310,20 @@ TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValuesAfterResume) {
     expect_checkpoint_matches(save("resumed", resumed_model, resumed_optimizer), resumed_params, resumed_optimizer);
 }
 
-// AdamWFullPrecision keeps its master weights and moments as fp32-native tensors. The checkpoint must store
-// them in fp32, bit for bit, not rounded down to the bf16 view, and the model weights as their bf16 copies.
-TEST_F(CheckpointTrainingTest, CheckpointKeepsFullPrecisionOptimizerState) {
+// Parameters stored as fp32 are the master weights, and fused AdamW keeps fp32 moments for them. The checkpoint must
+// store both in fp32, bit for bit, not rounded down to the bf16 view.
+TEST_F(CheckpointTrainingTest, CheckpointKeepsFp32MasterWeightsAndMoments) {
     ttml::modules::LinearLayer model(32, 64);
     auto params = model.parameters();
-    ttml::optimizers::AdamWFullPrecisionConfig config;
-    config.lr = 1e-2F;
-    ttml::optimizers::AdamWFullPrecision optimizer(params, config);
+    ttml::core::store_trainable_parameters_as(params, ttnn::DataType::FLOAT32);
+    ttml::optimizers::AdamW optimizer(params, adamw_config());
 
     step_with_random_grads(params, optimizer, 3);
-    expect_checkpoint_matches(
-        save("only", model, optimizer), params, optimizer, ttml::autograd::PreferredPrecision::FULL);
+    for (const auto& [name, param] : params) {
+        ASSERT_EQ(param->get_value(ttml::autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32)
+            << name;
+    }
+    expect_checkpoint_matches(save("only", model, optimizer), params, optimizer);
 }
 
 TEST_F(CheckpointTrainingTest, ResumeIntoFp32ModelKeepsItsDtype) {
