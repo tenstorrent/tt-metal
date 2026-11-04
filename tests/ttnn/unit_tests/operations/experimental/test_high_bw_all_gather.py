@@ -861,6 +861,7 @@ def _run_high_bw_all_gather_perf(
     input_batch_index=None,
     gathered_dim_size=None,
     invocation="scalar",
+    num_links=_NUM_LINKS,
 ):
     """Measure one configuration's gather bandwidth, under either invocation form.
 
@@ -954,7 +955,7 @@ def _run_high_bw_all_gather_perf(
                 dim=2,
                 output_tensor=persistent_output,
                 cluster_axis=cluster_axis,
-                num_links=_NUM_LINKS,
+                num_links=num_links,
                 input_batch_index_tensor=slot_meta,
                 batch_slot_num_layers=num_layers,
                 batch_slot_layer_idx=layer_idx,
@@ -984,7 +985,7 @@ def _run_high_bw_all_gather_perf(
                 dim=2,
                 output_tensor=persistent_output,
                 cluster_axis=cluster_axis,
-                num_links=_NUM_LINKS,
+                num_links=num_links,
                 **runtime_controls,
             )
 
@@ -1013,7 +1014,7 @@ def _run_high_bw_all_gather_perf(
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
         f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
-        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} "
+        f"layout={layout} num_links={num_links} mesh={tuple(mesh_device.shape)} rows_per_device={rows_per_device} "
         f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(duration / 1e6, 3) for duration in durations_ns]}"
@@ -1082,7 +1083,12 @@ def _run_high_bw_all_gather_test_cases(mesh_device, min_bandwidth_gbps, cluster_
 
 
 def _run_high_bw_all_gather_ci_perf(
-    mesh_device, cluster_axis, min_bandwidth_gbps, global_rows_cases=_CI_PERF_GLOBAL_ROWS, invocation="scalar"
+    mesh_device,
+    cluster_axis,
+    min_bandwidth_gbps,
+    global_rows_cases=_CI_PERF_GLOBAL_ROWS,
+    invocation="scalar",
+    num_links=_NUM_LINKS,
 ):
     """Run the compact CI matrix and pair every bandwidth measurement with correctness.
 
@@ -1135,6 +1141,7 @@ def _run_high_bw_all_gather_ci_perf(
                 input_batch_index=perf_batch_index,
                 gathered_dim_size=perf_gathered_dim_size,
                 invocation=invocation,
+                num_links=num_links,
             )
             # Use a compact reference run after the full-size measurement. This
             # validates the same dtype/layout/route without doubling CI memory
@@ -1148,6 +1155,7 @@ def _run_high_bw_all_gather_ci_perf(
                 cluster_axis,
                 rows_per_device=min(rows_per_device, _ACCURACY_ROWS_PER_DEVICE),
                 metadata_batch_index=perf_batch_index if invocation == "metadata" else None,
+                num_links=num_links,
             )
 
 
@@ -1210,6 +1218,33 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
         cluster_axis=None,
         min_bandwidth_gbps=_GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS,
         global_rows_cases=_GALAXY_FULL_MESH_MATCHED_LOCAL_GLOBAL_ROWS,
+    )
+
+
+# A 4x4 submesh of the Galaxy is a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four of eight rows) is a
+# line. The 16-rank full-mesh gather then runs over three Hamiltonian cycles (2 links per hop, one per cycle on a hop two
+# cycles share), or over the snake when only one link per hop is allowed. Same global volumes as the 32-rank gate (both
+# divide by 16). No floors yet: the test reports time and bandwidth until a Galaxy run calibrates them. Expected from
+# link volume: the cycles carry 5 shards on the busiest hop against the 2-link snake's 7.5 (1.5x); the 1-link snake
+# carries the same 7.5 over half the links.
+_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 cylinder perf requires Blackhole")
+@pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy 4x4 cylinder perf requires MESH_DEVICE=TG")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [2, 1], ids=["three_cycles", "snake_1_link"])
+def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device, num_links):
+    """Time and bandwidth of the 16-rank full-mesh gather on a 4x4 cylinder, each paired with a correctness run."""
+    cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
+    assert cylinder.get_num_devices() == 16
+    _run_high_bw_all_gather_ci_perf(
+        cylinder,
+        cluster_axis=None,
+        min_bandwidth_gbps=0.0,
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=num_links,
     )
 
 
