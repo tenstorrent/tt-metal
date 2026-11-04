@@ -41,6 +41,7 @@ OBJECT_NOT_FOUND = -704
 
 _ENV_PREFIX = "PREFILL_MEDIA_STORE_"
 _DEFAULT_HTTP_METADATA_PORT = 8080  # mooncake_master's --http_metadata_server_port default
+_DEFAULT_SEGMENT_BYTES = "1G"
 _REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
 
@@ -54,10 +55,10 @@ def _check_key(media_key: str) -> str:
 
 
 def parse_bytes(text: str) -> int:
-    """'50G', '50GiB', '512M', '1048576' -> bytes. Suffixes are binary (G = GiB)."""
+    """'1G', '1GiB', '512M', '1048576' -> bytes. Suffixes are binary (G = GiB)."""
     m = re.fullmatch(r"\s*(\d+)\s*([KMGT]?)(?:i?B)?\s*", text, re.IGNORECASE)
     if not m:
-        raise ValueError(f"not a byte size: {text!r} (examples: 50G, 512M, 1048576)")
+        raise ValueError(f"not a byte size: {text!r} (examples: 1G, 512M, 1048576)")
     return int(m.group(1)) << {"": 0, "K": 10, "M": 20, "G": 30, "T": 40}[m.group(2).upper()]
 
 
@@ -82,7 +83,7 @@ class MediaEmbeddingStoreConfig:
 
         PREFILL_MEDIA_STORE_MASTER    master address, host:port (turns the store on)
         PREFILL_MEDIA_STORE_SEGMENT   this host's address, host:port or host (required)
-        PREFILL_MEDIA_STORE_BYTES     segment size, e.g. 50G (required)
+        PREFILL_MEDIA_STORE_BYTES     segment size (default 1G)
         PREFILL_MEDIA_STORE_METADATA  metadata server (default http://<master host>:8080/metadata)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
@@ -97,14 +98,13 @@ class MediaEmbeddingStoreConfig:
             return None
         if ":" not in master:
             raise ValueError(f"{_ENV_PREFIX}MASTER={master!r}: want host:port")
-        missing = [_ENV_PREFIX + n for n in ("SEGMENT", "BYTES") if get(n) is None]
-        if missing:
-            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
+        if get("SEGMENT") is None:
+            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {_ENV_PREFIX}SEGMENT must be set too")
         master_host = master.rsplit(":", 1)[0]
         return cls(
             master=master,
             segment=get("SEGMENT"),
-            segment_bytes=parse_bytes(get("BYTES")),
+            segment_bytes=parse_bytes(get("BYTES", _DEFAULT_SEGMENT_BYTES)),
             metadata=get("METADATA", f"http://{master_host}:{_DEFAULT_HTTP_METADATA_PORT}/metadata"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
