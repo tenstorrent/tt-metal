@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tt-metalium/constants.hpp>
 #include <tt-umd/cluster.hpp>
 #include <utility>
 #include <vector>
@@ -781,6 +782,9 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         Shape{1, 1184, 1, 2463},
         // One tile-row of 27 tiles: 3 slices of 9 tiles, block size 3 in the forward and 1 in the backward.
         Shape{1, 32, 1, 863},
+        // 131 tile-rows of 74 = 2 * 37 tiles: 2 slices is the only split, with row-groups of 3 and of 2 rows in two
+        // core groups.
+        Shape{1, 4192, 1, 2368},
     };
     // These widths would be sliced, so they keep whole rows to cover the whole-row paths.
     const std::vector<Shape> whole_row_shapes = {
@@ -1025,6 +1029,56 @@ TEST_F(RMSNormOpTest, RejectsMaxRowSlicesOutOfRange) {
             ThrowsMessage<std::runtime_error>(HasSubstr("max_row_slices must be in")))
             << label;
     }
+}
+
+// The tests that use these shapes only cover the sliced or the whole-row path if the planner, on this device's grid,
+// splits their rows the way they expect. Every slice they get is far inside L1, so every fit check passes.
+TEST_F(RMSNormOpTest, TestShapesGetTheirIntendedRowSplit) {
+    struct Expectation {
+        const char* label;
+        std::vector<uint32_t> shape;
+        bool sliced;
+    };
+    const std::vector<Expectation> expectations = {
+        {"Plain_1x32x1x1000", {1U, 1U, 32U, 1000U}, true},
+        {"Plain_1x1024x1x5120", {1U, 1U, 1024U, 5120U}, true},
+        {"Plain_1x1024x1x5119", {1U, 1U, 1024U, 5119U}, true},
+        {"Plain_1x1184x1x2463", {1U, 1U, 1184U, 2463U}, true},
+        {"Plain_1x32x1x863", {1U, 1U, 32U, 863U}, true},
+        {"Plain_1x4192x1x2368", {1U, 1U, 4192U, 2368U}, true},
+        // The _WholeRows cases force whole rows because these widths would be sliced.
+        {"Plain_1x32x1x5120_WholeRows, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden", {1U, 1U, 32U, 5120U}, true},
+        {"Plain_1x32x1x8191_WholeRows", {1U, 1U, 32U, 8191U}, true},
+        {"Plain_1x32x1x16384_WholeRows", {1U, 1U, 32U, 16384U}, true},
+        {"RMSNorm_Compare_FrozenGamma, whole rows", {1U, 1U, 4096U, 1024U}, false},
+        {"RMSNorm_Compare_FrozenGamma, sliced row", {1U, 1U, 1U, 16384U}, true},
+        {"DistinctKeys, sliced tile row", {1U, 1U, 32U, 1024U}, true},
+    };
+
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    const auto plan_of = [&](const std::vector<uint32_t>& shape) {
+        const uint32_t tile_rows =
+            shape[0] * shape[1] * ((shape[2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT);
+        const uint32_t Wt = (shape[3] + tt::constants::TILE_WIDTH - 1U) / tt::constants::TILE_WIDTH;
+        return ttml::metal::ops::rmsnorm::plan_row_slices(
+            grid, tile_rows, Wt, kMaxRowSlices, [](uint32_t, uint32_t) { return true; });
+    };
+    for (const auto& e : expectations) {
+        const auto plan = plan_of(e.shape);
+        EXPECT_EQ(plan.num_slices > 1U, e.sliced)
+            << e.label << ": " << plan.num_slices << " slices on a " << grid.x << "x" << grid.y << " grid";
+    }
+
+    // Plain_1x1184x1x2463 also covers row-groups of several rows and two core groups.
+    const auto plan = plan_of({1U, 1U, 1184U, 2463U});
+    EXPECT_GT(plan.rows_per_group_1, 1U);
+    EXPECT_FALSE(plan.core_group_2.empty());
+
+    // Plain_1x4192x1x2368 is the only case with 2 slices, which is what model shapes get when they slice.
+    const auto two_slice_plan = plan_of({1U, 1U, 4192U, 2368U});
+    EXPECT_EQ(two_slice_plan.num_slices, 2U);
+    EXPECT_GT(two_slice_plan.rows_per_group_1, 1U);
+    EXPECT_FALSE(two_slice_plan.core_group_2.empty());
 }
 
 // ============================================================================
