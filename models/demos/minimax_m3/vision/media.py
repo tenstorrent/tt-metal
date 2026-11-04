@@ -3,7 +3,7 @@
 
 """MiniMax-M3 media module for the encoder service: image checks, resize, token expansion and stored values.
 
-load builds the TT vision encoder (multimodal/encoder.py) on one chip, and encode writes each image's vision tokens
+load builds the TT vision encoder (encoder.py) on one chip, and encode writes each image's vision tokens
 into its stored value. With the encoder config's model_options.stub_embeddings, encode writes deterministic stub
 embeddings instead and no chip is used. Only load imports ttnn, so a process that only prepares media runs without it.
 """
@@ -138,7 +138,7 @@ class MiniMaxM3Media:
             raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
         warmup = _warmup_sizes(options)
         import ttnn
-        from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder
+        from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder
 
         own_mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1)) if mesh_device is None else None
         encoder = None
@@ -172,7 +172,7 @@ class MiniMaxM3Media:
     def _encode_into(self, item: M3Image, rows: np.ndarray) -> None:
         """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value)."""
         import ttnn
-        from models.demos.minimax_m3.multimodal.encoder import read_embeddings
+        from models.demos.minimax_m3.vision.encoder import read_embeddings
 
         with self._lock:
             tokens = self._encoder.forward(item.pixels)

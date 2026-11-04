@@ -59,10 +59,10 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows, resize_image
+from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
 from .golden_hf_vision import GOLDEN_FORMAT, IMAGES, gain, load_image, sha256, token_cosine_p01
 from .test_factory import parametrize_mesh_with_fabric
