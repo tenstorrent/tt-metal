@@ -79,10 +79,9 @@ void validate_borrowed_memory_address(const DataflowBufferImpl& dfb, uint32_t al
 }
 
 // The device walks the DM1 slot array, the DM0 descriptor pool and its own hart blob through the
-// CACHED view (config_cached in dataflow_buffer_init.h). A region that starts mid-line makes its
-// first cached load pull a line it only half uses, so every cached region starts on a cache line.
-// The sizer (compute_dfb_config_serialized_size) and the emitter (serialize_dfb_config_for_core)
-// must align identically, or the sizer under-allocates and the signal region runs off the end.
+// CACHED view. Every cached region starts on a cache line for max performance. The sizer
+// (compute_dfb_config_serialized_size) and the emitter (serialize_dfb_config_for_core) must align
+// identically, or the sizer under-allocates and the signal region runs off the end.
 constexpr uint32_t kDfbCacheLineBytes = 64;
 
 uint32_t dfb_align_cl(uint32_t offset) { return (offset + kDfbCacheLineBytes - 1u) & ~(kDfbCacheLineBytes - 1u); }
@@ -347,14 +346,9 @@ uint32_t compute_dfb_config_serialized_size(const std::vector<std::shared_ptr<Da
     return align_dfb_config_transfer_size(hal, payload);
 }
 
-// participation_mask is not a device-visible header field -- the device reads
-// hart_desc[h].num_entries instead -- but the emitter and its validation still need it, so it is
-// returned through an out-parameter.
 void populate_dfb_global_header_participation(
-    dfb_global_header_t& ghdr,
-    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS>& participation_mask,
-    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    participation_mask.fill(0u);
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> participation_mask{};
     ghdr.num_dfbs = static_cast<uint8_t>(dfbs_on_core.size());
     TT_FATAL(
         dfbs_on_core.size() <= ::dfb::NUM_DFBS,
@@ -463,9 +457,7 @@ void verify_dfb_hart_blobs(
             }
         }
 
-        // Walk init entries and verify them. The device trusts every field checked here: a DM indexes
-        // its g_dfb_interface by iface_byte_off and copies num_tcs slots with no bounds checks, and a
-        // TRISC copies num_tcs slots into its pool.
+        // Walk init entries and verify them.
         uint32_t cursor = 0u;
         for (uint8_t e = 0; e < num_entries; e++) {
             uint32_t logical_dfb_id = 0u;
@@ -722,8 +714,7 @@ size_t serialize_dfb_config_for_core(
     // 2. Build the header (all offsets computed after blob sizes are known).
     // ---------------------------------------------------------------------------
     dfb_global_header_t ghdr = {};
-    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> participation_mask{};
-    populate_dfb_global_header_participation(ghdr, participation_mask, dfbs_on_core);
+    populate_dfb_global_header_participation(ghdr, dfbs_on_core);
     verify_dfb_global_header_participation(ghdr, dfbs_on_core);
 
     const uint32_t header_size = dfb_config_header_size();  // 120B
@@ -1152,8 +1143,7 @@ size_t serialize_dfb_config_for_core(
     }
 
     // Every CACHED region starts on a cache line, and the hart blobs are whole numbers of lines, so
-    // no two harts ever touch the same line. Checked rather than trusted, because the offsets are
-    // computed in two places.
+    // no two harts ever touch the same line.
     TT_FATAL(
         (dm1_off + DFB_DM1_CACHED_PAYLOAD_OFFSET) % kDfbCacheLineBytes == 0 &&
             (dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET) % kDfbCacheLineBytes == 0,
@@ -2284,10 +2274,9 @@ uint32_t finalize_dfbs(
     // Quasar uses a single program-wide packed layout sized by compute_dfb_config_serialized_size.
     const bool slot_addressed = !hal.has_tile_counter_registers();
 
-    // Quasar: start the DFB config region on a cache line. The serializer lays every cached region
-    // out on 64B lines relative to the region base, so the base's own phase carries through to all
-    // of them; program config sections are only aligned to hal.get_alignment(HalMemType::L1) (16 on
-    // Quasar). Costs at most 48 bytes of padding.
+    // Quasar: the serializer's cached regions are line-aligned relative to this offset, and config
+    // sections are only 16B aligned, so round it up to a 64B line. It is absolute-aligned because
+    // finalize_kernel_bins rounds every Tensix ring entry (kernel_config_base) to a line too.
     dfb_offset = slot_addressed ? base_offset : dfb_align_cl(base_offset);
     dfb_size = 0;
 
