@@ -78,6 +78,12 @@ class HFSource(WeightSource):
 
     def _raw(self, layer_idx: int) -> dict:
         if layer_idx not in self.raw:
+            # one layer resident at a time: a sparse layer's raw experts are ~14 GB in bf16 and the backend builds the
+            # layers in order (45 layers resident = the host OOM of mk_backend_45)
+            for old in [k for k in self.raw if k != layer_idx]:
+                del self.raw[old]
+            for key in [k for k in self.cache if k[0] != layer_idx]:
+                del self.cache[key]
             self.raw[layer_idx] = load_layer_raw(self.snapshot, layer_idx, self.headers)
         return self.raw[layer_idx]
 
