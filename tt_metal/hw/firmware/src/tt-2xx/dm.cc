@@ -498,6 +498,7 @@ extern "C" uint32_t _start1() {
             asm("nop; nop; nop; nop; nop");
         }
         // The next read, write, and atomic leave these fields as the previous kernel set them.
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
         overlay_cmd_buff_restore_launch_state(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
