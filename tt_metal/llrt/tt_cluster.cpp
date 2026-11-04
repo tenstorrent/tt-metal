@@ -1684,6 +1684,10 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
     bool enable_internal_routing,
     const std::vector<ChipId>& target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
+    // routing_info lives in base Ethernet firmware's L1; without base firmware there is nothing to set.
+    if (!this->hal_->has_eth_base_firmware()) {
+        return;
+    }
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW

@@ -259,7 +259,8 @@ bool test_load_write_read_risc_binary(
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
-    bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH &&
+                            hal.has_eth_base_firmware();
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = hal.relocate_dev_addr(addr, local_init_addr, local_mem_offset);
