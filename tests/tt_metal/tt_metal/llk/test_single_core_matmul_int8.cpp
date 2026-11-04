@@ -94,14 +94,17 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
         .shard_shape = {32, 32},
         .shard_orientation = ShardOrientation::ROW_MAJOR};
 
-    workload.add_program(device_range, tt_metal::CreateProgram());
+    workload.add_program(device_range, tt_metal::CreateProgram(*mesh_device));
     auto& program = workload.get_programs().at(device_range);
 
-    auto input0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto input0_dram_buffer =
+        distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto input1_dram_buffer =
+        distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto output_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto output_dram_buffer =
+        distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =

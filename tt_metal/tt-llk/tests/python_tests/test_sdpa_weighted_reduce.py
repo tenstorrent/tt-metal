@@ -64,7 +64,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The header reduces over exactly 8 head weights: weights[1, 8], qk[8, 32]. Fixed by the op.
 # Blackhole-only experimental SDPA LLK: guard WH/Quasar from building BH-only headers.
@@ -167,7 +167,7 @@ def test_sdpa_weighted_reduce(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Validate ONLY the lanes the test's MATH core provably defines: logical row 0, columns 0..15.

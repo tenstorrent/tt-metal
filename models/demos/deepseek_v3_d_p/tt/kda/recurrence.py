@@ -31,18 +31,24 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 
 
-def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
+def _group_summary_memory_config(
+    device: ttnn.Device, tail: bool, group_heads: int, key_dim: int, value_dim: int
+) -> ttnn.MemoryConfig:
+    """L1 shards of each group-head's [S, 1, K, K+V] summaries, on the core its prefix worker occupies; S = 2 with
+    tail transforms."""
+    slots = 2 if tail else 1
     grid = device.compute_with_storage_grid_size()
     capacity = grid.x * grid.y
     if group_heads > capacity:
         raise ValueError(f"grouped KDA needs {group_heads} summary owners, but only {capacity} are supported")
     worker_cores = ttnn.num_cores_to_corerangeset(group_heads, grid, row_wise=True)
-    return ttnn.create_sharded_memory_config(
-        (group_heads, key_dim, key_dim),
-        core_grid=worker_cores,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[slots, 1, key_dim, key_dim + value_dim],
+            grid=worker_cores,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
 
 
@@ -147,6 +153,9 @@ def _reshape_chunks_for_groups(
     group_heads: int,
     summary_group_chunks: int,
 ) -> _PreparedChunks:
+    # One group per head is the layout chunk preparation already writes; a reshape onto it would only cost a dispatch.
+    if group_heads == geometry.batch_heads and summary_group_chunks == geometry.num_chunks:
+        return prepared
     return _PreparedChunks(
         v_beta=ttnn.reshape(
             prepared.v_beta, (group_heads, summary_group_chunks, geometry.chunk_size, geometry.value_dim)
@@ -175,11 +184,13 @@ def _summarize_chunk_groups(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     groups_per_head: int,
+    summary_tail: bool,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
-) -> AffineTransform:
+) -> ttnn.Tensor:
     """Summarize whole groups for the single-rank path at the BF16 prefix boundary."""
-    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+    # The scan never reads a group without a valid chunk, so those slots need no identity.
+    return ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
         memory_config=summary_memory_config,
@@ -187,11 +198,9 @@ def _summarize_chunk_groups(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        tail=summary_tail,
+        init=False,
     )
-    # A single sequence rank has no split tail, so only the head summaries are needed.
-    ttnn.deallocate(tail_a)
-    ttnn.deallocate(tail_b)
-    return AffineTransform(a, b)
 
 
 def _scan_chunks(
@@ -265,7 +274,8 @@ def distributed_prefix(
     carry on each independent TP line.
     """
     device = packed.device()
-    _, batch_heads, key_dim, row_width = tuple(packed.shape)
+    packed_shape = packed.shape
+    batch_heads, key_dim, row_width = packed_shape[1], packed_shape[2], packed_shape[3]
     # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
     chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
     if gather_buffer is not None:
@@ -320,7 +330,7 @@ def _last_group_state(
 
 def _ordinary_group_scan(
     grouped: _PreparedChunks,
-    summary: AffineTransform,
+    summaries: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
@@ -331,19 +341,14 @@ def _ordinary_group_scan(
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
     """Scan groups on a single sequence rank, where no split-tail reset is needed."""
-    # Tail inputs are unused on this path; reuse the head summaries and initial state.
     group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
-        summary.a,
-        summary.b,
+        summaries,
         initial_state,
         groups_per_head,
         memory_config=prefix_memory_config,
         compute_kernel_config=compute_config.affine_prefix,
         actual_start=actual_start,
         actual_end=actual_end,
-        tail_a=summary.a,
-        tail_b=summary.b,
-        tail_entry_states=initial_state,
         local_rows=grouped.v_beta.shape[1] * grouped.v_beta.shape[2] * groups_per_head,
         sequence_parallel_axis=sequence_parallel_axis,
     )
@@ -369,15 +374,17 @@ def _scan_local_grouped_chunks(
     sequence_parallel_axis: int,
     summary_group_chunks: int,
     groups: int,
+    summary_tail: bool,
     memory: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
     )
-    summary = _summarize_chunk_groups(
+    summaries = _summarize_chunk_groups(
         grouped,
         groups_per_head=groups,
+        summary_tail=summary_tail,
         summary_memory_config=memory,
         compute_config=compute_config,
         actual_start=actual_start,
@@ -386,7 +393,7 @@ def _scan_local_grouped_chunks(
     )
     scan = _ordinary_group_scan(
         grouped,
-        summary,
+        summaries,
         initial_state,
         groups_per_head=groups,
         prefix_memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
@@ -402,7 +409,7 @@ def _scan_local_grouped_chunks(
 
 
 def _partition_prefix(
-    summary: AffineTransform,
+    summaries: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
     groups_per_head: int,
@@ -413,8 +420,7 @@ def _partition_prefix(
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
-        summary.a,
-        summary.b,
+        summaries,
         groups_per_head,
         local_rows=local_rows,
         actual_start=actual_start,
@@ -440,6 +446,7 @@ def _scan_sp_grouped_chunks(
     *,
     summary_group_chunks: int,
     groups: int,
+    summary_tail: bool,
     memory: ttnn.MemoryConfig,
     sequence_parallel_axis: int,
     actual_start: ttnn.Tensor,
@@ -453,7 +460,7 @@ def _scan_sp_grouped_chunks(
     if groups == 1:
         # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
         # without a head), and the group enters at the rank's own entry state.
-        (packed,) = ttnn.experimental.kda.summarize_chunk_recurrence(
+        packed = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
@@ -461,7 +468,6 @@ def _scan_sp_grouped_chunks(
             sequence_parallel_axis=sequence_parallel_axis,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
-            packed_head=True,
         )
         group_entry_states, prefix_final_state = distributed_prefix(
             packed,
@@ -473,7 +479,9 @@ def _scan_sp_grouped_chunks(
             gather_buffer=gather_buffer,
         )
     else:
-        head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        # The reduction and the scan read only slots with a valid segment (the reduction writes its own identity for
+        # a rank without a head), so the other slots need no identity.
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
@@ -481,9 +489,11 @@ def _scan_sp_grouped_chunks(
             sequence_parallel_axis=sequence_parallel_axis,
             memory_config=memory,
             compute_kernel_config=compute_config.preparation,
+            tail=summary_tail,
+            init=False,
         )
         local_entry_state, prefix_final_state = _partition_prefix(
-            AffineTransform(head_a, head_b),
+            summaries,
             initial_state,
             groups_per_head=groups,
             local_rows=geometry.local_rows,
@@ -494,13 +504,10 @@ def _scan_sp_grouped_chunks(
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
         group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
-            head_a,
-            head_b,
+            summaries,
             local_entry_state,
             groups,
             local_rows=geometry.local_rows,
-            tail_a=tail_a,
-            tail_b=tail_b,
             tail_entry_states=prefix_final_state,
             actual_start=actual_start,
             actual_end=actual_end,
@@ -518,8 +525,12 @@ def _scan_sp_grouped_chunks(
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.scan,
     )
-    output = ttnn.reshape(
-        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
+    output = (
+        scan.output
+        if groups == 1
+        else ttnn.reshape(
+            scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
+        )
     )
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
@@ -584,6 +595,14 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
+        # Shapes are compared whole: iterating a ttnn.Shape ends in a C++ exception inside nanobind.
+        key_shape = ttnn.Shape([batch, local_rows, heads * key_dim])
+        self._input_shapes = {
+            "q": key_shape,
+            "k": key_shape,
+            "v": ttnn.Shape([batch, local_rows, heads * value_dim]),
+            "gate": key_shape,
+        }
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
@@ -607,7 +626,11 @@ class KDARecurrence:
             if self._geometry.num_chunks % self._summary_group_chunks:
                 raise ValueError("summary_group_chunks must divide the constructed local chunk count")
             self._groups = self._geometry.num_chunks // self._summary_group_chunks
-            self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
+            # Only a sequence-parallel run can split chronologically, so only its summaries carry tail transforms.
+            self._summary_tail = self._sequence_parallel
+            self._summary_memory = _group_summary_memory_config(
+                device, self._summary_tail, batch * heads * self._groups, key_dim, value_dim
+            )
         # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
         # one-group-per-head summary gathers them directly.
         self._gather_buffer = None
@@ -652,18 +675,15 @@ class KDARecurrence:
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
         # Beta's logits are a column window of a wider projection.
+        beta_shape = beta.shape
         if (
-            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
-            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+            beta_shape[0] != geometry.batch
+            or beta_shape[1] != geometry.local_rows
+            or beta_shape[-1] < beta_logits_column_offset + geometry.heads
         ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
-        for name, tensor, width in (
-            ("q", q, geometry.heads * geometry.key_dim),
-            ("k", k, geometry.heads * geometry.key_dim),
-            ("v", v, geometry.heads * geometry.value_dim),
-            ("gate", gate, geometry.heads * geometry.key_dim),
-        ):
-            if tuple(tensor.shape) != (geometry.batch, geometry.local_rows, width):
+        for name, tensor in (("q", q), ("k", k), ("v", v), ("gate", gate)):
+            if tensor.shape != self._input_shapes[name]:
                 raise ValueError(f"recurrence {name} shape does not match constructed geometry")
 
         state = ttnn.reshape(
@@ -767,6 +787,7 @@ class KDARecurrence:
             self._geometry,
             summary_group_chunks=self._summary_group_chunks,
             groups=self._groups,
+            summary_tail=self._summary_tail,
             memory=self._summary_memory,
             compute_config=self._compute_config,
             actual_start=actual_start,
@@ -787,6 +808,7 @@ class KDARecurrence:
             self._geometry,
             summary_group_chunks=self._summary_group_chunks,
             groups=self._groups,
+            summary_tail=self._summary_tail,
             memory=self._summary_memory,
             compute_config=self._compute_config,
             actual_start=actual_start,

@@ -20,7 +20,7 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
     // slice fallback by the composite layer, so the device kernel only supports dim 3.
     TT_FATAL(args.dim == 3, "Split device kernel only supports the last dim (3)");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     // Sharded input/output are supported natively: the reader/writer kernels address by global
     // page_id and TensorAccessor resolves the physical NOC address for INTERLEAVED and
     // HEIGHT/WIDTH/BLOCK sharded buffers transparently.

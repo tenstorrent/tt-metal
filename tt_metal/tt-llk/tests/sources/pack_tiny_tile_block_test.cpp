@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test: Pack tiny tiles from sparse DEST (Tile32x32 slots) to dense L1
-// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1), _llk_pack_ per tile (2) _llk_pack_block_dense_ (3).
+// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1), _llk_pack_ per tile (2) _llk_pack_block_dense_ (3), the closed block of llk_pack_block with the W offset (4).
 //
 // Math uses standard datacopy (Tile32x32 DEST addressing — sparse).
 // Pack uses the new block-contiguous MOP that reads from sparse DEST
@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces,
             params.num_faces);
 
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */,
             0 /* within_face_16x16_transpose */,
             ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int i = 0; i < total_tiles; ++i)
                 {
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -95,11 +95,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces);
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-            params.num_faces, formats.math);
+            tensor_shape, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
@@ -126,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             BroadcastType::NONE,
-                            false /* unpack_to_dest */>(tile, formats.math, formats.math, params.num_faces);
+                            unpack_to_dest>(params.DST_INDEX + tile, formats.math, formats.math, tensor_shape);
                     }
 
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -195,6 +196,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_block_dense_init_(params.TEST_FACE_R_DIM, params.num_faces);
         }
+        else if constexpr (tiny_pack_mode == 4)
+        {
+            // the closed block llk_pack_block makes with the W offset: the output programmed once
+            _llk_pack_block_w_init_(L1_ADDRESS(params.buffer_Res[0]), (L1_ADDRESS(params.buffer_Res[1]) - L1_ADDRESS(params.buffer_Res[0])) << 4);
+        }
 #endif
         PROFILER_SYNC();
     }
@@ -224,12 +230,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t tile_stride = (L1_ADDRESS(params.buffer_Res[1]) - L1_ADDRESS(params.buffer_Res[0])) << 4;
                         _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
-                            0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, tile_stride, params.num_faces);
+                            params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, tile_stride, params.num_faces);
+                    }
+                    else if constexpr (tiny_pack_mode == 4)
+                    {
+                        _llk_pack_block_closed_w_mop_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                            params.DST_INDEX, block * num_tiles_in_block, num_tiles_in_block, params.num_faces);
                     }
                     else if constexpr (tiny_pack_mode == 3)
                     {
                         _llk_pack_block_dense_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
-                            0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, params.TEST_FACE_R_DIM, params.num_faces);
+                            params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, params.TEST_FACE_R_DIM, params.num_faces);
                     }
                     else
 #endif
@@ -237,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (int tile = 0; tile < num_tiles_in_block; ++tile)
                         {
                             int res_idx = block * num_tiles_in_block + tile;
-                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[res_idx]));
                         }
                     }
 

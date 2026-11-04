@@ -20,7 +20,7 @@
   skus:
     wh_n150_civ2:
       timeout: 10
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: cnn_pipeline
@@ -30,7 +30,7 @@
   skus:
     wh_n150_civ2:
       timeout: 10
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: cnn_builder

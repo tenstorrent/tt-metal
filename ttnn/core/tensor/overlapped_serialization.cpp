@@ -21,6 +21,8 @@
 #include "tensor/flatbuffer/overlapped_tensor_flatbuffer.hpp"
 #include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
+#include "ttnn/tensor/topology_check.hpp"
+#include "ttnn/config.hpp"
 
 namespace ttnn {
 using tt::tt_metal::MemoryPin;
@@ -46,10 +48,14 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
     }
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    // After the gather every rank holds every shard of the fused tensor, so every rank reaches the same verdict and
+    // a rejected tensor throws on all of them, rather than on rank 0 alone while the others wait in the barrier below.
+    ttnn::verify_shards_match_topology(cpu_tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
+    // Only rank 0 serializes and writes; the other ranks wait in the barrier below.
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         std::vector<SerializedTensorBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
-        auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers);
+        auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers, /*verify_shards=*/false);
         builder.Finish(root_offset);
 
         write_tensor_file(file_name, builder, buffers);

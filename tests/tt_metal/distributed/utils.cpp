@@ -45,7 +45,9 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
     CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
 
     std::vector<std::shared_ptr<Program>> programs = {
-        std::make_shared<Program>(), std::make_shared<Program>(), std::make_shared<Program>()};
+        std::make_shared<Program>(CreateProgram(*mesh_device)),
+        std::make_shared<Program>(CreateProgram(*mesh_device)),
+        std::make_shared<Program>(CreateProgram(*mesh_device))};
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
     for (std::size_t eltwise_op = 0; eltwise_op < op_id_to_op_define.size(); eltwise_op++) {
@@ -159,6 +161,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 }
 
 std::vector<std::shared_ptr<Program>> create_random_programs(
+    MeshDevice& mesh_device,
     uint32_t num_programs,
     CoreCoord worker_grid_size,
     uint32_t /*seed*/,
@@ -186,7 +189,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t page_size = l1_cb_test_budget / max_dfbs;
 
     for (uint32_t i = 0; i < num_programs; i++) {
-        Program& program = *programs.emplace_back(std::make_shared<Program>());
+        Program& program = *programs.emplace_back(std::make_shared<Program>(CreateProgram(mesh_device)));
         // ========== Set configs for BRISC ==========
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
@@ -412,7 +415,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 }
 
 std::vector<std::unique_ptr<Program>> create_benchmark_programs(
-    uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program) {
+    MeshDevice& mesh_device, uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program) {
     uint32_t MAX_LOOP = 100;
 
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -437,7 +440,7 @@ std::vector<std::unique_ptr<Program>> create_benchmark_programs(
     uint32_t num_common_rtargs = common_rtargs.size();
 
     for (uint32_t i = 0; i < num_programs; i++) {
-        Program& program = *programs.emplace_back(std::make_unique<Program>());
+        Program& program = *programs.emplace_back(std::make_unique<Program>(CreateProgram(mesh_device)));
 
         // Create CBs
         for (uint32_t j = 0; j < NUM_CBS; j++) {

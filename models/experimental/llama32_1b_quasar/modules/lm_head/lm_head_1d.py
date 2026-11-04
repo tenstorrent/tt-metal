@@ -24,6 +24,7 @@ import ttnn
 from models.experimental.llama32_1b_quasar.lightweightmodule import LightweightModule
 from models.experimental.llama32_1b_quasar.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.experimental.llama32_1b_quasar.tensor_utils import TILE_SIZE
+from models.experimental.llama32_1b_quasar.utility_functions import linear
 
 # =============================================================================
 # Config dataclass
@@ -130,7 +131,7 @@ class LMHead1D(LightweightModule):
         for weight, pc in zip(self.output_weights, cfg.program_configs):
             if pc is not None:
                 # DRAM-sharded path (from_model_args): width-sharded output → interleaved
-                output = ttnn.linear(
+                output = linear(
                     x,
                     weight,
                     compute_kernel_config=cfg.compute_kernel_config,
@@ -140,8 +141,8 @@ class LMHead1D(LightweightModule):
                 )
                 outputs.append(ttnn.sharded_to_interleaved(output, memory_config=cfg.output_memcfg))
             else:
-                # Auto path (simple API): interleaved output directly
-                output = ttnn.linear(
+                # Auto path (simple API; always on Quasar): interleaved output directly
+                output = linear(
                     x,
                     weight,
                     compute_kernel_config=cfg.compute_kernel_config,

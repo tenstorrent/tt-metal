@@ -689,7 +689,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         mem_config_actual =
             operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
     }
-    if (!memory_config.has_value() && !output_tensor.has_value()) {
+    // A preallocated output buffer's config describes where the writer stores and it takes precedence over any
+    // memory_config
+    if (output_tensor.has_value()) {
+        mem_config_actual = output_tensor->memory_config();
+        log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
+    } else if (!memory_config.has_value()) {
         if (input_tensor_b.memory_config().is_sharded()) {
             // if a is interleaved but in L1 (not DRAM), still use a's memory config
             if (!input_tensor_a.memory_config().is_sharded()) {
@@ -711,7 +716,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                     "grid");
             }
         }
-    } else if (memory_config.has_value()) {
+    } else {
         mem_config_actual = *memory_config;
         // If the provided memory config is sharded but doesn't have a shard spec, inherit from input.
         // An ND_SHARDED config has no 2D shard spec either, but already carries its own geometry.
@@ -740,9 +745,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
         }
-    } else {
-        mem_config_actual = output_tensor->memory_config();
-        log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
     }
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -782,14 +784,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     // With nothing sharded, get_shard_volumes() and the output's shape in pages are both nullopt, so the
-    // attributes stay as initialized. A preallocated output is tested on its own: mem_config_actual falls
-    // back to it only when no explicit memory_config was given, while compute_output_specs returns a
-    // supplied output's spec verbatim.
+    // attributes stay as initialized. A preallocated output needs no entry of its own: its memory config
+    // takes precedence, so mem_config_actual is alreadythat config whenever one was supplied and
+    // compute_output_specs returns its spec verbatim.
     if (operations::binary_ng::any_memory_config_sharded(
-            {&input_tensor_a.memory_config(),
-             &input_tensor_b.memory_config(),
-             &mem_config_actual,
-             output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
+            {&input_tensor_a.memory_config(), &input_tensor_b.memory_config(), &mem_config_actual})) {
         const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
         const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
@@ -852,8 +851,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
-    MemoryConfig mem_config_actual = memory_config.value_or(
-        output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
+    // A preallocated output's own config takes precedence over any memory_config passed alongside it
+    MemoryConfig mem_config_actual = output_tensor.has_value() ? output_tensor->memory_config()
+                                                               : memory_config.value_or(input_tensor_a.memory_config());
 
     auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
     if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR) {
@@ -895,13 +895,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
-    // Same predicate as the tensor-tensor overload. A preallocated output is tested on its own:
-    // mem_config_actual falls back to it only when no explicit memory_config was given, while
-    // compute_output_specs returns a supplied output's spec verbatim.
-    if (operations::binary_ng::any_memory_config_sharded(
-            {&input_tensor_a.memory_config(),
-             &mem_config_actual,
-             output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
+    // Same predicate as the tensor-tensor overload. A preallocated output needs no entry of its own: its
+    // memory config takes precedence, so mem_config_actual is already that config whenever one was supplied
+    // and compute_output_specs returns its spec verbatim.
+    if (operations::binary_ng::any_memory_config_sharded({&input_tensor_a.memory_config(), &mem_config_actual})) {
         const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
         const auto shard_volumes =
             ttnn::operations::binary_ng::get_shard_volumes(input_tensor_a.tensor_spec(), std::nullopt, output_spec);

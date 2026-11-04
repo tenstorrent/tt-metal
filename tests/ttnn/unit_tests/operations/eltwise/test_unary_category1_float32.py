@@ -183,6 +183,18 @@ def test_logical_not_ops(device):
     ],
 )
 def test_identity_neg_abs_sign_ops(device, ttnn_op, include_spl_values):
+    """Float32 sweep over every bfloat16 value; every output must match torch exactly.
+
+    | Op       | Special values | Reason                                                     |
+    |----------|----------------|------------------------------------------------------------|
+    | identity | excluded       | device is bit-exact on -0, ±inf and NaN, but assert_equal  |
+    | neg      |                | (torch.equal) treats NaN != NaN                            |
+    | abs      | excluded       | as above; also abs(-NaN) stays -NaN (torch gives +NaN):    |
+    |          |                | SFPABS leaves -NaN unchanged by design (Wormhole ISA)      |
+    | sign     | excluded       | sign(NaN) is ±1 (Wormhole copies the NaN's sign bit,       |
+    |          |                | Blackhole gives +1); torch gives 0. Tracked in #55827      |
+    | signbit  | included       | output is 0 or 1, so assert_equal works; matches torch     |
+    """
     input_tensor = generate_float32_bits(include_spl_values=include_spl_values)
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -294,6 +306,67 @@ def test_trig_ops_out_ftz(device, ttnn_op, low, high, ulp_threshold):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trig ops over every bfloat16 bit pattern, including -0, ±inf and NaN
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, golden_fn, ulp_threshold",
+    [
+        (ttnn.asin, torch.asin, 2),
+        (ttnn.acos, torch.acos, 1),
+        (ttnn.atan, torch.atan, 2),
+        (ttnn.sinh, torch.sinh, 2),
+        (ttnn.cosh, torch.cosh, 1),
+        (ttnn.asinh, torch.asinh, 1),
+        (ttnn.acosh, torch.acosh, 1),
+        (ttnn.atanh, torch.atanh, 2),
+    ],
+    ids=["asin", "acos", "atan", "sinh", "cosh", "asinh", "acosh", "atanh"],
+)
+def test_trig_ops_all_bf16_bitpatterns(device, ttnn_op, golden_fn, ulp_threshold):
+    """Float32 sweep over every bfloat16 bit pattern, special values included.
+
+    Covers what the bounded sweeps above leave out: out-of-domain inputs, large
+    |x| and ±inf/NaN inputs.
+
+    | Op    | Finite results | Out-of-range and special inputs                     |
+    |-------|----------------|-----------------------------------------------------|
+    | asin  | ULP ≤ 2        | |x| > 1 → NaN                                       |
+    | acos  | ULP ≤ 1        | |x| > 1 → NaN                                       |
+    | atan  | ULP ≤ 2        | |x| > 100 in ULP; ±inf → ±pi/2                      |
+    | sinh  | ULP ≤ 2        | overflow to ±inf near ±89; ±inf → ±inf              |
+    | cosh  | ULP ≤ 1        | overflow to +inf near ±89; ±inf → +inf              |
+    | asinh | ULP ≤ 1        | ±inf → ±inf                                         |
+    | acosh | ULP ≤ 1        | x < 1 → NaN; +inf → +inf                            |
+    | atanh | ULP ≤ 2        | ±1 → ±inf; |x| > 1 → NaN                            |
+    | all   |                | NaN → NaN; NaN and signed inf positions match torch |
+
+    ULP bounds are the measured maxima. sin, cos and tan are not here: past
+    |x| ~ 1e4 their range reduction loses accuracy (and returns inf for some
+    large inputs), so they stay in test_trig_ops.
+
+    The golden is float64 rounded to float32: float32 torch.sinh/cosh overflow
+    at ±89 even where the rounded result is finite.
+    """
+    input_tensor = generate_float32_bits(include_spl_values=True)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+
+    golden = flush_subnormal_values_to_zero(golden_fn(input_tensor.double()).to(torch.float32))
+    result = ttnn.to_torch(ttnn_op(tt_in))
+
+    # allow_nonfinite requires NaN and signed inf at the same positions as the golden.
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold, allow_nonfinite=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

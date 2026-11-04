@@ -30,6 +30,11 @@
 //   [2]        value buffer address (read only with SPLIT_GATHER)
 //   [3 ...]    per output tile: base_page, head, v_rows, where
 //              base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages
+// With MSDA_DEVICE_COUNTS defined, [1] is the address of the (MSDA_BATCH,)
+// uint32 valid query counts and [3], [4] are this core's index and the core
+// count. The writer stages its own copy of the counts in MSDA_WRITER_COUNTS_CB
+// and derives the same tile run as the reader (msda_device_counts.hpp);
+// MSDA_NUM_QUERIES is Q.
 // Compile-time arg order is fixed by fused_msda_program_factory.cpp (writer_ct).
 
 #include <stdint.h>
@@ -40,6 +45,7 @@
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_device_counts.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
 
 constexpr uint32_t output_tile_cb_index = get_compile_time_arg_val(0);
@@ -60,6 +66,9 @@ constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(14);
 
 constexpr auto output_args = TensorAccessorArgs<15>();
 constexpr auto value_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+#ifdef MSDA_DEVICE_COUNTS
+constexpr auto counts_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
+#endif
 
 struct WriterGatherCfg {
     static constexpr uint32_t D = ::D;
@@ -86,7 +95,6 @@ static_assert(
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
     const uint32_t value_addr = get_arg_val<uint32_t>(2);
 
     const auto output_acc = TensorAccessor(output_args, output_addr, output_page_nbytes);
@@ -105,11 +113,26 @@ void kernel_main() {
     [[maybe_unused]] Semaphore<> gather_done(gather_done_sem_id);
     [[maybe_unused]] uint32_t gather_seq = 0;
 
+#ifdef MSDA_DEVICE_COUNTS
+    const auto counts_acc = TensorAccessor(counts_args, get_arg_val<uint32_t>(1), MSDA_BATCH * sizeof(uint32_t));
+    const auto work = fused_msda_work::stage_work_list<MSDA_BATCH, MSDA_NUM_QUERIES, NUM_HEADS>(
+        noc, counts_acc, MSDA_WRITER_COUNTS_CB, get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4));
+    const uint32_t num_output_tiles = work.run.count;
+#else
+    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
     uint32_t arg_idx = 3;
+#endif
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
+#ifdef MSDA_DEVICE_COUNTS
+        const auto u = work.unit(t);
+        const uint32_t base_page = u.b * MSDA_NUM_QUERIES + u.q_start;
+        const uint32_t head = u.head;
+        const uint32_t v_rows = u.v_rows;
+#else
         const uint32_t base_page = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t head = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t v_rows = get_arg_val<uint32_t>(arg_idx++);
+#endif
         const uint32_t head_byte_offset = head * HEAD_NBYTES;
 
         if constexpr (SPLIT_GATHER) {
@@ -117,16 +140,17 @@ void kernel_main() {
             // gathered, so helping with every point first costs no overlap.
             for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
                 // The wait invalidates the RISC L1 data cache on every poll, so
-                // the mailbox and the x0/y0 tiles read after it are the
+                // the mailbox and the corner tile read after it are the
                 // reader's and compute's current writes.
                 gather_ready.wait(++gather_seq);
                 const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
                 fused_msda_gather::gather_rows<WriterGatherCfg>(
-                    noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
+                    noc,
+                    value_acc,
+                    pt,
+                    fused_msda_gather::SPLIT_ROW<decltype(value_acc)>,
+                    fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
-                // Keeps the plain zero stores above ahead of the done store;
-                // see the ordering note in msda_gather_rows.hpp.
-                asm volatile("" ::: "memory");
                 gather_done.set(gather_seq);
             }
         }

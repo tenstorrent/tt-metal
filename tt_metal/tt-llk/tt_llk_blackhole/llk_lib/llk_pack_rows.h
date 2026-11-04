@@ -46,9 +46,9 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_OUTER_LOOP   = 1;
-    const std::uint32_t row_groups           = num_rows >> 2;
-    const std::uint32_t tail_rows            = num_rows & 0x3;
-    const std::uint32_t last_intf_sel        = (tail_rows == 0) ? p_pacr::ALL_INTF_ACTIVE : ((1u << tail_rows) - 1);
+    // The last PACR takes the one to four rows left; no branch, the init runs cold. Interface mask 0 (all four), 1, 3, 7 for rows modulo 4 of 0, 1, 2, 3.
+    const std::uint32_t pack_groups          = (num_rows + 3) >> 2;
+    const std::uint32_t last_intf_sel        = (1u << (num_rows & 0x3)) - 1;
 
     const std::uint32_t pack_four_rows = TT_OP_PACR(
         p_pacr::CFG_CTXT_0,
@@ -78,15 +78,8 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
         0,  // Flush
         1);
 
-    ckernel::ckernel_template tmp(MOP_OUTER_LOOP, (row_groups > 0) ? row_groups : 1, pack_four_rows);
-    if (row_groups > 0 && tail_rows > 0)
-    {
-        tmp.set_end_op(pack_last_rows);
-    }
-    else
-    {
-        tmp.set_last_outer_loop_instr(pack_last_rows);
-    }
+    ckernel::ckernel_template tmp(MOP_OUTER_LOOP, pack_groups, pack_four_rows);
+    tmp.set_last_outer_loop_instr(pack_last_rows);
     tmp.program();
 }
 
@@ -121,7 +114,8 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 
     // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
     // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    // Byte 1 of the register, one instruction (cfg_reg_rmw_tensix pushes it as three).
+    TTI_RMWCIB1(0xff, y_pos_counter_limit, PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_ADDR32);
 
     // Set the packer X counter to pack the specified number of datums per row
     TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);

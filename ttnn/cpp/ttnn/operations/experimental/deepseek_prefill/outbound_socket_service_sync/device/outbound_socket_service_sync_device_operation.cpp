@@ -23,11 +23,11 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const auto& backing = tensor_args.backing;
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE, "outbound_socket_service_sync: input tensor must be on device");
-    TT_FATAL(input.buffer() != nullptr, "outbound_socket_service_sync: input tensor must be allocated");
+    TT_FATAL(input.is_allocated(), "outbound_socket_service_sync: input tensor must be allocated");
     TT_FATAL(
         backing.storage_type() == StorageType::DEVICE,
         "outbound_socket_service_sync: backing tensor must be on device");
-    TT_FATAL(backing.buffer() != nullptr, "outbound_socket_service_sync: backing tensor must be allocated");
+    TT_FATAL(backing.is_allocated(), "outbound_socket_service_sync: backing tensor must be allocated");
     TT_FATAL(
         input.tensor_spec() == backing.tensor_spec(),
         "outbound_socket_service_sync: input tensor spec must match the sender backing per-shard spec (the kernel "
@@ -55,7 +55,7 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             args.metadata_size_bytes,
             args.page_size);
         TT_FATAL(
-            tensor_args.metadata.has_value() && tensor_args.metadata->buffer() != nullptr,
+            tensor_args.metadata.has_value() && tensor_args.metadata->is_allocated(),
             "outbound_socket_service_sync: metadata_size_bytes > 0 requires an allocated metadata tensor");
         TT_FATAL(
             args.metadata_addrs.size() == args.data_ready_addrs.size(),

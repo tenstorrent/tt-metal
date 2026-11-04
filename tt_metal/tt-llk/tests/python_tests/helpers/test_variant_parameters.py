@@ -32,12 +32,13 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuSrcsImpl,
+    SfpuImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -58,7 +59,7 @@ from .sfpu_dispatch_constants import (
 )
 
 
-def _fp32_bits(value: float) -> int:
+def fp32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
@@ -137,6 +138,22 @@ class MATMUL_REUSE_DIR(TemplateParameter):
 
 
 @dataclass
+class MATMUL_FUNC_BLOCKS(TemplateParameter):
+    """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_FUNC_BLOCKS 1"
+
+
+@dataclass
+class MATMUL_DYN_SWITCH(TemplateParameter):
+    """Blackhole matmul: a dynamic throttle change re-inits through the dyn_switch path of _llk_math_matmul_init_."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_DYN_SWITCH"
+
+
+@dataclass
 class MATMUL_ROW_MOP(TemplateParameter):
     """Blackhole matmul math with one MOP per reuse row."""
 
@@ -144,10 +161,10 @@ class MATMUL_ROW_MOP(TemplateParameter):
         return "#define MATMUL_ROW_MOP"
 
     @staticmethod
-    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1) -> list:
+    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1, several_blocks: bool = False) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
-        from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
+        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop, row_mop_form
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
@@ -163,9 +180,10 @@ class MATMUL_ROW_MOP(TemplateParameter):
             and {formats.input_format, formats.input_format_B} == {DataFormat.Float16_b, DataFormat.Bfp8_b}
         ):
             return []
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, several_blocks, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
             return []
-        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B):
+        # matmul_row_mop_form of llk_matmul_forms.h: the cells that take a forced form in place of the opt-in row MOP
+        if row_mop_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, dest_sync == DestSync.Full, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -317,6 +335,16 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 
 
 @dataclass
+class MATMUL_STOCH_RND(TemplateParameter):
+    """Matmul unpack thread that programs the ALU stochastic rounding units (None, Fpu, Pack, All) after its hw configure, as _llk_unpack_configure_stoch_rnd_ does for the other tests."""
+
+    matmul_stoch_rnd: StochasticRounding = StochasticRounding.No
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_STOCH_RND\nconstexpr auto STOCHASTIC_RND = ckernel::{self.matmul_stoch_rnd.value};"
+
+
+@dataclass
 class MATMUL_L1_ACC(TemplateParameter):
     """Blackhole matmul pack thread with the packer L1 accumulate switch on, as the ttnn bmm kernels run the later K blocks of a spilled output
     (llk_pack_reconfig_l1_acc(1) after the first pack). The perf loop accumulates into the same L1 tiles; the values do not matter."""
@@ -325,6 +353,25 @@ class MATMUL_L1_ACC(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define MATMUL_L1_ACC {1 if self.matmul_l1_acc == L1Accumulation.Yes else 0}"
+
+
+@dataclass
+class MATMUL_NB(TemplateParameter):
+    """Blackhole matmul pack thread of an output of nb inner K blocks with packer L1 accumulate: block 0 of every nb writes its partials,
+    the others accumulate onto them, each switch a reconfigure of the packer as the ttnn bmm kernels do. Only with MATMUL_L1_ACC on."""
+
+    matmul_nb: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_NB {self.matmul_nb}"
+
+
+@dataclass
+class MATMUL_WIDE_WALK(TemplateParameter):
+    """Blackhole matmul unpack whose MOP walk over in0 may leave the 16 tile PERF_ADDRESS ring: it reads on through the L1 below the perf counters (the data does not matter)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_WIDE_WALK"
 
 
 @dataclass
@@ -447,9 +494,15 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.in0 = None
         self.in1 = None
         self.pack_src_from_output = True
+        self.block = None
+
+    def with_block(self, ct: int, rt: int, kt: int, dest_acc, throttle: int = 0, l1_acc: bool = False, nb: int = 1, r0: int = 32, c1: int = 32):
+        """The block the cell runs (tiles, k steps, accumulate, throttle, packer L1 accumulate), for the cells llk_matmul_forms.h keeps on main's form."""
+        self.block = (ct, rt, kt, dest_acc == DestAccumulation.Yes, throttle, bool(l1_acc), nb, r0, c1)
+        return self
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''}{', block ' + str(self.block) if self.block else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -461,20 +514,30 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             + ("\n#define MATMUL_KEEP_FLIP_WRITE" if self.keep_flip else "")
             + (f"\n#define MATMUL_KEY_IN0 DataFormat::{self.in0.name}\n#define MATMUL_KEY_IN1 DataFormat::{self.in1.name}" if self.in0 is not None else "")
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
+            + (
+                "\n#define MATMUL_BLOCK\nconstexpr std::uint32_t MATMUL_BLOCK_CT = %d, MATMUL_BLOCK_RT = %d, MATMUL_BLOCK_KT = %d, MATMUL_BLOCK_THROTTLE = %d;"
+                "\nconstexpr bool MATMUL_BLOCK_ACC = %s, MATMUL_BLOCK_L1_ACC = %s;\nconstexpr std::uint32_t MATMUL_BLOCK_NB = %d, MATMUL_BLOCK_R0 = %d, MATMUL_BLOCK_C1 = %d;" % (*self.block[:3], self.block[4], str(self.block[3]).lower(), str(self.block[5]).lower(), *self.block[6:9])
+                if self.block
+                else ""
+            )
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
-        keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells)
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False, several_blocks: bool = False) -> list:
+        keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells, several_blocks)
         # a Bfp8_b pack below HiFi3 (the unfused post cells) reads slower without the half-sync flip's base write (the bound phase moves): the kernels keep it
-        keep = formats.output_format == DataFormat.Bfp8_b and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+        from helpers.matmul_prod_keys import keep_flip_write
+
+        keep = keep_flip_write(
+            math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format, rt_dim, ct_dim, kt_dim, throttle
+        )
         for k in keys:
             k.keep_flip = keep
             k.in0, k.in1 = formats.input_format_B, formats.input_format
         return keys
 
     @staticmethod
-    def _for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
+    def _for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False, several_blocks: bool = False) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -545,11 +608,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
             # a LoFi cell that keeps main's form does not take a forced one
             forced = "" if math_fidelity == MathFidelity.LoFi and mixed_main_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full, ct_dim, rt_dim) else (
-                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B)
+                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B)
             )
             if forced:
                 return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, several_blocks, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, unfused)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
@@ -655,6 +718,26 @@ class MATMUL_MIXED_STRIDE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_MIXED_STRIDE"
+
+
+@dataclass
+class MATMUL_OPERAND_SIZES(TemplateParameter):
+    """Blackhole math matmul test with operands of different formats and tile shapes: unpacker 0 (in1) is configured with TILE_SIZE_UNPACK_A and unpacker 1 (in0) with TILE_SIZE_UNPACK_B."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_OPERAND_SIZES"
+
+
+@dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: PackUntilizeBenchmark
+
+    def convert_to_cpp(self) -> str:
+        is_perf = self.pack_untilize_benchmark != PackUntilizeBenchmark.Functional
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark.value}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
 
 
 @dataclass
@@ -1031,7 +1114,7 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     relu_max_threshold: float = RELU_MAX_THRESHOLD
 
     def convert_to_cpp(self) -> str:
-        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        bits = fp32_bits(self.relu_max_threshold)
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
 
 
@@ -1045,7 +1128,7 @@ class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         value = self.max_min_scalar
-        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        bits = fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
         return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
 
 
@@ -1094,8 +1177,8 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
             raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
         scale = (-1) ** (n + 1) * math.factorial(n)
         return (
-            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
-            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
+            f"#define SFPU_POLYGAMMA_N_BITS {fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {fp32_bits(scale):#x}u"
         )
 
 
@@ -1119,7 +1202,7 @@ class SFPU_DROPOUT_PARAMS(TemplateParameter):
         ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
-        scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
+        scale_bits = fp32_bits(self.dropout_scale)
         return "\n".join(
             (
                 f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability:#010x}u",
@@ -1154,11 +1237,15 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class SFPU_SRCS_IMPL(TemplateParameter):
-    sfpu_srcs_impl: SfpuSrcsImpl
+class SFPU_IMPL(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuImpl exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuImpl."""
+
+    sfpu_impl: SfpuImpl
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+        load_macro = str(self.sfpu_impl == SfpuImpl.LoadMacro).lower()
+        return f"constexpr bool SFPU_IMPL_LOADMACRO = {load_macro};"
 
 
 @dataclass
@@ -1360,6 +1447,24 @@ class PACK_NUM_TILES(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t PACK_NUM_TILES = {self.num_tiles}u;"
+
+
+@dataclass
+class SDPA_BCAST_NUM_TILES(TemplateParameter):
+    """Outer-loop tile count of the SDPA bcast-col SrcB-reuse MOP (``sdpa_bcast_col_srcb_reuse_test.cpp``).
+
+    A template argument on both the math and the unpack LLK (``num_tiles``), so it cannot be a
+    runtime parameter: one ``_llk_unpack_A_`` call walks this many tiles and the math MOP writes
+    them to consecutive DEST tiles. Emits ``constexpr std::uint32_t SDPA_BCAST_NUM_TILES``.
+
+    The field carries the ``sdpa_bcast_`` prefix so it stays globally unique
+    (``test_perf_header_gate.py``); bare ``num_tiles`` belongs to ``PACK_NUM_TILES``.
+    """
+
+    sdpa_bcast_num_tiles: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_BCAST_NUM_TILES = {self.sdpa_bcast_num_tiles}u;"
 
 
 @dataclass
@@ -1604,15 +1709,18 @@ class DATACOPY_FLAG(TemplateParameter):
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
-    pack_block: bool = False  # 2 and 3 are ints: the block calls llk_pack_block makes, not the opt-in fast forms; 3: the W offset forms
+    pack_block: bool = (
+        False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output, LLK_PACK_W_OFFSET_OFF)
+    )
 
     def convert_to_cpp(self) -> str:
         # negative: a block too short for llk_pack_block, which packs it one tile at a time as main does
         en = bool(self.pack_block) and self.pack_block > 0
         return (
             f"constexpr bool pack_block_en = {str(en).lower()};\n"
-            f"constexpr bool pack_block_default = {str(en and self.pack_block == 2).lower()};\n"
-            f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};"
+            f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};\n"
+            f"constexpr bool pack_block_fast = {str(en and self.pack_block == 4).lower()};\n"
+            f"constexpr bool pack_block_plain = {str(en and self.pack_block == 5).lower()};"
         )
 
 
@@ -1625,10 +1733,12 @@ class PACK_RMW_DEST(TemplateParameter):
 
 class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
-    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles."""
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles.
+    """
 
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
+        self.pack_keys = getattr(pack_block, "keys", None)
 
     def __repr__(self) -> str:
         return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
@@ -1643,7 +1753,17 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         return hash(self.matmul_pack_block)
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+        out = f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+        if self.pack_keys is not None:
+            a, b, o, half, fid, rt, ct, kt, r0, c1, thr, dense, l1 = self.pack_keys
+            out += (
+                "\n#define MATMUL_PACK_KEYS"
+                f"\nconstexpr DataFormat MATMUL_PK_IN_A = DataFormat::{a.name}, MATMUL_PK_IN_B = DataFormat::{b.name}, MATMUL_PK_OUT = DataFormat::{o.name};"
+                f"\nconstexpr ckernel::MathFidelity MATMUL_PK_FID = ckernel::MathFidelity::{fid.name};"
+                f"\nconstexpr std::uint32_t MATMUL_PK_RT = {rt}, MATMUL_PK_CT = {ct}, MATMUL_PK_KT = {kt}, MATMUL_PK_R0 = {r0}, MATMUL_PK_C1 = {c1}, MATMUL_PK_THROTTLE = {thr};"
+                f"\nconstexpr bool MATMUL_PK_HALF = {str(half).lower()}, MATMUL_PK_DENSE = {str(dense).lower()}, MATMUL_PK_L1ACC = {str(l1).lower()};"
+            )
+        return out
 
 
 @dataclass
@@ -2187,6 +2307,21 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
         return "\n".join(lines)
 
 
+@dataclass
+class GATHER_COMPRESS_PARAMS(TemplateParameter):
+    """Gather / compress mode and FPU vector size (32 elements for a 16-bit format, 64 for an 8-bit one)."""
+
+    compress: bool = False
+    elem_cnt: int = 32
+
+    def convert_to_cpp(self) -> str:
+        mode = "COMPRESS" if self.compress else "GATHER"
+        return (
+            f"constexpr auto GATHER_COMPRESS_MODE = ckernel::GatherCompressModeSelect::{mode};\n"
+            f"constexpr std::uint32_t GATHER_COMPRESS_ELEM_CNT = {self.elem_cnt};"
+        )
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
@@ -2207,6 +2342,23 @@ class BLOCK_MAX8_PARAMS(RuntimeParameter):
     def convert_to_struct_fields(self):
         """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
         return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
+
+
+@dataclass
+class BLOCK_MAX8_FPU_PARAMS(RuntimeParameter):
+    """Number of FPU block-max calls per DST acquire and the optional DST denormal probe."""
+
+    calls: int
+    inject_denormal: int
+
+    def convert_to_cpp(self):
+        return (
+            f"constexpr unsigned FPU_CALLS = {self.calls};"
+            f"constexpr unsigned INJECT_DENORMAL = {self.inject_denormal};"
+        )
+
+    def convert_to_struct_fields(self):
+        return "unsigned FPU_CALLS; unsigned INJECT_DENORMAL;", "II"
 
 
 def generate_input_dim(
@@ -2266,6 +2418,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
 
 
 @dataclass
@@ -2348,6 +2513,20 @@ class ZERO_POINT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class OUT_ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of requant's output zero point, added after rounding.
+    Ignored by other binary ops."""
+
+    out_zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t OUT_ZERO_POINT = {self.out_zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t OUT_ZERO_POINT;", "I"
 
 
 @dataclass
@@ -2807,10 +2986,12 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 @dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
-    offset: int = 0
+    tile_dst_ct_offset: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.offset};"
+        return (
+            f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.tile_dst_ct_offset};"
+        )
 
 
 @dataclass
@@ -3011,7 +3192,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_tile_init does.
+                         copy_init does.
     """
 
     signal_granularity: int = 1
@@ -3038,10 +3219,9 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
 class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
     """Compile-time dims for the experimental sdpa_custom_mm_reuse_dest_srcb OV matmul.
 
-    kt_dim: number of K tiles (softmax-score / V K tiles). The unpack MOP requires an
-            even kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in
-            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h); kt_dim < 2 underflows the
-            MOP iteration count and hangs the unpacker.
+    kt_dim: number of K tiles (softmax-score / V K tiles), 1 to 256. The unpack MOP
+            covers them in pairs and replays an odd last one directly (see
+            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h).
     nt_dim: number of V head-dim output tiles per K iteration (1..16).
     """
 
@@ -3132,8 +3312,8 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
         )
 
 

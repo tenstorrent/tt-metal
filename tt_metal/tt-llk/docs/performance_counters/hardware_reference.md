@@ -62,7 +62,7 @@ The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0x
 | `PERF_CNT_TDMA_UNPACK0..2` | 0x00C, 0x010, 0x014 | Same triplet |
 | `PERF_CNT_FPU0..2` | 0x018, 0x01C, 0x020 | Same triplet |
 | `PERF_CNT_ALL` | 0x024 | Global start/stop for FPU + INSTRN_THREAD |
-| `DBG_FEATURE_DISABLE` | 0x040 | Scrubbed to 0 by `configure_and_arm()` |
+| `DBG_FEATURE_DISABLE` | 0x040 | Scrubbed to 0 by `clear_debug_features()` |
 | `PERF_CNT_TDMA_PACK0..2` | 0x08C, 0x090, 0x094 | Same triplet |
 | `PERF_CNT_OUT_L/H_INSTRN_THREAD` | 0x098, 0x09C | Elapsed cycles, event count |
 | `PERF_CNT_OUT_L/H_TDMA_UNPACK` | 0x0A0, 0x0A4 | Same pair |

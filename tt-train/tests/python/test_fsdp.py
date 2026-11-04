@@ -300,6 +300,18 @@ class TestFullyShardLinear:
         assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
         assert ttml.fsdp.unmatched_replicate_patterns(linear, ["bias", "no_such_param"]) == ["no_such_param"]
 
+    def test_replicate_keeps_a_lazy_param_replicated(self):
+        """A lazy param built without a mapper has no placements yet; it is replicated, so the pattern holds."""
+        with ttml.lazy_init():
+            linear = LinearLayer(64, 48, has_bias=True)
+        ttml.fsdp.fully_shard(linear, replicate=["bias"])
+        ttml.materialize_module(linear)
+
+        assert linear.bias.tensor.shape() == [1, 1, 1, 48]
+        assert not ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+        assert ttml.fsdp.is_fsdp_managed(linear.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
+
     def test_unmatched_patterns_empty_without_fully_shard(self):
         """If nothing was wrapped, no pattern was applied, so none is reported."""
         linear = LinearLayer(64, 48, has_bias=True)

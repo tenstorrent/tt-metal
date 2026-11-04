@@ -38,7 +38,7 @@ inline bool math_matmul_init_reuse_a = true;
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0, bool skip_mod5 = false>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -70,9 +70,13 @@ inline void matmul_configure_addrmod(
         .srcb = {.incr = 8, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_0);
+        .set_no_bias(ADDR_MOD_0);
 
-    if constexpr (!row_form)
+    if constexpr (skip_mod5)
+    {
+        // the row MOP runs on ADDR_MOD_3, 6 and 7 and its replay on 0, 1, 2 and 4
+    }
+    else if constexpr (!row_form)
     {
         // reset all, increment fidelity if we have more fidelity phases
         addr_mod_t {
@@ -81,7 +85,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = fidelity_increment, .clr = 0},
         }
-            .set(ADDR_MOD_5);
+            .set_no_bias(ADDR_MOD_5);
     }
     else if constexpr (is_high_fidelity(math_fidelity))
     {
@@ -92,7 +96,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 0, .cr = 1},
             .fidelity = {.incr = 1, .clr = 0},
         }
-            .set(ADDR_MOD_5);
+            .set_no_bias(ADDR_MOD_5);
     }
 
     if constexpr (THROTTLE_LEVEL)
@@ -104,7 +108,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
         }
-            .set(ADDR_MOD_6);
+            .set_no_bias(ADDR_MOD_6);
     }
 
     if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
@@ -116,7 +120,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
                 .dest = {.incr = 8, .clr = 0, .cr = 0},
             }
-                .set(ADDR_MOD_1);
+                .set_no_bias(ADDR_MOD_1);
         }
         else
         {
@@ -125,7 +129,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
                 .dest = {.incr = 8, .clr = 0, .cr = 0},
             }
-                .set(ADDR_MOD_1);
+                .set_no_bias(ADDR_MOD_1);
         }
     }
     else
@@ -138,7 +142,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 40, .clr = 0, .cr = 0},
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set(ADDR_MOD_1);
+                .set_no_bias(ADDR_MOD_1);
         }
         else if (is_in1_32x16)
         {
@@ -147,7 +151,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 8, .clr = 0, .cr = 0},
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set(ADDR_MOD_1);
+                .set_no_bias(ADDR_MOD_1);
         }
         else
         {
@@ -158,7 +162,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_1);
+                    .set_no_bias(ADDR_MOD_1);
             }
             else
             {
@@ -168,7 +172,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_1);
+                    .set_no_bias(ADDR_MOD_1);
             }
         }
     }
@@ -181,14 +185,14 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 24, .clr = 0, .cr = 0},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_2);
+            .set_no_bias(ADDR_MOD_2);
     }
     else if (is_in1_32x16)
     {
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
         }
-            .set(ADDR_MOD_2);
+            .set_no_bias(ADDR_MOD_2);
     }
     else if (is_in0_16x32 || is_in0_32x16)
     {
@@ -201,7 +205,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 0},
                     .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_2);
+                    .set_no_bias(ADDR_MOD_2);
             }
             else
             {
@@ -210,7 +214,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 0},
                     .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_2);
+                    .set_no_bias(ADDR_MOD_2);
             }
         }
         else
@@ -222,7 +226,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_2);
+                    .set_no_bias(ADDR_MOD_2);
             }
             else
             {
@@ -231,7 +235,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set(ADDR_MOD_2);
+                    .set_no_bias(ADDR_MOD_2);
             }
         }
     }
@@ -242,7 +246,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 32, .clr = 0, .cr = 1},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_2);
+            .set_no_bias(ADDR_MOD_2);
     }
 
     if (is_in0_16x32)
@@ -256,7 +260,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = 1, .cr = 0},
                 }
-                    .set(ADDR_MOD_4);
+                    .set_no_bias(ADDR_MOD_4);
             }
             else
             {
@@ -266,7 +270,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = row_form ? 0 : 1, .cr = row_form ? 1 : 0},
                 }
-                    .set(ADDR_MOD_4);
+                    .set_no_bias(ADDR_MOD_4);
             }
         }
         else
@@ -278,7 +282,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
-                    .set(ADDR_MOD_4);
+                    .set_no_bias(ADDR_MOD_4);
             }
             else
             {
@@ -287,7 +291,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
-                    .set(ADDR_MOD_4);
+                    .set_no_bias(ADDR_MOD_4);
             }
         }
     }
@@ -298,7 +302,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 16, .clr = 0, .cr = 1},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set(ADDR_MOD_4);
+            .set_no_bias(ADDR_MOD_4);
     }
     else if (is_in1_32x16)
     {
@@ -307,7 +311,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 8, .clr = 0, .cr = 0},
             .dest = {.incr = 16, .clr = 0, .cr = 1},
         }
-            .set(ADDR_MOD_4);
+            .set_no_bias(ADDR_MOD_4);
     }
     else
     {
@@ -318,7 +322,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set(ADDR_MOD_4);
+                .set_no_bias(ADDR_MOD_4);
         }
         else
         {
@@ -328,7 +332,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set(ADDR_MOD_4);
+                .set_no_bias(ADDR_MOD_4);
         }
     }
 }
@@ -391,7 +395,7 @@ inline void matmul_configure_mop(
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
         }
-            .set(ADDR_MOD_3);
+            .set_no_bias(ADDR_MOD_3);
     }
     load_replay_buf(
         ckernel::math::replay_buf_offset,
@@ -607,6 +611,14 @@ inline void matmul_configure_row_mop(
     if (!full_tiles)
     {
         matmul_row_mop_dims = 0;
+        // the tile MOP runs on ADDR_MOD_5, which the row MOP init did not write
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = is_high_fidelity(math_fidelity) ? 1u : 0u, .clr = 0},
+        }
+            .set_no_bias(ADDR_MOD_5);
         matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         return;
     }
@@ -621,7 +633,7 @@ inline void matmul_configure_row_mop(
         .dest     = {.incr = 0, .clr = 0, .cr = 1},
         .fidelity = {.incr = fidelity_increment, .clr = 0},
     }
-        .set(ADDR_MOD_7);
+        .set_no_bias(ADDR_MOD_5);
     {
         // the source and bias words of ADDR_MOD_3 are constants; its DEST word carries the run-time stride
         constexpr addr_mod_t tile_end {
@@ -629,7 +641,6 @@ inline void matmul_configure_row_mop(
             .srcb = {.incr = 0, .clr = 1, .cr = 1},
         };
         TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
-        TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
     }
     matmul_set_row_tile_end_dest(matmul_row_dest_stride(ct_dim, rt_dim));
     addr_mod_t {
@@ -638,7 +649,7 @@ inline void matmul_configure_row_mop(
         .dest     = {.incr = 0, .clr = 1, .cr = 1},
         .fidelity = {.incr = 0, .clr = 1},
     }
-        .set(ADDR_MOD_6);
+        .set_no_bias(ADDR_MOD_6);
 
     matmul_load_row_replay();
 
@@ -647,7 +658,7 @@ inline void matmul_configure_row_mop(
         reuse_a ? ct_dim : rt_dim /* outer loop: tiles of the row */,
         inner_loops,
         lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
-        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0));
+        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
@@ -715,7 +726,6 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
             .srcb = {.incr = 0, .clr = 1, .cr = 1},
         };
         TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
-        TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
     }
     const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
     matmul_set_row_tile_end_dest(dest_stride);
@@ -738,7 +748,7 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
         }
-            .set(ADDR_MOD_6);
+            .set_no_bias(ADDR_MOD_6);
     }
     tmp.set_last_outer_loop_instr(
         fold ? TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0) : fold_b ? TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0) : tile_end);
@@ -789,7 +799,6 @@ inline void matmul_configure_mop_rows_tiny(
             .srcb = {.incr = 0, .clr = 1, .cr = 1},
         };
         TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
-        TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
     }
     const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
     matmul_set_row_tile_end_dest(dest_stride);
@@ -1132,7 +1141,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1143,6 +1152,14 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
+    // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    // a 1x1 block runs without the end fold: the fold's ADDR_MOD_3 write costs more than the slot it saves when the block is re-initialised
+    constexpr bool run_end_fold = end_fold && !(key_ct == 1 && key_rt == 1);
+    constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
+    const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
+    LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
+    LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
     static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
@@ -1169,48 +1186,48 @@ inline void _llk_math_matmul_init_(
 
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
-                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+                blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     else if constexpr (row_mop)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, true>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_row_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_row_mop<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
-            matmul_configure_mop_rows<math_fidelity, row_end_fold>(ct_dim, rt_dim);
+            matmul_configure_mop_rows<math_fidelity, row_end_fold>(blk_ct, blk_rt);
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
-    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Matmul never sets the Src zero-substitution flag itself, so
@@ -1220,6 +1237,234 @@ inline void _llk_math_matmul_init_(
     // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
     // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
     math::_configure_default_zero_flag_state_();
+}
+
+// The throttle switch of a running kernel (matmul_block_math_dynamic_throttle) re-programs only what the throttled MOP changes. The
+// throttled and the other form share ADDR_MOD_0, 1, 2 and 4 and the zero flag state, and the throttled MOP leaves ADDR_MOD_3 and 7, so
+// the switch writes ADDR_MOD_5 and 6, the replay buffer and the MOP. Only the throttle switch calls these; the inits above are unchanged.
+
+// ADDR_MOD_5 and 6 of matmul_configure_addrmod
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form>
+inline void matmul_configure_addrmod_switch()
+{
+    constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
+    if constexpr (!row_form)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = fidelity_increment, .clr = 0},
+        }
+            .set_no_bias(ADDR_MOD_5);
+    }
+    else if constexpr (is_high_fidelity(math_fidelity))
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = 1, .clr = 0},
+        }
+            .set_no_bias(ADDR_MOD_5);
+    }
+    if constexpr (THROTTLE_LEVEL)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set_no_bias(ADDR_MOD_6);
+    }
+}
+
+// matmul_configure_row_mop without the write of ADDR_MOD_3; the fidelity step ADDR_MOD_5 is written again (the throttled form uses it)
+template <MathFidelity math_fidelity, int in1_order = 0>
+inline void matmul_configure_row_mop_switch(
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    const bool full_tiles = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
+    if (!full_tiles)
+    {
+        matmul_configure_row_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        return;
+    }
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    const bool reuse_a           = ct_dim >= rt_dim;
+    if constexpr (high_fidelity)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = 1, .clr = 0},
+        }
+            .set_no_bias(ADDR_MOD_5);
+    }
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
+    }
+        .set_no_bias(ADDR_MOD_6);
+    matmul_load_row_replay();
+    constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+    ckernel_template tmp(
+        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+    tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
+    tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
+    tmp.program();
+    matmul_row_mop_dims = matmul_block_dims(ct_dim, rt_dim);
+}
+
+// matmul_configure_mop_rows without the writes of ADDR_MOD_3
+template <MathFidelity math_fidelity, bool row_end_fold = false>
+inline void matmul_configure_mop_rows_switch(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+    constexpr bool high_fidelity    = is_high_fidelity(math_fidelity);
+    const bool reuse_a              = ct_dim >= rt_dim;
+    const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
+    matmul_load_row_replay();
+
+    constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+    const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+    ckernel_template tmp(
+        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+    tmp.set_last_inner_loop_instr(tile_end);
+    const bool fold   = reuse_a && high_fidelity;
+    const bool fold_b = row_end_fold && !reuse_a;
+    if (fold_b)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set_no_bias(ADDR_MOD_6);
+    }
+    tmp.set_last_outer_loop_instr(
+        fold ? TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0) : fold_b ? TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0) : tile_end);
+    tmp.program();
+    matmul_rows_dest_stride = dest_stride;
+    if constexpr (high_fidelity)
+    {
+        matmul_rows_fold = fold;
+    }
+}
+
+// matmul_configure_mop with the end fold's ADDR_MOD_3 left as the last init set it
+template <MathFidelity math_fidelity, int in1_order, bool end_fold, std::uint32_t reuse_dir>
+inline void matmul_configure_mop_switch(
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    if constexpr (!(high_fidelity && end_fold))
+    {
+        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    }
+    else
+    {
+        // the replay buffer of the load only form holds the one MVMUL more that the end fold MOP does not issue
+        matmul_configure_mop<math_fidelity, in1_order, true, false, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        const bool reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+        const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+        const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+        const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
+        const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
+        const std::uint32_t replay_buf_len =
+            (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
+        constexpr std::uint32_t inner_loops = to_underlying(math_fidelity);
+        ckernel_template tmp(
+            1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len - 1), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
+        tmp.program();
+    }
+}
+
+// _llk_math_matmul_init_ for a throttle switch: the last init of the kernel ran the other form with the same operands
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
+inline void _llk_math_matmul_init_switch_(
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false,
+    const std::uint32_t transpose      = 0,
+    const std::uint32_t ct_dim         = 1,
+    const std::uint32_t rt_dim         = 1)
+{
+    // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    // a 1x1 block runs without the end fold: the fold's ADDR_MOD_3 write costs more than the slot it saves when the block is re-initialised
+    constexpr bool run_end_fold = end_fold && !(key_ct == 1 && key_rt == 1);
+    constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
+    const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
+    LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
+    LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
+    static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
+        constexpr bool fallback_matches_execute = !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
+        if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
+        {
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+        else
+        {
+            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
+                blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+    }
+    else if constexpr (row_mop)
+    {
+        matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
+        matmul_configure_row_mop_switch<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    }
+    else if constexpr (tile_mop || !matmul_row_mop_supported)
+    {
+        matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
+        matmul_configure_mop_switch<math_fidelity, in1_order, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    }
+    else
+    {
+        if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
+        {
+            matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, true>();
+            matmul_configure_mop_rows_switch<math_fidelity, row_end_fold>(blk_ct, blk_rt);
+        }
+        else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
+        {
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
+                transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+        else
+        {
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+                transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_rows_dest_stride = 0;
+            matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+    }
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
+    math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 /**

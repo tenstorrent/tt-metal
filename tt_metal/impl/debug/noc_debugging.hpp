@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unordered_map>
 #include <array>
 #include <internal/profiler/event_metadata.hpp>

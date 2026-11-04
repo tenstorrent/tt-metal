@@ -569,6 +569,41 @@ inline void _llk_pack_uninit_()
 }
 
 /**
+ * @brief Put the default pack program back: the strides, the address modes, the MOP and the X counter of _llk_pack_init_ for full 32x32 tiles.
+ * The uninit of the fast untilize, and what the block packs run once if it was not called (_llk_pack_close_fast_untilize_).
+ */
+inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_format)
+{
+    // set_packer_strides also zeroes the channel-1 Y stride the fast untilize strided path programs.
+    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+}
+
+// Out of line: the call sites of the block packs carry a load, a branch and a call.
+template <DstSync Dst>
+__attribute__((noinline)) void pack_close_fast_untilize_slow_()
+{
+    _llk_pack_restore_default_program_(pack_fast_untilize_src);
+    // The fast untilize moved the DEST offset registers to its strip offsets; the offset id is the one the math thread flips with, so it stays.
+    _llk_init_packer_dest_offset_registers_<Dst>();
+}
+
+/**
+ * @brief Close a fast untilize whose uninit was not called, before a block pack: the default program, strides and DEST offset registers come back, the W offset state goes stale.
+ * Nothing in a kernel that does not run the fast untilize pack: the flag is never written and the call folds away.
+ */
+template <DstSync Dst>
+inline void _llk_pack_close_fast_untilize_()
+{
+    if (pack_fast_untilize_open)
+    {
+        pack_close_fast_untilize_slow_<Dst>();
+    }
+}
+
+/**
  * @brief Pack one tile from the destination register to an L1 address.
  *
  * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
@@ -587,7 +622,7 @@ inline void _llk_pack_uninit_()
  * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false, bool rmw_dest = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false, bool rmw_dest = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default)>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
@@ -800,10 +835,15 @@ inline void _llk_pack_block_dense_(
  * then no longer resets after each call. The write is faster per tile where the packer is the bound and slower where the pack thread's config
  * writes contend with the unpacker's (latency-bound matmul and eltwise kernels), so it is not the default.
  */
+template <bool bit31_set = false>
 inline void _llk_pack_rmw_dest_init_()
 {
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
-    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    // bit31_set: the full-sync _llk_pack_dest_init_ already set bit 31 and no pack program clears it.
+    if constexpr (!bit31_set)
+    {
+        TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    }
 }
 
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>
@@ -988,4 +1028,3 @@ inline void _llk_pack_block_closed_w_mop_(
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
-

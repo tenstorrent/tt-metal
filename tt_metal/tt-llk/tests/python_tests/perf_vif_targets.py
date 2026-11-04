@@ -30,30 +30,13 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     FastMode,
-    FusedSort,
     MathOperation,
-    StableSort,
-    Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import calculate_tile_and_face_counts
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    FUSED_SORT,
-    ITERATIONS,
-    LOOP_FACTOR,
-    MATH_OP,
-    NUM_FACES,
-    STABLE_SORT,
-    TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
-)
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 _DIMS = [[128, 64]]  # tile_cnt: 8, same as the main perf sweep
 
@@ -68,47 +51,6 @@ _INT_COMP_OPS = [
 ]
 
 
-def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
-    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-    return PerfConfig(
-        "sources/eltwise_unary_sfpu_perf.cpp",
-        formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
-            ITERATIONS(32),
-            FAST_MODE(FastMode.No),
-            STABLE_SORT(StableSort.No),
-            # eltwise_unary_sfpu_perf.cpp instantiates the topk primitives with both sort
-            # constants.
-            FUSED_SORT(FusedSort.No),
-            CLAMP_NEGATIVE(False),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(16),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count_A,
-            tile_count_B=tile_count_B,
-            tile_count_res=tile_count_A,
-        ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-    )
-
-
 @skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
@@ -118,10 +60,19 @@ def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
 )
 def test_perf_vif_comp_int32(perf_report, formats, mathop, input_dimensions):
     # Int32 unpacks straight into a 32-bit DEST, mirroring the correctness path.
-    _config(
-        formats,
-        mathop,
-        DestAccumulation.Yes,
-        unpack_to_dest=True,
+    eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=DestAccumulation.Yes,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
         input_dimensions=input_dimensions,
-    ).run(perf_report)
+        dest_sync=DestSync.Half,
+        clamp_negative=False,
+        unpack_to_dest=True,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=ALL_PERF_RUN_TYPES,
+        check_golden=False,
+        loop_factor=16,
+    )

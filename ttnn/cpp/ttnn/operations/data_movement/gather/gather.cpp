@@ -336,6 +336,11 @@ Tensor gather_dispatch(
         const auto tile_out =
             gather_native(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
+        // Like the native op, `out` takes precedence over memory_config: write straight into it.
+        if (optional_output_tensor.has_value()) {
+            return ttnn::to_memory_config(
+                rm_out, optional_output_tensor->memory_config(), std::nullopt, optional_output_tensor);
+        }
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
         if (requested_mc.is_sharded() && !requested_mc.shard_spec().has_value()) {
@@ -382,6 +387,50 @@ Tensor gather_dispatch(
         optional_output_tensor_value = output_tensor;
     }
 
+    // The native RM factories need every BLOCK/WIDTH-sharded shard row to be a multiple of the buffer
+    // alignment (see has_subaligned_shard_row). An input or index tensor whose shard row fails this
+    // check is moved to interleaved memory of the same buffer type. An output whose shard row fails
+    // this check is computed in interleaved memory and then moved to the memory config the device op
+    // would have given it.
+    auto native_memory_config = memory_config_value;
+    auto native_output_tensor = optional_output_tensor_value;
+    std::optional<tt::tt_metal::MemoryConfig> rerouted_output_memory_config;
+    if (!use_codegen && padded_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        auto interleaved_same_buffer_type = [](const tt::tt_metal::MemoryConfig& mc) {
+            return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, mc.buffer_type());
+        };
+        const bool output_is_sharded = optional_output_tensor_value.has_value()
+                                           ? optional_output_tensor_value->is_sharded()
+                                           : memory_config_value.is_sharded();
+        if (output_is_sharded) {
+            // Taken before the operands move, because a sharded output with no shard spec derives
+            // its spec from the index and input tensors. The device op gets this spec rather than
+            // re-deriving it from operands that may have moved.
+            const auto output_spec = ttnn::prim::GatherDeviceOperation::compute_output_specs(
+                ttnn::prim::GatherParams{normalized_dim, sparse_grad, memory_config_value, sub_core_grids},
+                ttnn::prim::GatherInputs{padded_input_tensor, padded_index_tensor, optional_output_tensor_value});
+            uint32_t output_elem_size = padded_input_tensor.element_size();
+            if (optional_output_tensor_value.has_value()) {
+                output_elem_size = optional_output_tensor_value->element_size();
+            } else {
+                native_memory_config = output_spec.memory_config();
+            }
+            if (has_subaligned_shard_row(output_spec.memory_config(), output_elem_size)) {
+                rerouted_output_memory_config = output_spec.memory_config();
+                native_memory_config = interleaved_same_buffer_type(output_spec.memory_config());
+                native_output_tensor = std::nullopt;
+            }
+        }
+        if (has_subaligned_shard_row(padded_input_tensor.memory_config(), padded_input_tensor.element_size())) {
+            padded_input_tensor = ttnn::to_memory_config(
+                padded_input_tensor, interleaved_same_buffer_type(padded_input_tensor.memory_config()));
+        }
+        if (has_subaligned_shard_row(padded_index_tensor.memory_config(), padded_index_tensor.element_size())) {
+            padded_index_tensor = ttnn::to_memory_config(
+                padded_index_tensor, interleaved_same_buffer_type(padded_index_tensor.memory_config()));
+        }
+    }
+
     Tensor gather_tensor = use_codegen ? ttnn::prim::gather_codegen(
                                              padded_input_tensor,
                                              normalized_dim,
@@ -395,9 +444,13 @@ Tensor gather_dispatch(
                                              normalized_dim,
                                              padded_index_tensor,
                                              sparse_grad,
-                                             memory_config_value,
-                                             optional_output_tensor_value,
+                                             native_memory_config,
+                                             native_output_tensor,
                                              sub_core_grids);
+    if (rerouted_output_memory_config.has_value()) {
+        gather_tensor = ttnn::to_memory_config(
+            gather_tensor, rerouted_output_memory_config.value(), std::nullopt, optional_output_tensor_value);
+    }
 
     return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor,

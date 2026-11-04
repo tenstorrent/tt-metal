@@ -67,7 +67,7 @@ void print_detailed_comparison(const vector<uint32_t>& packed_golden, const vect
 /// @param test_config - Configuration of the test
 /// @return true if test passes
 bool run_dm_neighbour(distributed::MeshDevice& mesh_device, const DramNeighbourConfig& test_config) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
     const size_t total_size_bytes = num_pages * test_config.page_size_bytes;

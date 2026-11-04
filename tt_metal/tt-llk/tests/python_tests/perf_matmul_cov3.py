@@ -3,7 +3,8 @@
 
 """Coverage of the matmul format and mode cells that no other perf module ran: 366 cells of (SrcA, SrcB, output, dest accumulate, sync, fidelity) over Float16_b, Bfp8_b, Bfp4_b and Float32,
 two block shapes each (one K tile block and one four tile K block, rt x ct of at least two tiles), throttle 0, on the shapes perf_matmul's dest corner grid yields (cov3_cases.json).
-SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0)."""
+SrcA is input_format (unpacker 0, matmul in1), SrcB is input_format_B (unpacker 1, matmul in0).
+"""
 
 from typing import Callable, List, Union
 
@@ -27,30 +28,59 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    input_output_formats,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
     MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
-    MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+)
+
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
+    [
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([128, 32], [32, 128]), <MathFidelity.LoFi: 0>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([128, 128], [128, 64]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 32], [32, 256]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp4_b,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 128], [128, 96]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 32], [32, 128]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 32], [32, 32]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 128], [128, 96]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp8_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([256, 32], [32, 32]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([64, 128], [128, 128]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Float32], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([32, 128], [128, 128]), <MathFidelity.HiFi4: 4>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp8_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 128], [128, 32]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([64, 128], [128, 64]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Bfp4_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 128], [128, 512]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 128], [128, 160]), <MathFidelity.LoFi: 0>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Bfp8_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 128], [128, 192]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([32, 128], [128, 256]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 128], [128, 64]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float16_b,B:Float32,out:Float32], <DestAccumulation.Yes: True>, <DestSync.Full: 'SyncFull'>, ([128, 128], [128, 32]), <MathFidelity.HiFi2: 2>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float32,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([512, 32], [32, 32]), <MathFidelity.LoFi: 0>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float32,B:Float32,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([64, 32], [32, 96]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float32,B:Float32,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 32], [32, 192]), <MathFidelity.HiFi3: 3>, 0)]",
+        "test_perf_matmul_cov3[case:(InputOutputFormat[A:Float32,B:Float32,out:Float32], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([64, 32], [32, 96]), <MathFidelity.HiFi3: 3>, 0)]",
+    ]
 )
 
 # Cold start, functional-max inner dim, and reuse/bandwidth.
@@ -116,19 +146,33 @@ def matmul_combos(
     ]
 
 
+import json
+import os
 
-import json,os
 from conftest import skip_for_wormhole
 from helpers.format_config import InputOutputFormat
 from helpers.test_variant_parameters import PACK_SRC_FROM_OUTPUT
-_F=lambda n:getattr(DataFormat,n)
-_J=json.load(open(os.path.join(os.path.dirname(__file__),"cov3_cases.json")))
+
+_F = lambda n: getattr(DataFormat, n)
+_J = json.load(open(os.path.join(os.path.dirname(__file__), "cov3_cases.json")))
+
+
 def _cases():
-    out=[]
-    for a,b,o,acc,sy,fi,rt,ct,kt in _J:
-        fmt=InputOutputFormat(_F(a),_F(o),input_format_B=_F(b))
-        out.append((fmt,getattr(DestAccumulation,acc.split(".")[1]),getattr(DestSync,sy.split(".")[1]),([rt*TILE_DIM,kt*TILE_DIM],[kt*TILE_DIM,ct*TILE_DIM]),getattr(MathFidelity,fi.split(".")[1]),0))
+    out = []
+    for a, b, o, acc, sy, fi, rt, ct, kt in _J:
+        fmt = InputOutputFormat(_F(a), _F(o), input_format_B=_F(b))
+        out.append(
+            (
+                fmt,
+                getattr(DestAccumulation, acc.split(".")[1]),
+                getattr(DestSync, sy.split(".")[1]),
+                ([rt * TILE_DIM, kt * TILE_DIM], [kt * TILE_DIM, ct * TILE_DIM]),
+                getattr(MathFidelity, fi.split(".")[1]),
+                0,
+            )
+        )
     return out
+
 
 @pytest.mark.perf
 @skip_for_wormhole
@@ -158,7 +202,6 @@ def test_perf_matmul_cov3(
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
-
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
@@ -170,28 +213,56 @@ def test_perf_matmul_cov3(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(throttle),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
+            *MATMUL_REUSE_DIR.for_block(
+                formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync
+            ),
             *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
                 math_fidelity=math_fidelity,
                 kt_dim=dims.kt_dim,
             ),
             *MATMUL_UNPACK_TTSYNC.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
+                formats,
+                dest_acc,
+                math_fidelity,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
+                dest_sync,
             ),
             *MATMUL_K_LOOP.for_block(
                 formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
             ),
             *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
             *MATMUL_ROW_MOP.for_block(
-                formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
+                formats,
+                dest_acc,
+                math_fidelity,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
             ),
             *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
+                formats,
+                dims.kt_dim,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
+                unfuse_one_tile=True,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(

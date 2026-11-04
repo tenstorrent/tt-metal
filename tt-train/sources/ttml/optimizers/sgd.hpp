@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
+// Defaults for every param group. Groups can override lr, momentum, dampening and weight_decay;
+// nesterov applies to the whole optimizer.
 struct SGDConfig {
     float lr{1e-3F};
     float momentum{0.0F};
@@ -25,7 +29,10 @@ public:
         return "SGD";
     }
 
-    explicit SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config);
+    explicit SGD(
+        ttml::serialization::NamedParameters parameters,
+        const SGDConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -37,26 +44,15 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override;
-
-    void set_lr(float lr) override;
-
-    [[nodiscard]] float get_momentum() const;
-    void set_momentum(float momentum);
-
-    [[nodiscard]] float get_dampening() const;
-    void set_dampening(float dampening);
-
-    [[nodiscard]] float get_weight_decay() const;
-    void set_weight_decay(float weight_decay);
-
     [[nodiscard]] bool get_nesterov() const;
     void set_nesterov(bool nesterov);
 
 private:
+    // Checks every group's momentum / dampening against nesterov
     void validate_config() const;
+
     size_t m_steps{0};
-    SGDConfig m_config;
+    bool m_nesterov{false};
     ttml::serialization::NamedParameters m_momentum;
     // Buffers that have received at least one update. PyTorch seeds a fresh momentum
     // buffer with the raw gradient (buf = g), so each buffer's first update must skip

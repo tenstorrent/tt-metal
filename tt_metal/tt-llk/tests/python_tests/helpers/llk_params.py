@@ -13,7 +13,11 @@ format_dict = {
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
+    DataFormat.Bfp8: torch.float16,  # BFP8 with the 5 bit exponent, represented as float16
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
+    DataFormat.Bfp4: torch.float16,  # BFP4 with an A exponent
+    DataFormat.Bfp2: torch.float16,  # BFP2 with an A exponent
+    DataFormat.Lf8: torch.float16,  # FP8 e5m2
     DataFormat.Bfp4_b: torch.bfloat16,  # BFP4 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp2_b: torch.bfloat16,  # BFP2 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
@@ -317,6 +321,21 @@ class MathOperation(Enum):
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
     SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
+    # The 8-bit quant entry points of quantization.h: uint8 / int8 output and int8 input.
+    # Named after the compute-API *_tile_init wrapper each one mirrors.
+    SfpuQuantUint8 = OpSpec("QUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuQuantInt8 = OpSpec("QUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantUint8 = OpSpec("REQUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8 = OpSpec("REQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8In = OpSpec("REQUANT_INT8_IN", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8InUint8Out = OpSpec(
+        "REQUANT_INT8_IN_UINT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuRequantInt8InInt8Out = OpSpec(
+        "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
@@ -453,6 +472,9 @@ class DestAccumulation(Enum):
         return str(self.value).lower()
 
 
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+
+
 class L1Accumulation(Enum):
     Yes = 1
     No = 0
@@ -524,13 +546,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):
@@ -563,6 +583,14 @@ class MathFidelity(Enum):
     @property
     def cpp_enum_value(self):
         return f"ckernel::MathFidelity::{self.name}"
+
+
+ALL_MATH_FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
 
 
 class DestSync(Enum):
@@ -739,13 +767,17 @@ class BriscCmd(Enum):
 
 format_tile_sizes = {
     DataFormat.Bfp8_b: 1088,
+    DataFormat.Bfp8: 1088,
     DataFormat.Bfp4_b: 576,
     DataFormat.Bfp2_b: 320,
+    DataFormat.Bfp4: 576,
+    DataFormat.Bfp2: 320,
+    DataFormat.Lf8: 1024,  # 1 byte per element, no exponent section
     DataFormat.Float16: 2048,
     DataFormat.Float16_b: 2048,
     DataFormat.Float32: 4096,
     DataFormat.Int32: 4096,
-    DataFormat.Tf32: 3072,  # 3 bytes * 1024 elements
+    DataFormat.Tf32: 4096,  # a 32-bit word per datum in L1
     DataFormat.UInt32: 4096,
     DataFormat.Int16: 2048,
     DataFormat.UInt16: 2048,
@@ -819,6 +851,15 @@ class BlocksCalculationAlgorithm(Enum):
     Standard = "STANDARD"
     Tilize = "TILIZE"
     Untilize = "UNTILIZE"
+
+
+class PackUntilizeBenchmark(str, Enum):
+    Functional = "functional"
+    Standard = "standard"
+    FastUntilizeBaseline = "fast_untilize_baseline"
+
+    def __str__(self):
+        return self.value
 
 
 class PerfRunType(Enum):
@@ -919,6 +960,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):

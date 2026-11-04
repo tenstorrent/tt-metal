@@ -13,7 +13,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, LOW_PRECISION, MuseGlimmerModelArgs
 
 CKPT = os.environ.get("HF_MODEL") or DEFAULT_CKPT_DIR
 
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
     not os.path.exists(os.path.join(CKPT, "config.json")), reason="checkpoint not available"
 )
 
-PCC = 0.98
+PCC = 0.95 if LOW_PRECISION else 0.98
 PROMPT = "What is the capital of France? Answer in one sentence."
 
 

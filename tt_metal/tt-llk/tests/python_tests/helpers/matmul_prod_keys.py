@@ -12,7 +12,9 @@ from pathlib import Path
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
 
-_HEADER = (Path(__file__).resolve().parents[3] / "tt_llk_blackhole/llk_lib/llk_matmul_forms.h").read_text()
+_HEADER = (
+    Path(__file__).resolve().parents[3] / "tt_llk_blackhole/llk_lib/llk_matmul_forms.h"
+).read_text()
 _TABLE = re.findall(r'"([.rRh]{5})"', _HEADER)
 # matmul_main_form_cells of the header: cells whose keyed forms read slower than main's, which keep main's form
 _NUM = r"(0x[0-9A-Fa-f]+|\d+)"
@@ -26,10 +28,25 @@ _CELL = (
 def _cells(text: str) -> dict:
     out = {}
     for fid, k1, acc, i, o, p, several_ok, *rest in re.findall(_CELL, text):
-        if rest[6]:  # a mixed pair: the harness sweeps equal in0 and in1 formats, so the cell never applies there
+        if rest[
+            6
+        ]:  # a mixed pair: the harness sweeps equal in0 and in1 formats, so the cell never applies there
             continue
-        n = [int(x, 0) if x else d for x, d in zip(rest[:6], (0, 0xFFFF, -1, 0, 0xFFFF, 0))]
-        out[(fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], n[2])] = (several_ok == "true", n[0], n[1], n[3], n[4], n[5])
+        n = [
+            int(x, 0) if x else d
+            for x, d in zip(rest[:6], (0, 0xFFFF, -1, 0, 0xFFFF, 0))
+        ]
+        out[
+            (
+                fid,
+                k1 == "true",
+                acc == "true",
+                DataFormat[i],
+                DataFormat[o],
+                DataFormat[p],
+                n[2],
+            )
+        ] = (several_ok == "true", n[0], n[1], n[3], n[4], n[5])
     return out
 
 
@@ -38,7 +55,25 @@ _MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_form_cells[] = {"
 _MAIN_CELLS = _cells(_MAIN_PART)
 # matmul_forced_form_cells: cells that take the form 'R', 'h' or 'r' whatever the table says
 _FORCED_CELLS = [
-    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form, several == "true", int(sections or 0), int(maxh, 0) if maxh else 0xFFFF, in0_only == "true")
+    (
+        fid,
+        int(sync),
+        int(mink),
+        int(maxk, 0),
+        acc == "true",
+        DataFormat[i],
+        DataFormat[o],
+        DataFormat[p],
+        int(minw),
+        int(maxw, 0),
+        int(minh),
+        wide == "true",
+        form,
+        several == "true",
+        int(sections or 0),
+        int(maxh, 0) if maxh else 0xFFFF,
+        in0_only == "true",
+    )
     for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sections, maxh, in0_only in re.findall(
         r"\{MathFidelity::(\w+), (\d), (\d+), (0x[0-9A-Fa-f]+|\d+), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), "
         r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'(?:, (true|false))?(?:, (\d))?(?:, (0x[0-9A-Fa-f]+|\d+))?(?:, (true|false))?\},",
@@ -52,7 +87,12 @@ _FMT = {
     DataFormat.Bfp8_b: 3,
     DataFormat.Bfp4_b: 4,
 }
-_FID = {MathFidelity.LoFi: 0, MathFidelity.HiFi2: 1, MathFidelity.HiFi3: 2, MathFidelity.HiFi4: 3}
+_FID = {
+    MathFidelity.LoFi: 0,
+    MathFidelity.HiFi2: 1,
+    MathFidelity.HiFi3: 2,
+    MathFidelity.HiFi4: 3,
+}
 
 
 def form_char(kt: int, fidelity, half_sync: bool, fp32_dest: bool, fmt) -> str:
@@ -60,7 +100,10 @@ def form_char(kt: int, fidelity, half_sync: bool, fp32_dest: bool, fmt) -> str:
     if fmt not in _FMT:
         return "."
     k = 0 if kt == 1 else (1 if kt <= 4 else 2)
-    return _TABLE[((k * 4 + _FID[fidelity]) * 2 + (0 if half_sync else 1)) * 2 + (1 if fp32_dest else 0)][_FMT[fmt]]
+    return _TABLE[
+        ((k * 4 + _FID[fidelity]) * 2 + (0 if half_sync else 1)) * 2
+        + (1 if fp32_dest else 0)
+    ][_FMT[fmt]]
 
 
 def form(row_mop: bool, char: str) -> tuple:
@@ -77,11 +120,14 @@ def partials_format(fp32_dest: bool, packer_l1_acc: bool, out_format):
 
 def m2_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format) -> bool:
     return (fidelity != MathFidelity.LoFi or w >= 6 or (h * w >= 8 and kb > 1)) and (
-        fp32_dest or (out_format != DataFormat.Float32 and pack_format != DataFormat.Float32)
+        fp32_dest
+        or (out_format != DataFormat.Float32 and pack_format != DataFormat.Float32)
     )
 
 
-def lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format, in1_format) -> bool:
+def lg_row_mop(
+    fidelity, h, w, kb, fp32_dest, out_format, pack_format, in1_format
+) -> bool:
     return (
         m2_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format)
         and h * w >= 4
@@ -89,10 +135,38 @@ def lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format, in1_forma
     )
 
 
-def _cell_hit(cells, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side):
+def _cell_hit(
+    cells,
+    fidelity,
+    kb,
+    fp32_dest,
+    in_format,
+    out_format,
+    pack_format,
+    several_blocks,
+    row_tiles,
+    full_sync,
+    min_side,
+):
     for sync in ((1,) if full_sync else (-1, 0)):
-        cell = cells.get((fidelity.name, kb == 1, fp32_dest, in_format, out_format, pack_format, sync))
-        if cell is not None and not (cell[0] and several_blocks) and cell[1] <= row_tiles <= cell[2] and cell[3] <= kb <= cell[4] and min_side >= cell[5]:
+        cell = cells.get(
+            (
+                fidelity.name,
+                kb == 1,
+                fp32_dest,
+                in_format,
+                out_format,
+                pack_format,
+                sync,
+            )
+        )
+        if (
+            cell is not None
+            and not (cell[0] and several_blocks)
+            and cell[1] <= row_tiles <= cell[2]
+            and cell[3] <= kb <= cell[4]
+            and min_side >= cell[5]
+        ):
             return True
     return False
 
@@ -109,16 +183,30 @@ _LOFI_MAIN_CELLS = {
 }
 
 
-def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct=0, rt=0) -> bool:
+def mixed_main_form(
+    fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct=0, rt=0
+) -> bool:
     """matmul_mixed_main_form of llk_matmul_forms.h; in_format is in1 (SrcA), in_format_b is in0 (SrcB)."""
     if in_format_b is None:
         return False
     block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
     if fidelity == MathFidelity.LoFi:
-        return not full_sync and not fp32_dest and ct > 0 and (in_format, in_format_b, out_format, kb, ct, rt) in _LOFI_MAIN_CELLS
+        return (
+            not full_sync
+            and not fp32_dest
+            and ct > 0
+            and (in_format, in_format_b, out_format, kb, ct, rt) in _LOFI_MAIN_CELLS
+        )
     if fidelity == MathFidelity.HiFi3:
         return (
-            not full_sync and fp32_dest and kb == 1 and ct == 1 and rt == 1 and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float32 and out_format == DataFormat.Float32
+            not full_sync
+            and fp32_dest
+            and kb == 1
+            and ct == 1
+            and rt == 1
+            and in_format == DataFormat.Bfp8_b
+            and in_format_b == DataFormat.Float32
+            and out_format == DataFormat.Float32
         )
     if fidelity != MathFidelity.HiFi2:
         return False
@@ -126,36 +214,118 @@ def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format,
     if f32_in1 and ct > 0:
         # Float32 in in1: the keyed forms win on rows of 3 tiles or fewer and lose on wider rows
         keyed = (
-            (ct < 4 and not (full_sync and kb <= 4 and ct == 1 and rt == 1) and not (not full_sync and kb <= 4 and ct == 3 and rt == 1))
+            (
+                ct < 4
+                and not (full_sync and kb <= 4 and ct == 1 and rt == 1)
+                and not (not full_sync and kb <= 4 and ct == 3 and rt == 1)
+            )
             if kb > 1
-            else not (ct >= 4 and rt >= 4) and not (not full_sync and ct == 1 and rt == 1)
+            else not (ct >= 4 and rt >= 4)
+            and not (not full_sync and ct == 1 and rt == 1)
         )
         f32_in1 = not keyed
-    f32_in0_half_k1 = in_format_b == DataFormat.Float32 and in_format in block and not full_sync and kb == 1
+    f32_in0_half_k1 = (
+        in_format_b == DataFormat.Float32
+        and in_format in block
+        and not full_sync
+        and kb == 1
+    )
     return (
         f32_in1
         or f32_in0_half_k1
-        or (not fp32_dest and kb == 1 and not full_sync and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float16_b and out_format == DataFormat.Float32)
+        or (
+            not fp32_dest
+            and kb == 1
+            and not full_sync
+            and in_format == DataFormat.Bfp8_b
+            and in_format_b == DataFormat.Float16_b
+            and out_format == DataFormat.Float32
+        )
     )
 
 
-def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99, in_format_b=None, ct=0, rt=0) -> bool:
+def main_form_cell(
+    fidelity,
+    kb,
+    fp32_dest,
+    in_format,
+    out_format,
+    pack_format,
+    several_blocks=False,
+    row_tiles=0,
+    full_sync=False,
+    min_side=99,
+    in_format_b=None,
+    ct=0,
+    rt=0,
+) -> bool:
     """matmul_main_form_cell_selected of llk_matmul_forms.h; the table cells for equal in0 and in1 formats, in_format_b (in0) given for a mixed pair."""
-    if mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct, rt):
+    if mixed_main_form(
+        fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct, rt
+    ):
         return True
-    return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
+    return _cell_hit(
+        _MAIN_CELLS,
+        fidelity,
+        kb,
+        fp32_dest,
+        in_format,
+        out_format,
+        pack_format,
+        several_blocks,
+        row_tiles,
+        full_sync,
+        min_side,
+    )
 
 
-def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct, several_blocks=False, sections=1, in_format_b=None) -> str:
+def forced_form(
+    fidelity,
+    kb,
+    fp32_dest,
+    in_format,
+    out_format,
+    pack_format,
+    full_sync,
+    rt,
+    ct,
+    several_blocks=False,
+    sections=1,
+    in_format_b=None,
+) -> str:
     """matmul_forced_form of llk_matmul_forms.h: 'R', 'h', 'r' or '' (the table's form), for a block of rt x ct tiles."""
-    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sec, maxh, in0_only in _FORCED_CELLS:
+    for (
+        fid,
+        sync,
+        mink,
+        maxk,
+        acc,
+        i,
+        o,
+        p,
+        minw,
+        maxw,
+        minh,
+        wide,
+        form,
+        several,
+        sec,
+        maxh,
+        in0_only,
+    ) in _FORCED_CELLS:
         if (
             fid == fidelity.name
             and sync == (1 if full_sync else 0)
             and mink <= kb <= maxk
             and acc == fp32_dest
-            and (i in (in_format, in_format_b) if in_format_b is not None else in_format == i)
-            and (not in0_only or (in_format if in_format_b is None else in_format_b) == i)
+            and (
+                i in (in_format, in_format_b)
+                if in_format_b is not None
+                else in_format == i
+            )
+            and (
+                not in0_only or (in_format if in_format_b is None else in_format_b) == i
+            )
             and out_format == o
             and pack_format == p
             and minw <= ct <= maxw
@@ -169,47 +339,844 @@ def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, ful
     return ""
 
 
-MAIN_FORM = (("tile", False), None)  # main's form: tile MOP, per-row unpack, unknown format key
+def row_mop_form(
+    fidelity,
+    kb,
+    fp32_dest,
+    in_format,
+    out_format,
+    full_sync,
+    rt,
+    ct,
+    several_blocks=False,
+    sections=1,
+    in_format_b=None,
+) -> str:
+    """matmul_row_mop_form of llk_matmul_forms.h: the forced form that replaces the opt-in row MOP ('' where it stays): any forced cell at half sync, 'R' and 'h' at full sync."""
+    form = forced_form(
+        fidelity,
+        kb,
+        fp32_dest,
+        in_format,
+        out_format,
+        out_format,
+        full_sync,
+        rt,
+        ct,
+        several_blocks,
+        sections,
+        in_format_b=in_format_b,
+    )
+    return form if form and (not full_sync or form in ("R", "h")) else ""
+
+
+MAIN_FORM = (
+    ("tile", False),
+    None,
+)  # main's form: tile MOP, per-row unpack, unknown format key
 
 
 def production_forms(in1_format, out_format, fp32_dest, fidelity, h, w, kb) -> dict:
     """{(kernel, variant): (form, form_format)} for one sub block of kb inner k steps, Half sync (every ttnn matmul kernel but the
     gather_in0 ring). Variants: nb1 = one inner block (packed to the output format), nb4 = several inner blocks, nb4_l1acc = the
-    same with packer_l1_acc. minimal_matmul packs every section to its intermediate buffer."""
+    same with packer_l1_acc. minimal_matmul packs every section to its intermediate buffer.
+    """
     out = {}
     for nb in (1, 4):
         for l1 in (False, True) if nb > 1 else (False,):
             pf = partials_format(fp32_dest, l1, out_format) if nb > 1 else out_format
             tag = f"nb{nb}" + ("_l1acc" if l1 else "")
-            if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf, nb > 1, max(h, w)):
+            if main_form_cell(
+                fidelity, kb, fp32_dest, in1_format, out_format, pf, nb > 1, max(h, w)
+            ):
                 out[("M2", tag)] = out[("LG", tag)] = MAIN_FORM
                 continue
             ch = form_char(kb, fidelity, True, fp32_dest, pf)
-            out[("M2", tag)] = (form(m2_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pf), ch), pf)
-            out[("LG", tag)] = (form(lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pf, in1_format), ch), pf)
+            out[("M2", tag)] = (
+                form(m2_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pf), ch),
+                pf,
+            )
+            out[("LG", tag)] = (
+                form(
+                    lg_row_mop(
+                        fidelity, h, w, kb, fp32_dest, out_format, pf, in1_format
+                    ),
+                    ch,
+                ),
+                pf,
+            )
     pf = DataFormat.Float32 if fp32_dest else DataFormat.Float16_b
-    if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf, False, max(h, w)):
+    if main_form_cell(
+        fidelity, kb, fp32_dest, in1_format, out_format, pf, False, max(h, w)
+    ):
         out[("MM", "interm")] = MAIN_FORM
     else:
-        out[("MM", "interm")] = (form(h * w >= 8 and kb > 1, form_char(kb, fidelity, True, fp32_dest, pf)), pf)
+        out[("MM", "interm")] = (
+            form(h * w >= 8 and kb > 1, form_char(kb, fidelity, True, fp32_dest, pf)),
+            pf,
+        )
     return out
 
 
 def harness_forms(fidelity, fp32_dest, out_format, h, w, kt) -> set:
     """The (math, hoist) pairs the sweep measures for a Half cell: the forms table keyed by the output format, and the row MOP
-    module (perf_matmul_row_mop: at least 8 tiles, kt > 1, not Float32 from a 16-bit DEST)."""
+    module (perf_matmul_row_mop: at least 8 tiles, kt > 1, not Float32 from a 16-bit DEST).
+    """
     ch = form_char(kt, fidelity, True, fp32_dest, out_format)
     s = {form(False, ch)}
-    if h * w >= 8 and kt > 1 and not (out_format == DataFormat.Float32 and not fp32_dest):
+    if (
+        h * w >= 8
+        and kt > 1
+        and not (out_format == DataFormat.Float32 and not fp32_dest)
+    ):
         s.add(form(True, ch))
     return s
 
 
-def unmeasured_production_forms(in1_format, out_format, fp32_dest, fidelity, h, w, kt) -> dict:
+def unmeasured_production_forms(
+    in1_format, out_format, fp32_dest, fidelity, h, w, kt
+) -> dict:
     """{form: form_format} production selects for the cell that the sweep does not measure (one representative format per form)."""
     seen = harness_forms(fidelity, fp32_dest, out_format, h, w, kt)
     res = {}
-    for (kernel, tag), (f, fmt) in production_forms(in1_format, out_format, fp32_dest, fidelity, h, w, kt).items():
+    for (kernel, tag), (f, fmt) in production_forms(
+        in1_format, out_format, fp32_dest, fidelity, h, w, kt
+    ).items():
         if f not in seen:
             res.setdefault(f, fmt)
     return res
+
+
+# (fidelity, half sync, accumulate, in1, in0, output, rt, ct, k steps, throttle, packer L1 accumulate, inner blocks)
+_GRID_MAIN_ROWS = (
+    ("LoFi", True, True, "F16", "B8x", "B8x", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 2, 4, 8, 2, False, 1),
+    ("HiFi2", False, False, "B8", "F32", "F32", 1, 1, 3, 0, False, 1),
+    ("HiFi2", False, False, "F32", "B8", "F32", 6, 2, 1, 0, True, 1),
+    ("HiFi2", False, True, "B8", "F32", "F32", 1, 1, 3, 0, False, 1),
+    ("HiFi2", True, False, "B4", "B8", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "B4", "B8", "F32", 1, 1, 1, 0, True, 1),
+    ("HiFi2", True, False, "B4", "F16b", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "B4", "F32", "B8", 3, 1, 3, 0, False, 1),
+    ("HiFi2", True, False, "B8", "B4", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "B4", 2, 3, 1, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "B4", 2, 3, 3, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "B4", 2, 4, 1, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "F16b", 2, 3, 1, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "F16b", 2, 3, 3, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "F16b", 2, 4, 1, 0, False, 1),
+    ("HiFi2", True, False, "F32", "B8", "F32", 1, 3, 8, 0, False, 1),
+    ("HiFi2", True, True, "B4", "B8", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "B4", "F16b", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "F16b", "B4", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "F16b", "B4", "F32", 1, 1, 1, 0, True, 1),
+    ("HiFi2", True, True, "F16b", "B4", "F32", 1, 1, 1, 1, False, 1),
+    ("HiFi2", True, True, "F32", "B4", "B8", 2, 2, 3, 0, False, 1),
+    ("HiFi2", True, True, "F32", "B4", "B8", 2, 2, 8, 0, False, 1),
+    ("HiFi2", True, True, "F32", "B8", "F32", 1, 3, 8, 0, False, 1),
+    ("HiFi3", True, False, "B4", "B8", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "B4", "F16b", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "B4", "F32", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "F16b", "F32", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B4", "B4", 1, 1, 1, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B4", 1, 7, 8, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B4", 2, 7, 8, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B8", 1, 7, 8, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B8", 2, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 1, 8, 1, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 6, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 7, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 8, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B8", "B4", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "B8", "B4", "F32", 1, 3, 3, 0, True, 1),
+    ("LoFi", True, False, "B8", "F16b", "F16b", 1, 3, 3, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B4", 1, 8, 1, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 1, 8, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 2, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 2, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 2, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 5, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 5, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 6, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 1, 7, 8, 0, True, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 1, 8, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 1, 8, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 2, 3, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 2, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 2, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 2, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 1, 5, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 1, 7, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F32", 1, 5, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F32", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 5, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 7, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 8, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 1, 8, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 2, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 2, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 2, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B4", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 1, 5, 3, 4, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 1, 7, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 2, 3, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 2, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 2, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 3, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 5, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 6, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 7, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 7, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 8, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 2, 2, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 2, 3, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 2, 4, 8, 1, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 3, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 5, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 6, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 5, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 5, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 6, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 2, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 1, 3, 8, 1, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 2, 2, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F32", 1, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F32", 2, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 3, 2, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 3, 2, 3, 1, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 4, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 5, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 6, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 7, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B8", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B8", 2, 1, 8, 4, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F16b", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F32", 1, 7, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F32", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B4", 1, 7, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B4", 4, 2, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B4", 5, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B4", 7, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B8", 1, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B8", 1, 7, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 2, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 2, 3, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 2, 3, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 3, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 3, 2, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 4, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 4, 2, 3, 0, False, 1),
+    ("LoFi", True, True, "B4", "B8", "B8", 2, 2, 3, 4, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 1, 3, 1, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F16b", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "B8", "B4", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B8", "F16b", "B8", 1, 2, 3, 4, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B4", 1, 3, 1, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B8", 2, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B8", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B8", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B8", 1, 4, 8, 0, True, 1),
+    ("LoFi", True, True, "F16b", "F16b", "B8", 1, 4, 3, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 3, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 3, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 4, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 4, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F32", 1, 1, 1, 5, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 1, 2, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 2, 2, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 3, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B8", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B8", 2, 2, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 3, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 1, 1, 5, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 3, 8, 1, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B4", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B8", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "F16b", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "F32", 2, 1, 3, 1, False, 1),
+    ("LoFi", True, True, "F32", "B8", "F32", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 1, 3, 3, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 4, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B8", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B8", 2, 2, 1, 4, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B8", 4, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "F16b", 1, 3, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "F16b", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "F32", 1, 2, 3, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "F32", 1, 4, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 1, 3, 8, 1, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 2, 2, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 2, 2, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 2, 2, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 3, 1, 3, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "F16b", 1, 4, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "F32", 1, 2, 3, 0, False, 1),
+    ("HiFi2", True, False, "B8", "B8", "F32", 1, 1, 1, 0, True, 4),
+    ("HiFi2", True, False, "F32", "B8", "F32", 1, 4, 3, 0, True, 1),
+    ("HiFi2", True, True, "B4", "B4", "F32", 2, 1, 1, 0, True, 1),
+    ("HiFi2", True, True, "B4", "B8", "F32", 1, 1, 1, 0, True, 2),
+    ("HiFi2", True, True, "F16b", "B4", "F32", 1, 1, 1, 0, True, 2),
+    ("HiFi2", True, True, "F16b", "F32", "B4", 2, 1, 1, 0, True, 2),
+    ("HiFi2", True, True, "F32", "B4", "F32", 3, 1, 1, 0, True, 1),
+    ("HiFi2", True, True, "F32", "F32", "B4", 2, 1, 1, 0, True, 2),
+    ("HiFi3", True, True, "B4", "B4", "F32", 3, 1, 1, 0, True, 4),
+    ("LoFi", False, False, "F16b", "B8", "B4", 1, 7, 32, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B4", 2, 7, 32, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B8", 1, 7, 32, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "B8", 2, 7, 32, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "F16b", 1, 7, 32, 0, False, 1),
+    ("LoFi", False, False, "F16b", "B8", "F16b", 2, 7, 32, 0, False, 1),
+    ("LoFi", False, True, "B4", "F32", "F32", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F16b", "F32", 1, 5, 1, 0, True, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 4, 1, 8, 0, True, 2),
+    ("LoFi", True, False, "B4", "F32", "B4", 5, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 6, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 7, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 7, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 7, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 8, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 8, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B4", 8, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 5, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 5, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "B8", 7, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F16b", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F16b", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F32", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F32", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F32", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F16b", "B8", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B4", 6, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B4", 6, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B4", 7, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 6, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 6, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 7, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 7, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 8, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "B8", 8, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F16b", 6, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F16b", 6, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F16b", 8, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F16b", 8, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F32", 6, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F32", 6, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F32", 8, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8", "F32", "F32", 8, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B4", "B8", 1, 7, 3, 0, True, 4),
+    ("LoFi", True, False, "F16b", "B4", "B8", 2, 4, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 5, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 1, 7, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "B8", 2, 4, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 1, 5, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 3, 1, 8, 0, True, 4),
+    ("LoFi", True, False, "F16b", "B8", "F16b", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F32", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F16b", "B8", "F32", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F16b", "B8", 2, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 2, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 5, 1, 0, True, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 6, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 7, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 8, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "B8", 2, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F32", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 1, 6, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B4", 1, 7, 3, 0, True, 2),
+    ("LoFi", True, False, "F32", "B8", "B4", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B8", 1, 6, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B8", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F16b", 1, 6, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F16b", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F32", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F16b", "B8", 1, 6, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 2, 4, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 3, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 4, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 4, 2, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B8", 3, 2, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B8", 3, 2, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "B8", "F32", 2, 1, 1, 0, True, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 2, 1, 8, 0, True, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 3, 1, 1, 0, True, 2),
+    ("LoFi", True, True, "B4", "F32", "B4", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B8", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F16b", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F16b", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F16b", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 2, 1, 8, 0, True, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 3, 1, 8, 0, True, 4),
+    ("LoFi", True, True, "B4", "F32", "F32", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B4", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B8", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "B8", "F32", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B4", "F32", 2, 1, 1, 0, True, 4),
+    ("LoFi", True, True, "F16b", "B8", "B4", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B4", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "F16b", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "F16b", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "F32", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "F32", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 3, 1, 8, 0, True, 2),
+    ("LoFi", True, True, "F16b", "F32", "B4", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B4", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B8", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "B8", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F16b", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F16b", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F16b", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F32", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F32", "F32", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B8", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 1, 2, 8, 0, True, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 3, 8, 0, True, 4),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 3, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B4", 2, 1, 8, 0, True, 4),
+    ("LoFi", True, True, "F32", "B8", "B4", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B8", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "F16b", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "F32", 2, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 1, 4, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B8", 1, 4, 8, 0, True, 2),
+    ("LoFi", True, True, "F32", "F16b", "B8", 1, 4, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "F16b", 1, 4, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 4, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 2, 2, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 3, 1, 3, 0, True, 4),
+    ("LoFi", True, True, "F32", "F32", "B8", 3, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "B8", 3, 1, 32, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "F32", 4, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "F32", "F32", 4, 1, 32, 0, False, 1),
+    # LLK-only space (formats and throttles the grid sweep does not reach) where the keyed forms read slower than main's
+    ("LoFi", True, False, "B4", "F32", "B2", 4, 2, 3, 0, False, 1),
+    ("LoFi", True, False, "F32", "B2", "B4", 1, 4, 1, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "B2", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B8", "F32", 2, 1, 8, 2, False, 1),
+    ("LoFi", True, False, "F32", "F32", "B4", 4, 1, 1, 2, False, 1),
+    ("LoFi", True, True, "B4", "B8", "B8", 2, 1, 8, 3, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B2", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B2", 4, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B8", 1, 2, 8, 2, False, 1),
+    ("LoFi", True, True, "F32", "F32", "F16", 1, 4, 8, 0, False, 1),
+    # Full sync 1x1 blocks of Float16_b or Bfp8_b: re-initialised before every call, the keyed forms read up to 10 cycles per call behind main's
+    ("LoFi", False, False, "F16b", "F16b", "F16b", 1, 1, 1, 0, False, 1),
+    ("LoFi", False, False, "B8", "B8", "B8", 1, 1, 1, 0, False, 1),
+    ("LoFi", False, False, "F16b", "F16b", "F16b", 1, 1, 4, 0, False, 1),
+    ("LoFi", False, False, "B8", "B8", "B8", 1, 1, 4, 0, False, 1),
+    ("HiFi2", False, False, "F16b", "F16b", "F16b", 1, 1, 1, 0, False, 1),
+    ("HiFi2", False, False, "B8", "B8", "B8", 1, 1, 1, 0, False, 1),
+    ("HiFi2", False, False, "F16b", "F16b", "F16b", 1, 1, 4, 0, False, 1),
+    ("HiFi2", False, False, "B8", "B8", "B8", 1, 1, 4, 0, False, 1),
+    ("HiFi2", False, False, "F16b", "F16b", "F16b", 1, 1, 32, 0, False, 1),
+    ("HiFi2", False, False, "B8", "B8", "B8", 1, 1, 32, 0, False, 1),
+    ("HiFi4", False, False, "F16b", "F16b", "F16b", 1, 1, 4, 0, False, 1),
+    ("HiFi4", False, False, "B8", "B8", "B8", 1, 1, 4, 0, False, 1),
+    ("HiFi4", False, False, "F16b", "F16b", "F16b", 1, 1, 32, 0, False, 1),
+    ("HiFi4", False, False, "B8", "B8", "B8", 1, 1, 32, 0, False, 1),
+    # Half sync 1x1 blocks the llkx sweep read slower than main on the keyed forms
+    ("HiFi2", True, False, "B8x", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "F16", "B8x", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "F16", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "B8x", "B8x", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "B8x", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "F16", "B8x", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "F16", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "B8x", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "F16", "B8x", "B8x", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "F16", "B8x", "B8x", 1, 1, 8, 0, False, 1),
+    ("HiFi3", True, False, "F16", "B8x", "F16", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "F16", "B8x", "F16b", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "F16", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "B8x", "B8x", "F16", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "B8x", "F16", "F16", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "B8x", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "F16", "B8x", "F16b", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "F16", "F16", "F16", 1, 1, 1, 0, False, 1),
+    ("HiFi3", True, True, "F16", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("HiFi4", True, False, "B8x", "F16", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "B8x", "B8x", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F16", "B8x", "F32", 1, 1, 1, 0, False, 1),
+    ("LoFi", True, False, "F16", "F16", "F32", 1, 1, 1, 0, False, 1),
+    # LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile form
+    ("LoFi", True, True, "B4", "B4", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B4", "B8", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B4", "F16b", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B4", "F32", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B8", "B4", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B8", "B8", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "B8", "F16b", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B2", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B4", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "B8", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F16b", "F16b", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "B8", "B4", 2, 1, 1, 0, False, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 2, 1, 1, 0, False, 1),
+    # BEGIN generated by gen_matmul_closed_off_cells.py grid_main
+    ("LoFi", True, False, "F16b", "F16b", "B8", 2, 2, 8, 2, False, 1),
+    # END generated
+    ("HiFi2", True, True, "I8", "I8", "I32", 1, 1, 1, 0, False, 1),
+    ("HiFi2", True, True, "U8", "U8", "I32", 1, 1, 1, 0, False, 1),
+)
+_GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
+_SHORT = {
+    DataFormat.Float16_b: "F16b",
+    DataFormat.Bfp8_b: "B8",
+    DataFormat.Bfp4_b: "B4",
+    DataFormat.Float32: "F32",
+    DataFormat.Float16: "F16",
+    DataFormat.Bfp8: "B8x",
+    DataFormat.Bfp2_b: "B2",
+    DataFormat.Int8: "I8",
+    DataFormat.UInt8: "U8",
+    DataFormat.Int32: "I32",
+}
+
+
+def reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb) -> bool:
+    """Full sync blocks of two tiles whose keyed row form re-initialises slower than main's tile form without reading faster (llk_matmul_forms.h matmul_reinit_main_block)."""
+    return (
+        not half_sync
+        and throttle == 0
+        and not l1_acc
+        and nb == 1
+        and kb == 1
+        and rt * ct == 2
+        and (fidelity.name == "LoFi" or (fidelity.name == "HiFi2" and rt == 2))
+    )
+
+
+def grid_main_cell(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    """Cells of the perf_matmul_grid sweep (every subblock) where the keyed forms read slower than main's: they keep main's form."""
+    if reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb):
+        return True
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return False
+    return key in _GRID_MAIN
+
+
+# Half sync cells with packer L1 accumulate where the fused section post (the post and the DEST flip in one stall) holds the packer longer than main's separate post
+_UNFUSED_POST_ROWS = (
+    ("LoFi", True, True, "B4", "B8", "F32", 2, 1, 1, 0, True, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 2, 1, 8, 0, True, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 1, 6, 8, 0, True, 1),
+    ("LoFi", True, True, "F32", "B4", "F16b", 1, 2, 8, 0, True, 1),
+    ("HiFi2", True, True, "F32", "B4", "F32", 3, 1, 1, 0, True, 1),
+    ("HiFi2", True, False, "F32", "B8", "F32", 1, 4, 3, 0, True, 1),
+    ("LoFi", True, True, "B4", "F32", "F32", 3, 1, 8, 0, True, 4),
+    ("LoFi", True, True, "F32", "B4", "F32", 1, 3, 8, 0, True, 4),
+    ("LoFi", True, True, "B4", "F32", "B4", 3, 1, 1, 0, True, 2),
+    ("HiFi2", True, True, "B4", "B8", "F32", 1, 1, 1, 0, False, 1),
+)
+_UNFUSED_POST = frozenset(_UNFUSED_POST_ROWS)
+
+
+def grid_unfused_post_cell(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return False
+    return key in _UNFUSED_POST
+
+
+# Half sync single K tile blocks of Float32 output from Bfp8 operands where the half sync end fold reads slower than main's separate phase end
+# (fidelity, half sync, accumulate, in1, in0, output, rt, ct, k steps, throttle, packer L1 accumulate, inner blocks)
+_END_FOLD_OFF_ROWS = (
+    ("HiFi3", True, False, "B8x", "B8x", "F32", 1, 8, 1, 0, False, 1),
+    ("HiFi3", True, False, "B8x", "B8x", "F32", 3, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "B8x", "B8x", "F32", 8, 1, 1, 0, False, 1),
+    ("HiFi3", True, False, "B8x", "F16", "F32", 1, 8, 1, 0, False, 1),
+    ("HiFi4", True, False, "B8x", "B8x", "F32", 1, 8, 1, 0, False, 1),
+    ("HiFi4", True, False, "B8x", "B8x", "F32", 8, 1, 1, 0, False, 1),
+    ("HiFi4", True, False, "B8x", "F16", "F32", 1, 8, 1, 0, False, 1),
+)
+_END_FOLD_OFF = frozenset(_END_FOLD_OFF_ROWS)
+
+
+def end_fold_off_cell(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return False
+    return key in _END_FOLD_OFF
+
+
+# Half sync cells whose DEST flip drops the base write that the keep rule keeps for Bfp8_b outputs at LoFi and HiFi2 (matmul_keep_flip_off_cells)
+_KEEP_FLIP_OFF_ROWS = (("LoFi", True, False, "F16b", "B4", "B8", 2, 4, 8, 2, False, 1),)
+_KEEP_FLIP_OFF = frozenset(_KEEP_FLIP_OFF_ROWS)
+
+
+def keep_flip_write(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    """matmul_keep_flip_write of llk_matmul_forms.h: whether the half sync DEST flip keeps its base write."""
+    if out != DataFormat.Bfp8_b or fidelity not in (
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+    ):
+        return False
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return True
+    return key not in _KEEP_FLIP_OFF
+
+
+# Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write
+_MAIN_FLIP_ROWS = (
+    ("LoFi", True, False, "F32", "B4", "B4", 1, 7, 8, 0, False, 1),
+    ("LoFi", True, False, "F32", "B4", "F16b", 1, 7, 3, 0, False, 1),
+)
+_MAIN_FLIP = frozenset(_MAIN_FLIP_ROWS)
+
+
+def grid_main_flip_cell(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return False
+    return key in _MAIN_FLIP
+
+
+# Tiny tile cells (in0 height under 32) where the keyed forms and the tiny module's extra keys read slower than main's: they keep main's unpack and math
+# (fidelity, half sync, accumulate, in1, in0, output, in0 tile height, in1 tile width, rt, ct, k steps)
+_TINY_MAIN_ROWS = (
+    ("LoFi", True, True, "F32", "F16b", "B4", 4, 32, 1, 4, 1),
+    ("LoFi", True, True, "F32", "F32", "B4", 4, 32, 1, 4, 1),
+    ("LoFi", True, True, "F32", "F16b", "B4", 8, 32, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "B4", 4, 32, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "B4", "B4", 4, 32, 1, 4, 1),
+    ("HiFi2", True, False, "F32", "B8", "B4", 16, 32, 1, 8, 1),
+    ("LoFi", True, True, "F32", "B8", "B4", 4, 32, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "F16b", "B4", 8, 32, 1, 4, 1),
+    ("HiFi2", True, False, "F32", "B4", "B4", 16, 32, 1, 8, 1),
+    ("LoFi", True, True, "F32", "B4", "B4", 4, 32, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "F16b", "F32", 8, 32, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "F16b", "F32", 4, 32, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "F32", 2, 32, 2, 2, 4),
+)
+_TINY_MAIN = frozenset(_TINY_MAIN_ROWS)
+
+
+def tiny_main_cell(
+    fidelity, half_sync, fp32_acc, in1, in0, out, r0, c1, rt, ct, kb
+) -> bool:
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            r0,
+            c1,
+            rt,
+            ct,
+            kb,
+        )
+    except KeyError:
+        return False
+    return key in _TINY_MAIN

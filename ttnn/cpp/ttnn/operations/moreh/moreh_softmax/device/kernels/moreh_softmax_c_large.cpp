@@ -47,6 +47,7 @@ void kernel_main() {
                 // SOFTMIN runs the same running reduce with the other extreme: min(x) keeps
                 // the shift finite for rows holding +inf, where a max-based shift is +inf and
                 // exp(max(x) - x) saturates the row (see #56371).
+                moreh_retarget_packer(dfb::max);
                 ckl::binary_sfpu<
 #ifdef SOFTMAX
                     ckl::BinaryMax<>,

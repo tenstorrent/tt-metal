@@ -1236,10 +1236,14 @@ class TT_CCL:
                 # the column reduction. Use the stable ttnn.reduce_scatter with the configured Ring
                 # topology, mirroring the working decode no-prefetch path.
                 B = input_tensor_mesh.shape[1]
+                seqlen = B * input_tensor_mesh.shape[-2]
+                assert seqlen % batch_size == 0, f"prefill rows {seqlen} do not split over batch_size={batch_size}"
+                # The ring kernels choose each chunk's ring direction, and so its summation order, from
+                # the chunk's tile index inside a (batch, channel) unit. One unit per user gives every
+                # user the same order, so a batched-prefill user's result does not depend on its slot.
                 input_tensor_mesh = ttnn.reshape(
-                    input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+                    input_tensor_mesh, (1, batch_size, seqlen // batch_size, input_tensor_mesh.shape[-1])
                 )
-                seqlen = input_tensor_mesh.shape[-2]
                 # num_workers_per_link keeps us on the ring backend. After the main rebase,
                 # ttnn.reduce_scatter auto-dispatches to reduce_scatter_minimal_direct, whose
                 # static CBs clash with resident L1 scratch on BH worker cols 4-7 during prefill

@@ -110,7 +110,7 @@ FORCE_INLINE void unary(uint32_t a, uint32_t op, uint32_t scalar_bits, uint32_t 
     CircularBuffer cb_a(a), cb_out(out);
     cb_a.wait_front(1);
     reconfig_data_format_srca(a);
-    copy_tile_to_dst_init_short(a);
+    copy_init(a);
     tile_regs_acquire();
     copy_tile(a, 0, 0);
     if (op == OP_EXP) {

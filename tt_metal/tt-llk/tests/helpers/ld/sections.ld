@@ -59,6 +59,7 @@ SECTIONS
   } > REGION_CODE
   .text :
   {
+    . += DEFINED(__llk_code_shift) ? __llk_code_shift : 0;
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)

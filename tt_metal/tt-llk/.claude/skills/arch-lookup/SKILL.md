@@ -41,9 +41,9 @@ Launch up to 3 agents IN PARALLEL using the Agent tool:
 
 | Agent | Scope | Primary ISA Source |
 |-------|-------|--------------------|
-| `sage-wormhole` | `tt_llk_wormhole_b0/` | DeepWiki + assembly.yaml |
-| `sage-blackhole` | `tt_llk_blackhole/` | DeepWiki + assembly.yaml |
-| `sage-quasar` | `tt_llk_quasar/` | Confluence + assembly.yaml (NO DeepWiki) |
+| `sage-wormhole` | `tt_llk_wormhole_b0/` + `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` | DeepWiki + assembly.yaml |
+| `sage-blackhole` | `tt_llk_blackhole/` + `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/` | DeepWiki + assembly.yaml |
+| `sage-quasar` | `tt_llk_quasar/` + `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` | Confluence + assembly.yaml (NO DeepWiki) |
 
 **Prompt construction rules:**
 

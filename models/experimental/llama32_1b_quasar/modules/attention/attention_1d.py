@@ -57,7 +57,7 @@ from models.experimental.llama32_1b_quasar.tensor_utils import (
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
-from models.experimental.llama32_1b_quasar.utility_functions import is_blackhole, nearest_32
+from models.experimental.llama32_1b_quasar.utility_functions import is_blackhole, is_quasar, linear, nearest_32
 
 # =============================================================================
 # Constants
@@ -248,17 +248,21 @@ class Attention1DConfig:
             "head_dim",
             "qkv_size",
             "scale",
-            "decode_xqkv_prg_config",  # Required for all 1D (DRAM-sharded matmul)
-            "decode_attn_output_prg_config",  # Required for all 1D (DRAM-sharded matmul)
             "decode_sdpa_prg_config",
             "decode_residual_memcfg",
-            "prefill_xqkv_prg_config",
             "prefill_sdpa_prg_config",
-            "prefill_wo_prg_config",
             "li_qkv_decode_compute_kernel_cfg",
             "sdpa_decode_compute_kernel_cfg",
             "li_o_decode_compute_kernel_cfg",
         ]
+        if not is_quasar():
+            # Quasar runs the matmuls with no program config (the unified matmul).
+            required += [
+                "decode_xqkv_prg_config",  # Required for all 1D (DRAM-sharded matmul)
+                "decode_attn_output_prg_config",  # Required for all 1D (DRAM-sharded matmul)
+                "prefill_xqkv_prg_config",
+                "prefill_wo_prg_config",
+            ]
 
         # Multi-device needs CCL and topology
         if self.mesh_device and self.mesh_device.get_num_devices() > 1:
@@ -436,13 +440,13 @@ class Attention1D(LightweightModule):
                 config=cfg.prefill_xqkv_minimal_matmul_config(seq_len),
             )
         else:
-            xqkv_fused = ttnn.linear(
+            xqkv_fused = linear(
                 x,
                 self.wqkv,
                 dtype=cfg.activation_dtype or ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_xqkv_prg_config(seq_len),
+                program_config=cfg.prefill_xqkv_prg_config and cfg.prefill_xqkv_prg_config(seq_len),
             )
 
         # Add bias if present
@@ -603,13 +607,13 @@ class Attention1D(LightweightModule):
         attn_output_concat = self._all_gather_before_wo_prefill(attn_output_concat)
 
         # --- STAGE 14: WO Matmul ---
-        output = ttnn.linear(
+        output = linear(
             attn_output_concat,
             self.wo,
             compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
             dtype=cfg.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=cfg.prefill_wo_prg_config(seq_len),
+            program_config=cfg.prefill_wo_prg_config and cfg.prefill_wo_prg_config(seq_len),
         )
 
         # --- STAGE 15: Reshape back (undo long sequence reshape) ---
@@ -657,7 +661,7 @@ class Attention1D(LightweightModule):
 
         # --- STAGE 1: QKV Matmul ---
         # All 1D topologies use DRAM-sharded matmul with L1_WIDTH_SHARDED output (matches TTTv1)
-        xqkv_fused_sharded = ttnn.linear(
+        xqkv_fused_sharded = linear(
             x,
             self.wqkv,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -1219,7 +1223,7 @@ class Attention1D(LightweightModule):
         # This matches TTTv1 behavior where tt_all_gather returns input unchanged.
 
         # WO matmul
-        dense_out = ttnn.linear(
+        dense_out = linear(
             attn_output_cat,
             self.wo,
             program_config=cfg.decode_attn_output_prg_config,
@@ -1672,8 +1676,11 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
     n_local_heads = n_heads // num_devices
 
+    # Quasar runs every matmul with no program config (the unified matmul places it), so none is built there.
+    quasar = is_quasar()
+
     # Decode configs - use DRAM-sharded matmul for all 1D topologies (matches TTTv1)
-    if config.decode_xqkv_prg_config is None:
+    if config.decode_xqkv_prg_config is None and not quasar:
         attn_input_grid = _dram_shard_core_grid(dim)
         to_set["decode_xqkv_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
@@ -1690,7 +1697,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             k_chunk_size=0,
         )
 
-    if config.decode_attn_output_prg_config is None:
+    if config.decode_attn_output_prg_config is None and not quasar:
         # Use DRAM-sharded matmul for all 1D topologies (matches TTTv1)
         to_set["decode_attn_output_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
@@ -1741,7 +1748,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # Matching per_core_N to this width avoids silent PCC issues on P100.
     dram_shard_grid_width = 8 if not is_blackhole() else mesh_device.dram_grid_size().x
 
-    if config.prefill_xqkv_prg_config is None:
+    if config.prefill_xqkv_prg_config is None and not quasar:
 
         @lru_cache
         def xqkv_prefill_prg_config(seq_len: int):
@@ -1795,7 +1802,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
         to_set["prefill_sdpa_prg_config"] = sdpa_prg_config
 
-    if config.prefill_wo_prg_config is None:
+    if config.prefill_wo_prg_config is None and not quasar:
         use_fused = to_set.get("use_fused_all_gather_matmul", config.use_fused_all_gather_matmul)
         if use_fused is None:
             use_fused = (

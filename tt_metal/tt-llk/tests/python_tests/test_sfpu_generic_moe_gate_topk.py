@@ -104,7 +104,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FACE_DIM = 16
 NUM_TOTAL_EXPERTS = 256  # one face of a 32x32 tile
@@ -416,7 +416,7 @@ def _check_moe_gate(
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     score_words = res_tensor[:ELEMENTS_PER_TILE]
     index_words = res_tensor[ELEMENTS_PER_TILE : 2 * ELEMENTS_PER_TILE]

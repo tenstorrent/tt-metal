@@ -32,6 +32,7 @@ constexpr auto cb_inverse_rms_after_reduction_intermediate = tt::CBIndex::c_7;
 constexpr auto cb_output = tt::CBIndex::c_8;
 constexpr auto cb_rms_output = tt::CBIndex::c_9;
 constexpr auto cb_output_intermediate = tt::CBIndex::c_10;
+constexpr auto cb_gate = tt::CBIndex::c_11;
 
 constexpr uint32_t onetile = 1;
 #ifdef DO_MASK_W
@@ -46,6 +47,31 @@ constexpr bool return_rms = true;
 constexpr bool return_rms = false;
 #endif
 
+#ifdef GATED
+constexpr bool gated = true;
+#else
+constexpr bool gated = false;
+#endif
+#if defined(GATED) && !defined(EVERYTHING_FITS_IN_L1)
+#error "Gated mode is only implemented for rows resident in L1."
+#endif
+
+// DEST[0, block_size) *= silu(gate) for the next gate block, with DEST[block_size] as scratch.
+void multiply_block_by_silu_gate() {
+    constexpr uint32_t gate_register = block_size;
+    cb_wait_front(cb_gate, block_size);
+    reconfig_data_format_srca(cb_gate);
+    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        copy_init(cb_gate);
+        copy_tile(cb_gate, /* tile_idx */ block_idx, gate_register);
+        silu_tile_init();
+        silu_tile(gate_register);
+        mul_binary_tile_init();
+        mul_binary_tile(block_idx, gate_register, block_idx);
+    }
+    cb_pop_front(cb_gate, block_size);
+}
+
 // calculate x = sum(y^2)
 #if defined(EVERYTHING_FITS_IN_L1) || defined(EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1)
 
@@ -56,6 +82,8 @@ void calculate_sum_x_squared() {
     const uint32_t accum_register = 0;
     const uint32_t tile_register = 1U;
     tile_regs_acquire();
+    // SrcA keeps the previous row's last format: Float32 cb_output_intermediate, or the bf16 gate when GATED.
+    reconfig_data_format_srca(cb_input);
     for (uint32_t col = 0; col < num_inner; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
         copy_init(cb_input);
@@ -67,6 +95,7 @@ void calculate_sum_x_squared() {
                 // mask tile currently does not work for mask register that is not next to data register
                 const uint32_t mask_register = working_register + 1U;
 
+                reconfig_data_format_srca(cb_mask);
                 copy_init(cb_mask);
                 copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -101,6 +130,8 @@ void calculate_sum_x_squared() {
     const uint32_t tile_register = 1U;
     const uint32_t mask_register = block_size;
     tile_regs_acquire();
+    // SrcA keeps the previous row's last format: Float32 cb_output_intermediate, or the bf16 gate when GATED.
+    reconfig_data_format_srca(cb_input);
     for (uint32_t col = 0; col < num_inner;) {
         cb_wait_front(cb_input, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
@@ -114,6 +145,7 @@ void calculate_sum_x_squared() {
                     // mask tile currently does not work for mask register that is not next to data register
                     const uint32_t mask_register = working_register + 1U;
 
+                    reconfig_data_format_srca(cb_mask);
                     copy_init(cb_mask);
                     copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -183,6 +215,9 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
                 block_idx,
                 /* tile idx */ 0,
                 block_idx);
+        }
+        if constexpr (gated) {
+            multiply_block_by_silu_gate();
         }
 
         tile_regs_wait();

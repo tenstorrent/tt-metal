@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 dense attention under SP — the real model forward for the dense layers (0-2).
+"""MiniMax-M3 dense attention under SP — the real model forward for the sparse_attention_freq==0 layers.
 
 Chunked-prefill GQA attention via the chunked-KV cache + ring_joint SDPA. Unlike MSA, ring_joint
 reads the KV cache and gathers the accumulated prefix across the SP axis *internally* (online-softmax

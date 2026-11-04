@@ -11,6 +11,9 @@
 namespace ckernel
 {
 
+// The MOP loop-length registers are MOP_CONFIG_REGS__LOOP_LENGTH__LENGTH_bw bits wide: a longer loop silently truncates.
+constexpr std::uint32_t MOP_LOOP_LEN_MAX = MOP_CONFIG_REGS__LOOP_LENGTH__LENGTH_bm;
+
 class ckernel_template
 {
     // Here is the basic outline of a MOP loop and the definition of the

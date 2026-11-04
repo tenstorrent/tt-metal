@@ -7,6 +7,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
+#include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -52,12 +53,14 @@ void kernel_main() {
             cb_tiled_in,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
             1, total_sticks_per_block);
 
-        pack_untilize_init(cb_in_batch, cb_transpose_in0);
-        transpose_init(cb_in_batch);
-        pack_untilize_dest_init<1>(cb_in_batch);
+        // Transpose reads the tilized intermediate and packs straight into the output format.
+        reconfig_data_format_srca(cb_tiled_in);
+        pack_untilize_init(cb_tiled_in, cb_transpose_in0);
+        transpose_init(cb_tiled_in);
+        pack_untilize_dest_init<1>(cb_transpose_in0);
 
         for (std::uint32_t idx = 0; idx < total_tiles_per_block; idx++) {
             const std::uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;

@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ProgramSpec spec{.name = "untilize_multi_core_block"};
 

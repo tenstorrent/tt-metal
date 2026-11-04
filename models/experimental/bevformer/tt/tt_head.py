@@ -6,79 +6,75 @@
 (``models/experimental/uniad/tt/ttnn_head.py``).
 
 Runs the decoder batch-first over the encoder's ``(bs, bev_h * bev_w, embed_dims)`` BEV
-features, then each layer's classification branch. Parameters come from
-``model_preprocessing_head.create_head_parameters``. Forward runs on device only.
+features, then the classification branch of every layer, or of the last alone. Parameters come from
+``model_preprocessing.create_head_parameters``. Forward runs on device only.
 
 The reg branches run once per layer, inside the decoder, which returns their box codes.
 The reference sets a box's center to ``sigmoid(delta + inverse_sigmoid(points))``, with
 ``delta`` the code's center channels and ``points`` the layer's input reference points:
 that is the decoder's refinement of its points, so its refined points (float32) replace
-the center channels, scaled to metres.
+the center channels, scaled to metres. The boxes keep the decoder's ``CENTERS_FIRST`` channel
+order, whose center channels come first, where the refined centers fill them without slicing.
 """
 
-import torch
-
 import ttnn
-from models.experimental.bevformer.config.decoder_config import (
-    CENTERS_FIRST,
-    CODE_H,
+from models.experimental.bevformer.model_config import (
+    CENTERS_FIRST_CENTERS,
+    CODE_ORDER,
     CODE_SIZE,
-    CODE_WL,
-    CODE_XY,
-    CODE_Z,
+    GRID_DTYPE,
+    SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
-
-# The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
-# scores tie, and the coder's top-k order departs from the reference's. Box predictions: the
-# decoder's, as their centers are the refined reference points.
-SCORE_DTYPE = ttnn.float32
-BOX_DTYPE = GRID_DTYPE
-
-# __call__ turns the decoder's centers-first box codes into the box code layout by one concat:
-# cx cy | w l | cz | h onward, which needs this order on both sides.
-_CHANNELS = [*range(CODE_SIZE)]
-if not (
-    _CHANNELS[CODE_XY] == [0, 1]
-    and _CHANNELS[CODE_WL] == [2, 3]
-    and _CHANNELS[CODE_Z] == [4]
-    and _CHANNELS[CODE_H.start :] == CENTERS_FIRST[5:]
-    and CENTERS_FIRST[3:5] == _CHANNELS[CODE_WL]
-):
-    raise ValueError("the head's box code concat expects xy | wl | z | h onward, and centers-first codes")
+from models.experimental.bevformer.tt.tt_common import device_constant, l1_linear, layer_norm, signpost, stack_layers
+from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
-class TtBEVFormerHead:
+def box_preds_to_torch(bbox_preds):
+    """``TTBEVFormerHead``'s box predictions, a device tensor, on the host in the reference's box
+    code order."""
+    return ttnn.to_torch(bbox_preds)[..., CODE_ORDER]
+
+
+class TTBEVFormerHead:
     """BEVFormer's detection head, batch-first on device."""
 
-    def __init__(self, params, device):
+    def __init__(self, params, device, all_layers=False):
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
-        and the ``pc_range`` its [0, 1] reference points map to in metres."""
+        and the ``pc_range`` corner and size its [0, 1] reference points map to in metres.
+
+        ``all_layers`` returns every decoder layer's logits and boxes, as the reference does for
+        its per-layer training losses; without it, the default, only the last layer's, the ones
+        the coder reads. The decoder runs every layer either way, as each refines the previous
+        one's points."""
         self.params = params
-        self.decoder = TtDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
-        pc_min = torch.tensor(params.pc_range[:3])
-        pc_size = torch.tensor(params.pc_range[3:]) - pc_min
-
-        def upload(values):
-            return ttnn.from_torch(values.view(1, 1, 1, 3), dtype=GRID_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-
-        self.pc_min = upload(pc_min)
-        self.pc_size = upload(pc_size)
+        self.all_layers = all_layers
+        # The box predictions' center channels, which the refined centers fill.
+        self._center_mask = device_constant(
+            [float(c in range(CENTERS_FIRST_CENTERS.start, CENTERS_FIRST_CENTERS.stop)) for c in range(CODE_SIZE)],
+            [1, 1, 1, CODE_SIZE],
+            GRID_DTYPE,
+            device,
+        )
+        self.decoder = TTDetectionTransformerDecoder(
+            params.decoder, device, params.bev_shape, batch_first=True, all_layers=all_layers
+        )
 
     @staticmethod
     def _cls_branch(x, branch):
         for linear, norm in branch.hidden:
-            x = ttnn.relu(layer_norm(ttnn.linear(x, linear.weight, bias=linear.bias), norm))
-        return ttnn.linear(x, branch.out.weight, bias=branch.out.bias, dtype=SCORE_DTYPE)
+            x = ttnn.relu(layer_norm(l1_linear(x, linear), norm, memory_config=ttnn.L1_MEMORY_CONFIG))
+        return l1_linear(x, branch.out, dtype=SCORE_DTYPE)
 
     def __call__(self, bev_embed):
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
-        Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
-        ``config/decoder_config.py``'s code layout with cx, cy and cz in metres.
+        Returns the class logits ``(L, bs, num_query, num_classes)`` (``SCORE_DTYPE``) and box
+        predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``) in L1, L the number of decoder
+        layers with ``all_layers``, else 1, the last layer. The boxes are the box code in
+        ``model_config.py``'s ``CENTERS_FIRST`` order with cx, cy and cz in metres;
+        ``box_preds_to_torch`` brings them to the host in the reference's order.
         """
+        signpost(header="TTNN Head Forward Start")
         p = self.params
         bs = bev_embed.shape[0]
         query, query_pos, reference_points = p.query, p.query_pos, p.reference_points
@@ -87,14 +83,19 @@ class TtBEVFormerHead:
                 ttnn.repeat(t, (bs, 1, 1)) for t in (query, query_pos, reference_points)
             )
 
+        signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
-        all_cls_scores = ttnn.stack(
-            [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
-        )
+        signpost(header="Head Decoder End")
+        # The decoder returns the last layer alone without all_layers.
+        cls_branches = p.cls_branches if self.all_layers else p.cls_branches[-1:]
+        signpost(header="Head ClsBranches Start")
+        all_cls_scores = stack_layers([self._cls_branch(hs[i], branch) for i, branch in enumerate(cls_branches)])
+        signpost(header="Head ClsBranches End")
+        signpost(header="Head BoxPreds Start")
 
-        centers = ttnn.add(ttnn.multiply(refined_points, self.pc_size), self.pc_min)
-        # The refined points and the codes' first three channels are (x, y, z).
-        all_bbox_preds = ttnn.concat(
-            [centers[..., 0:2], box_codes[..., 3:5], centers[..., 2:3], box_codes[..., 5:]], dim=-1
-        )
+        centers = ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min)
+        centers = ttnn.pad(centers, [(0, 0)] * 3 + [(0, CODE_SIZE - centers.shape[-1])], 0.0)
+        all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes, memory_config=ttnn.L1_MEMORY_CONFIG)
+        signpost(header="Head BoxPreds End")
+        signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

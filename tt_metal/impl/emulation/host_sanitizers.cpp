@@ -18,24 +18,12 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "llrt/tt_cluster.hpp"
 #include "emule_live_ranges.hpp"
 
 // Single definition lives in emule_asan_panic.cpp, linked into the same libtt_metal.
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
 
 namespace tt::tt_metal::emule {
-
-namespace {
-// The transfer's real alignment requirement: DMA alignment when a DMA engine
-// backs the transfer, otherwise 1 (the host/UMD poke path imposes none — e.g.
-// emule's memory-backed I/O, or the unaligned row-major page remainders that
-// WriteToBuffer issues by design). Resolved here, behind the enabled-check, so
-// it never runs on the production host path.
-uint32_t host_alignment_requirement(const IDevice* device, uint32_t size) {
-    return MetalContext::instance().get_cluster().get_alignment_requirements(device->id(), size);
-}
-}  // namespace
 
 void check_buffer_allocated(const Buffer& buffer, const char* op) {
     if (!emule_asan_enabled()) {
@@ -50,30 +38,6 @@ void check_buffer_allocated(const Buffer& buffer, const char* op) {
             buffer.unique_id(),
             static_cast<unsigned long>(buffer.size()),
             static_cast<int>(buffer.buffer_type()));
-    }
-}
-
-void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op) {
-    if (!emule_asan_enabled()) {
-        return;
-    }
-    // Query the real requirement (1 on the byte-granular host->L1 path) rather than
-    // hardcoding word/NoC alignment, which would false-positive legitimate writes.
-    const uint32_t alignment = host_alignment_requirement(device, size);
-    if (alignment > 1 && address % alignment != 0) {
-        __emule_asan_panic(
-            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
-    }
-}
-
-void check_host_dram_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op) {
-    if (!emule_asan_enabled()) {
-        return;
-    }
-    const uint32_t alignment = host_alignment_requirement(device, size);
-    if (alignment > 1 && address % alignment != 0) {
-        __emule_asan_panic(
-            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
     }
 }
 

@@ -82,7 +82,7 @@ inline void find_argmax_for_core(
 
         for (uint32_t i = red_dim_offset; i < (red_dim_offset + red_dim_units_this_core); ++i) {
             if constexpr (data_format == DataFormat::Float16_b) {
-                uint16_t val = in_vals[i - red_dim_offset];
+                const uint16_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint16_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint16_t a, uint16_t b) {
                         return argmax_bfloat16_greater(a, b);
@@ -171,11 +171,11 @@ inline uint32_t find_argmax_from_intermediate_outputs(
     uint32_t max_idx = 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        volatile tt_l1_ptr auto i_red_idxs =
+        volatile tt_l1_ptr auto* volatile i_red_idxs =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_idx_dfb_local_base_addr + (i * red_idx_size_per_core));
 
         if constexpr (data_format == DataFormat::Float16_b) {
-            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+            volatile tt_l1_ptr auto* volatile i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
@@ -184,14 +184,14 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 });
 
         } else if constexpr (data_format == DataFormat::UInt16) {
-            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+            volatile tt_l1_ptr auto* volatile i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint16_t a, uint16_t b) { return a > b; });
 
         } else if constexpr (data_format == DataFormat::Float32) {
-            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            volatile tt_l1_ptr auto* volatile i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
@@ -200,7 +200,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 });
 
         } else if constexpr (data_format == DataFormat::Int32) {
-            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr int32_t*>(
+            volatile tt_l1_ptr auto* volatile i_red_vals = reinterpret_cast<volatile tt_l1_ptr int32_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
@@ -210,7 +210,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
 #ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
         } else if constexpr (data_format == DataFormat::UInt32) {
-            volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            volatile tt_l1_ptr auto* volatile i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
@@ -365,10 +365,10 @@ void kernel_main() {
         "Partial result buffer must use the same data format as values.");
 
     // Semaphores
-    Semaphore start_sem(sem::start);
-    Semaphore done_sem(sem::done);
+    Semaphore<> start_sem(sem::start);
+    Semaphore<> done_sem(sem::done);
     // Monotonic per launch, reset after the loop; wait_min invalidates L1, making the secondary's stores visible.
-    Semaphore partial_ready_sem(sem::partial_ready);
+    Semaphore<> partial_ready_sem(sem::partial_ready);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();

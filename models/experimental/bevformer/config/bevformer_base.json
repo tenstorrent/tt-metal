@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "bevformer_base",
+  "variant": "base",
+  "class_names": [
+    "car", "truck", "construction_vehicle", "bus", "trailer",
+    "barrier", "motorcycle", "bicycle", "pedestrian", "traffic_cone"
+  ],
+  "input": {
+    "camera_order": [
+      "CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT",
+      "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"
+    ],
+    "can_bus_dims": 18,
+    "camera_image_size": [1600, 900],
+    "image_scale": 1.0,
+    "color_order": "BGR",
+    "mean": [103.53, 116.28, 123.675],
+    "std": [1.0, 1.0, 1.0],
+    "size_divisor": 32
+  },
+  "backbone": {
+    "depth": 101,
+    "style": "caffe",
+    "with_dcn": true,
+    "out_indices": [1, 2, 3]
+  },
+  "fpn": {"num_levels": 4},
+  "transformer": {
+    "bev_size": 200,
+    "embed_dims": 256,
+    "num_heads": 8,
+    "feedforward_channels": 512,
+    "encoder_layers": 6,
+    "decoder_layers": 6,
+    "spatial_num_points": 8,
+    "temporal_num_points": 4,
+    "decoder_num_points": 4,
+    "num_points_in_pillar": 4,
+    "num_query": 900,
+    "point_cloud_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+    "rotate_center": [100, 100]
+  },
+  "box_coder": {
+    "post_center_range": [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+    "max_detections": 300
+  }
+}

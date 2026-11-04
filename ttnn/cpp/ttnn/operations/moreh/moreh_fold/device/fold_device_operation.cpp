@@ -42,6 +42,12 @@ void MorehFoldOperation::validate_inputs(
     for (uint32_t i = 0; i < num_spatial_dims; ++i) {
         TT_FATAL(operation_attributes.stride[i] > 0, "Fold: stride must be greater than 0");
         TT_FATAL(operation_attributes.kernel_size[i] > 0, "Fold: kernel_size must be greater than 0");
+        TT_FATAL(operation_attributes.output_size[i] > 0, "Fold: output_size must be greater than 0");
+        TT_FATAL(
+            operation_attributes.output_size[i] + 2 * static_cast<uint64_t>(operation_attributes.padding[i]) >=
+                static_cast<uint64_t>(operation_attributes.dilation[i]) * (operation_attributes.kernel_size[i] - 1) + 1,
+            "Fold: dilated kernel size exceeds padded output_size in dim {}",
+            i);
     }
 
     uint32_t kernel_size_product = 1;

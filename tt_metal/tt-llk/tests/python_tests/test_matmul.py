@@ -10,6 +10,8 @@ from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
     MathFidelity,
@@ -22,7 +24,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     matmul_pack_form,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -34,6 +36,8 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
+    MATMUL_DYN_SWITCH,
+    MATMUL_FUNC_BLOCKS,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
     MATMUL_ROW_END_FOLD,
@@ -70,10 +74,10 @@ def generate_format_aware_matmul_combinations(
     combinations = []
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
-
         for dest_acc in dest_acc_modes:
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = max_dest_tiles(
+                dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
+            )
             dimensions_list = generate_matmul_dimension_combinations(max_tiles)
             combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
 
@@ -85,19 +89,13 @@ MATMUL_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
 )
 
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
 )
 
 
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
@@ -110,6 +108,9 @@ def test_matmul(
     unpack_ttsync=False,
     dest_sync=DestSync.Half,
     unpack_ttsync_excl=False,
+    source="sources/matmul_test.cpp",
+    dyn_switch=None,
+    blocks=1,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -169,7 +170,7 @@ def test_matmul(
 
 
     configuration = TestConfig(
-        "sources/matmul_test.cpp",
+        source,
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
@@ -178,6 +179,8 @@ def test_matmul(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
+            *([MATMUL_DYN_SWITCH()] if dyn_switch else []),
+            *([MATMUL_FUNC_BLOCKS()] if blocks > 1 else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
             *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
@@ -214,7 +217,7 @@ def test_matmul(
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            LOOP_FACTOR(1),
+            LOOP_FACTOR(blocks),
             UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
@@ -225,13 +228,16 @@ def test_matmul(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
+            tile_count_res=matmul_dims.output_tile_cnt * blocks,
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
+
+    if blocks > 1:
+        golden_tensor = torch.cat([golden_tensor] * blocks)
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -488,3 +494,49 @@ STREAM_NARROW_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 def test_matmul_stream_narrow(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=DestSync.Full)
+
+
+# A dynamic throttle change between k steps (matmul_dyn_switch_test.cpp: even steps run the form of the init, odd ones the
+# throttled tile MOP), re-initialised by the switch path (dyn_switch) and by the full init, against the golden, on the tile and
+# the row form, at both DEST syncs.
+DYN_SWITCH_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b], same=True)
+DYN_SWITCH_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 1, 5), (2, 2, 4), (1, 4, 3), (4, 1, 3), (2, 4, 4), (1, 8, 3)]
+]
+
+
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=DYN_SWITCH_FORMATS,
+    dims=DYN_SWITCH_BLOCKS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+    row_mop=[False, True],
+    dyn_switch=[False, True],
+)
+def test_matmul_dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    test_matmul(
+        math_fidelity,
+        (formats, DestAccumulation.No, dims),
+        row_mop=row_mop,
+        dest_sync=dest_sync,
+        source="sources/matmul_dyn_switch_test.cpp",
+        dyn_switch=dyn_switch,
+    )
+
+
+# Three output blocks of the same matmul on the real buffers, each packed to the next result tiles, on every config whose pack form is a block form: the
+# second and the third block take the W base programming and the W advance of llk_pack_block (matmul_pack_production.h), which one pass never reaches.
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_blocks(math_fidelity, format_dest_acc_and_dims, dest_sync):
+    formats, dest_acc, dims = format_dest_acc_and_dims
+    md = generate_tile_dims((dims[0], dims[1]))
+    if matmul_pack_form(formats, dest_sync, math_fidelity, md.rt_dim, md.ct_dim, md.kt_dim) == 0:
+        pytest.skip("per-tile pack")
+    test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=dest_sync, blocks=3)

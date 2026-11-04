@@ -431,7 +431,7 @@ class TtPrefillRuntime:
 
         first = self.config.first_layer_idx
         last_excl = first + self.config.num_layers
-        owned = tuple(t for t in dcfg.target_layer_ids if first <= t < last_excl)
+        owned = tuple(t for t in dcfg.target_layer_ids if first <= self._dflash_tap_layer(t) < last_excl)
         # A kv-only last layer returns before its post-FFN tap fires, so a target layer at that index would
         # be silently dropped. Kimi is safe (targets <= 58); assert so a future layout can't regress it.
         if self.config.kv_only_last_layer and self.config.is_last_rank and self.config.num_layers > 0:
@@ -484,6 +484,11 @@ class TtPrefillRuntime:
                 tp_axis=self.config.tp_axis,
                 num_users=self.config.num_users,  # user-major slots, like the verifier's kvpe cache
             )
+
+    def _dflash_tap_layer(self, target_layer_idx: int) -> int:
+        """The layer whose forward fires the drafter tap for ``target_layer_idx``; the rank holding it owns
+        that target's fc slice. The target's own output by default."""
+        return target_layer_idx
 
     def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
         """Fuse this rank's output hidden and finalized drafter FC partial into ONE activation for the D2D
@@ -595,6 +600,11 @@ class TtPrefillRuntime:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+    def _make_partial_placeholder(self) -> ttnn.Tensor:
+        """Trace buffer for the upstream drafter partial: the hidden-only placeholder, which is the partial's
+        shape whenever the hidden is a single plane. A model sending more planes overrides this."""
+        return self.make_placeholder_activation(dflash_packed=False)
 
     def _num_mtp_tokens(self) -> int:
         """MTP lookahead ids the H2D row carries past this chip's trunk shard. Same function the runner
@@ -1000,8 +1010,8 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
-            # The capture reads the upstream partial here; same shape as the hidden half.
-            self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
+            # The capture reads the upstream partial here.
+            self._trace_partial_in = self._make_partial_placeholder()
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
         if self.config.mtp_levels and self.config.is_first_rank:
@@ -1457,23 +1467,30 @@ class TtPrefillRuntime:
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
 
         if self.config.dflash_enabled:
-            # Two more stages, K then V: they are distinct allocations, so each needs its own gathered
-            # base address. The drafter is built on the KV-tail rank alone, so every other rank
-            # contributes a null stage — the all-gather is collective and must be entered by all ranks,
-            # and merged_num_layers/the populate walk both ignore count == 0. Keep these LAST so the
-            # block-cyclic configs stay at layout indices [0, n_block_cyclic).
-            draft_layers = self.drafter.config.num_hidden_layers
-            if self._dflash_k_cache is not None:
-                # The drafter lives on the KV tail, whose slice ends at the model's global layer count, so
-                # this is where the verifier's layer axis ends and the draft layers continue it. One axis for
-                # both keeps a single (layer, position, slot) key meaningful across every config of the table.
-                draft_first = first_layer_idx + num_my_layers
-                stages.append(KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers))
-                stages.append(KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers))
-            else:
-                stages.append(KvCacheStage(0, 0, 0))
-                stages.append(KvCacheStage(0, 0, 0))
+            stages.extend(self._dflash_migration_stages(first_layer_idx + num_my_layers))
         return stages
+
+    def _dflash_migration_stages(self, draft_first: int):
+        """The drafter's two stages, K then V, appended LAST to a runtime's stages.
+
+        They are distinct allocations, so each needs its own gathered base address. The drafter is built on
+        the KV-tail rank alone, so every other rank contributes a null stage — the all-gather is collective
+        and must be entered by all ranks, and merged_num_layers/the populate walk both ignore count == 0.
+        Last, so the block-cyclic configs stay at layout indices [0, n_block_cyclic).
+
+        ``draft_first``: where the draft layers start on the table's layer axis, the end of this rank's
+        slice. On the KV tail of a dense stack that is the model's global layer count, so the draft layers
+        continue the verifier's axis -- the axis the layer acks are numbered on.
+        """
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        if self._dflash_k_cache is None:
+            return [KvCacheStage(0, 0, 0), KvCacheStage(0, 0, 0)]
+        draft_layers = self.drafter.config.num_hidden_layers
+        return [
+            KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers),
+            KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers),
+        ]
 
     def kv_table_layer_rows(self, stage_layouts):
         """Model layer to publish each dense KV slab at, or None when every layer owns one.
@@ -1539,45 +1556,9 @@ class TtPrefillRuntime:
         #     above), so a worker acting on the last ack would migrate drafter chunks the current chunk
         #     has not written yet. Registering it for a reader that never copies is safe; wiring it into
         #     live migration needs that ordering fixed first.
-        dflash_caches = None
-        dflash_spec = None
-        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
-        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
-        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
-        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
-        if self.config.dflash_enabled:
-            if stage_layouts is None:
-                # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
-                # straight from the tensors.
-                if self._dflash_k_cache is not None:
-                    dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
-            else:
-                # kv_migration_stages appends the drafter's K and V stages last, so peel them off here;
-                # what remains is one layout per block-cyclic cache, which is what the builder expects.
-                # Works for any rank count: the drafter is not layer-partitioned, so exactly one gathered
-                # stage carries it (the KV tail) and the rest are count==0 nulls. Under pipeline
-                # parallelism THIS rank generally owns no drafter tensor, which is precisely why the
-                # spec is metadata-only.
-                n_block_cyclic = 1 + (1 if kv_caches.index is not None else 0)
-                if len(stage_layouts) != n_block_cyclic + 2:
-                    raise RuntimeError(
-                        f"dflash is on, so kv_migration_stages emits {n_block_cyclic} block-cyclic stage(s) "
-                        f"plus the drafter's K and V, but {len(stage_layouts)} layouts were gathered. The "
-                        "caller must gather one layout per stage this runtime declares."
-                    )
-                *block_cyclic_layouts, k_layout, v_layout = stage_layouts
-                stage_layouts = block_cyclic_layouts
-                # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its
-                # own layer slice says nothing about where the tail's draft layers begin.
-                dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
-                dcfg = self.drafter.config
-                dflash_spec = {
-                    "num_kv_heads": dcfg.num_key_value_heads,
-                    "head_dim": dcfg.head_dim,
-                    "num_layers": dcfg.num_hidden_layers,
-                    "k_stage_layout": k_layout,
-                    "v_stage_layout": v_layout,
-                }
+        stage_layouts, dflash_caches, dflash_spec, dflash_first_layer = self._dflash_table_args(
+            stage_layouts, 1 + (1 if kv_caches.index is not None else 0)
+        )
 
         # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
         index_layer_ids = None
@@ -1629,6 +1610,50 @@ class TtPrefillRuntime:
             index_layer_ids=index_layer_ids,
             kvpe_alias_rows=kvpe_alias_rows,
         )
+
+    def _dflash_table_args(self, stage_layouts, n_block_cyclic: int):
+        """Split the drafter off the gathered layouts for ``build_and_serialize_kv_chunk_table``.
+
+        Returns ``(stage_layouts, dflash_caches, dflash_spec, dflash_first_layer)``: the layouts left once the
+        drafter's K and V are peeled off, and the builder's three drafter arguments (both caches/spec None
+        when DFlash is off). ``n_block_cyclic`` counts the layouts this runtime declares before the drafter's.
+        """
+        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
+        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
+        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
+        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
+        if not self.config.dflash_enabled:
+            return stage_layouts, None, None, dflash_first_layer
+        if stage_layouts is None:
+            # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
+            # straight from the tensors.
+            dflash_caches = None
+            if self._dflash_k_cache is not None:
+                dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
+            return stage_layouts, dflash_caches, None, dflash_first_layer
+        # kv_migration_stages appends the drafter's K and V stages last, so peel them off here. Works for
+        # any rank count: the drafter is not layer-partitioned, so exactly one gathered stage carries it
+        # (the KV tail) and the rest are count==0 nulls. Under pipeline parallelism THIS rank generally
+        # owns no drafter tensor, which is precisely why the spec is metadata-only.
+        if len(stage_layouts) != n_block_cyclic + 2:
+            raise RuntimeError(
+                f"dflash is on, so kv_migration_stages emits {n_block_cyclic} stage(s) plus the drafter's "
+                f"K and V, but {len(stage_layouts)} layouts were gathered. The caller must gather one "
+                "layout per stage this runtime declares."
+            )
+        *stage_layouts, k_layout, v_layout = stage_layouts
+        # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its own
+        # layer slice says nothing about where the tail's draft layers begin.
+        dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
+        dcfg = self.drafter.config
+        dflash_spec = {
+            "num_kv_heads": dcfg.num_key_value_heads,
+            "head_dim": dcfg.head_dim,
+            "num_layers": dcfg.num_hidden_layers,
+            "k_stage_layout": k_layout,
+            "v_stage_layout": v_layout,
+        }
+        return stage_layouts, None, dflash_spec, dflash_first_layer
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
         """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor

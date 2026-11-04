@@ -481,3 +481,51 @@ def test_moreh_matmul_with_bias_add_fp32_dest_acc(params, device):
     logger.debug(f"mean={diff_fp16.mean()}")
     logger.debug(f"topk(5) {torch.topk(diff_fp16.reshape(-1), 5)}")
     assert diff.mean() < diff_fp16.mean()
+
+
+@pytest.mark.parametrize("width", [10, 323, 16384])
+@pytest.mark.parametrize("has_output", [False, True])
+# fp32_dest_acc_en=False is left out: a bf16 accumulator stalls at about half the true sum for width 16384.
+@pytest.mark.parametrize("compute_kernel_options", [None, True], ids=["default", "fp32_dest_acc_en=True"])
+def test_moreh_matmul_1d(width, has_output, compute_kernel_options, device):
+    torch.manual_seed(3072)
+    torch_input = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    torch_other = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    tt_input = create_tt_tensor(torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_other = create_tt_tensor(torch_other, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_output = (
+        create_tt_tensor(torch.zeros([1, 1, 1, 1]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device) if has_output else None
+    )
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
+    tt_result = ttnn.operations.moreh.matmul(
+        tt_input, tt_other, output=tt_output, compute_kernel_config=compute_kernel_config
+    )
+    if has_output:
+        tt_result = tt_output
+    assert tt_result.shape == ttnn.Shape([1, 1, 1, 1])
+    tt_output_cpu = ttnn.to_torch(tt_result).reshape(()).float()
+
+    # moreh_dot's bf16 accumulator returned about half the true value at 16384 elements.
+    torch_output = torch.dot(torch_input.reshape(-1).float(), torch_other.reshape(-1).float())
+    assert torch.allclose(tt_output_cpu, torch_output, rtol=0.02)
+
+
+@pytest.mark.parametrize("width", [10, 323])
+def test_moreh_matmul_backward_1d(width, device):
+    torch.manual_seed(3072)
+    torch_input = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    torch_other = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    torch_output_grad = torch.rand([1, 1, 1, 1], dtype=torch.bfloat16)
+    tt_input = create_tt_tensor(torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_other = create_tt_tensor(torch_other, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_output_grad = create_tt_tensor(torch_output_grad, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_input_grad = create_tt_tensor(torch.zeros_like(torch_input), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_other_grad = create_tt_tensor(torch.zeros_like(torch_other), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+
+    tt_input_grad, tt_other_grad = ttnn.operations.moreh.matmul_backward(
+        tt_output_grad, tt_input, tt_other, input_a_grad=tt_input_grad, input_b_grad=tt_other_grad
+    )
+
+    assert torch.allclose(ttnn.to_torch(tt_input_grad), torch_output_grad * torch_other, rtol=0.01)
+    assert torch.allclose(ttnn.to_torch(tt_other_grad), torch_output_grad * torch_input, rtol=0.01)

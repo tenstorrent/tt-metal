@@ -16,6 +16,8 @@ from .format_config import DataFormat
 from .tilize_untilize import untilize_block
 
 BFP_BLOCK = 16
+# Seven magnitude bits plus a guard bit are exhausted here; keep int32 shifts in range.
+BFP_MAX_ALIGNMENT_SHIFT = 8
 
 
 def _bf16_sign_exp_mantissa(flat: torch.Tensor):
@@ -34,12 +36,12 @@ def _bfp8_mantissas_per_block(mants_blocks: torch.Tensor, exps_blocks: torch.Ten
     """
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
     deltas = shared_exps - exps_blocks
-    # Clamp the shift to avoid evaluating `mants_blocks >> -1` when delta == 0;
-    # torch.where selects element-wise but both branches are evaluated eagerly.
-    guard_shifts = torch.clamp(deltas - 1, min=0)
+    shifts = deltas.clamp(max=BFP_MAX_ALIGNMENT_SHIFT)
+    # Both branches are evaluated eagerly, so also avoid a negative guard shift.
+    guard_shifts = (deltas - 1).clamp(min=0, max=BFP_MAX_ALIGNMENT_SHIFT)
     guard_bits = (mants_blocks >> guard_shifts) & 1
     guard = torch.where(deltas > 0, guard_bits, torch.zeros_like(mants_blocks))
-    bfp8 = ((mants_blocks >> deltas) + guard) & 0x7F
+    bfp8 = ((mants_blocks >> shifts) + guard) & 0x7F
     return shared_exps, bfp8
 
 
@@ -140,3 +142,55 @@ def bfp2b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     is set; otherwise it collapses to 0.
     """
     return _quantize_bfp_b(operand, magnitude_bits=1, dimensions=dimensions)
+
+
+def _quantize_bfp_a(operand: torch.Tensor, magnitude_bits: int) -> torch.Tensor:
+    """BFP{8,4,2} with an A exponent (5-bit shared exponent, bias 15) pack/unpack round trip, same rounding and truncation as the B formats."""
+    flat = operand.flatten().to(torch.float16)
+    n = flat.numel()
+    bits = flat.view(torch.int16).to(torch.int32) & 0xFFFF
+    signs = bits >> 15
+    exps = (bits >> 10) & 0x1F
+    mants = ((bits & 0x3FF) >> 4) | 0x40
+    shared_exps, bfp8_mants = _bfp8_mantissas_per_block(
+        mants.view(-1, BFP_BLOCK), exps.view(-1, BFP_BLOCK)
+    )
+    trunc_mants = bfp8_mants >> (7 - magnitude_bits)
+    values = trunc_mants.float() * torch.exp2(
+        (shared_exps - 14 - magnitude_bits).float()
+    )
+    values = torch.where(signs.view(-1, BFP_BLOCK).bool(), -values, values)
+    return values.flatten()[:n].to(torch.float16)
+
+
+def bfp8a_to_float16(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
+    """BFP8 with the 5 bit exponent pack/unpack round trip, truncating like the packer; dimensions untilizes a tiled stimulus."""
+    out = _quantize_bfp_a(operand, 7)
+    if dimensions is not None:
+        out = untilize_block(out, stimuli_format=DataFormat.Float16, dimensions=dimensions).flatten()
+    return out
+
+
+def bfp4a_to_float16(operand: torch.Tensor) -> torch.Tensor:
+    return _quantize_bfp_a(operand, 3)
+
+
+def bfp2a_to_float16(operand: torch.Tensor) -> torch.Tensor:
+    return _quantize_bfp_a(operand, 1)
+
+
+def lf8_to_float16(operand: torch.Tensor) -> torch.Tensor:
+    """FP8 e5m2 round trip (a float16 with its low 8 mantissa bits dropped, round to nearest even)."""
+    import ml_dtypes
+
+    arr = operand.flatten().to(torch.float32).numpy().astype(ml_dtypes.float8_e5m2)
+    return torch.from_numpy(arr.astype("float32")).to(torch.float16)
+
+
+QUANTIZE_TO_FORMAT = {
+    DataFormat.Bfp8: bfp8a_to_float16,
+    DataFormat.Bfp4: bfp4a_to_float16,
+    DataFormat.Bfp2: bfp2a_to_float16,
+    DataFormat.Lf8: lf8_to_float16,
+    DataFormat.Bfp2_b: bfp2b_to_float16b,
+}

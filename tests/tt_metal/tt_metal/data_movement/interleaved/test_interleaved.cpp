@@ -39,7 +39,7 @@ struct InterleavedConfig {
 /// @return
 bool run_dm(distributed::MeshDevice& mesh_device, const InterleavedConfig& test_config) {
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 

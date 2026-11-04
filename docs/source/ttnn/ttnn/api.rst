@@ -106,6 +106,7 @@ Core
    ttnn.to_memory_config
    ttnn.to_torch
    ttnn.typecast
+   ttnn.verify_shards_match_topology
 
 Tensor Creation
 ===============

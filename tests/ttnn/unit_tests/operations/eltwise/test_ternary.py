@@ -588,3 +588,183 @@ def test_ternary_cache_miss_different_alignment(device):
     assert device.num_program_cache_entries() == 2
 
     device.disable_and_clear_program_cache()
+
+
+def _height_sharded(device, shard_shape=(32, 64)):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+ROW_MAJOR_REJECTION_CASES = [
+    ("rm sharded predicate, rm interleaved operands", ttnn.ROW_MAJOR_LAYOUT, "mixed", None, None),
+    ("tile operands, rm sharded output", ttnn.TILE_LAYOUT, "interleaved", ttnn.ROW_MAJOR_LAYOUT, None),
+    ("rm sharded operands, tile sharded output", ttnn.ROW_MAJOR_LAYOUT, "sharded", ttnn.TILE_LAYOUT, None),
+    ("rm sharded operands, interleaved memory_config", ttnn.ROW_MAJOR_LAYOUT, "sharded", None, "dram"),
+    ("rm sharded operands, computed output", ttnn.ROW_MAJOR_LAYOUT, "sharded", None, None),
+]
+
+
+@pytest.mark.parametrize(
+    "label, operand_layout, operand_memory, out_layout, memory_config_kwarg",
+    ROW_MAJOR_REJECTION_CASES,
+    ids=[c[0] for c in ROW_MAJOR_REJECTION_CASES],
+)
+def test_ternary_rejects_row_major(
+    device, expect_error, label, operand_layout, operand_memory, out_layout, memory_config_kwarg
+):
+    """ttnn.where must reject every row-major configuration in any slot."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    sharded = _height_sharded(device)
+
+    def make(host, layout, memory_config):
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config)
+
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    operands = [
+        pred.to(torch.bfloat16),
+        torch.rand(shape, dtype=torch.bfloat16),
+        torch.rand(shape, dtype=torch.bfloat16),
+    ]
+
+    if operand_memory == "mixed":
+        memories = [sharded, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]
+    elif operand_memory == "sharded":
+        memories = [sharded] * 3
+    else:
+        memories = [ttnn.DRAM_MEMORY_CONFIG] * 3
+
+    args = [make(host, operand_layout, memory) for host, memory in zip(operands, memories)]
+
+    kwargs = {}
+    if out_layout is not None:
+        kwargs["output_tensor"] = make(torch.zeros(shape, dtype=torch.bfloat16), out_layout, sharded)
+    if memory_config_kwarg == "dram":
+        kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
+    with expect_error(RuntimeError, r"Tile layout"):
+        ttnn.where(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "call, slot",
+    [("where_true", "input_b"), ("where_false", "input_c"), ("lerp_tts", "input_b"), ("mac_tst", "input_c")],
+)
+def test_ternary_rejects_row_major_operand(device, expect_error, call, slot):
+    """A row-major operand must be rejected even when input_a is TILE."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+
+    def make(layout):
+        return ttnn.from_torch(
+            torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+        )
+
+    tile, rm = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
+    with expect_error(RuntimeError, rf"requires {slot} to be in Tile layout"):
+        if call == "where_true":
+            ttnn.where(make(tile), make(rm), make(tile))
+        elif call == "where_false":
+            ttnn.where(make(tile), make(tile), make(rm))
+        elif call == "lerp_tts":
+            ttnn.lerp(make(tile), make(rm), 0.5)
+        else:
+            ttnn.mac(make(tile), 2.0, make(rm))
+
+
+def test_ternary_accepts_tile_sharded(device):
+    """The TILE counterpart of the rejected cases must still work."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    sharded = _height_sharded(device)
+
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+
+    def make(host, memory_config):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    for out_memory in (sharded, ttnn.DRAM_MEMORY_CONFIG):
+        out = make(torch.zeros(shape, dtype=torch.bfloat16), out_memory)
+        result = ttnn.where(
+            make(pred.to(torch.bfloat16), sharded), make(a, sharded), make(b, sharded), output_tensor=out
+        )
+        assert_equal(ttnn.to_torch(result), torch.where(pred, a, b))
+
+
+def test_ternary_cache_miss_different_output_alignment(device):
+    """Same inputs, preallocated output over-padded vs default, must be two cache entries."""
+    device.enable_program_cache()
+
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
+    torch.manual_seed(0)
+
+    pred = torch.rand(logical, dtype=torch.bfloat16) > 0.5
+    a = torch.rand(logical, dtype=torch.bfloat16)
+    b = torch.rand(logical, dtype=torch.bfloat16)
+    expected = torch.where(pred, a, b)
+
+    def tile(host):
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def over_padded(host):
+        return ttnn.tilize_with_val_padding(
+            ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), padded, 0.0
+        )
+
+    # Build every tensor before clearing so that tilize's own entries do not count.
+    inputs = [tile(pred.to(torch.bfloat16)), tile(a), tile(b)]
+    out_default = tile(torch.zeros(logical, dtype=torch.bfloat16))
+    out_over = over_padded(torch.zeros(logical, dtype=torch.bfloat16))
+    assert list(out_default.shape) == list(out_over.shape)
+    assert list(out_default.padded_shape) != list(out_over.padded_shape)
+
+    device.clear_program_cache()
+    for entries, out in enumerate((out_default, out_over), start=1):
+        assert_equal(ttnn.to_torch(ttnn.where(*inputs, output_tensor=out)), expected)
+        assert device.num_program_cache_entries() == entries
+
+    device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("pass_memory_config", [True, False])
+def test_ternary_preallocated_output_memory_distinguishes_cache_entries(device, pass_memory_config):
+    """Regression test for cache key containing the memory of the preallocated output."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    t_true = torch.rand(shape, dtype=torch.bfloat16)
+    t_false = torch.rand(shape, dtype=torch.bfloat16)
+    expected = torch.where(pred, t_true, t_false)
+
+    def to_dev(host, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    for entries, out_memory_config in enumerate((ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG), start=1):
+        out = to_dev(torch.zeros(shape, dtype=torch.bfloat16), out_memory_config)
+        kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if pass_memory_config else {}
+        result = ttnn.where(
+            to_dev(pred.to(torch.bfloat16)), to_dev(t_true), to_dev(t_false), output_tensor=out, **kwargs
+        )
+
+        assert device.num_program_cache_entries() == entries, (
+            f"an output in {out_memory_config} must get its own cache entry -- sharing one "
+            "means the key does not carry the preallocated output's memory, so the cached program "
+            "addresses the wrong address space"
+        )
+        assert_equal(ttnn.to_torch(result), expected)
+
+    device.disable_and_clear_program_cache()

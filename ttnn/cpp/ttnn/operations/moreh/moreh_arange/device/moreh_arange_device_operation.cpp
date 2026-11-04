@@ -28,7 +28,7 @@ void MorehArangeOperation::validate_inputs(
     if (!output.has_value()) {
         return;
     }
-    TT_FATAL(output->buffer() != nullptr, "Must have 1 output tensor.");
+    TT_FATAL(output->is_allocated(), "Must have 1 output tensor.");
     TT_FATAL(dtype == output->dtype(), "If output is provided as input, its dtype should match the dtype parameter.");
     TT_FATAL(
         output->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

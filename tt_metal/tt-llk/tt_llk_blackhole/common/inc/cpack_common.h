@@ -110,6 +110,36 @@ typedef union
     dest_rd_ctrl_t f;
 } dest_rd_ctrl_u;
 
+// RMW mask over every non-reserved field of dest_rd_ctrl_t. A packer data-format reconfig writes the
+// whole field set with it, as the full configure does with a word write.
+constexpr std::uint32_t PCK_DEST_RD_CTRL_FIELDS_MASK =
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK;
+// dest_rd_ctrl_t is four 1-bit fields at consecutive bit positions followed by the reserved bits; the
+// mask must be exactly that run of bits. (Checked arithmetically: clang cannot constant-evaluate a
+// bit cast of a bit-field struct.)
+static_assert(
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK == (1u << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_unsigned_MASK == (1u << PCK_DEST_RD_CTRL_Read_unsigned_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_int8_MASK == (1u << PCK_DEST_RD_CTRL_Read_int8_SHAMT) &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_MASK == (1u << PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT),
+    "PCK_DEST_RD_CTRL fields must be single bits");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_unsigned_SHAMT == PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Read_int8_SHAMT == PCK_DEST_RD_CTRL_Read_unsigned_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT == PCK_DEST_RD_CTRL_Read_int8_SHAMT + 1,
+    "PCK_DEST_RD_CTRL fields must be consecutive bits, as laid out in dest_rd_ctrl_t");
+// The constant stays on the right-hand side: the cross-thread config checker (infra/check_cross_thread_cfg.py)
+// reads `<name>_MASK =` as a definition and would resolve the mask to this assert instead.
+static_assert(
+    (((1u << (PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT - PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1)) - 1) << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT) ==
+        PCK_DEST_RD_CTRL_FIELDS_MASK,
+    "PCK_DEST_RD_CTRL_FIELDS_MASK must cover every non-reserved field of dest_rd_ctrl_t");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
+    "PCK_DEST_RD_CTRL fields must share one ADDR32 for a combined RMW");
+
 // PACK_EDGE_OFFSET_SEC[0:3] register structure
 //
 // Lower 16b represent a mask that is applied on a single row of one face on the packer output
@@ -301,19 +331,32 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // Internal linkage lets a kernel without a closed block drop the store.
 static std::uint32_t pack_ch1_w_stride = 0;
 
+// W offset block packs are the default; LLK_PACK_W_OFFSET_OFF takes llk_pack_block back to programming the output on every call.
+#if !defined(LLK_PACK_W_OFFSET) && !defined(LLK_PACK_W_OFFSET_OFF)
+#define LLK_PACK_W_OFFSET
+#endif
 #ifdef LLK_PACK_W_OFFSET
 // W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
 // Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
-static bool pack_w_valid               = false;
-static std::uint8_t pack_w_out         = 0;
-static std::uint32_t pack_w_page       = 0;
-static std::uint32_t pack_w_next       = 0;
-static std::uint32_t pack_w_tiles      = 0;
-static std::uint8_t pack_w_last        = 0xff;
+[[maybe_unused]] static bool pack_w_valid               = false;
+[[maybe_unused]] static std::uint8_t pack_w_out         = 0;
+[[maybe_unused]] static std::uint32_t pack_w_page       = 0;
+[[maybe_unused]] static std::uint32_t pack_w_next       = 0;
+[[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
+[[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
+// An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
+#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff)
 #else
 #define LLK_PACK_W_INVALIDATE() ((void)0)
+#define LLK_PACK_W_FORGET_OUTPUT() ((void)0)
 #endif
+
+// Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), cleared by set_packer_strides: the fast untilize leaves the pack program, the
+// packer strides and the DEST offset registers set for itself. The block packs of llk_pack_block close it first (_llk_pack_close_fast_untilize_), so a
+// pack_block that follows without the uninit still writes where it should. Internal linkage: a kernel without fast untilize never writes it, the test folds away.
+[[maybe_unused]] static bool pack_fast_untilize_open         = false;
+[[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
@@ -339,7 +382,8 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     pack_ch1_w_stride = 0;
-    LLK_PACK_W_INVALIDATE();
+    LLK_PACK_W_FORGET_OUTPUT();
+    pack_fast_untilize_open = false;
     TTI_NOP;
     TTI_NOP;
 }
@@ -548,16 +592,10 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Read_unsigned must share ADDR32 for combined RMW");
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Round_10b_mant must share ADDR32 for combined RMW");
-    cfg_reg_rmw_tensix<
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
-        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(dest_rd_ctrl.val);
+    // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
+    // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
+    // covers every dest_rd_ctrl field.
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
@@ -669,6 +707,7 @@ inline void configure_pack(
 
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg[PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32]     = 0x0;
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;

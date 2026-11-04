@@ -212,19 +212,25 @@ def _grid(device, layout):
     return ttnn.num_cores_to_corerangeset(layout[1], device.compute_with_storage_grid_size(), row_wise=True)
 
 
-def _width_sharded_l1(grid, width_tiles):
+def _width_sharded_l1(grid, width_tiles, height=32):
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(grid, (32, width_tiles * 32), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(grid, (height, width_tiles * 32), ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
-def _operands(device, k, n, w_dtype, x_dtype, x_layout, x_shard_w, seed=0):
+def _operands(device, k, n, w_dtype, x_dtype, x_layout, x_shard_w, seed=0, m=32, tile_h=32, k_logical=None):
     torch.manual_seed(seed)
-    x_mc = _width_sharded_l1(_grid(device, x_layout), x_shard_w)
+    k_logical = k if k_logical is None else k_logical
+    x_mc = _width_sharded_l1(_grid(device, x_layout), x_shard_w, math.ceil(m / tile_h) * tile_h)
     x = ttnn.from_torch(
-        torch.randn(1, 1, 32, k), dtype=DTYPES[x_dtype], layout=ttnn.TILE_LAYOUT, device=device, memory_config=x_mc
+        torch.randn(1, 1, m, k_logical),
+        dtype=DTYPES[x_dtype],
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile([tile_h, 32]),
+        device=device,
+        memory_config=x_mc,
     )
     banks = device.dram_grid_size().x
     padded_n = math.ceil(n / (32 * banks)) * 32 * banks
@@ -235,7 +241,11 @@ def _operands(device, k, n, w_dtype, x_dtype, x_layout, x_shard_w, seed=0):
         ttnn.ShardSpec(dram_grid, (k, padded_n // banks), ttnn.ShardOrientation.ROW_MAJOR),
     )
     w = ttnn.from_torch(
-        torch.randn(1, 1, k, n), dtype=DTYPES[w_dtype], layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mc
+        torch.randn(1, 1, k_logical, n),
+        dtype=DTYPES[w_dtype],
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=w_mc,
     )
     return x, w
 
@@ -253,10 +263,14 @@ def _matmul(
     fp32=True,
     fused_activation=None,
     use_multicore_pipeline=None,
+    per_core_m=1,
+    bias=None,
+    packer_l1_acc=True,
+    optional_output_tensor=None,
 ):
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w,
-        per_core_M=1,
+        per_core_M=per_core_m,
         per_core_N=per_core_n,
         fused_activation=fused_activation,
         # cores_per_bank 0 is the single-reader program, which is num_workers_per_dram_bank 1
@@ -269,21 +283,23 @@ def _matmul(
         math_fidelity=getattr(ttnn.MathFidelity, fidelity),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
     return ttnn.linear(
         x,
         w,
+        bias=bias,
         program_config=program_config,
         memory_config=out_mc,
         dtype=DTYPES[out_dtype],
         compute_kernel_config=compute,
+        optional_output_tensor=optional_output_tensor,
     )
 
 
 def _reference(x, w, n):
     """float64 product of the operands as they sit on the device (the quantized weight)."""
-    xt = ttnn.to_torch(x).double().reshape(32, -1)
+    xt = ttnn.to_torch(x).double().reshape(x.shape[-2], -1)
     wt = ttnn.to_torch(w).double().reshape(xt.shape[1], -1)[:, :n]
     return xt @ wt
 

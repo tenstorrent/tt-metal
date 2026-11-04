@@ -38,14 +38,16 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
-    // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
-    // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
-    // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
-    // rather than an arch list, so this stays correct as arches are added or drop FP8 support.
-    if (spec.data_type() == DataType::FP8_E4M3) {
+    // Stop an FP8 or MX tensor on an arch without that format here, before programs that use it misbehave.
+    // Use the data-format capability check, not an arch list, so that new arches stay correct.
+    // Only FP8 and MX are checked: is_data_format_supported says what the compute pipeline can unpack and pack,
+    // but other dtypes are still valid as plain storage (e.g. reshape's UInt32 page mapping on Quasar).
+    const DataType dtype = spec.data_type();
+    if (dtype == DataType::FP8_E4M3 || is_mx(dtype)) {
         TT_FATAL(
-            tt::is_data_format_supported(tt::DataFormat::Fp8_e4m3, mesh_device.arch()),
-            "FP8_E4M3 is not supported on arch {}",
+            tt::is_data_format_supported(datatype_to_dataformat_converter(dtype), mesh_device.arch()),
+            "{} is not supported on arch {}",
+            dtype,
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);

@@ -11,7 +11,7 @@ from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -27,7 +27,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 @parametrize(
@@ -179,11 +179,7 @@ def unpack_tilize(
             res_tensor_list.extend(tile_data)
         res_from_L1 = res_tensor_list
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if validate_lossless:
         # Lossless validation

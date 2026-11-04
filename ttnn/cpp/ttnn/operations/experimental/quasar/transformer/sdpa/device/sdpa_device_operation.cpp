@@ -34,7 +34,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     // Basic tensor properties
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
-        TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
+        TT_FATAL(input_tensor->is_allocated(), "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor->dtype() == DataType::BFLOAT16 || input_tensor->dtype() == DataType::BFLOAT8_B ||
@@ -443,7 +443,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
         const auto& cu = tensors.cu_window_seqlens.value();
         TT_FATAL(cu.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device.");
-        TT_FATAL(cu.buffer() != nullptr, "cu_window_seqlens must be allocated on device.");
+        TT_FATAL(cu.is_allocated(), "cu_window_seqlens must be allocated on device.");
         TT_FATAL(q.device() == cu.device(), "cu_window_seqlens must be on the same device as Q/K/V.");
         TT_FATAL(
             cu.dtype() == DataType::INT32 || cu.dtype() == DataType::UINT32,
@@ -495,7 +495,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         if (tensors.windowed_q_token_offset_tensor.has_value()) {
             const auto& off = tensors.windowed_q_token_offset_tensor.value();
             TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
-            TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
+            TT_FATAL(off.is_allocated(), "windowed_q_token_offset_tensor must be allocated on device.");
             TT_FATAL(q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
             TT_FATAL(
                 off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,

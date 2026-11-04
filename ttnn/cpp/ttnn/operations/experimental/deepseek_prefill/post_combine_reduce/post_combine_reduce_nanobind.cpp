@@ -42,8 +42,10 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok, emb_dim]
                     Example: [1, 1, 3200, 8, 7168]
 
-                weights (ttnn.Tensor): Gate weights for broadcast multiply.
-                    Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok]
+                weights (ttnn.Tensor): Gate weights for broadcast multiply, ROW_MAJOR bfloat16.
+                    Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok, 1] (one weight per
+                    page), or [batch, dispatch_group_size, seq_len, num_experts_per_tok] (one token's
+                    weights per page, read once per token).
                     Example: [1, 1, 3200, 8]
 
                 indices (ttnn.Tensor, optional): Global expert IDs per token/slot, INT32.
@@ -60,6 +62,16 @@ void bind_post_combine_reduce(nb::module_& mod) {
                 output_memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                     Defaults to L1_MEMORY_CONFIG.
 
+                combine_row_index (ttnn.Tensor, optional): UINT32 ROW_MAJOR
+                    [batch, dispatch_group_size, seq_len, num_experts_per_tok]. With it, combine_output is a
+                    [rows, emb_dim] ROW_MAJOR table and slot j of token t reads row combine_row_index[t, j]
+                    (no gathered copy of the rows).
+
+                skip_row (int, optional): with combine_row_index, a row the kernel never reads. Slots
+                    pointing at it must be ones the expert skip drops: weight 0 (no expert_dispatch_table) or a
+                    non-local expert in expert_dispatch_table (their L1 slot keeps finite stale data). A row
+                    index past the table's last row is not read either.
+
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
@@ -72,7 +84,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("expert_dispatch_table") = nb::none(),
         nb::kw_only(),
         nb::arg("expert_dim") = 3,
-        nb::arg("output_memory_config") = nb::none());
+        nb::arg("output_memory_config") = nb::none(),
+        nb::arg("combine_row_index") = nb::none(),
+        nb::arg("skip_row") = std::numeric_limits<uint32_t>::max());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail

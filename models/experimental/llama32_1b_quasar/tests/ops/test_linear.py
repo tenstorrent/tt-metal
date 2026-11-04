@@ -20,12 +20,16 @@ each op runs standalone on the emulator. Reference is ``x @ w``.
 
 Rows M come from the prefill sequence lengths (U.PREFILL_SEQ_LENS) and the decode
 batch sizes (U.DECODE_BATCHES) the demo drives through the model.
+
+no_program_config runs the same matmuls through ``ttnn.experimental.quasar.linear`` with no
+program config: the unified matmul, which the model calls on Quasar.
 """
 
 import pytest
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # (name, in_dim/K, out_dim/N, pcc). Large-K matmuls (W2 down, K=8192) accumulate more
 # bf16 rounding error over the reduction, so allow a slightly looser 0.98.
@@ -44,12 +48,13 @@ _M_SIZES = [pytest.param(seq, id=f"prefill-seq{seq}") for seq in U.PREFILL_SEQ_L
 
 
 @U.with_default_mesh()
+@pytest.mark.parametrize("quasar_linear", [False, True], ids=["ttnn_linear", "no_program_config"])
 @pytest.mark.parametrize("m", _M_SIZES)
 @pytest.mark.parametrize(
     "name, in_dim, out_dim, pcc",
     [pytest.param(*s, id=s[0]) for s in _LINEAR_SITES],
 )
-def test_linear(ttnn_mesh_device, reset_seeds, name, in_dim, out_dim, pcc, m):
+def test_linear(ttnn_mesh_device, reset_seeds, name, in_dim, out_dim, pcc, m, quasar_linear):
     mesh = ttnn_mesh_device
 
     x_torch = U.torch_rand((1, 1, m, in_dim))
@@ -58,7 +63,14 @@ def test_linear(ttnn_mesh_device, reset_seeds, name, in_dim, out_dim, pcc, m):
     x = U.to_tt(x_torch, mesh)
     w = U.to_tt(w_torch, mesh)
 
-    out = ttnn.linear(x, w, dtype=ttnn.bfloat16)
+    if quasar_linear:
+        out = ttnn.experimental.quasar.linear(x, w, program_config=None, dtype=ttnn.bfloat16)
+    else:
+        out = ttnn.linear(x, w, dtype=ttnn.bfloat16)
 
     ref = x_torch.float() @ w_torch.float()
-    U.assert_pcc(ref, out, pcc=pcc, mesh_device=mesh)
+    host = U.from_tt(out, mesh)
+    U.assert_pcc(ref, out, pcc=pcc, mesh_device=mesh, host=host)
+    if quasar_linear:
+        # bf16 partial sums over K: WH reaches ~7% of the largest output at K=8192.
+        assert_allclose(ref, host, rtol=0.1, atol=0.1 * ref.abs().max().item())

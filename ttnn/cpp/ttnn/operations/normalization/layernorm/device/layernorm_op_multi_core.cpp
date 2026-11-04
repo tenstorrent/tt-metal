@@ -1194,7 +1194,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         // Each entry is gated on the same condition as its binding: an entry naming a buffer the
         // kernel does not bind is rejected, and legacy set this one from float32_reduction alone,
         // writing into a vector slot for a buffer index that may not have been allocated.
-        if (large_tensor_needed && !use_welford && float32_reduction) {
+        //
+        // Not on Quasar: there unpack-to-dest is a kernel-wide sync mode (UnpackToDestEn), so one
+        // UnpackToDest buffer makes every tile_regs_acquire on the math thread wait on the
+        // UNPACK_MATH semaphore, which only unpack-to-dest unpacks post. The large-tensor kernel's
+        // reduces unpack to SrcA/SrcB, so math would stall at its first acquire. The accumulator
+        // is then restored through SrcA instead.
+        if (large_tensor_needed && !use_welford && float32_reduction && device->arch() != tt::ARCH::QUASAR) {
             unpack_to_dest.push_back(ACCUMULATE);
         }
         if (welford_fp32_alias) {

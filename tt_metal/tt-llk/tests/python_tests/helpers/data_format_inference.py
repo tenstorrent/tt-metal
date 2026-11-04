@@ -9,11 +9,12 @@ the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
 
-from typing import List, Optional
+from enum import Enum
+from typing import List, Optional, Union
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import DestAccumulation
+from .llk_params import DestAccumulation, Tilize
 
 VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
@@ -163,11 +164,70 @@ def effective_dest_acc(
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
-_2X_L1_FORMAT = {
-    DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
-    DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
-    DataFormat.Int8_2x: DataFormat.Int8,
-    DataFormat.UInt8_2x: DataFormat.UInt8,
+def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
+    """Normalise a two-state Enum-or-bool test flag to a plain bool.
+
+    DestAccumulation and ApproximationMode wrap True and False, so ``bool(member)`` is True
+    for *both* — ``.No`` included, which silently selects the True branch. Read ``.value``
+    for an enum, take a bool as-is, reject anything else.
+
+    *enum_name* is checked too, because both enums' ``.Yes`` wraps True and duck-typing on
+    ``.value`` would accept the wrong one.
+    """
+    flag = getattr(value, "value", value)
+    if not isinstance(flag, bool):
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    if isinstance(value, Enum) and type(value).__name__ != enum_name:
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got the "
+            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
+            f"otherwise select a branch silently"
+        )
+    return flag
+
+
+def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
+    """Normalise a 32-bit-destination flag to a plain bool.
+
+    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
+    is True for *both* of them -- ``DestAccumulation.No`` included, which would evaluate
+    every triple as the 32-bit-dest case and silently flip specials on and off for whole
+    rows of the matrix.
+
+    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
+    rather than guessing.
+    """
+    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
+
+
+def unpacks_to_dest(
+    input_format: DataFormat,
+    dest_acc: Union[bool, DestAccumulation],
+    tilize: Tilize = Tilize.No,
+) -> bool:
+    """Does *input_format* unpack straight into Dest instead of through SrcA? A 32-bit
+    input at dest_acc=Yes, except a tilized Float32 input."""
+    if tilize == Tilize.Yes and input_format == DataFormat.Float32:
+        return False
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
+def dest_acc_for(data_format: DataFormat) -> DestAccumulation:
+    """The Dest width *data_format* needs: ``Yes`` for a 32-bit format, so its datums
+    are not truncated to 16 bits in Dest, otherwise ``No``."""
+    return DestAccumulation.Yes if data_format.is_32_bit() else DestAccumulation.No
+
+
+# The L1 input formats each 2x register format can be unpacked from. Int4 widens to Int8 in
+# the unpacker, so it can feed Int8_2x as well.
+_2X_L1_FORMATS = {
+    DataFormat.MxFp4_2x_A: (DataFormat.MxFp4,),
+    DataFormat.MxFp4_2x_B: (DataFormat.MxFp4,),
+    DataFormat.Int8_2x: (DataFormat.Int8, DataFormat.Int4),
+    DataFormat.UInt8_2x: (DataFormat.UInt8,),
 }
 
 _SRCS_PASSTHROUGH_FORMATS = [
@@ -205,7 +265,7 @@ def infer_unpack_out(
         The inferred output data format for unpacking to registers
     """
     if register_format_hint is not None:
-        if input_format != _2X_L1_FORMAT.get(register_format_hint):
+        if input_format not in _2X_L1_FORMATS.get(register_format_hint, ()):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -226,7 +286,12 @@ def infer_unpack_out(
     # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
     # the unpacker internally normalizes the datum into the BF16 source-register
     # representation before math consumes it.
-    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+    if input_format in [
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+        DataFormat.Bfp4,
+        DataFormat.Bfp2,
+    ]:
         return input_format
 
     if (
@@ -354,6 +419,11 @@ def infer_pack_in(
         # Otherwise use the unpacker output (Tf32 or 16-bit) as packer input
         return unpack_out
 
+    # Bfp8 (5 bit exponent) operands sit in a 16-bit DEST as Float16: a Float16_b output needs Float16 as the packer input, since the packer converts Float16 to
+    # Float16_b but not a block float input format (a Bfp8 packer input reads the 16-bit datums as Bfp8 and returns garbage)
+    if unpack_out == DataFormat.Bfp8 and output_format == DataFormat.Float16_b and is_fp32_dest_acc_en == DestAccumulation.No:
+        return DataFormat.Float16
+
     # Float16_A in L1 to Bfp8_B without float32 datums in dest reg requires Bfp8_A as packer input for conversion to desired output format
     if (
         unpack_out == DataFormat.Float16
@@ -371,6 +441,13 @@ def infer_pack_in(
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
+    if output_format in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return (
+            DataFormat.Float32
+            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            else DataFormat.Float16
+        )
+
     if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         # production (data_format.cpp) packs block float output from a 32-bit DEST through Bfp8_b unless bfp8_pack_precise is set
         if pack_src_from_output and is_fp32_dest_acc_en == DestAccumulation.Yes:
@@ -388,7 +465,9 @@ def infer_pack_in(
         and is_fp32_dest_acc_en == DestAccumulation.No
         and not unpacking_to_dest
         and unpack_out in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
-        and (output_format == DataFormat.Float16_b or output_format == DataFormat.Float32)
+        and (
+            output_format == DataFormat.Float16_b or output_format == DataFormat.Float32
+        )
     ):
         return DataFormat.Float16_b
 
@@ -403,6 +482,8 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
     # inference historically models the unpacked payload as BFP8_b.
     if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
+    if unpack_out in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return DataFormat.Bfp8
 
     # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
     # used to derive a math/pack format (those fields cannot hold the 2x format itself).

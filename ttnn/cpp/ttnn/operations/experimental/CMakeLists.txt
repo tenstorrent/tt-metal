@@ -40,6 +40,9 @@ add_subdirectory(topk_large_indices)
 add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
 
+# Gemma4 model owners
+add_subdirectory(gemma4)
+
 # metalium-developers-external-experience
 add_subdirectory(isin)
 
@@ -66,6 +69,9 @@ add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
 add_subdirectory(multi_scale_deformable_attn)
+add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul)
+add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -95,6 +101,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::Gemma4
         TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
@@ -113,6 +120,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
@@ -147,6 +157,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Gemma4>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
@@ -165,6 +176,9 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>

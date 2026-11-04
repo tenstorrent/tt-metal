@@ -6,6 +6,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/assert.h"
 
 void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
@@ -36,8 +37,14 @@ void kernel_main() {
 
     // signal the packer
     tile_regs_commit();  // Math
-    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 40.
+#if LIGHTWEIGHT_ASSERT_ENABLED
+    // Intentional hang on a lightweight ASSERT (tt-exalens#1164); test_triage.py asserts it is on line 43.
+    volatile uint32_t magic = 0, n = 0xDEADBEEF;
+    ASSERT(magic == n);
+#else
+    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 46.
     asm volatile("ebreak");
+#endif
 
     // packer waits here
     tile_regs_wait();  // Pack

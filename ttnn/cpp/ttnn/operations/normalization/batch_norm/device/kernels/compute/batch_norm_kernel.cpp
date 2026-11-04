@@ -41,7 +41,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb::out);
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
-    const auto batchnorm_bcast_tiles = [&](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
+    const auto batchnorm_bcast_tiles = [&](uint32_t freq, uint32_t start) __attribute__((always_inline)) {
         // 1/(sqrt(batch_var + eps))
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
@@ -52,7 +52,7 @@ void kernel_main() {
             ckl::Rsqrt<>{},
             ckl::PackTile<ckl::output(dfb::den)>{dfb_den_obj});
 
-        const uint32_t inner_count = freq - tile_start;
+        const uint32_t inner_count = freq - start;
 
         // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
         const auto sub_op = ckl::BinaryFpu<

@@ -18,6 +18,14 @@
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
+namespace tt::umd {
+class TTDevice;
+}
+
+// CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry word for `tt_device`, or nullopt when the entry is absent
+// (CMFW older than 19.12) or there is no device to ask.
+std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device);
+
 //! SocDescriptor contains information regarding the SOC configuration targeted.
 /*!
     Should only contain relevant configuration for SOC
@@ -41,9 +49,12 @@ public:
 
     std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
+    // On Blackhole, `mrisc_noc2axi_ports` selects the DRAM endpoint assignment; nullopt keeps the
+    // pre-relocation one.
     metal_SocDescriptor(
         const SocDescriptor& other,
         const tt::BoardType& board_type,
+        std::optional<uint32_t> mrisc_noc2axi_ports,
         std::optional<uint64_t> dram_view_size_limit = std::nullopt);
 
     tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
@@ -112,7 +123,8 @@ private:
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
-    void load_dram_metadata_from_device_descriptor(std::optional<uint64_t> dram_view_size_limit);
+    void load_dram_metadata_from_device_descriptor(
+        const std::optional<uint32_t>& mrisc_noc2axi_ports, std::optional<uint64_t> dram_view_size_limit);
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
 };

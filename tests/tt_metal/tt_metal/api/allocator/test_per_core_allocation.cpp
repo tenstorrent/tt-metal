@@ -37,6 +37,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <internal/mesh_device.hpp>
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -335,7 +336,7 @@ receiver_socket_md read_h2d_receiver_config(
     cluster.read_core(
         &config,
         sizeof(config),
-        tt_cxy_pair(md->get_device(recv_core.device_coord)->id(), virtual_core),
+        tt_cxy_pair(internal::get_device(*md, recv_core.device_coord)->id(), virtual_core),
         socket.get_config_buffer_address());
     return config;
 }
@@ -441,7 +442,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreEndToEndTransfer) {
     };
     auto landing_buffer = distributed::MeshBuffer::create(landing_config, landing_local_config, md.get());
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*md);
     CreateKernel(
         recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
@@ -479,7 +480,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreEndToEndTransfer) {
         cluster.read_core(
             readback.data(),
             data_size,
-            tt_cxy_pair(md->get_device(recv_core.device_coord)->id(), recv_core_virtual),
+            tt_cxy_pair(internal::get_device(*md, recv_core.device_coord)->id(), recv_core_virtual),
             landing_buffer->address());
         EXPECT_EQ(src, readback) << "payload mismatch on iteration " << i;
     }

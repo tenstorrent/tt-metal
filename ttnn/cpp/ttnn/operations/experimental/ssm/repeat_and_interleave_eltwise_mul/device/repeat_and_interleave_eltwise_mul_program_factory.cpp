@@ -33,7 +33,7 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // Metalium-native device tensors: these back the TensorParameter specs and the
     // TensorArguments, which the framework matches by MeshTensor identity.

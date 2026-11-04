@@ -1,5 +1,6 @@
 {
   "env": {
-    "PREFILL_MODEL": "deepseek_v3_d_p"
+    "PREFILL_MODEL": "deepseek_v3_d_p",
+    "TT_PREFILL_CHUNK_TIMEOUT_SECONDS": "10"
   }
 }

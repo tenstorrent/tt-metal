@@ -1957,10 +1957,10 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_2param<"var_hw", &ttnn::var_hw>(
         mod,
-        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population variance over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W. Both means divide by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"std_hw", &ttnn::std_hw>(
         mod,
-        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population standard deviation over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W, dividing by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"normalize_hw", &ttnn::normalize_hw>(
         mod,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",

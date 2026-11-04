@@ -125,7 +125,7 @@ public:
 };
 
 #ifndef LOCAL_COMBINE
-// Build one V2 mux client per open direction from the trailing runtime args (11 args each, in `directions` index
+// Build one V2 mux client per open direction from the trailing runtime args (12 args each, in `directions` index
 // order, which is the host's `neighbors` order). rt_arg_idx is advanced past the consumed args.
 template <uint8_t NumDirections>
 inline void build_mux_connections(

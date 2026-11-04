@@ -143,6 +143,14 @@ struct addr_mod_t
         TTI_SETC16(addr_mod_dest_reg_addr[mod_index], dest.val() | (fidelity.val() << 13));
         TTI_SETC16(addr_mod_bias_reg_addr[mod_index], bias.val());
     }
+
+    // Program source and dest registers, not the bias register. No Blackhole code sets a nonzero bias increment, so the bias
+    // register of every address mod stays 0 and the caller's mods never need it written.
+    __attribute__((always_inline)) inline void set_no_bias(const std::uint8_t mod_index) const
+    {
+        TTI_SETC16(addr_mod_src_reg_addr[mod_index], srca.val() | (srcb.val() << 8));
+        TTI_SETC16(addr_mod_dest_reg_addr[mod_index], dest.val() | (fidelity.val() << 13));
+    }
 };
 
 struct addr_mod_pack_t

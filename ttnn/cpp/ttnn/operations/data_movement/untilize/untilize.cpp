@@ -134,9 +134,11 @@ ttnn::Tensor untilize_force_codegen(
         TT_FATAL(
             supported_by_codegen(normalized_input, output_mem_config),
             "untilize_force_codegen invoked for a case the codegen prim does not support (requires "
-            "TILE-layout, interleaved (non-sharded) input and output, dtype bfloat16 or bfloat8_b "
-            "(bfloat8_b additionally requires a tile-aligned logical shape), and a width within the L1 "
-            "chunking threshold). This entry never falls back to native, because a forced leg that "
+            "TILE layout in the default 32x32 non-transposed tile, interleaved (non-sharded) input and "
+            "output, dtype bfloat16, bfloat8_b, int32 or uint32 (bfloat8_b additionally requires a "
+            "tile-aligned logical shape), a tile-row within the L1 chunking threshold, and for a single "
+            "tile-row a column-parallel CB plan that fits L1; see supported_by_codegen). This entry never "
+            "falls back to native, because a forced leg that "
             "quietly served native would make any comparison against native vacuous. Use ttnn::untilize "
             "if you want the case routed.");
         // Deliberately no codegen_cb_plan_fits_live_l1 gate here either: if no codegen CB plan fits

@@ -4,7 +4,8 @@
 
 // Parity tests for PolyNorm3 forward and backward (fused metal kernel vs. composite TTNN ops).
 // Each test compares both paths against an xtensor ground-truth reference implementation,
-// checking forward output, grad_x, grad_w, and grad_b within tolerance.
+// checking forward output, grad_x, grad_w, and grad_b within tolerance. Section 2 relaunches the
+// fused kernels on fresh tensors to check their program-cache hits.
 
 #include "ops/polynorm_op.hpp"
 
@@ -14,14 +15,21 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <tt-metalium/bfloat16.hpp>
 #include <tuple>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/polynorm_bw/device/polynorm_bw_device_operation.hpp"
 #include "metal/ops/polynorm_bw/polynorm_bw.hpp"
+#include "metal/ops/polynorm_fw/device/polynorm_fw_device_operation.hpp"
+#include "metal/ops/polynorm_fw/polynorm_fw.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
 class PolyNormOpTest : public ::testing::Test {
@@ -426,4 +434,417 @@ TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_UndisclosedModelLongSequenceHidd
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_Llama1bLikeHiddenShape) {
     // Llama1B MLP hidden dim is 8192. Keep sequence short for test runtime.
     CompareKernelVsReferenceWithShape({1, 1, 32, 8192}, 1e-5F);
+}
+
+// ============================================================================
+// Section 2: Program-cache hits
+// ============================================================================
+// A launch whose specs match a cached program reuses it, and only the buffer addresses of the new
+// tensors are patched in. The cache-hit tests clear the cache so that their first launch is the miss,
+// and keep every tensor of the earlier launches alive so that a later launch cannot land on a freed
+// address: a hit must read and write the new buffers and leave the earlier ones untouched.
+// ============================================================================
+
+namespace {
+
+using ttml::test_utils::CacheExpectation;
+using ttml::test_utils::expect_cache;
+using ttml::test_utils::expect_new_buffer;
+using ttml::test_utils::expect_unchanged;
+using ttml::test_utils::num_worker_cores;
+using ttml::test_utils::two_core_group_rows_shape;
+
+// Both factories split tile rows over the cores, so two_core_group_rows_shape(kCacheTestC) gives them two core
+// groups on any grid. C = 64 keeps the backward on its one-block (matmul row-reduce) path.
+constexpr uint32_t kCacheTestC = 64U;
+
+// Still two core groups (one core takes 2 rows, the others 1) at half the data of two_core_group_rows_shape, for
+// the test that launches eight times.
+std::vector<uint32_t> small_two_core_group_shape() {
+    return {1U, 1U, (num_worker_cores() + 1U) * 32U, kCacheTestC};
+}
+
+// Big enough that losing it (a compute runtime arg dropped on a hit, or never set on the second core group)
+// moves the results past the tolerance. The 1e-6..1e-4 of EpsilonVariants moves them by ~1e-4.
+constexpr float kCacheTestEpsilon = 0.0625F;
+// The epsilon of the launch that follows the hits. Far enough from kCacheTestEpsilon that a launch run
+// with the cached epsilon misses its reference.
+constexpr float kOtherEpsilon = 0.25F;
+
+// bf16-exact {w0, w1, w2, b}. Every coefficient differs between any two sets, so a launch that reads
+// another launch's weight or bias misses its reference.
+struct PolyNormCoeffs {
+    float w0;
+    float w1;
+    float w2;
+    float b;
+};
+constexpr PolyNormCoeffs kCoeffsA{0.25F, 0.25F, 0.5F, 0.125F};
+constexpr PolyNormCoeffs kCoeffsB{-0.25F, 0.375F, 0.375F, -0.25F};
+constexpr PolyNormCoeffs kCoeffsC{0.375F, -0.125F, 0.25F, 0.25F};
+
+// Fill value of preallocated outputs, far from any polynorm output: an output the kernels never wrote fails.
+constexpr float kUnwrittenSentinel = 1000.0F;
+
+// polynorm_bw's packed partials hold four FP32 tiles per tile row: [dw0, dw1, dw2, db].
+constexpr uint32_t kPackedPartialsWidth = 128U;
+
+// Whether the launch passes a preallocated output (only the prims take one) or lets the op allocate it.
+enum class Output { Allocated, Preallocated };
+
+// Uniform values truncated to bf16: the device stores them exactly, so they are what the kernels read.
+xt::xarray<float> make_bf16_uniform(const std::vector<uint32_t>& shape, float min, float max, uint32_t seed) {
+    auto values = ttml::test_utils::make_uniform_xarray<float>(shape, min, max, seed);
+    for (auto& v : values) {
+        v = static_cast<float>(bfloat16::truncate(v));
+    }
+    return values;
+}
+
+xt::xarray<float> filled(const std::vector<uint32_t>& shape, float value) {
+    xt::xarray<float> values = xt::xarray<float>::from_shape(std::vector<std::size_t>(shape.begin(), shape.end()));
+    values.fill(value);
+    return values;
+}
+
+xt::xarray<float> weight_of(const PolyNormCoeffs& coeffs) {
+    xt::xarray<float> weight = xt::xarray<float>::from_shape({1, 1, 1, 3});
+    weight(0, 0, 0, 0) = coeffs.w0;
+    weight(0, 0, 0, 1) = coeffs.w1;
+    weight(0, 0, 0, 2) = coeffs.w2;
+    return weight;
+}
+
+// Per-row [dw0, dw1, dw2, db], each [B, N, S]: what the fused backward writes to column 0 of the four
+// packed-partials tiles of a tile row, for each of its 32 rows. polynorm3_bw sums them over the rows.
+std::array<xt::xarray<float>, 4> polynorm_reference_row_partials(
+    const xt::xarray<float>& x, const xt::xarray<float>& dL_dout, float epsilon) {
+    const xt::xarray<float> x2 = xt::square(x);
+    const xt::xarray<float> x3 = x * x2;
+    return {
+        xt::xarray<float>(xt::sum(dL_dout * rms_norm_last_dim(x3, epsilon), {3})),
+        xt::xarray<float>(xt::sum(dL_dout * rms_norm_last_dim(x2, epsilon), {3})),
+        xt::xarray<float>(xt::sum(dL_dout * rms_norm_last_dim(x, epsilon), {3})),
+        xt::xarray<float>(xt::sum(dL_dout, {3})),
+    };
+}
+
+// One forward launch. Holding it keeps all of the launch's buffers allocated.
+struct ForwardLaunch {
+    PolyNormCaseData data;  // bf16-exact, so also what the device stores
+    float epsilon{};
+    ttnn::Tensor input;
+    ttnn::Tensor weight;
+    ttnn::Tensor bias;
+    std::optional<ttnn::Tensor> preallocated_output;
+    ttnn::Tensor output;
+    xt::xarray<float> output_result;  // read back right after the launch
+};
+
+// Launches on fresh tensors through metal::polynorm3_fw, or through the prim when the output is preallocated
+// (the wrapper never passes one), and checks the output against the reference.
+ForwardLaunch run_forward(
+    const std::vector<uint32_t>& shape,
+    const PolyNormCoeffs& coeffs,
+    uint32_t seed,
+    Output output,
+    float epsilon,
+    CacheExpectation expectation,
+    const std::string& label) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const bool preallocate_output = output == Output::Preallocated;
+    ForwardLaunch launch;
+    launch.data.input = make_bf16_uniform(shape, -1.0F, 1.0F, seed);
+    launch.data.weight = weight_of(coeffs);
+    launch.data.bias = filled({1U, 1U, 1U, 1U}, coeffs.b);
+    launch.epsilon = epsilon;
+    launch.input = core::from_xtensor(launch.data.input, device);
+    launch.weight = core::from_xtensor(launch.data.weight, device);
+    launch.bias = core::from_xtensor(launch.data.bias, device);
+    if (preallocate_output) {
+        launch.preallocated_output = test_utils::filled_on_device(shape, kUnwrittenSentinel);
+    }
+
+    const auto entries_before = device->num_program_cache_entries();
+    launch.output = preallocate_output
+                        ? ttnn::prim::ttml_polynorm3_fw(
+                              launch.input, launch.weight, launch.bias, epsilon, launch.preallocated_output)
+                        : metal::polynorm3_fw(launch.input, launch.weight, launch.bias, epsilon);
+    expect_cache(entries_before, expectation, label);
+
+    launch.output_result = core::to_xtensor(launch.output);
+    const auto expected = polynorm_reference(launch.data.input, launch.data.weight, launch.data.bias, epsilon);
+    EXPECT_EQ(launch.output_result.shape(), expected.shape()) << label;
+    expect_allclose_with_metrics(launch.output_result, expected, kForwardRtol, kForwardAtol, label + " output");
+    if (preallocate_output) {
+        EXPECT_EQ(launch.output.buffer()->address(), launch.preallocated_output->buffer()->address())
+            << label << " must return the preallocated output";
+    }
+    return launch;
+}
+
+void expect_new_buffers(const ForwardLaunch& earlier, const ForwardLaunch& later, const std::string& label) {
+    expect_new_buffer(earlier.input, later.input, label + " input");
+    expect_new_buffer(earlier.weight, later.weight, label + " weight");
+    expect_new_buffer(earlier.bias, later.bias, label + " bias");
+    expect_new_buffer(earlier.output, later.output, label + " output");
+}
+
+void expect_untouched(const ForwardLaunch& launch, const std::string& label) {
+    expect_unchanged(launch.input, launch.data.input, label + " input");
+    expect_unchanged(launch.weight, launch.data.weight, label + " weight");
+    expect_unchanged(launch.bias, launch.data.bias, label + " bias");
+    expect_unchanged(launch.output, launch.output_result, label + " output");
+}
+
+// One backward launch, through the prim: it hands back packed_partials (polynorm3_bw frees it, so the next
+// launch could land on its address) and is the only entry point that takes the optional outputs.
+struct BackwardLaunch {
+    xt::xarray<float> input;  // bf16-exact, so also what the device stores
+    xt::xarray<float> dL_dout;
+    xt::xarray<float> weight;
+    float epsilon{};
+    ttnn::Tensor input_tensor;
+    ttnn::Tensor dL_dout_tensor;
+    ttnn::Tensor weight_tensor;
+    std::optional<ttnn::Tensor> preallocated_dL_dx;
+    std::optional<ttnn::Tensor> preallocated_packed_partials;
+    ttnn::Tensor dL_dx;
+    ttnn::Tensor packed_partials;
+    xt::xarray<float> dL_dx_result;  // read back right after the launch
+    xt::xarray<float> packed_partials_result;
+};
+
+void expect_backward_matches_reference(const BackwardLaunch& launch, const std::string& label) {
+    const auto dL_dx_expected =
+        std::get<0>(polynorm_reference_backward(launch.input, launch.weight, launch.dL_dout, launch.epsilon));
+    ASSERT_EQ(launch.dL_dx_result.shape(), dL_dx_expected.shape()) << label;
+    expect_allclose_with_metrics(launch.dL_dx_result, dL_dx_expected, kBackwardRtol, kBackwardAtol, label + " dL_dx");
+
+    ASSERT_EQ(launch.packed_partials_result.dimension(), 4U) << label;
+    ASSERT_EQ(launch.packed_partials_result.shape()[3], kPackedPartialsWidth) << label;
+    const auto partials_expected = polynorm_reference_row_partials(launch.input, launch.dL_dout, launch.epsilon);
+    for (std::size_t k = 0; k < partials_expected.size(); ++k) {
+        const xt::xarray<float> partial =
+            xt::view(launch.packed_partials_result, xt::all(), xt::all(), xt::all(), k * 32U);
+        expect_allclose_with_metrics(
+            partial,
+            partials_expected[k],
+            kBackwardRtol,
+            kBackwardAtol,
+            label + " packed partial " + std::to_string(k));
+    }
+}
+
+// Launches on fresh tensors, optionally into preallocated outputs, and checks both outputs against the
+// reference.
+BackwardLaunch run_backward(
+    const std::vector<uint32_t>& shape,
+    const PolyNormCoeffs& coeffs,
+    uint32_t seed,
+    Output dL_dx_output,
+    Output packed_partials_output,
+    float epsilon,
+    CacheExpectation expectation,
+    const std::string& label) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const bool preallocate_dL_dx = dL_dx_output == Output::Preallocated;
+    const bool preallocate_packed_partials = packed_partials_output == Output::Preallocated;
+    BackwardLaunch launch;
+    launch.input = make_bf16_uniform(shape, -1.0F, 1.0F, seed);
+    // |dL_dout| <= 0.1 keeps dL_dx and the per-row partials around 0.1..1: far above the tolerance, so a stale
+    // or unwritten output fails, while the kernels' bf16 rounding stays well inside it.
+    launch.dL_dout = make_bf16_uniform(shape, -0.1F, 0.1F, seed + 1U);
+    launch.weight = weight_of(coeffs);
+    launch.epsilon = epsilon;
+    launch.input_tensor = core::from_xtensor(launch.input, device);
+    launch.dL_dout_tensor = core::from_xtensor(launch.dL_dout, device);
+    launch.weight_tensor = core::from_xtensor(launch.weight, device);
+    if (preallocate_dL_dx) {
+        launch.preallocated_dL_dx = test_utils::filled_on_device(shape, kUnwrittenSentinel);
+    }
+    if (preallocate_packed_partials) {
+        launch.preallocated_packed_partials = core::full(
+            ttnn::Shape({shape[0], shape[1], shape[2], kPackedPartialsWidth}),
+            kUnwrittenSentinel,
+            device,
+            ttnn::DataType::FLOAT32);
+    }
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto outputs = ttnn::prim::ttml_polynorm3_bw(
+        launch.input_tensor,
+        launch.dL_dout_tensor,
+        launch.weight_tensor,
+        epsilon,
+        launch.preallocated_dL_dx,
+        launch.preallocated_packed_partials);
+    expect_cache(entries_before, expectation, label);
+    launch.dL_dx = outputs.at(0);
+    launch.packed_partials = outputs.at(1);
+
+    launch.dL_dx_result = core::to_xtensor(launch.dL_dx);
+    launch.packed_partials_result = core::to_xtensor(launch.packed_partials);
+    expect_backward_matches_reference(launch, label);
+    if (preallocate_dL_dx) {
+        EXPECT_EQ(launch.dL_dx.buffer()->address(), launch.preallocated_dL_dx->buffer()->address())
+            << label << " must return the preallocated dL_dx";
+    }
+    if (preallocate_packed_partials) {
+        EXPECT_EQ(launch.packed_partials.buffer()->address(), launch.preallocated_packed_partials->buffer()->address())
+            << label << " must return the preallocated packed partials";
+    }
+    return launch;
+}
+
+void expect_new_buffers(const BackwardLaunch& earlier, const BackwardLaunch& later, const std::string& label) {
+    expect_new_buffer(earlier.input_tensor, later.input_tensor, label + " input");
+    expect_new_buffer(earlier.dL_dout_tensor, later.dL_dout_tensor, label + " dL_dout");
+    expect_new_buffer(earlier.weight_tensor, later.weight_tensor, label + " weight");
+    expect_new_buffer(earlier.dL_dx, later.dL_dx, label + " dL_dx");
+    expect_new_buffer(earlier.packed_partials, later.packed_partials, label + " packed partials");
+}
+
+void expect_untouched(const BackwardLaunch& launch, const std::string& label) {
+    expect_unchanged(launch.input_tensor, launch.input, label + " input");
+    expect_unchanged(launch.dL_dout_tensor, launch.dL_dout, label + " dL_dout");
+    expect_unchanged(launch.weight_tensor, launch.weight, label + " weight");
+    expect_unchanged(launch.dL_dx, launch.dL_dx_result, label + " dL_dx");
+    expect_unchanged(launch.packed_partials, launch.packed_partials_result, label + " packed partials");
+}
+
+}  // namespace
+
+// A miss, then two hits on fresh tensors while the earlier launches stay alive: each hit must replace the
+// addresses the launch before it left in the program. Last, a launch with another epsilon, which must run
+// with its own epsilon whether or not the program key includes it.
+TEST_F(PolyNormOpTest, PolyNormFw_CacheHitReadsFreshBuffers_TwoCoreGroups) {
+    ttml::autograd::ctx().get_device().clear_program_cache();
+    const auto shape = two_core_group_rows_shape(kCacheTestC);
+
+    const auto a = run_forward(
+        shape, kCoeffsA, 11U, Output::Allocated, kCacheTestEpsilon, CacheExpectation::Miss, "launch A (cache miss)");
+    const auto b = run_forward(
+        shape, kCoeffsB, 21U, Output::Allocated, kCacheTestEpsilon, CacheExpectation::Hit, "launch B (cache hit)");
+    const auto c = run_forward(
+        shape, kCoeffsC, 31U, Output::Allocated, kCacheTestEpsilon, CacheExpectation::Hit, "launch C (second hit)");
+    const auto d = run_forward(
+        shape, kCoeffsA, 41U, Output::Allocated, kOtherEpsilon, CacheExpectation::Unchecked, "launch D (new epsilon)");
+    EXPECT_FALSE(xt::allclose(
+        polynorm_reference(d.data.input, d.data.weight, d.data.bias, kOtherEpsilon),
+        polynorm_reference(d.data.input, d.data.weight, d.data.bias, kCacheTestEpsilon),
+        kForwardRtol,
+        kForwardAtol))
+        << "the epsilon change is within tolerance, so a launch D run with the cached epsilon would pass";
+    expect_new_buffers(a, b, "launch B");
+    expect_new_buffers(a, c, "launch C vs A");
+    expect_new_buffers(b, c, "launch C vs B");
+    expect_untouched(a, "launch A");
+    expect_untouched(b, "launch B");
+    expect_untouched(c, "launch C");
+}
+
+// Without, with, without and with a preallocated output. Whether or not the key tells the two apart, the
+// last two must hit the programs of the first two, and every launch must write its own output.
+TEST_F(PolyNormOpTest, PolyNormFw_PreallocatedOutputPresenceFlips_CacheHits_TwoCoreGroups) {
+    ttml::autograd::ctx().get_device().clear_program_cache();
+    const auto shape = two_core_group_rows_shape(kCacheTestC);
+    constexpr float epsilon = kCacheTestEpsilon;
+
+    const auto a =
+        run_forward(shape, kCoeffsA, 51U, Output::Allocated, epsilon, CacheExpectation::Miss, "launch A (allocated)");
+    const auto b = run_forward(
+        shape, kCoeffsA, 61U, Output::Preallocated, epsilon, CacheExpectation::Unchecked, "launch B (preallocated)");
+    const auto c =
+        run_forward(shape, kCoeffsB, 71U, Output::Allocated, epsilon, CacheExpectation::Hit, "launch C (allocated)");
+    const auto d = run_forward(
+        shape, kCoeffsB, 81U, Output::Preallocated, epsilon, CacheExpectation::Hit, "launch D (preallocated)");
+    expect_new_buffers(a, c, "launch C");
+    expect_new_buffers(b, d, "launch D");
+    expect_untouched(a, "launch A");
+    expect_untouched(b, "launch B");
+    expect_untouched(c, "launch C");
+}
+
+// Same sequence as PolyNormFw_CacheHitReadsFreshBuffers_TwoCoreGroups.
+TEST_F(PolyNormOpTest, PolyNormBw_CacheHitReadsFreshBuffers_TwoCoreGroups) {
+    ttml::autograd::ctx().get_device().clear_program_cache();
+    const auto shape = two_core_group_rows_shape(kCacheTestC);
+    const auto launch = [&shape](
+                            const PolyNormCoeffs& coeffs,
+                            uint32_t seed,
+                            float epsilon,
+                            CacheExpectation expectation,
+                            const std::string& label) {
+        return run_backward(shape, coeffs, seed, Output::Allocated, Output::Allocated, epsilon, expectation, label);
+    };
+
+    const auto a = launch(kCoeffsA, 111U, kCacheTestEpsilon, CacheExpectation::Miss, "launch A (cache miss)");
+    const auto b = launch(kCoeffsB, 121U, kCacheTestEpsilon, CacheExpectation::Hit, "launch B (cache hit)");
+    const auto c = launch(kCoeffsC, 131U, kCacheTestEpsilon, CacheExpectation::Hit, "launch C (second hit)");
+    const auto d = launch(kCoeffsA, 141U, kOtherEpsilon, CacheExpectation::Unchecked, "launch D (new epsilon)");
+    EXPECT_FALSE(xt::allclose(
+        std::get<0>(polynorm_reference_backward(d.input, d.weight, d.dL_dout, kOtherEpsilon)),
+        std::get<0>(polynorm_reference_backward(d.input, d.weight, d.dL_dout, kCacheTestEpsilon)),
+        kBackwardRtol,
+        kBackwardAtol))
+        << "the epsilon change is within tolerance, so a launch D run with the cached epsilon would pass";
+    expect_new_buffers(a, b, "launch B");
+    expect_new_buffers(a, c, "launch C vs A");
+    expect_new_buffers(b, c, "launch C vs B");
+    expect_untouched(a, "launch A");
+    expect_untouched(b, "launch B");
+    expect_untouched(c, "launch C");
+}
+
+// Every presence pattern of the two optional outputs, launched once and then again on fresh tensors (a hit
+// on the first launch's program) while all earlier launches stay alive. Presence changes which tensors the
+// op is given; each hit must still read and write only its own launch's buffers.
+// PolyNormBw_CacheHitReadsFreshBuffers_TwoCoreGroups covers the larger split, so the eight launches here use
+// the smaller one.
+TEST_F(PolyNormOpTest, PolyNormBw_PreallocatedOutputsPresenceFlips_CacheHits_TwoCoreGroups) {
+    ttml::autograd::ctx().get_device().clear_program_cache();
+    const auto shape = small_two_core_group_shape();
+    struct Presence {
+        Output dL_dx;
+        Output packed_partials;
+        const char* name;
+    };
+    constexpr std::array<Presence, 4> kPresences{{
+        {Output::Allocated, Output::Allocated, "allocated outputs"},
+        {Output::Preallocated, Output::Allocated, "preallocated dL_dx"},
+        {Output::Allocated, Output::Preallocated, "preallocated packed partials"},
+        {Output::Preallocated, Output::Preallocated, "both preallocated"},
+    }};
+
+    // First round: one program per pattern (only the first launch is asserted to compile one). Second round:
+    // the same patterns on fresh tensors and other weights, each a hit on its first-round program.
+    std::vector<BackwardLaunch> launches;
+    std::vector<std::string> labels;
+    for (const bool second_round : {false, true}) {
+        for (const auto& presence : kPresences) {
+            CacheExpectation expectation = CacheExpectation::Hit;
+            if (!second_round) {
+                expectation = launches.empty() ? CacheExpectation::Miss : CacheExpectation::Unchecked;
+            }
+            labels.push_back(std::string(second_round ? "second" : "first") + " launch, " + presence.name);
+            launches.push_back(run_backward(
+                shape,
+                second_round ? kCoeffsB : kCoeffsA,
+                200U + 10U * static_cast<uint32_t>(launches.size()),
+                presence.dL_dx,
+                presence.packed_partials,
+                kCacheTestEpsilon,
+                expectation,
+                labels.back()));
+        }
+    }
+    for (std::size_t i = 0; i < kPresences.size(); ++i) {
+        expect_new_buffers(launches[i], launches[kPresences.size() + i], labels[kPresences.size() + i]);
+    }
+    for (std::size_t i = 0; i + 1U < launches.size(); ++i) {
+        expect_untouched(launches[i], labels[i]);
+    }
 }

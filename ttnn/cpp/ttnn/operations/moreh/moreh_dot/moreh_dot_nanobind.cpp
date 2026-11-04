@@ -15,7 +15,7 @@
 namespace ttnn::operations::moreh::moreh_dot {
 
 void bind_moreh_dot_operation(nb::module_& mod) {
-    const auto* doc = "Moreh Moreh Dot Operation";
+    const auto* doc = "Deprecated in favor of ttnn.matmul with transpose_b=True. Will be removed after 2026-11-26.";
 
     ttnn::bind_function<"moreh_dot">(
         mod,

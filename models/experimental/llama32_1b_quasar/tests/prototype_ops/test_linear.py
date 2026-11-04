@@ -15,8 +15,9 @@ matmul dims (K = in_dim, N = out_dim). One parametrization per weight matrix:
   * LM head:       [*, DIM]          x [DIM, VOCAB]         (lm_head_1d.py:133 / :144)
 
 The model drives these matmuls with DRAM-sharded / width-sharded program configs;
-here we exercise the *plain* interleaved bf16 ``ttnn.linear`` (no program_config) so
-each op runs standalone on the emulator. Reference is ``x @ w``.
+here we exercise ``ttnn.experimental.quasar.linear`` with no program_config (the unified
+matmul on Quasar, as the model calls it there) so each op runs standalone on the emulator.
+Reference is ``x @ w``.
 
 Rows M come from the prefill sequence lengths (U.PREFILL_SEQ_LENS) and the decode
 batch sizes (U.DECODE_BATCHES) the demo drives through the model.
@@ -26,6 +27,7 @@ import pytest
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # (name, in_dim/K, out_dim/N, pcc). Large-K matmuls (W2 down, K=8192) accumulate more
 # bf16 rounding error over the reduction, so allow a slightly looser 0.98.
@@ -62,3 +64,5 @@ def test_linear(ttnn_mesh_device, reset_seeds, name, in_dim, out_dim, pcc, m):
 
     ref = x_torch.float() @ w_torch.float()
     U.assert_pcc(ref, out, pcc=pcc, mesh_device=mesh)
+    # bf16 partial sums over K: WH reaches ~7% of the largest output at K=8192.
+    assert_allclose(ref, U.from_tt(out, mesh), rtol=0.1, atol=0.1 * ref.abs().max().item())

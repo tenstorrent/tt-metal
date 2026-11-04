@@ -639,9 +639,14 @@ __attribute__((noinline)) void quick_push() {
         return;
     }
 
+    // The quick-push zone is recorded only if its START/END pair fits in this RISC's ring: worker zones and records may
+    // fill the ring to its last word, and the next RISC's ring follows it in L1. The chunk is pushed either way.
+    const bool mark_push = wIndex + QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE <= PROFILER_L1_VECTOR_SIZE;
     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
-    mark_time_at_index_inlined(wIndex, hash);
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    if (mark_push) {
+        mark_time_at_index_inlined(wIndex, hash);
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    }
 
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
@@ -650,8 +655,10 @@ __attribute__((noinline)) void quick_push() {
         (profiler_data_buffer[myRiscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
         (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (myRiscID & PROFILER_ID_RISC_MASK));
 
-    mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    if (mark_push) {
+        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    }
 
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
@@ -731,7 +738,11 @@ struct profileScope {
         // "additional" words.
         if (bufferHasRoom<dispatch>(2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
 #else
-        if (bufferHasRoom<dispatch>()) {
+        // ~profileScope() writes the ZONE_END without a room check, so a worker zone opens only if its END fits too:
+        // stackSize reserves the END only once the START is written. Dispatch zones keep DISPATCH_HEADROOM_SIZE free.
+        constexpr uint32_t end_slots =
+            dispatch == DoingDispatch::NOT_DISPATCH ? 2 * PROFILER_L1_MARKER_UINT32_SIZE - 1 : 0;
+        if (bufferHasRoom<dispatch>(end_slots)) {
 #endif
             stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = true;

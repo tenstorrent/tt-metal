@@ -3,9 +3,7 @@
 
 """Fused tilize plus column reduce on Wormhole and Blackhole."""
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceGolden, TilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -16,7 +14,6 @@ from helpers.llk_params import (
     PerfRunType,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
@@ -34,7 +31,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, MAX_FACE_R_DIM
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
@@ -95,17 +92,6 @@ def test_unpack_reduce_col_tilizeA_strided(
     run_types=None,
     loop_factor=1,
 ):
-    if (
-        formats.input_format == DataFormat.Float32
-        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip(
-            "Blackhole _llk_unpack_tilizeA_B_init_ sets the SrcA Y stride with "
-            "SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM) in llk_unpack_tilize.h, "
-            "which has no Tf32 case (16 bytes instead of 64). Skip until that stride is "
-            "FACE_C_DIM * datum_size_in_bytes(unpack_dst_format)."
-        )
-
     num_faces_r_dim = num_faces // 2
     tile_dimensions = [face_r_dim * num_faces_r_dim, DEFAULT_TILE_C_DIM]
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -194,11 +180,7 @@ def test_unpack_reduce_col_tilizeA_strided(
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
     ), "Assert against golden failed"

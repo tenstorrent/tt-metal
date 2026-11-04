@@ -238,5 +238,57 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPlusVarargs_FastPathLayout) {
     }
 }
 
+enum ArgSourceEnum { kFirstEnumerator = 7, kSecondEnumerator = 8 };
+
+// An ArgValue reaches the dispatch buffer as the implicit conversion of its source to uint32_t
+// (negative values wrap, floating point truncates, bools and unscoped enums convert), for per-node
+// and common args, on both the first SetProgramRunArgs call and the in-place fast path.
+TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversion) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"neg", "wide", "flag", "real", "enumerator"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"common_neg", "common_real"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+
+    for (int call = 0; call < 2; ++call) {  // call 0 allocates the buffers; call 1 patches them in place
+        const int neg = -1 - call;
+        const std::uint64_t wide = 0x1'0000'0005 + call;
+        const bool flag = call == 0;
+        const double real = 2.9 + call;
+        const ArgSourceEnum enumerator = call == 0 ? kFirstEnumerator : kSecondEnumerator;
+
+        ProgramRunArgs params;
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"dm_kernel"},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node, {{"neg", neg}, {"wide", wide}, {"flag", flag}, {"real", real}, {"enumerator", enumerator}}),
+            .common_runtime_arg_values = {{"common_neg", neg}, {"common_real", real}},
+        });
+        params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+        SetProgramRunArgs(program, params);
+
+        const std::vector<uint32_t> expected_rtas = {
+            static_cast<uint32_t>(neg),
+            static_cast<uint32_t>(wide),
+            static_cast<uint32_t>(flag),
+            static_cast<uint32_t>(real),
+            static_cast<uint32_t>(enumerator),
+        };
+        const auto& rta = dm->runtime_args_data(node);
+        ASSERT_GE(rta.size(), expected_rtas.size());
+        for (size_t i = 0; i < expected_rtas.size(); ++i) {
+            EXPECT_EQ(rta.data()[i], expected_rtas[i]) << "RTA slot " << i << " on call " << call;
+        }
+
+        const std::vector<uint32_t> expected_crtas = {static_cast<uint32_t>(neg), static_cast<uint32_t>(real)};
+        const auto& crta = dm->common_runtime_args_data();
+        ASSERT_GE(crta.size(), expected_crtas.size());
+        for (size_t i = 0; i < expected_crtas.size(); ++i) {
+            EXPECT_EQ(crta.data()[i], expected_crtas[i]) << "CRTA slot " << i << " on call " << call;
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

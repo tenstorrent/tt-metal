@@ -8,6 +8,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <internal/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-umd/pcie/pci_device.hpp>
@@ -42,7 +43,7 @@ void HDSocketDescriptor::populate_from_owner(
     // does not would disagree on what a given logical id refers to. The physical
     // device number is identical in every process on the host, so the connector can
     // translate it back to its own local logical id (see PCIeCoreWriter).
-    uint32_t logical_device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    uint32_t logical_device_id = static_cast<uint32_t>(internal::get_device(*mesh_device, core.device_coord)->id());
     auto physical_device_num = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(logical_device_id));
     TT_FATAL(
         physical_device_num.has_value(),

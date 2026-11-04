@@ -26,7 +26,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
 
 void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(tensor.is_allocated(), "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
 }
 
@@ -47,7 +47,7 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     // Single factory for both layouts; create() branches on input.layout(). ROW_MAJOR/TILE stay separate
-    // program-cache entries because compute_program_hash hashes input.layout().
+    // program-cache entries because compute_program_hash hashes the input's tensor_spec().
     return PerTokenCastToFp8ProgramFactory{};
 }
 
@@ -68,9 +68,9 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
     const auto& tile = input.tensor_spec().tile();
-    // The compute kernels build cb_in with the default, non-transposed tile descriptor and
-    // compute_program_hash only records tile/face shapes. A transposed tile would be unpacked with the
-    // wrong face ordering and silently produce incorrect scales and FP8 values, so reject it here.
+    // The compute kernels build cb_in with the default, non-transposed tile descriptor, whatever the input's
+    // tile says. A transposed tile would be unpacked with the wrong face ordering and silently produce incorrect scales
+    // and FP8 values, so reject it here.
     TT_FATAL(
         !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
         "per_token_cast_to_fp8: transposed TILE inputs are not supported");
@@ -158,19 +158,10 @@ PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceO
 
 ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
-    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = input.tensor_spec().tile().get_face_shape();
+    // The whole spec, not just its logical shape: the row-major accessor bakes in the aligned page size, which
+    // follows the padded width and so the spec's Alignment.
     return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
-        attrs,
-        input.dtype(),
-        input.layout(),  // ROW_MAJOR and TILE select different program factories
-        input.memory_config(),
-        input.logical_shape(),
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
+        attrs, tensor_args.input_tensor.tensor_spec());
 }
 
 }  // namespace ttnn::experimental::prim::per_token_cast_to_fp8

@@ -10,17 +10,21 @@ from pathlib import Path
 from typing import ClassVar
 
 import torch
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
-from .device_io import read_from_device, write_to_device
 from .format_config import DataFormat
 from .golden_generators import GeneratorProxy, ProxyMode
 from .llk_params import format_tile_sizes
 from .logger import logger
 from .pack import (
+    pack_bfp2,
     pack_bfp2_b,
+    pack_bfp4,
     pack_bfp4_b,
+    pack_bfp8,
     pack_bfp8_b,
     pack_bfp16,
+    pack_dense_tiles,
     pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
@@ -28,6 +32,7 @@ from .pack import (
     pack_int8,
     pack_int16,
     pack_int32,
+    pack_lf8,
     pack_mxfp4,
     pack_mxfp8p,
     pack_mxfp8r,
@@ -105,6 +110,14 @@ class StimuliConfig:
         use_dense_tile_dimensions: bool = False,
         operand_res_tile_size: int = None,
         twos_complement: bool = False,
+        num_faces_A: int = None,
+        num_faces_B: int = None,
+        face_r_dim_A: int = None,
+        face_r_dim_B: int = None,
+        tile_dimensions_A: list[int] = None,
+        tile_dimensions_B: list[int] = None,
+        num_faces_res: int = None,
+        face_r_dim_res: int = None,
     ):
 
         # Fields init
@@ -134,6 +147,21 @@ class StimuliConfig:
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
+
+        # Per-operand geometry of a matmul with tiny tiles: operand A is in0 (unpacker 1), operand B is in1 (unpacker 0), each with its own face count,
+        # face rows and tile dimensions; unset, an operand follows num_faces, face_r_dim and tile_dimensions as before.
+        self.per_operand_geometry = any(
+            v is not None
+            for v in (num_faces_A, num_faces_B, face_r_dim_A, face_r_dim_B, tile_dimensions_A, tile_dimensions_B, num_faces_res, face_r_dim_res)
+        )
+        self.num_faces_A = num_faces if num_faces_A is None else num_faces_A
+        self.num_faces_B = num_faces if num_faces_B is None else num_faces_B
+        self.face_r_dim_A = face_r_dim if face_r_dim_A is None else face_r_dim_A
+        self.face_r_dim_B = face_r_dim if face_r_dim_B is None else face_r_dim_B
+        self.tile_dimensions_A = tile_dimensions if tile_dimensions_A is None else tile_dimensions_A
+        self.tile_dimensions_B = tile_dimensions if tile_dimensions_B is None else tile_dimensions_B
+        self.num_faces_res = num_faces if num_faces_res is None else num_faces_res
+        self.face_r_dim_res = face_r_dim if face_r_dim_res is None else face_r_dim_res
 
         # Hardware flags injected by TestConfig via set_use_srcs() / set_srcs_32bit_mode()
         self.use_srcs = False
@@ -187,18 +215,19 @@ class StimuliConfig:
             self._operand_tile_size_bytes(name),
             self.num_faces,
             self.face_r_dim,
-            location,
         )
         if dense:
             StimuliConfig.write_matrix_w_tile_dimensions(
                 *common_args,
                 self.tile_dimensions,
+                location,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
         else:
             StimuliConfig.write_matrix(
                 *common_args,
+                location,
                 self.write_full_tiles,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
@@ -208,13 +237,13 @@ class StimuliConfig:
         """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
             self.stimuli_A_format,
-            self.tile_dimensions,
+            self.tile_dimensions_A,
             format_tile_sizes,
             use_srcs=self._operand_use_srcs("A"),
         )
         self.tile_size_B_bytes = calculate_tile_size_bytes(
             self.stimuli_B_format,
-            self.tile_dimensions,
+            self.tile_dimensions_B,
             format_tile_sizes,
             use_srcs=self._operand_use_srcs("B"),
         )
@@ -266,6 +295,14 @@ class StimuliConfig:
                 use_srcs=self._operand_use_srcs("Res"),
                 dest_acc=self._srcs_32bit_mode,
             )
+
+    @property
+    def operand_unpack_words(self):
+        """(tile size of unpacker 0, tile size of unpacker 1) in 16 byte words from the per-operand geometry, or None without one.
+        Unpacker 0 reads in1 (operand B) and unpacker 1 reads in0 (operand A), each strided by its own L1 tile size."""
+        if not self.per_operand_geometry:
+            return None
+        return self.tile_size_B_bytes // 16, self.tile_size_A_bytes // 16
 
     def set_use_srcs(self, unpack_to_srcs: bool):
         """Enable SrcS-interleaved L1 layout. Called by TestConfig."""
@@ -399,6 +436,10 @@ class StimuliConfig:
             DataFormat.Float16: pack_fp16,
             DataFormat.Float16_b: pack_bfp16,
             DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8: pack_bfp8,
+            DataFormat.Bfp4: pack_bfp4,
+            DataFormat.Bfp2: pack_bfp2,
+            DataFormat.Lf8: pack_lf8,
             DataFormat.Bfp8_b: pack_bfp8_b,
             DataFormat.Bfp4_b: pack_bfp4_b,
             DataFormat.Bfp2_b: pack_bfp2_b,
@@ -463,6 +504,18 @@ class StimuliConfig:
         return True
 
     @staticmethod
+    def _write_packed_tiles(location, base_address, tile_size, packed_tiles):
+        if len(packed_tiles) > 1 and all(
+            len(data) == tile_size for data in packed_tiles
+        ):
+            write_to_device(
+                location, base_address, b"".join(bytes(data) for data in packed_tiles)
+            )
+            return
+        for index, data in enumerate(packed_tiles):
+            write_to_device(location, base_address + index * tile_size, data)
+
+    @staticmethod
     def write_matrix(
         buffer,
         tile_count: int,
@@ -486,7 +539,6 @@ class StimuliConfig:
         ):
             return
 
-        addresses = []
         packed_data_list = []
 
         # Elements to pack per tile:
@@ -513,6 +565,7 @@ class StimuliConfig:
                     use_srcs=use_srcs,
                 )
             if pack_function in (
+                pack_bfp8,
                 pack_bfp8_b,
                 pack_bfp4_b,
                 pack_bfp2_b,
@@ -531,11 +584,11 @@ class StimuliConfig:
             start_idx = MAX_TILE_ELEMENTS * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        StimuliConfig._write_packed_tiles(
+            location, base_address, tile_size, packed_data_list
+        )
 
     @staticmethod
     def write_matrix_w_tile_dimensions(
@@ -561,11 +614,18 @@ class StimuliConfig:
         ):
             return
 
-        addresses = []
         packed_data_list = []
 
         tile_r, tile_c = tile_dimensions
         tile_elements = tile_r * tile_c  # Dense: use actual tile dimensions
+
+        if not use_srcs and tile_elements == num_faces * face_r_dim * FACE_C_DIM:
+            packed_data = pack_dense_tiles(
+                buffer, tile_count, pack_function, num_faces, face_r_dim
+            )
+            if packed_data is not None and len(packed_data) == tile_count * tile_size:
+                write_to_device(location, base_address, packed_data)
+                return
 
         def _pack_tile(buffer_tile):
             if pack_function in (
@@ -583,6 +643,7 @@ class StimuliConfig:
                     use_srcs=use_srcs,
                 )
             if pack_function in (
+                pack_bfp8,
                 pack_bfp8_b,
                 pack_bfp4_b,
                 pack_bfp2_b,
@@ -600,11 +661,11 @@ class StimuliConfig:
             start_idx = tile_elements * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        StimuliConfig._write_packed_tiles(
+            location, base_address, tile_size, packed_data_list
+        )
 
     def write(self, location: str = "0,0"):
         """
@@ -669,8 +730,8 @@ class StimuliConfig:
             pack_function_A,
             self.buf_a_addr,
             self.tile_size_A_bytes,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_A,
+            self.face_r_dim_A,
             location,
             self.write_full_tiles,
             use_srcs=self._operand_use_srcs("A"),
@@ -683,8 +744,8 @@ class StimuliConfig:
             pack_function_B,
             self.buf_b_addr,
             self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_B,
+            self.face_r_dim_B,
             location,
             self.write_full_tiles,
             use_srcs=self._operand_use_srcs("B"),
@@ -714,9 +775,9 @@ class StimuliConfig:
             pack_function_A,
             self.buf_a_addr,
             self.tile_size_A_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
+            self.num_faces_A,
+            self.face_r_dim_A,
+            self.tile_dimensions_A,
             location,
             use_srcs=self._operand_use_srcs("A"),
             twos_complement=self.twos_complement,
@@ -727,9 +788,9 @@ class StimuliConfig:
             pack_function_B,
             self.buf_b_addr,
             self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
+            self.num_faces_B,
+            self.face_r_dim_B,
+            self.tile_dimensions_B,
             location,
             use_srcs=self._operand_use_srcs("B"),
             twos_complement=self.twos_complement,
@@ -787,8 +848,8 @@ class StimuliConfig:
             fmt,
             count,
             sfpu,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_res if operand == "Res" else self.num_faces,
+            self.face_r_dim_res if operand == "Res" else self.face_r_dim,
             tile_stride_bytes=stride_bytes,
             use_srcs=use_srcs,
             dest_acc=self._srcs_32bit_mode,

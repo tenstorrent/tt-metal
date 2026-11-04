@@ -110,7 +110,7 @@ bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs
 
 // Conditions that depend on neither the padding nor L1, so routing can decline before building params.
 bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated()) {
         return false;
     }
     // The reader publishes its pad tile with a store-ordering idiom that does not cover Quasar's L2, so the forced
@@ -270,7 +270,7 @@ bool supported_by_codegen(
         return false;
     }
     if (optional_output.has_value() &&
-        (optional_output->storage_type() != ttnn::StorageType::DEVICE || optional_output->buffer() == nullptr ||
+        (optional_output->storage_type() != ttnn::StorageType::DEVICE || !optional_output->is_allocated() ||
          !output_matches(input, attrs, *optional_output))) {
         return false;
     }

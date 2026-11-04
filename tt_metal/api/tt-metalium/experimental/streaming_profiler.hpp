@@ -29,7 +29,7 @@
 //     Callback callback = RegisterCallback(
 //         [](const Batch<Zone>& batch) {
 //             for (const Zone& zone : batch.records<Zone>()) {
-//                 use(zone.site().name, zone.core().logical, zone.duration());
+//                 use(zone.descriptor().name, zone.core().logical, zone.duration());
 //             }
 //         },
 //         "my-tool");
@@ -43,8 +43,8 @@ struct SourceLocation {
     uint32_t line = 0;
 };
 
-/** @brief A marker's name and where it is written in kernel source code. */
-struct MarkerSite {
+/** @brief An observability event's name and where it is declared in device-side source code. */
+struct ObservabilityEventDescriptor {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
 };
@@ -63,7 +63,7 @@ struct Core {
     Processor processor = Processor::BRISC;
 };
 
-/** @brief Site name of a stall zone. */
+/** @brief Name of a stall zone. */
 inline constexpr std::string_view STALL_ZONE_NAME = "PROFILER-STALL";
 
 class Zone;
@@ -73,23 +73,25 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-inline constexpr uint32_t ZONE_ID_BITS = 27;
-inline constexpr uint32_t ZONE_LOCAL_BITS = 14;
-inline constexpr uint32_t ZONE_TU_COUNT = 1u << (ZONE_ID_BITS - ZONE_LOCAL_BITS);
+inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 27;
+inline constexpr uint32_t EVENT_DESCRIPTOR_LOCAL_BITS = 14;
+inline constexpr uint32_t EVENT_DESCRIPTOR_TU_COUNT = 1u << (EVENT_DESCRIPTOR_ID_BITS - EVENT_DESCRIPTOR_LOCAL_BITS);
 
-struct SiteTu {
-    std::span<const MarkerSite* const> sites;
+struct DescriptorTu {
+    std::span<const ObservabilityEventDescriptor* const> descriptors;
 };
-struct SiteRegistry {
-    static std::atomic<const SiteTu*> tus[ZONE_TU_COUNT];
+struct DescriptorRegistry {
+    static std::atomic<const DescriptorTu*> tus[EVENT_DESCRIPTOR_TU_COUNT];
 };
-inline constexpr MarkerSite UNNAMED_SITE{};
+inline constexpr ObservabilityEventDescriptor UNNAMED_DESCRIPTOR{};
 
-inline const MarkerSite& site_of(uint32_t zone_id) {
-    const SiteTu* tu = SiteRegistry::tus[zone_id >> ZONE_LOCAL_BITS].load(std::memory_order_acquire);
-    const uint32_t local = zone_id & ((1u << ZONE_LOCAL_BITS) - 1u);
-    const MarkerSite* s = tu != nullptr && local < tu->sites.size() ? tu->sites[local] : nullptr;
-    return s != nullptr ? *s : UNNAMED_SITE;
+inline const ObservabilityEventDescriptor& descriptor_of(uint32_t descriptor_id) {
+    const DescriptorTu* tu =
+        DescriptorRegistry::tus[descriptor_id >> EVENT_DESCRIPTOR_LOCAL_BITS].load(std::memory_order_acquire);
+    const uint32_t local = descriptor_id & ((1u << EVENT_DESCRIPTOR_LOCAL_BITS) - 1u);
+    const ObservabilityEventDescriptor* s =
+        tu != nullptr && local < tu->descriptors.size() ? tu->descriptors[local] : nullptr;
+    return s != nullptr ? *s : UNNAMED_DESCRIPTOR;
 }
 
 struct BatchData;
@@ -102,11 +104,11 @@ inline constexpr uint32_t record_bit = []<std::size_t... I>(std::index_sequence<
 }(std::make_index_sequence<std::tuple_size_v<RecordSpans>>());
 }  // namespace detail
 
-/** @brief Base class of every record, holding its site, core and program runtime ID. */
+/** @brief Base class of every record, holding its observability event's descriptor id, core and program runtime ID. */
 class Record {
 public:
-    /** @brief The marker this record came from. */
-    const MarkerSite& site() const { return detail::site_of(zone_id_); }
+    /** @brief The descriptor of the observability event this record came from. */
+    const ObservabilityEventDescriptor& descriptor() const { return detail::descriptor_of(descriptor_id_); }
     /** @brief The core that emitted the record. */
     Core core() const {
         return Core{
@@ -128,7 +130,7 @@ protected:
     }
 
     uint64_t device_cycles_ = 0;
-    uint32_t zone_id_ = 0;
+    uint32_t descriptor_id_ = 0;
     uint32_t runtime_id_ = 0;
     uint8_t logical_x_ = 0, logical_y_ = 0, physical_x_ = 0, physical_y_ = 0;
     uint16_t chip_id_ = 0;
@@ -152,7 +154,7 @@ private:
 /**
  * @brief One closed DeviceZoneScopedN scope.
  *
- * A stall, the time a core spent waiting for the profiler to drain its records, is delivered as a Zone with site name
+ * A stall, the time a core spent waiting for the profiler to drain its records, is delivered as a Zone with name
  * STALL_ZONE_NAME.
  */
 class Zone : public Record {
@@ -184,15 +186,15 @@ private:
 /** @brief Base class of records that mark one instant. */
 class PointRecord : public Record {
 public:
-    /** @brief When the marker was recorded, on steady_clock. */
+    /** @brief When the event was recorded, on steady_clock. */
     std::chrono::steady_clock::time_point time() const { return tsc_to_steady(tsc_); }
-    /** @brief When the marker was recorded, in host reference cycles (the x86 time-stamp counter). */
+    /** @brief When the event was recorded, in host reference cycles (the x86 time-stamp counter). */
     int64_t host_cycles() const { return tsc_; }
-    /** @brief When the marker was recorded, in the core's own clock cycles. */
+    /** @brief When the event was recorded, in the core's own clock cycles. */
     uint64_t device_cycles() const { return device_cycles_; }
 };
 
-/** @brief One DeviceTimestampedData marker and the values it recorded. */
+/** @brief One DeviceTimestampedData event and the values it recorded. */
 class TimestampedData : public PointRecord {
 public:
     TimestampedData() = default;
@@ -201,7 +203,7 @@ public:
     TimestampedData& operator=(TimestampedData other) noexcept;
     ~TimestampedData();
 
-    /** @brief The marker's values. */
+    /** @brief The event's values. */
     std::span<const uint64_t> payload() const { return {values_, value_count_}; }
 
 private:
@@ -209,7 +211,7 @@ private:
     const uint64_t* values_ = nullptr;
 };
 
-/** @brief One DeviceRecordEvent marker. */
+/** @brief One DeviceRecordEvent. */
 class Event : public PointRecord {};
 
 /** @brief A type a Batch can hold: Zone, TimestampedData or Event. */

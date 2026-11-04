@@ -268,6 +268,18 @@ def run_reduce_scatter_test(
                 memory_config=output_mem_config,
                 qkv_memory_config=qkv_mem_config,
             )
+            # Output TensorTopology: the reduce_scatter sums along the columns and scatters the ROWS, which become
+            # output dim 1 (batch); input dim 0 stays dim 0. So q, k and v are Shard(0) on the rows and Shard(1) on
+            # the columns -- the layout ConcatMesh2dToTensor dims=(0, 1) below composes against the row-sliced golden.
+            for tt_out in (tt_out_tensor_q, tt_out_tensor_k, tt_out_tensor_v):
+                assert [repr(p) for p in tt_out.tensor_topology().placements()] == [
+                    "PlacementShard(0)",
+                    "PlacementShard(1)",
+                ]
+                assert tuple(int(d) for d in tt_out.tensor_topology().distribution_shape()) == (
+                    num_devices_fracture,
+                    num_devices_scatter,
+                )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:

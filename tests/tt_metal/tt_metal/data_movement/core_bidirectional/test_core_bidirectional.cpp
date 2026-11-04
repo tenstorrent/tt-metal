@@ -44,7 +44,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const CoreBidirectionalConfig&
     /* ================ SETUP ================ */
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;

@@ -187,6 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the value format before the SFPU network; the TopK value
     // SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
     const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(value_math_format, value_math_format);
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
@@ -209,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_index        = static_cast<int>(stage);
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                    _configure_alu_formats_<is_fp32_dest_acc_en>(
                         math_format, math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
@@ -222,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-                _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                _configure_alu_formats_<is_fp32_dest_acc_en>(
                     value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).

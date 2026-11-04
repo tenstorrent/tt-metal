@@ -6,10 +6,12 @@
 // Exercises the dispatcher op-id -> Inspector operationName/parameters decode path
 // in tools/triage/dump_running_operations.py.
 
-#include <cstdio>
+#include <csignal>
 #include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 #include <string>
+#include <sys/prctl.h>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -28,6 +30,10 @@ int main() {
     // Killed while hung -- which is the whole point of this app -- we still have to release the
     // simulator, so exit rather than die on SIGTERM.
     tt::tt_metal::triage_hang_apps::stop_simulation_on_termination();
+    if (std::getenv("TT_TRIAGE_HANG_APP_STAY_ALIVE")) {
+        // If the test process dies without stopping us, die with it instead of holding the card forever.
+        ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+    }
 
     auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
 
@@ -65,7 +71,13 @@ int main() {
         }
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
-            printf("Device timeout detected as expected.\n");
+            std::cout << "Device timeout detected as expected." << std::endl;  // test_triage.py waits for this line
+            if (std::getenv("TT_TRIAGE_HANG_APP_STAY_ALIVE")) {
+                // Stay alive so triage reads this process's Inspector RPC; test_hang_report.py needs the exit.
+                for (;;) {
+                    ::pause();
+                }
+            }
             std::_Exit(0);
         }
         throw;

@@ -116,6 +116,14 @@ void kernel_main() {
     const auto s3 = TensorAccessor(tensor::trans_mat);
 
     DataflowBuffer dfb_input(dfb::input);
+#if ROW_MAJOR_OUTPUT
+    // Row-major output: compute untilizes each tile row's prefix tiles with its rotated ones, so the reader fetches
+    // them.
+    constexpr auto prefix_Wt = get_arg(args::prefix_Wt);
+    const auto s_prefix = TensorAccessor(tensor::concat_prefix);
+    DataflowBuffer dfb_prefix(dfb::prefix);
+    const uint32_t prefix_tile_bytes = dfb_prefix.get_entry_size();
+#endif
     DataflowBuffer dfb_cos(dfb::cos);
     DataflowBuffer dfb_sin(dfb::sin);
     DataflowBuffer dfb_trans_mat(dfb::trans_mat);
@@ -206,6 +214,22 @@ void kernel_main() {
 
                 noc.async_read_barrier();
                 dfb_input.push_back(Wt);
+#if ROW_MAJOR_OUTPUT
+                dfb_prefix.reserve_back(prefix_Wt);
+                uint32_t prefix_l1_write_addr = dfb_prefix.get_write_ptr();
+                const uint32_t prefix_first_page = ((batch_id * n_heads + head_num) * Ht + seq_tile) * prefix_Wt;
+                for (uint32_t col = 0; col < prefix_Wt; ++col) {
+                    noc.async_read(
+                        s_prefix,
+                        CoreLocalMem<uint32_t>(prefix_l1_write_addr),
+                        prefix_tile_bytes,
+                        {.page_id = prefix_first_page + col},
+                        {});
+                    prefix_l1_write_addr += prefix_tile_bytes;
+                }
+                noc.async_read_barrier();
+                dfb_prefix.push_back(prefix_Wt);
+#endif
 #if RELOAD_IMPL == 1
                 dfb_sin.push_back(Wt);
                 dfb_cos.push_back(Wt);

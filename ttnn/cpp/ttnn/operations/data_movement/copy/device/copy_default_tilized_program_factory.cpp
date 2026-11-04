@@ -41,7 +41,7 @@ constexpr const char* KERNEL_READER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* KERNEL_WRITER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
-constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
+constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY_METAL2 =
     "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp";
 
 }  // namespace
@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source = KERNEL_COMPUTE_ELTWISE_COPY,
+        .source = KERNEL_COMPUTE_ELTWISE_COPY_METAL2,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
