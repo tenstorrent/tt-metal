@@ -15,7 +15,7 @@ import ttnn
 import torch
 from typing import Optional, List, Dict, Any, NamedTuple
 
-from .tt_spatial_cross_attention import SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
+from .tt_spatial_cross_attention import SCARebatchPlan, SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
 from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
@@ -34,12 +34,16 @@ class CameraProjection(NamedTuple):
     Attributes:
         reference_points_cam: Bfloat16 ``[num_cams, B, num_queries, D, 2]``.
         bev_mask: Bfloat16 ``[num_cams, B, num_queries, D]``.
-        visibility: The encoder planner's :meth:`SCARebatchPlanner.visibility` of ``bev_mask``.
+        visibility: The encoder planner's :meth:`SCARebatchPlanner.count_visible` of ``bev_mask``,
+            with its counts' readback queued once :meth:`SCARebatchPlanner.read_counts` has run.
+        rebatch_plan: The plan built from ``visibility``; None until a caller builds it, and the
+            encoder then builds it itself.
     """
 
     reference_points_cam: ttnn.Tensor
     bev_mask: ttnn.Tensor
     visibility: SCAVisibility
+    rebatch_plan: Optional[SCARebatchPlan] = None
 
 
 class TTBEVFormerLayer:
@@ -430,6 +434,11 @@ class TTBEVFormerEncoder:
             projection = ttnn.from_torch(
                 self.projection_rows(img_metas), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
+        cameras = self.project_cameras_on_device(projection)
+        return cameras._replace(visibility=self.rebatch_planner.read_counts(cameras.visibility))
+
+    def project_cameras_on_device(self, projection) -> CameraProjection:
+        """:meth:`project_cameras` without the readback: device work only, as a trace records it."""
         reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
             reference_points=None,
             pc_range=self.pc_range,
@@ -441,7 +450,7 @@ class TTBEVFormerEncoder:
             # Projected in float32; bfloat16 is the only dtype the rebatch plan's gather takes.
             output_dtype=ttnn.bfloat16,
         )
-        return CameraProjection(reference_points_cam, bev_mask, self.rebatch_planner.visibility(bev_mask))
+        return CameraProjection(reference_points_cam, bev_mask, self.rebatch_planner.count_visible(bev_mask))
 
     def projection_rows(self, img_metas) -> torch.Tensor:
         """Host projection rows (``tt_point_sampling_3d_2d.camera_rows``) of the frame's cameras over
@@ -482,7 +491,8 @@ class TTBEVFormerEncoder:
             shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
                 with ``prev_bev``.
             img_metas: Camera metadata, projected here with :meth:`project_cameras`; not with ``cameras``.
-            cameras: The frame's :meth:`project_cameras`, made ahead of the forward.
+            cameras: The frame's :meth:`project_cameras`, made ahead of the forward. Its plan is built
+                here, waiting for the counts, unless it carries one.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
@@ -523,9 +533,10 @@ class TTBEVFormerEncoder:
             cameras = self.project_cameras(img_metas)
         reference_points_cam, bev_mask, rebatch_plan = None, None, None
         if cameras is not None:
-            reference_points_cam, bev_mask, visibility = cameras
+            reference_points_cam, bev_mask, visibility, rebatch_plan = cameras
             # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-            rebatch_plan = self.rebatch_planner(reference_points_cam, visibility)
+            if rebatch_plan is None:
+                rebatch_plan = self.rebatch_planner(reference_points_cam, visibility)
 
         signpost(header="BEVEncoder Reference Points End")
 

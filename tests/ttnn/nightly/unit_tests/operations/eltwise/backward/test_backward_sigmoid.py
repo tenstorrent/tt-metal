@@ -31,23 +31,12 @@ def test_bw_sigmoid(input_shapes, device):
     assert comp_pass
 
 
-# Exhaustive BF16 accuracy of ttnn.sigmoid_bw.
+# Exhaustive BF16 accuracy of ttnn.sigmoid_bw: every BF16 bit pattern with each gradient in SIGMOID_BW_GRADS.
 #
-# Every BF16 bit pattern is paired with each gradient in GRADS. The reference is grad times
-# torch.exp(-x.abs()) / (1.0 + torch.exp(-x.abs())) ** 2, the exact derivative of torch.sigmoid(x), in
-# float64 at every finite input (float64 autograd rounds it, as where the forward rounds to its
-# limit), and torch autograd at the others, rounded once to BF16 with subnormal results flushed to
-# zero.
-# The SFPU may read a subnormal operand as zero, so torch is evaluated both at the operands and at
-# the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
-# path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
-# the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
-# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for
-# main's single program's on the same operands.
-# The output is 0 wherever |x| >= 131.698, where even exp(-|x|) * 2^64 is below the smallest normal,
-# for a finite grad, as main's single program computes it; torch keeps the exact product.
+# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
+# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# Declared lanes, as main's single program computes them unless noted: 0 wherever |x| >= 131.698, where even
+# exp(-|x|) * 2^64 is below the smallest normal, for a finite grad.
 SIGMOID_BW_GRADS = [
     "1",
     "-1",
@@ -96,8 +85,8 @@ def _sigmoid_bw_torch_reference(grad, x, flush):
         )
 
 
-def _sigmoid_bw_reference(grad, x, flush, board):
-    """Torch, except on the declared lanes in the module docstring."""
+def _sigmoid_bw_reference(grad, x, flush):
+    """Torch, except on the declared lanes."""
     result = _sigmoid_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(torch.isfinite(grad) & (x32.abs() >= 131.69798278808594), torch.zeros_like(result), result)
@@ -161,29 +150,18 @@ def test_sigmoid_bw_exhaustive_bfloat16(grad, device):
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_g = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.sigmoid_bw(tt_g, tt_x)[0]).to(torch.bfloat16)
-    # Main's single program on the same operands: a gradient in L1 beside an input in DRAM keeps it.
-    tt_g_l1 = ttnn.from_torch(
-        g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    stock = ttnn.to_torch(ttnn.sigmoid_bw(tt_g_l1, tt_x)[0]).to(torch.bfloat16)
-
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    (ours, ours_classes), (composite, composite_classes) = _sigmoid_bw_versus_torch(
-        g, x, actual
-    ), _sigmoid_bw_versus_torch(g, x, stock)
-    print(
-        f"ULP sigmoid_bw {board} ours={ours:.3f} stock={composite:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
-    )
+    ours, ours_classes = _sigmoid_bw_versus_torch(g, x, actual)
+    print(f"ULP sigmoid_bw {board} ours={ours:.3f} ours_class_mismatches={ours_classes} grad={grad}")
     ulp = torch.minimum(
-        _sigmoid_bw_pure_ulp(_sigmoid_bw_reference(g, x, False, board), actual),
-        _sigmoid_bw_pure_ulp(_sigmoid_bw_reference(g, x, True, board), actual),
+        _sigmoid_bw_pure_ulp(_sigmoid_bw_reference(g, x, False), actual),
+        _sigmoid_bw_pure_ulp(_sigmoid_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
         f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
-        f"expected {_sigmoid_bw_reference(g, x, False, board).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
+        f"expected {_sigmoid_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
@@ -201,6 +179,7 @@ SIGMOID_BW_FUSED_CALLS = (
     "sharded_to_interleaved",
     "interleaved_to_sharded",
     "mixed_placements",
+    "grad_in_l1",
 )
 
 
@@ -299,9 +278,8 @@ def _sigmoid_bw_placements(shape):
     ],
 )
 def test_sigmoid_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in tiles, interleaved or sharded in L1 or DRAM, with one placement or
-    an output config run the fused program and match torch; every other call keeps main's single program,
-    which broadcasts and takes any layout, placement and dtype."""
+    """BF16 tiles of one shape, interleaved or sharded in L1 or DRAM, in any placements or an output config, run
+    the fused program and match torch; every other call keeps main's single program."""
     shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
@@ -310,7 +288,6 @@ def test_sigmoid_bw_runs_the_fused_program_only_where_it_applies(call, device):
     layouts = {"row_major": (ttnn.ROW_MAJOR_LAYOUT,) * 2, "mixed_layouts": (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)}
     grad_layout, input_layout = layouts.get(call, (ttnn.TILE_LAYOUT,) * 2)
     placements = _sigmoid_bw_placements(shape)
-    shard = placements["height_sharded"][0]
     grad_memory, input_memory, output_memory = placements.get(
         call, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None)
     )
@@ -334,7 +311,7 @@ def test_sigmoid_bw_runs_the_fused_program_only_where_it_applies(call, device):
     assert error is None, error
     expected = _sigmoid_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
-    if call != "interleaved_tiles" and call in SIGMOID_BW_FUSED_CALLS:
+    if call != "interleaved_tiles":
         # A layout moves tiles, not arithmetic: the result is where the call asks for it, and is the
         # interleaved call's bit for bit, so the exhaustive test's accuracy holds in every layout.
         placement = tt_x.memory_config()

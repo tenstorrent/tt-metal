@@ -144,6 +144,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/2_0/internal/llk_descriptor.h
     inc/api/compute/experimental/add_rsqrt.h
     inc/api/compute/experimental/block_max8.h
+    inc/api/compute/experimental/cluster_semaphore.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/compute_kernel_hw_cleanup.h
     inc/api/compute/experimental/csa_index_remap.h
@@ -241,7 +242,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h
-    inc/hostdev/profiler_zone_id.h
+    inc/hostdev/observability_event_descriptor.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
@@ -293,6 +294,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/watcher_common.h
     inc/internal/ethernet/dataflow_api.h
     inc/internal/ethernet/erisc.h
+    inc/internal/ethernet/eth_fw_stage.h
     inc/internal/ethernet/eth_ptp.hpp
     inc/internal/ethernet/tt_eth_api.h
     inc/internal/ethernet/tt_eth_ss_regs.h
@@ -436,5 +438,4 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
-    inc/api/compute/sigmoid_bw.h
 )

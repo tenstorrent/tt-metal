@@ -2,20 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Device kernel time of ttnn.sigmoid_bw's fused program against main's single program.
+"""Device kernel time of ttnn.sigmoid_bw's fused program, alone: main's single program serves none of its calls
+in this build."""
 
-Both run in one profiled process on the same BF16 operands, a gradient in L1 beside an input in
-DRAM: without an output placement that call keeps main's single program, and with main's single program's output
-placement it runs the fused program, so both write the same memory. A call's time is the device
-kernel duration summed over the programs it launches, the median of REPEATS calls.
-The fused program installs as an accuracy tier on every board it serves (CHARTER C-SEL-1): more
-accurate than main's single program, whose own max pure ULP is 1 or more, and allowed to be slower. The
-test reports both times and holds each call only to launching a program.
-
-The fused program serves the other memory layouts too, where no call of this build runs
-main's single program; the layout test times each one.
-"""
+import os
 
 import pandas as pd
 import pytest
@@ -31,16 +21,15 @@ FUSED_BOARDS = (
     "wormhole_b0",
 )
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_sigmoid_bw_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 
 
 def _calls(tt_g, tt_x):
-    composite = ttnn.sigmoid_bw(tt_g, tt_x)[0]
-    placement = composite.memory_config()
-    ttnn.deallocate(composite)
-    return {
-        "composite": lambda: ttnn.sigmoid_bw(tt_g, tt_x)[0],
-        "fused": lambda: ttnn.sigmoid_bw(tt_g, tt_x, memory_config=placement)[0],
-    }
+    return {"fused": lambda: ttnn.sigmoid_bw(tt_g, tt_x)[0]}
 
 
 def _bits(tensor):
@@ -59,6 +48,7 @@ def _runs_fused(call):
     )
 
 
+@IN_PROFILER
 def test_sigmoid_bw_profiled_calls(device):
     """The calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost
@@ -124,15 +114,12 @@ def test_sigmoid_bw_device_perf():
     regions = _kernel_ns_per_region(get_latest_ops_log_filename(subdir))
     for height, width in SHAPES:
         per_call = {}
-        for path in ("composite", "fused"):
+        for path in ("fused",):
             measured = [regions[f"{path}-{height}x{width}-{repeat}"] for repeat in range(REPEATS)]
             assert all(programs for _, programs in measured), f"a {path} call at {height}x{width} launched no program"
             per_call[path] = (sorted(ns for ns, _ in measured)[REPEATS // 2], measured[0][1])
-        (composite, composite_programs), (fused, fused_programs) = per_call["composite"], per_call["fused"]
-        logger.info(
-            f"DEVICE_PERF sigmoid_bw {board} {height}x{width} composite={composite:.0f}ns ({composite_programs} programs) "
-            f"fused={fused:.0f}ns ({fused_programs} programs) speedup={composite / fused:.2f}x"
-        )
+        fused, fused_programs = per_call["fused"]
+        logger.info(f"DEVICE_PERF sigmoid_bw {board} {height}x{width} fused={fused:.0f}ns ({fused_programs} programs)")
 
 
 def _layouts(shape, device):
@@ -183,6 +170,7 @@ LAYOUTS = (
 )
 
 
+@IN_PROFILER
 @pytest.mark.parametrize("name", LAYOUTS)
 def test_sigmoid_bw_layout_profiled_calls(name, device):
     """A layout's call, both operands in it, between signposts that name it. This build runs every layout on

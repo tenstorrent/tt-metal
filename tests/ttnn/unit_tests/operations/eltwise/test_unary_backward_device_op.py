@@ -124,8 +124,7 @@ def test_sigmoid_bw_bfloat16_keeps_intermediates_in_float32(device):
     (1 - s) keeps only a couple of significant bits. This call runs the generated BF16 kernel
     (SIGMOID_BW_BF16), which forms the derivative from exp(-|x|) without 1 - s; the float32-DEST
     kernel (UnaryBackwardKernelSpec::force_fp32_dest_acc) serves the calls it does not, and
-    test_backward_sigmoid.py value-checks those. A composite of bfloat16 forward ops, writing each
-    intermediate back to L1, could not hold this error. This pins that gain."""
+    test_backward_sigmoid.py value-checks those. This pins that gain."""
     torch.manual_seed(0)
     shape = (1, 1, 32, 32)
     torch_input = torch.randn(shape, dtype=torch.float32) * 4.0

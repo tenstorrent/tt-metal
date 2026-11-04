@@ -371,6 +371,7 @@ private:
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
+    void DumpEthFwStage() const;
     void DumpSyncRegs() const;
     // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
     // programmed remapper pairs so the bypass dump can skip them.
@@ -754,6 +755,11 @@ void WatcherDeviceReader::Core::Dump() const {
 
     // Dump state always available
     DumpLaunchMessage();
+    // Always-on Metal ethernet firmware stage breadcrumb (written unconditionally by eth FW, so it is
+    // available even when the core was not compiled with watcher instrumentation).
+    if (is_eth_core) {
+        DumpEthFwStage();
+    }
     // Ethernet and DRAM cores don't use the sync reg
     if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
@@ -1340,6 +1346,20 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     } else {
         fmt::print(reader_.f, "{:>4}  ", fmt::join(risc_status, ","));
     }
+}
+
+void WatcherDeviceReader::Core::DumpEthFwStage() const {
+    const auto& hal = reader_.env.get_hal();
+    const std::vector<uint32_t> slots = tt::llrt::read_eth_fw_stage_slots(
+        hal, reader_.env.get_cluster(), reader_.device_id, virtual_coord_, programmable_core_type_);
+    if (slots.empty()) {
+        // FW stage breadcrumb not mapped for this arch (only instrumented on Blackhole).
+        return;
+    }
+    fprintf(
+        reader_.f,
+        "fw_stage:%s  ",
+        tt::llrt::format_eth_fw_stage_slots(hal, programmable_core_type_, slots, "|").c_str());
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {

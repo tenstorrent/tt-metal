@@ -344,7 +344,8 @@ def check_plan(plan, mask, points):
     rebatch_len = plan.rebatch_len
     expected = host_plan(mask, rebatch_len)
     assert int(expected["num_valid"].max()) < rebatch_len, "the plan holds fewer rows than a camera sees"
-    assert plan.num_valid_queries == tuple(expected["num_valid"].tolist())
+    assert plan.num_valid_queries.dtype == ttnn.uint32
+    assert ttnn.to_torch(plan.num_valid_queries).tolist() == expected["num_valid"].flatten().tolist()
 
     row_mask = ttnn.to_torch(plan.row_mask).flatten().view(bs * num_cams, rebatch_len)
     expected_rows = torch.arange(rebatch_len) < expected["num_valid"].view(-1, 1)
