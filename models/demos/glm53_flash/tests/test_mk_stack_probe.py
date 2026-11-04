@@ -96,7 +96,7 @@ def test_mk_stack_probe(mesh_device):
                     f"MK_GEO: {role}: {dict((k, v) for k, v in g.items() if k != 'w_dtype')} dtype {g.get('w_dtype')}"
                 )
             logger.info(
-                f"MK_GEO rings {rd0.rings} slots {rd0.ring_slots} readers {len(rd0.assign)} in0_cap {rd0.in0_cap} nr_max {rd0.nr_max}"
+                f"MK_GEO rings {rd0.rings} slots {rd0.ring_slots} readers {len(rd0.assign)} in0_cap {getattr(rd0, 'in0_cap', None)} nr_max {getattr(rd0, 'nr_max', None)}"
             )
     if os.environ.get("GLM53_MK_CBDUMP", "0") == "1":  # the composed program's CB placement (tt/cb_guard.py replay)
         from models.autoports.zai_org_glm_5_3_flash.tt import cb_guard
