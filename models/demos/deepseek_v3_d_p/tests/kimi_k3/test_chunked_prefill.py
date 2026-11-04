@@ -1,19 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3 prefilled in 5120- and 2560-token chunks, carried across 56320 tokens of the traces.
+"""Kimi-K3 prefilled in 5120-, 2560- and 2048-token chunks, carried across ~55k tokens of the traces.
 
 The depth ladder proves one chunk. This proves the thing a chunk cannot: that the KDA recurrent
-carry survives the boundary between chunks and still equals the model's own, twenty times in a row.
+carry survives the boundary between chunks and still equals the model's own, at every boundary.
 That is the part of Kimi-K3 with genuine cross-chunk state — AttnRes has none, since every one of its
 reductions is over the hidden dimension and the token axis is a free batch axis, so each chunk opens
 a fresh walk while the KDA carries advance.
 
-Two chunk sizes. The KDA recurrence's shortest sequence on this mesh is `ttnn.TILE_SIZE(32) *
+Three chunk sizes. The KDA recurrence's shortest sequence on this mesh is `ttnn.TILE_SIZE(32) *
 summary_group_chunks * SP(8)`, and `kimi_k3_program_config` picks the group per local length: 20 at 640
-rows per chip (5120 tokens) and 10 at 320 (2560). Both cover the same 56320 tokens, so each is held to the
-same golden at the same bars, and `test_chunk_sizes_agree` compares the two runs' KV and KDA carries
-directly.
+rows per chip (5120 tokens), 10 at 320 (2560) and 8 at 256 (2048). Each covers the same golden at the
+same bars (2048 stops at a whole number of chunks, 55296 tokens), and `test_chunk_sizes_agree` compares
+the 5120 and 2560 runs' KV and KDA carries directly.
 
 Two oracles, and the second is the one that matters:
 
@@ -27,7 +27,7 @@ The golden stores the carry as `[heads, v_dim, k_dim]` and the layer produces `[
 v_dim]`. Both are `[96, 128, 128]`, so omitting the transpose reports PCC ~0.01 and looks exactly
 like a broken recurrence. `test_kda_golden.py` pins that convention; this file just obeys it.
 
-Twenty chunks also covers the standing memory gate: device DRAM is sampled after every chunk and
+The chunk sequence also covers the standing memory gate: device DRAM is sampled after every chunk and
 must not grow, which is what would catch the KDA carries or the walk's per-block batches leaking.
 """
 
@@ -107,7 +107,7 @@ SNAPSHOT_STRIDE = 640
 SHALLOW_OUTPUT_PCC = 0.99
 DEEP_OUTPUT_PCC = 0.98
 # The bars are scored per chunk, and the score falls with context depth, so a smaller chunk's last window holds only
-# the deepest tokens of the same 55k. Measured at depth 24 (layer 19, the worst at every size; jobs 168797/168917):
+# the deepest tokens of the same 55k. Measured at depth 24 (layer 19, the worst at every size):
 # 5120's last chunk [51200, 56320) scores 0.9809, while 2560 splits the same tokens into 0.9811 and 0.9791 and
 # 2048's last chunk [53248, 55296) scores 0.9784. 2048 keeps the TP-deduped KV and drops the same as 2560, so this
 # is the window, not the KV layout. Chunk 0 is 0.985-0.986 at all three sizes.
@@ -159,8 +159,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
     # TP-deduped KV stripes each chip's chunk region over the TP ranks in whole tiles: 5120 / SP8 / TP4 = 160 rows
     # each, but 2560 gives 80, which ring_mla's split-KV path cannot stripe. So 2560 keeps the TP-replicated KV
     # (every TP rank holds the chip's whole 320-row region), 4x the KV bytes per chip.
-    rows, columns = tuple(mesh_device.shape)
-    tp_shard_kv = (chunk_len // (rows, columns)[SP_AXIS]) % ((rows, columns)[TP_AXIS] * ttnn.TILE_SIZE) == 0
+    tp_shard_kv = (chunk_len // mesh_device.shape[SP_AXIS]) % (mesh_device.shape[TP_AXIS] * ttnn.TILE_SIZE) == 0
     # A whole number of chunks: the deduped KV cache asserts it, and 56320 is not a multiple of 2048.
     cache_len = _num_chunks(chunk_len) * chunk_len
     checkpoint = resolve_checkpoint()
@@ -248,7 +247,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
     # the causal depthwise conv's history — kernel 4, so 3 tokens by 3*q_dim channels — and it has to
     # cross the boundary too, or the FIRST THREE TOKENS of every chunk convolve against zeros
     # instead of the tail of the previous chunk. That is a small, localized error that per-chunk PCC
-    # over 5120 tokens would comfortably hide, which is exactly why it needs its own oracle.
+    # over a whole chunk would comfortably hide, which is exactly why it needs its own oracle.
     golden_conv = trace.rows("kda", "kda_conv_state_layer_0") if trace.has("kda", "kda_conv_state_layer_0") else None
     deep_bar = DEEP_OUTPUT_PCC if chunk_len >= 5120 else SMALL_CHUNK_DEEP_OUTPUT_PCC
     output_pcc_bar = deep_bar if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_OUTPUT_PCC
@@ -295,7 +294,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
         output_pcc = min(layer_pccs.values())
         per_chunk_layer_pccs[chunk] = layer_pccs
 
-        # Snapshots land every 640 tokens, so the boundary after chunk k is row 8(k+1) - 1. The
+        # Snapshots land every 640 tokens, so the boundary after chunk k is row (k+1) * chunk_len / 640 - 1. The
         # golden's [heads, v_dim, k_dim] needs transposing into the layer's [heads, k_dim, v_dim].
         conv_pcc = float("nan")
         on_snapshot = (start + chunk_len) % SNAPSHOT_STRIDE == 0
@@ -489,4 +488,6 @@ def test_chunk_sizes_agree(mesh_device, device_params):
                 other.kda_carries[layer][name],
                 AGREE_CARRY_PCC,
             )
-    assert not failures, "prefill at 2560-token chunks disagrees with 5120: " + "; ".join(failures)
+    assert not failures, f"prefill at {AGREE_SIZES[1]}-token chunks disagrees with {AGREE_SIZES[0]}: " + "; ".join(
+        failures
+    )

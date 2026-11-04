@@ -278,7 +278,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_runner_kv_cache_table -k "torus-xy and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and ((seq5k and c5120) or (seq10k and c2048))" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
     '
@@ -492,7 +492,7 @@
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       # Production's 5,120-token chunk at depth 24, plus a small chunk: 2,048 at depth 5 on the TP-deduped KV
-      # cache, the layout serving uses (~5 min). 4x4 stages at 2,560 join once they land (#61481).
+      # cache, the layout serving uses (~5 min).
       timeout -k 2m 100m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py::test_chunked_prefill_carries_kda_state -k "(L24 and c5120) or (L5 and c2048)" -vvv --tb=short

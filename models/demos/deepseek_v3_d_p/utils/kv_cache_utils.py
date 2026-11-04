@@ -423,7 +423,8 @@ def populate_kv_chunk_address_table_block_cyclic(
             A compacted cache passes its dense -> global layer map here; DRAM addresses do not move.
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
-            linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
+            linear chip row*tp + col owns tokens [seq_chunk*C + row*(C/sp) + col*(C/(sp*tp)), +C/(sp*tp)),
+            C = chunk_size_global.
         chunk_size_global: the block-cyclic period, i.e. the runtime's prefill chunk size (default 5120).
         alias_rows: {alias table row: source table row}; each alias gets every location its source does.
             Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
@@ -454,8 +455,8 @@ def populate_kv_chunk_address_table_block_cyclic(
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
         rows = mesh_shape[0]
 
-        tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks
-        num_chunks_per_seq_len = seq_len // chunk_size_global  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks on SP=8
+        num_chunks_per_seq_len = seq_len // chunk_size_global
 
         assert seq_len % chunk_size_global == 0, f"seq_len {seq_len} must be a multiple of {chunk_size_global}"
 
@@ -553,7 +554,7 @@ def populate_kv_chunk_address_table_block_cyclic(
         tt_kvpe_cache.shape[0] == num_users * num_layers
     ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
 
-    tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks
+    tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks on SP=8
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
         f"{chunk_size_global} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
