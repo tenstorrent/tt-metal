@@ -193,8 +193,10 @@ void kernel_main() {
     // ------------------------------------------------------------------------------------------------------------
     auto stream_block = [&](uint32_t R, uint32_t skv, const BlockMask& bm, bool first) {
         const uint32_t sbw = subblock_w(skv);
-        const uint32_t sum_cb = first ? cb_sum_acc : cb_sum_blk;
-        const uint32_t out_cb = first ? cb_out_acc : cb_out_blk;
+        // Single accumulators: block 0 fills l_acc / O_acc; every later block corrects them in place inside S2
+        // (l_acc = rowsum P + a*l_acc, O_acc = P.V + a*O_acc), so there is no l_blk / O_blk and no rescale pass.
+        constexpr uint32_t sum_cb = cb_sum_acc;
+        constexpr uint32_t out_cb = cb_out_acc;
         Src src{cb_k, cb_q};
         reconfig_data_format(cb_k, cb_q);  // unconditional: the previous block's helpers left any state
         pack_reconfig_data_format(cb_scores);
@@ -250,23 +252,40 @@ void kernel_main() {
         };
 
         // ---- S1 chunk: P_i cols [c0, c0+w) = exp(s (S_i - m_i)) in place; exp on the PACK thread ----
-        auto exp_chunk = [&](uint32_t i, uint32_t c0, uint32_t w) {
+        // with_a: the row's correction factor a_i = exp(s (m_acc_i - m_blk_i)) rides in DEST slot w of the same
+        // section (same pack-thread exp stream) and is packed to cb_row_factor for S2's in-place l / O update.
+        auto exp_chunk = [&](uint32_t i, uint32_t c0, uint32_t w, bool with_a) {
             if (c0 == 0) {
                 cb_wait_front(cb_max_blk, i + 1);
             }
-            src.use(cb_scores, cb_max_blk);
-            sub_bcast_cols_init(cb_scores, cb_max_blk);
             tile_regs_acquire();
-            for (uint32_t j = 0; j < w; ++j) {
-                sub_tiles_bcast_cols(cb_scores, cb_max_blk, i * Sk + c0 + j, i, j);
+            if (w) {
+                src.use(cb_scores, cb_max_blk);
+                sub_bcast_cols_init(cb_scores, cb_max_blk);
+                for (uint32_t j = 0; j < w; ++j) {
+                    sub_tiles_bcast_cols(cb_scores, cb_max_blk, i * Sk + c0 + j, i, j);
+                }
+            }
+            if (with_a) {
+                src.use(cb_max_acc, cb_max_blk);
+                sub_init(cb_max_acc, cb_max_blk);
+                sub_tiles(cb_max_acc, cb_max_blk, i, i, w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            PExp::tiles<p_stall::MATH>(w);
+            PExp::tiles<p_stall::MATH>(w + (with_a ? 1 : 0));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            pack_row(cb_scores, 0, i * Sk + c0, w);
+            if (w) {
+                pack_row(cb_scores, 0, i * Sk + c0, w);
+            }
+            if (with_a) {
+                cb_reserve_back(cb_row_factor, 1);
+                set_pack_width(cb_row_factor, 1);
+                pack_tile(w, cb_row_factor);
+                cb_push_back(cb_row_factor, 1);
+            }
             tile_regs_release();
-            if (c0 + w >= skv) {  // P row complete -> token for P.V / rowsum
+            if (w && c0 + w >= skv) {  // P row complete -> token for P.V / rowsum
                 cb_reserve_back(cb_p_tok, 1);
                 cb_push_back(cb_p_tok, 1);
             }
@@ -304,6 +323,22 @@ void kernel_main() {
                 for (uint32_t k = 0; k < skv; ++k) {
                     matmul_block(cb_scores, cb_v, prow * Sk + k, k * DVt, 2, 0, pv_w, 1, Sk);
                 }
+                if (!first) {
+                    // l and O chunk 0 corrections: ELWMUL accumulates into DEST (DST += A*B), so a*l_acc lands on
+                    // the fresh row sum and a*O_acc on the fresh P.V (matmul first: the P.V keeps its own rounding)
+                    cb_wait_front(cb_row_factor, prow + 1);
+                    cb_wait_front(cb_sum_acc, 1);
+                    cb_wait_front(cb_out_acc, pv_w);
+                    src.use(cb_sum_acc, cb_row_factor);
+                    mul_bcast_cols_init(cb_sum_acc, cb_row_factor);
+                    mul_tiles_bcast_cols(cb_sum_acc, cb_row_factor, 0, prow, 1);
+                    src.use(cb_out_acc, cb_row_factor);
+                    for (uint32_t c = 0; c < pv_w; ++c) {
+                        mul_tiles_bcast_cols(cb_out_acc, cb_row_factor, c, prow, 2 + c);
+                    }
+                    cb_pop_front(cb_sum_acc, 1);
+                    cb_pop_front(cb_out_acc, pv_w);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -320,23 +355,38 @@ void kernel_main() {
                 cb_push_back(sum_cb, 1);
             }
             PACK((llk_pack_reduce_mask_clear()));
+            // O_acc rotates through its CB one pv_w chunk at a time (pop the corrected chunk at the front, push it
+            // back): in place for a full accumulator, into the free window for a tail piece, order preserved.
             if (do_pv) {
-                cb_reserve_back(out_cb, DVt);
+                cb_reserve_back(out_cb, pv_w);
                 pack_row(out_cb, 2, 0, pv_w);
+                cb_push_back(out_cb, pv_w);
             }
             tile_regs_release();
             if (do_pv) {
                 for (uint32_t c0 = pv_w; c0 < DVt; c0 += pv_w) {  // remaining P.V column chunks (DVt > PV_W)
                     tile_regs_acquire();
+                    src.use(cb_v, cb_scores);
+                    matmul_block_init(cb_scores, cb_v, 0, pv_w, 1, Sk);
                     for (uint32_t k = 0; k < skv; ++k) {
                         matmul_block(cb_scores, cb_v, prow * Sk + k, k * DVt + c0, 0, 0, pv_w, 1, Sk);
                     }
+                    if (!first) {
+                        cb_wait_front(cb_out_acc, pv_w);
+                        src.use(cb_out_acc, cb_row_factor);
+                        mul_bcast_cols_init(cb_out_acc, cb_row_factor);
+                        for (uint32_t c = 0; c < pv_w; ++c) {
+                            mul_tiles_bcast_cols(cb_out_acc, cb_row_factor, c, prow, c);
+                        }
+                        cb_pop_front(cb_out_acc, pv_w);
+                    }
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_row(out_cb, 0, c0, pv_w);
+                    cb_reserve_back(out_cb, pv_w);
+                    pack_row(out_cb, 0, 0, pv_w);
+                    cb_push_back(out_cb, pv_w);
                     tile_regs_release();
                 }
-                cb_push_back(out_cb, DVt);
                 cb_pop_front(cb_p_tok, 1);
                 if (prow + 1 == R) {
                     cb_pop_front(cb_v, Sk * DVt);
@@ -349,6 +399,9 @@ void kernel_main() {
         const uint32_t n_qk = skv / sbw;
         const uint32_t ew = (n_qk == 1 && (sbw % 2) == 0) ? sbw / 2 : sbw;
         const uint32_t n_ex = skv / ew;
+        // a_i rides in exp chunk 0's DEST section when a slot is free, else in its own one-tile section
+        const bool a_in_chunk = !first && ew < DEST_AUTO_LIMIT;
+        const bool a_alone = !first && !a_in_chunk;
         const int32_t Ri = static_cast<int32_t>(R);
         for (int32_t i = -2; i <= Ri; ++i) {
             const bool has_exp = i >= 0 && i < Ri;
@@ -358,14 +411,17 @@ void kernel_main() {
             const bool has_qk = q >= 0 && q < Ri;
             const uint32_t ne = has_exp ? n_ex : 0, nq = has_qk ? n_qk : 0;
             if (ne) {
-                exp_chunk(i, 0, ew);
+                exp_chunk(i, 0, ew, a_in_chunk);
+                if (a_alone) {
+                    exp_chunk(i, 0, 0, true);
+                }
             }
             if (do_max || do_pv) {
                 s2(do_max ? m : 0, do_max, do_pv ? p : 0, do_pv);
             }
             for (uint32_t t = 1; t < ne || t <= nq; ++t) {
                 if (t < ne) {
-                    exp_chunk(i, t * ew, ew);
+                    exp_chunk(i, t * ew, ew, false);
                 }
                 if (t <= nq) {
                     qk_chunk(q, (t - 1) * sbw);
@@ -374,6 +430,11 @@ void kernel_main() {
         }
         cb_wait_front(cb_scores, Sq * Sk);
         cb_pop_front(cb_scores, Sq * Sk);
+        if (!first) {  // the rescale pass used to consume these
+            cb_wait_front(cb_row_factor, R);
+            cb_pop_front(cb_row_factor, R);
+            cb_pop_front(cb_max_acc, R);
+        }
         set_pack_width(cb_scores, 1);  // the helpers that follow pack one tile per call
     };
 
@@ -625,7 +686,7 @@ void kernel_main() {
                 // ---- rescale_block + m_acc <- m_blk (the op's helpers, unchanged) ----
                 auto rescale_copy = [&](auto rows_t) {
                     const uint32_t RR = rows_t;
-                    if (kb > 0) {
+                    if (DST_ACCUM_MODE && kb > 0) {  // bf16 DEST corrects l / O in place inside the stream
                         MaybeDeviceZoneScopeIf("compute_rescale", zs);
                         eltwise_chain(
                             IterationShape::tiles(RR),
