@@ -132,9 +132,9 @@ case "${MODEL}" in
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
-        # The 4x4 cache is not under GLM-5.3-Cache-prefill yet; this is the copy infra made of job 161770's
-        # 78-layer build. Checked non-empty on every host before launch.
-        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/rkim/glm53_ttnn_cache}"
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty on every host before launch.
+        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
         PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
         RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
         ;;
