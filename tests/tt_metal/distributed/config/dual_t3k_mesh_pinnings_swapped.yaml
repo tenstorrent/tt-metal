@@ -1,0 +1,15 @@
+# --mesh-pinning-file for the dual-host T3K mock
+# (tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml)
+# with tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto.
+# In mock mode a host is named after its cluster descriptor file. The unpinned Phase 1 placement puts mesh 0
+# on the rank_1 host and mesh 1 on the rank_0 host; this file pins the reverse, so a run that ignored the pins
+# is caught by MultiHost.MeshPinningFileHonored.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: t3k_dual_host_cluster_desc_rank_0.yaml
+    TT_VISIBLE_DEVICES: "0,1,2,3"
+  - mesh_id: 1
+    mesh_host_rank: 0
+    hostname: t3k_dual_host_cluster_desc_rank_1.yaml
+    TT_VISIBLE_DEVICES: "0,1,2,3"

@@ -6,8 +6,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstddef>
-#include <cstdint>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -16,23 +14,28 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <yaml-cpp/yaml.h>
+
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 using tt::tt_fabric::MeshHostRankId;
 using tt::tt_fabric::MeshId;
 
-struct HostPlacement {
+// One entry of the --mesh-pinning-file: the logical (mesh_id, mesh_host_rank) must run on `hostname`
+// using exactly the devices in `tt_visible_devices` (sorted, unique, non-negative).
+//
+//   mesh_host_rank_pinnings:
+//     - mesh_id: 0
+//       mesh_host_rank: 0
+//       hostname: nodeA
+//       TT_VISIBLE_DEVICES: "0,1,2,3"
+//
+// Logical host ranks absent from the file stay automatic.
+struct MeshHostRankPinning {
+    MeshId mesh_id{0};
+    MeshHostRankId mesh_host_rank{0};
     std::string hostname;
     std::vector<int> tt_visible_devices;
-};
-
-// A many-to-many mesh-host-rank pinning group. Any of `mesh_host_ranks` may map to any of
-// `host_placements` (all-to-all); selected placements are injective, so distinct logical pairs
-// land on distinct hostname + TT_VISIBLE_DEVICES pools. A 1:1 group is the classic exact pin.
-struct MeshHostRankPinningGroup {
-    std::vector<std::pair<MeshId, MeshHostRankId>> mesh_host_ranks;
-    std::vector<HostPlacement> host_placements;
 };
 
 namespace mesh_pinning_detail {
@@ -95,7 +98,7 @@ inline std::vector<int> parse_visible_devices(
 
 }  // namespace mesh_pinning_detail
 
-inline std::vector<MeshHostRankPinningGroup> parse_mesh_pinning_file(const std::string& path) {
+inline std::vector<MeshHostRankPinning> parse_mesh_pinning_file(const std::string& path) {
     YAML::Node root;
     try {
         root = YAML::LoadFile(path);
@@ -103,104 +106,63 @@ inline std::vector<MeshHostRankPinningGroup> parse_mesh_pinning_file(const std::
         throw std::runtime_error(fmt::format("Failed to parse mesh pinning file {}: {}", path, e.what()));
     }
 
-    if (!root.IsMap() || !root["mesh_host_pinnings"]) {
+    if (!root.IsMap() || !root["mesh_host_rank_pinnings"]) {
         throw std::runtime_error(
-            fmt::format("Mesh pinning file {} must contain a top-level 'mesh_host_pinnings' key", path));
+            fmt::format("Mesh pinning file {} must contain a top-level 'mesh_host_rank_pinnings' key", path));
     }
-    mesh_pinning_detail::reject_unknown_keys(root, {"mesh_host_pinnings"}, "top level", path);
-    const YAML::Node& entries = root["mesh_host_pinnings"];
+    mesh_pinning_detail::reject_unknown_keys(root, {"mesh_host_rank_pinnings"}, "top level", path);
+    const YAML::Node& entries = root["mesh_host_rank_pinnings"];
     if (!entries.IsSequence()) {
-        throw std::runtime_error(fmt::format("'mesh_host_pinnings' in {} must be a sequence", path));
+        throw std::runtime_error(fmt::format("'mesh_host_rank_pinnings' in {} must be a sequence", path));
     }
 
-    std::vector<MeshHostRankPinningGroup> groups;
+    std::vector<MeshHostRankPinning> pinnings;
     std::set<std::pair<MeshId, MeshHostRankId>> seen_mesh_host_ranks;
     std::map<std::string, std::set<int>> used_devices_by_host;
-    for (std::size_t group_index = 0; group_index < entries.size(); ++group_index) {
-        const YAML::Node& entry = entries[group_index];
-        const std::string group_context = fmt::format("mesh_host_pinnings[{}]", group_index);
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        const YAML::Node& entry = entries[index];
+        const std::string context = fmt::format("mesh_host_rank_pinnings[{}]", index);
         if (!entry.IsMap()) {
-            throw std::runtime_error(fmt::format("{} in {} must be a map", group_context, path));
+            throw std::runtime_error(fmt::format("{} in {} must be a map", context, path));
         }
-        mesh_pinning_detail::reject_unknown_keys(entry, {"mesh_host_ranks", "host_placements"}, group_context, path);
-        if (!entry["mesh_host_ranks"] || !entry["mesh_host_ranks"].IsSequence() ||
-            entry["mesh_host_ranks"].size() == 0) {
-            throw std::runtime_error(
-                fmt::format("{} in {} must have a non-empty mesh_host_ranks sequence", group_context, path));
-        }
-        if (!entry["host_placements"] || !entry["host_placements"].IsSequence() ||
-            entry["host_placements"].size() == 0) {
-            throw std::runtime_error(
-                fmt::format("{} in {} must have a non-empty host_placements sequence", group_context, path));
-        }
-
-        MeshHostRankPinningGroup group;
-        const YAML::Node& logical_entries = entry["mesh_host_ranks"];
-        for (std::size_t logical_index = 0; logical_index < logical_entries.size(); ++logical_index) {
-            const YAML::Node& logical = logical_entries[logical_index];
-            const std::string context = fmt::format("{}.mesh_host_ranks[{}]", group_context, logical_index);
-            if (!logical.IsMap()) {
-                throw std::runtime_error(fmt::format("{} in {} must be a map", context, path));
-            }
-            mesh_pinning_detail::reject_unknown_keys(logical, {"mesh_id", "mesh_host_rank"}, context, path);
-            if (!logical["mesh_id"] || !logical["mesh_host_rank"]) {
-                throw std::runtime_error(fmt::format("{} in {} requires mesh_id and mesh_host_rank", context, path));
-            }
-            const int mesh_id = logical["mesh_id"].as<int>();
-            const int mesh_host_rank = logical["mesh_host_rank"].as<int>();
-            if (mesh_id < 0 || mesh_host_rank < 0) {
-                throw std::runtime_error(fmt::format("{} in {} requires non-negative IDs", context, path));
-            }
-            const std::pair<MeshId, MeshHostRankId> logical_pair{
-                MeshId{static_cast<uint32_t>(mesh_id)}, MeshHostRankId{static_cast<uint32_t>(mesh_host_rank)}};
-            if (!seen_mesh_host_ranks.insert(logical_pair).second) {
-                throw std::runtime_error(
-                    fmt::format("Duplicate mesh_id {} mesh_host_rank {} in {}", mesh_id, mesh_host_rank, path));
-            }
-            group.mesh_host_ranks.push_back(logical_pair);
-        }
-
-        const YAML::Node& placement_entries = entry["host_placements"];
-        for (std::size_t placement_index = 0; placement_index < placement_entries.size(); ++placement_index) {
-            const YAML::Node& placement = placement_entries[placement_index];
-            const std::string context = fmt::format("{}.host_placements[{}]", group_context, placement_index);
-            if (!placement.IsMap()) {
-                throw std::runtime_error(fmt::format("{} in {} must be a map", context, path));
-            }
-            mesh_pinning_detail::reject_unknown_keys(placement, {"hostname", "TT_VISIBLE_DEVICES"}, context, path);
-            if (!placement["hostname"] || !placement["TT_VISIBLE_DEVICES"]) {
-                throw std::runtime_error(
-                    fmt::format("{} in {} requires hostname and TT_VISIBLE_DEVICES", context, path));
-            }
-            HostPlacement host_placement;
-            host_placement.hostname = placement["hostname"].as<std::string>();
-            if (host_placement.hostname.empty()) {
-                throw std::runtime_error(fmt::format("{} in {} has an empty hostname", context, path));
-            }
-            host_placement.tt_visible_devices =
-                mesh_pinning_detail::parse_visible_devices(placement["TT_VISIBLE_DEVICES"], context, path);
-            auto& used_devices = used_devices_by_host[host_placement.hostname];
-            for (const int device : host_placement.tt_visible_devices) {
-                if (!used_devices.insert(device).second) {
-                    throw std::runtime_error(fmt::format(
-                        "TT_VISIBLE_DEVICES {} on host '{}' is used by more than one placement in {}",
-                        device,
-                        host_placement.hostname,
-                        path));
-                }
-            }
-            group.host_placements.push_back(std::move(host_placement));
-        }
-
-        if (group.host_placements.size() < group.mesh_host_ranks.size()) {
+        mesh_pinning_detail::reject_unknown_keys(
+            entry, {"mesh_id", "mesh_host_rank", "hostname", "TT_VISIBLE_DEVICES"}, context, path);
+        if (!entry["mesh_id"] || !entry["mesh_host_rank"] || !entry["hostname"] || !entry["TT_VISIBLE_DEVICES"]) {
             throw std::runtime_error(fmt::format(
-                "{} in {} has {} logical mesh host ranks but only {} host placements",
-                group_context,
-                path,
-                group.mesh_host_ranks.size(),
-                group.host_placements.size()));
+                "{} in {} requires mesh_id, mesh_host_rank, hostname and TT_VISIBLE_DEVICES", context, path));
         }
-        groups.push_back(std::move(group));
+
+        const int mesh_id = entry["mesh_id"].as<int>();
+        const int mesh_host_rank = entry["mesh_host_rank"].as<int>();
+        if (mesh_id < 0 || mesh_host_rank < 0) {
+            throw std::runtime_error(fmt::format("{} in {} requires non-negative IDs", context, path));
+        }
+
+        MeshHostRankPinning pinning;
+        pinning.mesh_id = MeshId{static_cast<uint32_t>(mesh_id)};
+        pinning.mesh_host_rank = MeshHostRankId{static_cast<uint32_t>(mesh_host_rank)};
+        if (!seen_mesh_host_ranks.insert({pinning.mesh_id, pinning.mesh_host_rank}).second) {
+            throw std::runtime_error(
+                fmt::format("Duplicate mesh_id {} mesh_host_rank {} in {}", mesh_id, mesh_host_rank, path));
+        }
+
+        pinning.hostname = entry["hostname"].as<std::string>();
+        if (pinning.hostname.empty()) {
+            throw std::runtime_error(fmt::format("{} in {} has an empty hostname", context, path));
+        }
+        pinning.tt_visible_devices =
+            mesh_pinning_detail::parse_visible_devices(entry["TT_VISIBLE_DEVICES"], context, path);
+        auto& used_devices = used_devices_by_host[pinning.hostname];
+        for (const int device : pinning.tt_visible_devices) {
+            if (!used_devices.insert(device).second) {
+                throw std::runtime_error(fmt::format(
+                    "TT_VISIBLE_DEVICES {} on host '{}' is used by more than one pinning in {}",
+                    device,
+                    pinning.hostname,
+                    path));
+            }
+        }
+        pinnings.push_back(std::move(pinning));
     }
-    return groups;
+    return pinnings;
 }

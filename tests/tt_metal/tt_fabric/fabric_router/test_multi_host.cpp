@@ -31,6 +31,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-logger/tt-logger.hpp>
+#include <yaml-cpp/yaml.h>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
 using tt::tt_fabric::fabric_router_tests::check_intermesh_port_assignment_against_golden;
@@ -431,6 +432,94 @@ TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     check_asic_mapping_against_golden("TestDual2x4T3kDualHostControlPlaneInit");
+}
+
+// End-to-end check for `tt-run --mesh-pinning-file`. Phase 1 (generate_rank_bindings) pins logical host ranks to
+// hostname + TT_VISIBLE_DEVICES; tt-run then launches every Phase 2 rank with TT_MESH_ID, TT_MESH_HOST_RANK,
+// TT_METAL_CLUSTER_ID (the hostname Phase 1 saw; the cluster descriptor file name in mock mode) and
+// TT_VISIBLE_DEVICES taken from the generated rank bindings. Each rank re-reads the pinning file named by
+// TT_METAL_TEST_MESH_PINNING_FILE and checks its own placement against it. The (mesh, host rank) this rank runs
+// must appear in the file, so a pin that silently stopped applying cannot pass. Run with:
+//   TT_METAL_TEST_MESH_PINNING_FILE=tests/tt_metal/distributed/config/dual_t3k_mesh_pinnings_swapped.yaml \
+//   tt-run --mesh-graph-descriptor
+//   tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto \
+//   --mock-cluster-rank-binding
+//   tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml \
+//   --mesh-pinning-file tests/tt_metal/distributed/config/dual_t3k_mesh_pinnings_swapped.yaml \
+//   --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests
+//   --gtest_filter="MultiHost.MeshPinningFileHonored"
+TEST(MultiHost, MeshPinningFileHonored) {
+    const char* pinning_file_env = std::getenv("TT_METAL_TEST_MESH_PINNING_FILE");
+    if (pinning_file_env == nullptr) {
+        GTEST_SKIP() << "TT_METAL_TEST_MESH_PINNING_FILE not set - run under tt-run --mesh-pinning-file";
+    }
+
+    const auto require_env = [](const char* name) {
+        const char* value = std::getenv(name);
+        EXPECT_NE(value, nullptr) << name << " is not set; this test must run under tt-run --mesh-graph-descriptor";
+        return value == nullptr ? std::string{} : std::string(value);
+    };
+    const std::string mesh_id_env = require_env("TT_MESH_ID");
+    const std::string mesh_host_rank_env = require_env("TT_MESH_HOST_RANK");
+    const std::string hostname_env = require_env("TT_METAL_CLUSTER_ID");
+    const std::string visible_devices_env = require_env("TT_VISIBLE_DEVICES");
+    if (HasFailure()) {
+        return;
+    }
+    const int mesh_id = std::stoi(mesh_id_env);
+    const int mesh_host_rank = std::stoi(mesh_host_rank_env);
+
+    const auto parse_devices = [](const std::string& csv) {
+        std::vector<int> devices;
+        std::size_t begin = 0;
+        while (begin <= csv.size()) {
+            const std::size_t comma = csv.find(',', begin);
+            const std::size_t end = comma == std::string::npos ? csv.size() : comma;
+            devices.push_back(std::stoi(csv.substr(begin, end - begin)));
+            if (comma == std::string::npos) {
+                break;
+            }
+            begin = comma + 1;
+        }
+        std::sort(devices.begin(), devices.end());
+        return devices;
+    };
+
+    std::filesystem::path pinning_file(pinning_file_env);
+    if (pinning_file.is_relative()) {
+        pinning_file =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / pinning_file;
+    }
+    ASSERT_TRUE(std::filesystem::exists(pinning_file)) << "pinning file not found: " << pinning_file;
+    const YAML::Node root = YAML::LoadFile(pinning_file.string());
+    const YAML::Node entries = root["mesh_host_rank_pinnings"];
+    ASSERT_TRUE(entries && entries.IsSequence()) << "expected a mesh_host_rank_pinnings sequence in " << pinning_file;
+
+    bool found = false;
+    for (const YAML::Node& entry : entries) {
+        if (entry["mesh_id"].as<int>() != mesh_id || entry["mesh_host_rank"].as<int>() != mesh_host_rank) {
+            continue;
+        }
+        ASSERT_FALSE(found) << "duplicate pin for mesh " << mesh_id << " host rank " << mesh_host_rank;
+        found = true;
+        const std::string pinned_hostname = entry["hostname"].as<std::string>();
+        const std::vector<int> pinned_devices = parse_devices(entry["TT_VISIBLE_DEVICES"].as<std::string>());
+        log_info(
+            tt::LogTest,
+            "mesh {} host rank {}: pinned to {} devices {}; running on {} devices {}",
+            mesh_id,
+            mesh_host_rank,
+            pinned_hostname,
+            entry["TT_VISIBLE_DEVICES"].as<std::string>(),
+            hostname_env,
+            visible_devices_env);
+        EXPECT_EQ(hostname_env, pinned_hostname)
+            << "mesh " << mesh_id << " host rank " << mesh_host_rank << " was launched on the wrong host";
+        EXPECT_EQ(parse_devices(visible_devices_env), pinned_devices)
+            << "mesh " << mesh_id << " host rank " << mesh_host_rank << " was launched with the wrong devices";
+    }
+    EXPECT_TRUE(found) << "mesh " << mesh_id << " host rank " << mesh_host_rank << " is not pinned in " << pinning_file
+                       << "; this test expects every launched host rank to be pinned";
 }
 
 // Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in

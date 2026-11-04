@@ -370,65 +370,76 @@ std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const
 
 }  // namespace
 
-TEST(MeshPinningFileTest, ParsesManyToManyPlacementGroup) {
-    const auto dir = make_temp_dir("pin_global");
-    const auto path = write_pinning_file(dir, R"(mesh_host_pinnings:
-  - mesh_host_ranks:
-      - mesh_id: 0
-        mesh_host_rank: 0
-      - mesh_id: 0
-        mesh_host_rank: 1
-    host_placements:
-      - hostname: host-A
-        TT_VISIBLE_DEVICES: "3,1"
-      - hostname: host-B
-        TT_VISIBLE_DEVICES: "1,3"
-      - hostname: host-C
-        TT_VISIBLE_DEVICES: "1,3"
+TEST(MeshPinningFileTest, ParsesFlatPinningList) {
+    const auto dir = make_temp_dir("pin_flat");
+    const auto path = write_pinning_file(dir, R"(mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: host-A
+    TT_VISIBLE_DEVICES: "3,1"
+  - mesh_id: 0
+    mesh_host_rank: 1
+    hostname: host-B
+    TT_VISIBLE_DEVICES: "1,3"
+  - mesh_id: 2
+    mesh_host_rank: 0
+    hostname: host-A
+    TT_VISIBLE_DEVICES: "0, 2"
 )");
 
-    const auto groups = parse_mesh_pinning_file(path.string());
-    ASSERT_EQ(groups.size(), 1u);
-    ASSERT_EQ(groups[0].mesh_host_ranks.size(), 2u);
-    EXPECT_EQ(*groups[0].mesh_host_ranks[1].first, 0u);
-    EXPECT_EQ(*groups[0].mesh_host_ranks[1].second, 1u);
-    ASSERT_EQ(groups[0].host_placements.size(), 3u);
-    EXPECT_EQ(groups[0].host_placements[0].hostname, "host-A");
-    EXPECT_EQ(groups[0].host_placements[0].tt_visible_devices, std::vector<int>({1, 3}));
+    const auto pinnings = parse_mesh_pinning_file(path.string());
+    ASSERT_EQ(pinnings.size(), 3u);
+    EXPECT_EQ(*pinnings[0].mesh_id, 0u);
+    EXPECT_EQ(*pinnings[0].mesh_host_rank, 0u);
+    EXPECT_EQ(pinnings[0].hostname, "host-A");
+    EXPECT_EQ(pinnings[0].tt_visible_devices, std::vector<int>({1, 3}));  // sorted
+    EXPECT_EQ(*pinnings[1].mesh_host_rank, 1u);
+    EXPECT_EQ(pinnings[1].hostname, "host-B");
+    EXPECT_EQ(*pinnings[2].mesh_id, 2u);
+    EXPECT_EQ(pinnings[2].tt_visible_devices, std::vector<int>({0, 2}));  // whitespace tolerated
 
-    const auto empty_path = write_pinning_file(dir, "mesh_host_pinnings: []\n");
+    const auto empty_path = write_pinning_file(dir, "mesh_host_rank_pinnings: []\n");
     EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
 }
 
 TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
-    const std::vector<std::string> invalid_documents = {
-        "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n",
-        "mesh_host_pinnings: {}\n",
-        R"(mesh_host_pinnings:
-  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 1}]
-    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}]
-)",
-        R"(mesh_host_pinnings:
-  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 0}]
-    host_placements: [{hostname: h0, TT_VISIBLE_DEVICES: "0"}, {hostname: h1, TT_VISIBLE_DEVICES: "0"}]
-)",
-        R"(mesh_host_pinnings:
-  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
-    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}, {hostname: h, TT_VISIBLE_DEVICES: "0,1"}]
-)",
-        R"(mesh_host_pinnings:
-  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
-    host_placements: [{hostname: h}]
-)",
-        R"(mesh_host_pinnings:
-  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
-    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0,nope"}]
-)",
+    const std::vector<std::pair<std::string, std::string>> invalid_documents = {
+        {"wrong top-level key", "mesh_host_pinnings:\n  - mesh_id: 0\n    hostname: host-A\n"},
+        {"top-level value is a map", "mesh_host_rank_pinnings: {}\n"},
+        {"entry is not a map", "mesh_host_rank_pinnings:\n  - 7\n"},
+        {"missing hostname",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"missing TT_VISIBLE_DEVICES", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h}\n"},
+        {"missing mesh_host_rank",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"unknown key",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\", "
+         "rank: 3}\n"},
+        {"negative id",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: -1, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"empty hostname",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: \"\", TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"duplicate (mesh, host rank)",
+         "mesh_host_rank_pinnings:\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h0, TT_VISIBLE_DEVICES: \"0\"}\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h1, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"same device used twice on one host",
+         "mesh_host_rank_pinnings:\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0,1\"}\n"
+         "  - {mesh_id: 0, mesh_host_rank: 1, hostname: h, TT_VISIBLE_DEVICES: \"1,2\"}\n"},
+        {"device listed twice in one entry",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"1,1\"}\n"},
+        {"non-numeric device",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0,nope\"}\n"},
+        {"empty device entry",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0,,1\"}\n"},
     };
 
     for (std::size_t i = 0; i < invalid_documents.size(); ++i) {
         const auto dir = make_temp_dir("pin_invalid_" + std::to_string(i));
-        const auto path = write_pinning_file(dir, invalid_documents[i]);
-        EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error) << "case " << i;
+        const auto path = write_pinning_file(dir, invalid_documents[i].second);
+        EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error)
+            << "case " << i << ": " << invalid_documents[i].first;
     }
 }

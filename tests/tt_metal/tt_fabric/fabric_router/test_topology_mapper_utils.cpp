@@ -598,6 +598,32 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         EXPECT_FALSE(mapping.success);
         EXPECT_NE(mapping.error_message.find("Mesh-host-rank pinning"), std::string::npos) << mapping.error_message;
     }
+
+    // A right-sized pool that straddles both hosts resolves cleanly but is infeasible: host rank 0's two
+    // chips are adjacent and must share a host, while 100 and 103 are on different hosts and not connected.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = {
+            *config.hostname_to_asics.at("host0").begin(), *config.hostname_to_asics.at("host1").rbegin()};
+        const auto mapping =
+            map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
+        EXPECT_FALSE(mapping.success) << "straddling pool must not be satisfiable";
+    }
+
+    // Two host ranks pinned to the same host pool: four chips into two ASICs can never be injective.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        const auto& pool = config.hostname_to_asics.at("host0");
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = pool;
+        config.mesh_host_rank_pinnings[{mesh, MeshHostRankId{1}}] = pool;
+        const auto mapping =
+            map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
+        EXPECT_FALSE(mapping.success) << "two ranks on one host pool must not be satisfiable";
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipeline) {

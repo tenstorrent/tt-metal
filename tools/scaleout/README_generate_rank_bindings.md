@@ -69,33 +69,27 @@ mpirun -np <N> <mpi-args> \
 ## Mesh pinning file (optional)
 
 By default the auto-mapper decides where each logical `(mesh_id, mesh_host_rank)` runs. Pass
-`--mesh-pinning-file` to constrain selected logical host ranks to exact physical
-`(hostname, TT_VISIBLE_DEVICES)` placements. Unlisted logical host ranks remain automatic.
+`--mesh-pinning-file` to pin selected logical host ranks to exact physical `(hostname, TT_VISIBLE_DEVICES)`
+placements. Unlisted logical host ranks remain automatic.
 
 ```yaml
-mesh_host_pinnings:
-  - mesh_host_ranks:
-      - mesh_id: 0
-        mesh_host_rank: 0
-      - mesh_id: 0
-        mesh_host_rank: 1
-    host_placements:
-      - hostname: host-A
-        TT_VISIBLE_DEVICES: "0,1,2,3"
-      - hostname: host-B
-        TT_VISIBLE_DEVICES: "0,1,2,3"
-      - hostname: host-C
-        TT_VISIBLE_DEVICES: "0,1,2,3"
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: host-A
+    TT_VISIBLE_DEVICES: "0,1,2,3"
+  - mesh_id: 0
+    mesh_host_rank: 1
+    hostname: host-B
+    TT_VISIBLE_DEVICES: "0,1,2,3"
 ```
 
-Each group is many-to-many: every logical pair may use any placement in its group. The mapper selects an
-injective assignment, so two pairs never select the same placement. Extra placements may remain unused and
-available to unpinned ranks. A group with one pair and one placement is an exact one-to-one pin.
-
-`TT_VISIBLE_DEVICES` is required and exact: it resolves to the ASIC pool that the logical host rank must use,
-not merely an environment override or superset. The number of resolved ASICs must equal the number of logical
-nodes in every host rank in that group. Phase 1 tries the group's allowed injective assignments and keeps the
-first one satisfying topology, MGD, rank-binding, and other pinning constraints.
+Each entry is a one-to-one hard pin: that logical host rank runs on that host, using exactly those devices.
+`TT_VISIBLE_DEVICES` resolves to the ASIC pool the host rank must use, not merely an environment override or a
+superset, so the number of resolved ASICs must equal the number of logical nodes in that host rank. Phase 1
+feeds the pools to the topology mapper as hard constraints and keeps the first mapping that satisfies them
+together with the topology, MGD, rank-binding, and other pinning constraints; it then re-checks the generated
+rank bindings against the file.
 
 Pinning currently supports one MGD (`-m`) and cannot be combined with `--all-solutions`. The generated MPI
 ranks and rankfile slots remain outputs derived after topology mapping; they are not identifiers in this input
@@ -106,9 +100,9 @@ Failures reported before launch include:
 - a pinned hostname that physical system discovery did not find;
 - a `TT_VISIBLE_DEVICES` ID discovery did not find on the named host;
 - a pinned mesh ID or mesh host rank the MGD does not define;
-- overlapping visible-device pools on the same hostname;
-- fewer placements than logical pairs, or a placement with the wrong ASIC count;
-- a pin that conflicts with MGD or galaxy corner pinnings.
+- the same `(mesh_id, mesh_host_rank)` pinned twice, or the same device on one host used by two pins;
+- a pool with the wrong ASIC count for its host rank;
+- a pin the topology cannot satisfy, or one that conflicts with MGD or galaxy corner pinnings.
 
 ---
 
