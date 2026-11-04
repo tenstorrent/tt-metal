@@ -22,6 +22,7 @@ void kernel_main() {
     const uint64_t t_end = get_timestamp();
     noc_async_write(get_read_ptr(cb_out), out.get_noc_addr(page), get_tile_size(cb_out));
 
+    cb_reserve_back(cb_stats, 1);
     volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_stats));
     for (uint32_t i = 0; i < 16; ++i) {
         w[i] = 0;
