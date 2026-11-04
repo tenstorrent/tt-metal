@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <memory>
-
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "impl/kernels/kernel.hpp"

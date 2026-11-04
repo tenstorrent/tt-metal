@@ -961,6 +961,7 @@ void strided_all_gather_async_minimal_default_helper(
                 mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
             // Creates both the forwarder (RISCV_0) and manager
             tt::tt_fabric::add_fabric_mux_v2_to_program(
+                *mesh_device,
                 desc,
                 mux_v2_config,
                 mux_logical_core,
