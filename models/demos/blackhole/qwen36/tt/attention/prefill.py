@@ -8,7 +8,6 @@ Branch C: concat prefill (else) — uses memory_config, past_key/past_value; ret
 import contextlib
 
 import ttnn
-
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
 
 
@@ -69,7 +68,19 @@ def _q_proj_program_config(x, q_w):
 
 def prefill_forward(x, cos, sin, weights, config, device, ckc, *args, **kwargs):
     with _q_proj_program_config(x, weights.q_proj):
-        return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
+        from models.demos.blackhole.bonsai2.tt.attn_qg import QGSplitTtnn, is_reordered
+
+        if not is_reordered(weights):
+            return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
+        # Bonsai: q_proj stored as [q heads | gate heads] (models/demos/blackhole/bonsai2/tt/attn_qg.py)
+        import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention as _attn_mod
+
+        _orig = _attn_mod.ttnn
+        _attn_mod.ttnn = QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        try:
+            return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
+        finally:
+            _attn_mod.ttnn = _orig
 
 
 def _prefill_forward_impl(

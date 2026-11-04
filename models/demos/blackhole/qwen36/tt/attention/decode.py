@@ -24,6 +24,21 @@ def decode_forward(
     ternary=None,
 ):
     """Branch B — paged decode: paged_update_cache + paged_sdpa_decode via page_table."""
+    import ttnn as _ttnn
+    from models.demos.blackhole.bonsai2.tt.attn_qg import QGSplitTtnn, is_reordered
+
+    if ternary is None and is_reordered(weights) and _attn_mod.ttnn is _ttnn:
+        # dense decode with the reordered q_proj (models/demos/blackhole/bonsai2/tt/attn_qg.py); not under another
+        # stand-in (the ternary decode one has its own q weights and the dense q_proj is freed by then)
+        _orig = _attn_mod.ttnn
+        _attn_mod.ttnn = QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        try:
+            return decode_forward(
+                x, cos, sin, weights, config, device, ckc, mc, position_tensor, page_table,
+                paged_kv_cache_key, paged_kv_cache_value,
+            )  # fmt: skip
+        finally:
+            _attn_mod.ttnn = _orig
     if ternary is not None:
         # Bonsai: q/k/v/o in its own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/attention.py).
         from models.demos.blackhole.bonsai2.tt.ternary.attention import TernaryAttentionTtnn

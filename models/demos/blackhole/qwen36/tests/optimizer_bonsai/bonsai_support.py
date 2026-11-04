@@ -66,6 +66,11 @@ def build_model(device, n_layers=None):
         from models.demos.blackhole.bonsai2.tt.gdn_prefill.chunk_prep import install
 
         install(device)
+    if os.environ.get("BONSAI_ATTN_QG") == "1":
+        # Full attention: q_proj as [q heads | gate heads], no [T, 24, 512] relayout (bonsai2/tt/attn_qg.py).
+        from models.demos.blackhole.bonsai2.tt.attn_qg import reorder_q_proj
+
+        reorder_q_proj(model)
     if os.environ.get("BONSAI_GDN_FWD") == "1":
         # GatedDeltaNet chunked prefill without the head relayouts (bonsai2/tt/gdn_prefill/forward.py).
         from models.demos.blackhole.bonsai2.tt.gdn_prefill.forward import prepare
