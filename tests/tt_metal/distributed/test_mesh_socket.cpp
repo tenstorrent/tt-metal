@@ -21,7 +21,7 @@
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -175,7 +175,7 @@ void test_single_connection_single_device_socket(
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    auto send_recv_program = CreateProgram();
+    auto send_recv_program = CreateProgram(*md0);
     CreateKernel(
         send_recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
@@ -367,7 +367,7 @@ void test_single_device_socket_with_workers(
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    auto send_recv_program = CreateProgram();
+    auto send_recv_program = CreateProgram(*md0);
 
     auto sender_cb_index = tt::CBIndex::c_0;
     auto sender_cb_config = CircularBufferConfig(data_size, {{sender_cb_index, tt::DataFormat::UInt32}})
@@ -633,7 +633,7 @@ void test_single_connection_multi_device_socket(
     std::iota(src_vec.begin(), src_vec.end(), 0);
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    auto sender_program = CreateProgram();
+    auto sender_program = CreateProgram(*md0);
     auto sender_kernel = CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
@@ -650,11 +650,11 @@ void test_single_connection_multi_device_socket(
 
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
-        sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
+        *md0, sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_coord, sender_rtas);
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*md1);
 
     KernelHandle recv_kernel;
     if (use_cbs) {
@@ -724,7 +724,7 @@ void test_single_connection_multi_device_socket(
 
     std::vector<uint32_t> recv_rtas;
     tt_fabric::append_fabric_connection_rt_args(
-        recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
+        *md1, recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
     tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 
     auto sender_mesh_workload = MeshWorkload();
@@ -805,7 +805,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    auto sender_program = CreateProgram();
+    auto sender_program = CreateProgram(*md0);
     auto sender_kernel = CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
@@ -822,11 +822,11 @@ void test_single_connection_multi_device_socket_with_workers(
 
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
-        sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
+        *md0, sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_coord, sender_rtas);
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*md1);
 
     CoreRangeSet recv_worker_crs =
         CoreRangeSet(std::array{CoreRange(recv_logical_coord), CoreRange(worker_logical_coord)}).merge_ranges();
@@ -869,7 +869,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     std::vector<uint32_t> recv_rtas;
     tt_fabric::append_fabric_connection_rt_args(
-        recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
+        *md1, recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
     tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 
     auto worker_kernel = CreateKernel(
@@ -930,7 +930,7 @@ std::shared_ptr<Program> create_sender_program(
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto sender_program = std::make_shared<Program>();
+    auto sender_program = std::make_shared<Program>(CreateProgram(*sender_socket.get_mesh_device()));
     auto sender_kernel = CreateKernel(
         *sender_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
@@ -947,6 +947,7 @@ std::shared_ptr<Program> create_sender_program(
 
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
+        *sender_socket.get_mesh_device(),
         sender_fabric_node_id,
         recv_fabric_node_id,
         sender_link_idx,
@@ -989,7 +990,7 @@ std::shared_ptr<Program> create_split_reduce_program(
     auto recv_virtual_coord_1 = recv_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord_1);
     auto reduce_virtual_core = recv_data_buffer->device()->worker_core_from_logical_core(reduce_logical_coord);
 
-    auto recv_program = std::make_shared<Program>();
+    auto recv_program = std::make_shared<Program>(CreateProgram(*recv_socket_0.get_mesh_device()));
 
     auto config_cb_config0 =
         CircularBufferConfig(sizeof(receiver_socket_md), {{config0_cb_index, tt::DataFormat::UInt32}})
@@ -1084,6 +1085,7 @@ std::shared_ptr<Program> create_split_reduce_program(
     std::vector<uint32_t> recv_rtas_1;
 
     tt_fabric::append_fabric_connection_rt_args(
+        *recv_socket_0.get_mesh_device(),
         recv_fabric_node_id,
         sender0_fabric_node_id,
         sender0_link_idx,
@@ -1091,6 +1093,7 @@ std::shared_ptr<Program> create_split_reduce_program(
         {recv_logical_coord_0},
         recv_rtas_0);
     tt_fabric::append_fabric_connection_rt_args(
+        *recv_socket_0.get_mesh_device(),
         recv_fabric_node_id,
         sender1_fabric_node_id,
         sender1_link_idx,
@@ -1108,7 +1111,7 @@ std::shared_ptr<Program> create_reduce_program(
     const MeshSocket& recv_socket_0,
     const MeshSocket& recv_socket_1,
     const MeshSocket& send_socket_2,
-    const std::shared_ptr<MeshDevice>& /*reducer*/,
+    const std::shared_ptr<MeshDevice>& reducer,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,
@@ -1131,7 +1134,7 @@ std::shared_ptr<Program> create_reduce_program(
     const auto reducer_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(reducer_physical_device_id);
 
-    auto reduce_program = std::make_shared<Program>();
+    auto reduce_program = std::make_shared<Program>(CreateProgram(*reducer));
 
     auto output_cb_config = CircularBufferConfig(2 * page_size, {{out_cb_index, tt::DataFormat::UInt32}})
                                 .set_page_size(out_cb_index, page_size);
@@ -1170,6 +1173,7 @@ std::shared_ptr<Program> create_reduce_program(
     std::vector<uint32_t> recv_rtas;
 
     tt_fabric::append_fabric_connection_rt_args(
+        *recv_socket_0.get_mesh_device(),
         reducer_fabric_node_id,
         sender0_fabric_node_id,
         sender0_link_idx,
@@ -1177,6 +1181,7 @@ std::shared_ptr<Program> create_reduce_program(
         reduce_logical_coord,
         recv_rtas);
     tt_fabric::append_fabric_connection_rt_args(
+        *recv_socket_0.get_mesh_device(),
         reducer_fabric_node_id,
         sender1_fabric_node_id,
         sender1_link_idx,
@@ -1188,7 +1193,13 @@ std::shared_ptr<Program> create_reduce_program(
 
     std::vector<uint32_t> send_rtas;
     tt_fabric::append_fabric_connection_rt_args(
-        reducer_fabric_node_id, recv_fabric_node_id, recv_link_idx, *reduce_program, reduce_logical_coord, send_rtas);
+        *send_socket_2.get_mesh_device(),
+        reducer_fabric_node_id,
+        recv_fabric_node_id,
+        recv_link_idx,
+        *reduce_program,
+        reduce_logical_coord,
+        send_rtas);
     tt_metal::SetRuntimeArgs(*reduce_program, send_kernel, reduce_logical_coord, send_rtas);
 
     return reduce_program;
@@ -1212,7 +1223,7 @@ std::shared_ptr<Program> create_recv_program(
 
     auto output_virtual_coord = output_data_buffer->device()->worker_core_from_logical_core(output_logical_coord);
 
-    auto recv_program = std::make_shared<Program>();
+    auto recv_program = std::make_shared<Program>(CreateProgram(*recv_socket.get_mesh_device()));
 
     CoreRangeSet recv_crs = CoreRangeSet(std::array{CoreRange(recv_logical_coord)}).merge_ranges();
 
@@ -1235,7 +1246,13 @@ std::shared_ptr<Program> create_recv_program(
     std::vector<uint32_t> recv_rtas;
 
     tt_fabric::append_fabric_connection_rt_args(
-        recv_fabric_node_id, sender_fabric_node_id, recv_link_idx, *recv_program, {recv_logical_coord}, recv_rtas);
+        *recv_socket.get_mesh_device(),
+        recv_fabric_node_id,
+        sender_fabric_node_id,
+        recv_link_idx,
+        *recv_program,
+        {recv_logical_coord},
+        recv_rtas);
 
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 

@@ -18,7 +18,6 @@
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -90,8 +89,8 @@ struct TensorBindingsForKernel {
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count,
-    size_t base_named_rta_count,
+    size_t base_named_crta_words,
+    size_t base_named_rta_words,
     uint32_t base_cta_offset);
 
 // ----------------------------------------------------------------------------

@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 

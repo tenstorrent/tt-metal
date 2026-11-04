@@ -457,7 +457,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 // binary add, so the caller (`TensixComputeUnpackTilizeA_B`) skips on Quasar.
 void run_single_core_unpack_tilizeA_B_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device.mesh_command_queue();
-    Program program = tt::tt_metal::CreateProgram();
+    Program program = tt::tt_metal::CreateProgram(mesh_device);
 
     CoreCoord core = {0, 0};
 
@@ -940,7 +940,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
         for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
             auto& mesh_device = *this->devices_.at(0);
             auto& cq = mesh_device.mesh_command_queue();
-            Program program = CreateProgram();
+            Program program = CreateProgram(*this->devices_[0]);
             const CoreCoord core = {0, 0};
             const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
             const std::uint32_t buffer_bytes = num_tiles * tile_bytes;

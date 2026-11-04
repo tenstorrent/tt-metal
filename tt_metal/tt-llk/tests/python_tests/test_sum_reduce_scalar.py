@@ -26,7 +26,7 @@ fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32 tile
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -72,6 +72,8 @@ def _num_tiles_for_format(formats):
     )
 
 
+# sum_reduce_scalar is a Blackhole-only experimental LLK
+@blackhole_only
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
@@ -79,9 +81,6 @@ def _num_tiles_for_format(formats):
     tile_dimensions=TILE_DIMENSIONS,
 )
 def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("sum_reduce_scalar is a Blackhole-only experimental LLK")
-
     if tile_dimensions == [16, 16] and num_tiles > 1:
         # 16x16 is a single-face tile; with more than one such tile the device reduces only
         # the first tile (device ~= golden / num_tiles), i.e. the 1-face multi-tile

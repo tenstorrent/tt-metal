@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include "gmock/gmock.h"
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -371,6 +370,17 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
     EXPECT_EQ(readback, expected);
 }
 
+TEST_F(MeshBufferTestSuite, CreateOnSingleDeviceSetsAddress) {
+    constexpr DeviceAddr page_size = 1024;
+    const DeviceLocalBufferConfig local{.page_size = page_size, .buffer_type = BufferType::L1};
+    const MeshCoordinate coord = mesh_device_->get_view().get_local_mesh_coord_range().start_coord();
+    auto mesh_buffer = experimental::per_core_allocation::create_on_single_device(
+        ReplicatedBufferConfig{.size = 4 * page_size}, local, mesh_device_.get(), coord);
+    const DeviceAddr device_address = mesh_buffer->get_device_buffer(coord)->address();
+    EXPECT_NE(device_address, 0);
+    EXPECT_EQ(mesh_buffer->address(), device_address);
+}
+
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
@@ -621,6 +631,27 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
         EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[0]));
         EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[1]));
     }
+}
+
+TEST_F(MeshBufferTestSuite, UniqueId) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto owner = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    auto other = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto owner_id = owner->unique_id();
+    ASSERT_TRUE(owner_id.has_value());
+    ASSERT_TRUE(other->unique_id().has_value());
+    EXPECT_NE(*owner_id, *other->unique_id());
+
+    // A MeshBuffer created at an explicit address doesn't own the allocation.
+    auto view = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), owner->address());
+    EXPECT_FALSE(view->unique_id().has_value());
+
+    // The ID identifies the allocation for the MeshBuffer's lifetime, as Buffer::unique_id() does.
+    owner->deallocate();
+    EXPECT_EQ(owner->unique_id(), owner_id);
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
@@ -1714,7 +1745,7 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     std::vector<uint16_t> input(single_tile_size / sizeof(uint16_t), 1);
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buffer, input, /*blocking=*/true);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*this->mesh_device_);
     auto kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/full_grid_eltwise_device_reuse.cpp",

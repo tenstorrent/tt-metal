@@ -691,7 +691,7 @@ void for_each_core_runtime_args(
     // between noop and work across differently-shaped cache hits.
     const size_t noop_reader_len = row_major_inputs ? 26 : 24;
     const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
+    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
 
     // Scratch lists reused for every core; each core below reassigns all three in full before fn().
     RuntimeArgList reader_runtime_args;
@@ -902,6 +902,11 @@ void for_each_core_runtime_args(
             };
         }
 
+        if (op_type == BinaryOpType::REQUANT) {
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(
+                operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
+        }
+
         fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
 
         start_tile_id += c_num_tiles_core;
@@ -981,38 +986,44 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
-    // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
+    // Quant/requant round to nearest even for every output dtype. The init picks the clamp range:
+    // [0, 255] for uint8 and [-128, 127] otherwise. The packer narrows the int32 SFPU result to uint8.
     // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
     const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // Requant also takes the output zero point, added after rounding.
+    const char* requant_zp_args =
+        "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), "
+        "get_arg_val<uint32_t>(QUANT_OUT_ZERO_POINT_RT_ARGS_IDX));";
     const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
-    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
-        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn, const char* zp_args) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + zp_args;
         compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
     };
     if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
         if (c_dtype == DataType::UINT8) {
             compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
         } else if (c_dtype == DataType::INT8) {
-            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
         if (int8_in) {
-            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
         if (c_dtype == DataType::INT8) {
             set_sfpu_op(
                 int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
-                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile",
+                requant_zp_args);
         } else if (c_dtype == DataType::UINT8) {
-            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
-            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8). It reuses
+            // the int32-output op body; only the init differs, to select the [0, 255] clamp.
             set_sfpu_op(
                 int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
-                int8_in ? "requant_int8_in_tile" : "requant_tile");
+                int8_in ? "requant_int8_in_tile" : "requant_tile",
+                requant_zp_args);
         } else if (int8_in) {
-            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile", requant_zp_args);
         }
     }
 
@@ -1109,6 +1120,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                // Requant also passes its output zero point as the 5th run-time kernel argument
+                compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
                 add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
