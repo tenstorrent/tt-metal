@@ -1,15 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
-and last chronological ranks, call after call: on torus, unwrapped 2D and 1D ring fabrics, with Kimi-K3's per-chip
-workload (640 rows of 24 heads) and fabric payload.
+and last chronological ranks, call after call and bit-identically: on torus, unwrapped 2D and 1D ring fabrics, with
+Kimi-K3's per-chip workload (640 rows of 24 heads) and fabric payload, and within its device-time reference.
 """
-
-import statistics
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -17,28 +14,22 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     AffineTransform,
+    DeviceMismatch,
+    assert_device_time,
+    closed_form_tensor,
     distributed_prefix,
-    kda_device_params,
+    kda_mesh_param,
+    median_device_us,
     pack_transform,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
-
-
-def _mesh_case(shape: tuple[int, int], topology: str, case_id: str, device_params: dict | None = None):
-    """SP takes mesh axis 0."""
-    return pytest.param(
-        shape,
-        kda_device_params(shape) if device_params is None else device_params,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology),
-        id=case_id,
-    )
 
 
 def _fabric_1d_ring_params() -> dict:
@@ -48,29 +39,30 @@ def _fabric_1d_ring_params() -> dict:
     )
 
 
+# SP takes mesh axis 0.
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        _mesh_case((8, 4), "mesh-8x4", "SP8xTP4"),
-        _mesh_case(
+        kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
+        kda_mesh_param(
             (8, 4),
             "mesh-8x4",
             "SP8xTP4-fabric-2d",
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
         # FABRIC_1D: on a mesh descriptor without wrap links the last rank reaches the first sp_size - 1 hops back.
-        _mesh_case(
+        kda_mesh_param(
             (8, 4),
             "mesh-8x4",
             "SP8xTP4-fabric-1d-line",
             fabric_1d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
-        _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-ring"),
-        _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
-        _mesh_case((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
-        _mesh_case((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
-        _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-ring"),
-        _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
+        kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1-ring"),
+        kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
+        kda_mesh_param((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
+        kda_mesh_param((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
+        kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1-ring"),
+        kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
     ],
     indirect=True,
 )
@@ -79,13 +71,20 @@ _MESH = pytest.mark.parametrize(
 class _Transforms:
     """One transform per rank, its packed device copy, and the FP64 reference of the relay around the ring."""
 
-    def __init__(self, mesh_device, seed: int):
-        generator = torch.Generator().manual_seed(seed)
+    def __init__(self, mesh_device, seed: int | None):
+        """Random transforms from ``seed``, or closed-form ones (for the determinism check) without one."""
         self.sp_size, self.tp_size = tuple(mesh_device.shape)
+        if seed is None:
+            shape = (self.sp_size, _HEADS, _KEY, _KEY)
+            a, b = closed_form_tensor(*shape, offset=-0.125), closed_form_tensor(*shape, offset=0.0625)
+            self.initial = closed_form_tensor(_HEADS, _KEY, _KEY, offset=0.03)
+        else:
+            generator = torch.Generator().manual_seed(seed)
+            a = 0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)
+            b = 0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)
+            self.initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
         # BF16-representable transforms make the BF16 transport exact for both paths.
-        self.a = (0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
-        self.b = (0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
-        self.initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
+        self.a, self.b = a.bfloat16().float(), b.bfloat16().float()
 
         def per_rank(host):
             return ttnn.from_torch(
@@ -110,6 +109,11 @@ class _Transforms:
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
         )
 
+    def final_ranks(self, start: int) -> set[int]:
+        """The ranks the relay leaves the final state on: the last chronological rank and the first."""
+        first_rank = (start // _ROWS) % self.sp_size
+        return {first_rank, (first_rank + self.sp_size - 1) % self.sp_size}
+
     def reference(self, start: int):
         """Each rank's entry state, the final carry and the ranks the relay leaves the carry on."""
         first_rank = (start // _ROWS) % self.sp_size
@@ -119,8 +123,7 @@ class _Transforms:
             rank = (first_rank + step) % self.sp_size
             entries[rank] = carry.float()
             carry = self.a[rank].double() @ carry + self.b[rank].double()
-        # The final state is valid where the relay leaves it: the last chronological rank and the first.
-        return entries, carry.float(), {first_rank, (first_rank + self.sp_size - 1) % self.sp_size}
+        return entries, carry.float(), self.final_ranks(start)
 
     def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int):
         chained_entry, chained_final = distributed_prefix(
@@ -174,11 +177,12 @@ def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
     )
 
 
-@_MESH
 # Only the rank holding the first token orders the relay; "split" checks that an offset within that rank is ignored.
-@pytest.mark.parametrize(
-    "start", [0, 640, 672, 3232, 4480], ids=["aligned", "rotated", "split", "late-split", "last-rank"]
-)
+_STARTS = {"aligned": 0, "rotated": 640, "split": 672, "late-split": 3232, "last-rank": 4480}
+
+
+@_MESH
+@pytest.mark.parametrize("start", list(_STARTS.values()), ids=list(_STARTS))
 def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
     transforms = _Transforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
@@ -234,33 +238,62 @@ def test_relay_affine_prefix_after_counter_reset(mesh_device):
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
 
+_DETERMINISM_CALLS = 3
+
+
+@_MESH
+def test_relay_affine_prefix_determinism(mesh_device):
+    """Every start's calls return bit-identical entry states, and final states where the relay leaves them. A device
+    synchronize separates the calls, the barrier consecutive calls need."""
+    transforms = _Transforms(mesh_device, seed=None)
+    relay = _relay(mesh_device)
+    mismatch = DeviceMismatch(mesh_device)
+    for name, start in _STARTS.items():
+        actual_start = make_actual_start(mesh_device, start)
+        first = None
+        for _ in range(_DETERMINISM_CALLS):
+            entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+            ttnn.synchronize_device(mesh_device)
+            if first is None:
+                first = (entry, final)
+                continue
+            mismatch.compare(first[0], entry, f"{name} entry")
+            mismatch.compare(first[1], final, f"{name} final", ranks=transforms.final_ranks(start))
+            for tensor in (entry, final):
+                ttnn.deallocate(tensor)
+        for tensor in (*first, actual_start):
+            ttnn.deallocate(tensor)
+    mismatch.assert_none()
+
+
 # Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
 # each after a discarded first and never back to back (a device synchronize separates them, the barrier consecutive
 # calls need). A few single calls run slow while the ring waits on its predecessors; the median of 15 does not.
 _PERF_SAMPLES = 15
-_PERF_MARGIN = 0.05
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
 _PERF_START = _ROWS + 320
 _PERF_KERNEL = "relay_affine_prefix"
 
 
-def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float):
-    """A ring case with its device-time reference."""
-    ring = _mesh_case(shape, "ring", case_id)
-    return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
+def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us: float, margin: float):
+    """A mesh case with its device-time reference and margin."""
+    case = kda_mesh_param(shape, topology, case_id)
+    return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
 
 
-# Device-time references in us, on TorusY with K3's payload.
+# Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY. Galaxy's 32
+# chips start a call further apart, so its medians spread wider (175-223 us over repeated runs).
 _PERF_CASES = [
-    _perf_case((8, 1), "loudbox-SP8xTP1-ring", 119.6),
-    _perf_case((4, 1), "quietbox-SP4xTP1-ring", 75.5),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 200.0, 0.15),
+    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 119.6, 0.05),
+    _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
 ]
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params,reference_us", _PERF_CASES, indirect=["mesh_device", "device_params"]
+    "mesh_device,device_params,reference_us,margin", _PERF_CASES, indirect=["mesh_device", "device_params"]
 )
-def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us):
+def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
     """The model's relay: 24 heads per chip, HiFi2, entry states in L1 for the entry correction."""
     require_realtime_profiler("the relay_affine_prefix device-time gate")
     layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
@@ -279,24 +312,5 @@ def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us):
     for tensor in (entry, final):
         ttnn.deallocate(tensor)
 
-    def profiled_us() -> float:
-        (entry, final), programs = profile_realtime_program_merged(mesh_device, call)
-        for tensor in (entry, final):
-            ttnn.deallocate(tensor)
-        matched = [
-            program["duration_ns"]
-            for program in programs.values()
-            if any(_PERF_KERNEL in source.replace("\\", "/") for source in program["kernel_sources"])
-        ]
-        assert len(matched) == 1, f"expected one program running {_PERF_KERNEL}, got {len(matched)}"
-        return matched[0] / 1e3
-
-    profiled_us()  # exclude first-call jitter
-    samples_us = [profiled_us() for _ in range(_PERF_SAMPLES)]
-    median_us = statistics.median(samples_us)
-    logger.info(f"relay_affine_prefix Kimi-K3 {layout} perf: {median_us:.1f} us device, samples {samples_us}")
-    lower, upper = reference_us * (1 - _PERF_MARGIN), reference_us * (1 + _PERF_MARGIN)
-    assert lower <= median_us <= upper, (
-        f"{median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
-        f"(reference {reference_us} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
-    )
+    median_us = median_device_us(mesh_device, call, _PERF_KERNEL, _PERF_SAMPLES)
+    assert_device_time(median_us, reference_us, margin, f"relay_affine_prefix Kimi-K3 {layout}")

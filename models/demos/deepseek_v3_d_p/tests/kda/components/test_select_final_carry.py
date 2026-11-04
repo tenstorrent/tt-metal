@@ -1,13 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""select_final_carry must return the separated tail's owner state, or the prefix carry, on every trace replay."""
+"""select_final_carry must return the separated tail's owner state, or the prefix carry, on every trace replay,
+bit-identically call after call, and within its device-time reference."""
 
 import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    DeviceMismatch,
+    assert_device_time,
+    closed_form_tensor,
+    kda_device_params,
+    kda_mesh_param,
+    median_device_us,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
+from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = run_for_blackhole()
@@ -26,19 +36,12 @@ def _bounds(sp_size: int, bounded: bool) -> list[tuple[int, int | None]]:
 
 
 def _meshes():
+    """SP takes mesh axis 0."""
     return [
-        pytest.param(
-            (8, 4),
-            kda_device_params((8, 4)),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4",
-        ),
-        pytest.param(
-            (2, 4),
-            kda_device_params((2, 4)),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="SP2xTP4",
-        ),
+        kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
+        kda_mesh_param((2, 4), "mesh-2x4", "loudbox-SP2xTP4"),
+        kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"),
+        kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1"),
     ]
 
 
@@ -245,3 +248,103 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
     finally:
         for tensor in (rank_final_tt, prefix_tt):
             ttnn.deallocate(tensor)
+
+
+_DETERMINISM_CALLS = 3
+
+
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(), indirect=True)
+def test_select_final_carry_determinism(mesh_device):
+    """Every bound's calls, for one state per head and for groups, return bit-identical carries on every rank."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    width = tp_size * _VALUE
+
+    def shard(host, dims):
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=(sp_size, tp_size)),
+        )
+
+    prefix_tt = shard(closed_form_tensor(_HEADS, _KEY, width, offset=0.5), (None, 2))
+    mismatch = DeviceMismatch(mesh_device)
+    for groups in (1, 4):
+        shape = (sp_size * _HEADS, _KEY, width) if groups == 1 else (sp_size * _HEADS, groups, _KEY, width)
+        rank_final_tt = shard(closed_form_tensor(*shape, offset=-0.5), (0, len(shape) - 1))
+        for start, end in _bounds(sp_size, bounded=False) + _bounds(sp_size, bounded=True):
+            start_tt = make_actual_start(mesh_device, start)
+            end_tt = None if end is None else make_actual_start(mesh_device, end)
+            first = None
+            for _ in range(_DETERMINISM_CALLS):
+                carry = ttnn.experimental.kda.select_final_carry(
+                    rank_final_tt,
+                    prefix_tt,
+                    actual_start=start_tt,
+                    actual_end=end_tt,
+                    local_rows=_ROWS,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    sequence_parallel_axis=0,
+                )
+                if first is None:
+                    first = carry
+                    continue
+                mismatch.compare(first, carry, f"groups={groups} start={start} end={end}")
+                ttnn.deallocate(carry)
+            for tensor in (first, start_tt, end_tt):
+                if tensor is not None:
+                    ttnn.deallocate(tensor)
+        ttnn.deallocate(rank_final_tt)
+    ttnn.deallocate(prefix_tt)
+    mismatch.assert_none()
+
+
+# Device time of one call: its program's slowest chip, the median over single calls separated by a device synchronize.
+_PERF_SAMPLES = 15
+# A full chunk that starts 320 rows into the second rank, as the layer gates place it: the carry is the split tail's.
+_PERF_START = _ROWS + 320
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,reference_us,margin",
+    [
+        pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case.id)
+        for case, reference_us, margin in (
+            # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
+            # Galaxy's 32 chips start a call further apart, so its medians spread wider (194-209 us over repeated runs).
+            (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 203.0, 0.08),
+            (kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"), 203.0, 0.05),
+            (kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1"), 203.0, 0.05),
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_select_final_carry_kimi_k3_perf(mesh_device, reference_us, margin):
+    """The model's final carry: 24 heads' FP32 state per chip, on the layer's cores, links and semaphores."""
+    require_realtime_profiler("the select_final_carry device-time gate")
+    sp_size, tp_size = tuple(mesh_device.shape)
+    layout = f"SP{sp_size}xTP{tp_size}"
+    generator = torch.Generator().manual_seed(_PERF_START)
+
+    def shard(host, dims):
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=(sp_size, tp_size)),
+        )
+
+    rank_final_tt = shard(torch.randn(sp_size * _HEADS, _KEY, tp_size * _VALUE, generator=generator), (0, 2))
+    prefix_tt = shard(torch.randn(sp_size * _HEADS, _KEY, tp_size * _VALUE, generator=generator), (0, 2))
+    actual_start = make_actual_start(mesh_device, _PERF_START)
+    final_carry = _RelayFinalCarry.shared(mesh_device, 0, _sp_links(mesh_device, 0))
+
+    def call():
+        carry = final_carry(rank_final_tt, prefix_tt, actual_start, None, _ROWS)
+        ttnn.synchronize_device(mesh_device)
+        return (carry,)
+
+    median_us = median_device_us(mesh_device, call, "select_final_carry", _PERF_SAMPLES)
+    assert_device_time(median_us, reference_us, margin, f"select_final_carry Kimi-K3 {layout}")
