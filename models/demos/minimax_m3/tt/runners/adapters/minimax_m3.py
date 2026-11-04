@@ -37,6 +37,8 @@ Env the operator sets (mirrors the rest of the M3 ecosystem):
   TT_CACHE_PATH                 tilized weight-cache root (default: the variant's weka cache root for its default
                                 checkpoint when present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
+  PREFILL_MEDIA_STORE_*         media embedding store on the first rank's host (models/common/multimedia_store/
+                                mooncake_store.py); on when PREFILL_MEDIA_STORE_MASTER is set
 """
 
 from __future__ import annotations
@@ -186,6 +188,14 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
         from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
+        # The first rank injects media embeddings, so its host holds this runner's part of the media embedding
+        # store. Start it before the weights load, so a bad store config fails in seconds, not minutes.
+        media_embedding_reader = None
+        if params.is_first_rank:
+            from models.common.multimedia_store.mooncake_store import open_media_embedding_reader_from_env
+
+            media_embedding_reader = open_media_embedding_reader_from_env()
+
         # EXPERT_DTYPE selects the MoE routed-expert weight dtype (bf4 default here / bf8). The tilized
         # cache holds both, so either stays on the fast cache path. Same knob name as the M3 generate +
         # PCC harnesses. It feeds TtPrefillRuntimeConfig.expert_weight_dtype below.
@@ -245,6 +255,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             hf_config=hf_config,
             state_dict=state_dict,
             config=runtime_config,
+            media_embedding_reader=media_embedding_reader,
         )
         if params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
             if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":

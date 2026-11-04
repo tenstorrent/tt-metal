@@ -109,13 +109,16 @@ class TtPrefillRuntime:
     passed into every call."""
 
     supports_media = True
-    media_reader = None
-    """The first rank's EmbeddingReader (models/common/media_store/reader.py), set by the adapter."""
 
-    def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig):
+    def __init__(
+        self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig, media_embedding_reader=None
+    ):
+        """media_embedding_reader: the first rank's EmbeddingReader (models/common/multimedia_store/reader.py), which media
+        embedding injection reads; None without multimodal input."""
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
+        self.media_embedding_reader = media_embedding_reader
 
         assert (
             config.max_seq_len % config.chunk_size == 0
