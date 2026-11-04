@@ -196,6 +196,10 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
         # the 32-chip replica: the dense MLP's down K shard is 12288 / 32 = 384 = 12 tiles, which the TP8 K block of 8
         # does not divide (and 2 x the largest block must be a multiple of every block): 4
         os.environ["GLM53_MK_KB_O"] = "4"
+        # the o_proj / down ring must hold a whole layer's blocks (kda_o 2 + down 3 of 16 tiles) in a stack: with the
+        # default 3 (or 4) slots the second layer's down output is garbage (2026-11-04 one-chip loop: 5 slots right,
+        # 4 overflow; the single-layer program is right at any depth; ring A tolerates mid-layer waits). 104 KB = 6
+        os.environ.setdefault("GLM53_MK_RING_KB_O", "104")
     if tp > 1 and mode == "s7a283" and key is True:
         os.environ.update(KNOBS_7A283)
         if t > 4:
