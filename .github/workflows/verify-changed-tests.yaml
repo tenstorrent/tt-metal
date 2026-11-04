@@ -445,14 +445,6 @@ jobs:
               && !startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/') }}
         run: uv pip install pytest-xdist
 
-      - name: Apply ttsim wormhole workaround patches
-        if: ${{ startsWith(matrix.leg.sku, 'sim_wh') }}
-        run: |
-          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
-          echo "Patching: $HEADER"
-          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
-            "$HEADER"
-
       - name: ${{ matrix.leg.name }}
         if: ${{ !startsWith(matrix.leg.sku, 'sim_') }}
         timeout-minutes: ${{ matrix.leg.timeout }}
