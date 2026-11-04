@@ -636,6 +636,10 @@ FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not i
 # expert grid, wherever the gate's weight can be read in place (see :class:`RouterWeights`).
 # ``DEEPSEEK_V4_FUSE_ROUTER=0`` keeps the router as its own ops.
 FUSE_ROUTER = os.environ.get("DEEPSEEK_V4_FUSE_ROUTER", "1") not in ("0", "", "false", "False")
+# All-reduce the TP partial over the first TP axis inside ``fused_experts`` wherever its output is the
+# width-sharded partial (see ``output_memory_config``). ``DEEPSEEK_V4_FUSE_ALL_REDUCE=0`` leaves it to
+# ``width_sharded_all_reduce``.
+FUSE_ALL_REDUCE = os.environ.get("DEEPSEEK_V4_FUSE_ALL_REDUCE", "1") not in ("0", "", "false", "False")
 # How many cores of that row run the router (the op's kRouterCores): its gate's tile columns are dealt
 # round-robin over them.
 _FUSED_ROUTER_CORES = 12
@@ -1014,6 +1018,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                     ttnn.ShardOrientation.COL_MAJOR,
                 ),
             )
+        # The mesh axes the TP partials are summed over, in order; the op takes the first itself when it can.
+        self.tp_axes = _tp_cluster_axes(device, tp_size) if tp_size > 1 else ()
+        self.fused_all_reduce_axis = (
+            self.tp_axes[0] if self.output_memory_config is not None and FUSE_ALL_REDUCE else None
+        )
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
         # rather than handed over pre-normalized.
@@ -1198,6 +1207,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 shared_down_weights=None if shared is None else shared.down,
                 shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
                 memory_config=self.output_memory_config if t == 1 else None,
+                all_reduce_cluster_axis=self.fused_all_reduce_axis if t == 1 else None,
+                all_reduce_num_links=2,
+                all_reduce_topology=CCL_TOPOLOGY,
             )  # [1, t, D]
         except RuntimeError as e:
             if "clash with L1 buffers" in str(e):
@@ -1470,7 +1482,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         if fuse_router and routing.bias is not self.gate.e_score_correction_bias:
             ttnn.deallocate(routing.bias)
         if t == 1 and self.experts.output_memory_config is not None:
-            for axis in _tp_cluster_axes(self.device, self.tp_size):
+            done = 1 if self.experts.fused_all_reduce_axis is not None else 0
+            for axis in self.experts.tp_axes[done:]:
                 partial = combined
                 combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
                     partial, cluster_axis=axis, num_links=2, topology=CCL_TOPOLOGY
