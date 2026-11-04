@@ -578,10 +578,8 @@ FORCE_INLINE bool send(
     const uint32_t slot_addr = next_slot_addr;
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot_addr);
 
-    begin_read_group();
     const uint32_t payload_size = header->get_payload_size_excluding_header();
     const uint32_t status = read_txq_status(sender_txq_id);
-    end_read_group();
     if constexpr (!skip_src_ch_id_update) {
         header->src_ch_id = static_cast<uint8_t>(CH);
     }
@@ -700,7 +698,7 @@ FORCE_INLINE void visit_worker(
 // SenderChannelStates): send if it has a packet and the remote receiver channel has room, take completions (and acks),
 // return the slots to the producer, and keep the channel's bit in `channels_in_flight` equal to "packets not yet
 // completed (or acked)". The state's fields are taken into locals where first needed and written back where they change
-// (the send's read groups would make the compiler store and reload memory state around them).
+// (the send's read group would make the compiler store and reload memory state around it).
 template <size_t CH>
 FORCE_INLINE void visit_channel_with_work(
     SenderChannelState<CH>& state,
