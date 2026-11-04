@@ -75,18 +75,38 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     TT_FATAL(output_grad_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((output_tensor.layout() == Layout::TILE), "Output to softmax must be tilized");
     TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "Output_grad to softmax must be tilized");
-    // The readers fill the scaler/mask buffers (sized in the input_grad format) with raw bfloat16 tiles,
-    // so block-float formats are not supported.
-    TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "Output_tensor dtype should be bfloat16");
-    TT_FATAL(output_grad_tensor.dtype() == DataType::BFLOAT16, "Output_tensor_grad dtype should be bfloat16");
-    if (tensor_args.input_grad_tensor.has_value()) {
-        TT_FATAL(
-            tensor_args.input_grad_tensor->dtype() == DataType::BFLOAT16, "Input_grad_tensor dtype should be bfloat16");
-    }
-
     const auto rank = output_tensor.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+
+    if (dim >= rank - 2) {
+        // The H/W readers fill the scaler/mask buffers (sized in the input_grad format) with raw bfloat16 tiles,
+        // so block-float formats are not supported.
+        TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "Output_tensor dtype should be bfloat16");
+        TT_FATAL(output_grad_tensor.dtype() == DataType::BFLOAT16, "Output_tensor_grad dtype should be bfloat16");
+        if (tensor_args.input_grad_tensor.has_value()) {
+            TT_FATAL(
+                tensor_args.input_grad_tensor->dtype() == DataType::BFLOAT16,
+                "Input_grad_tensor dtype should be bfloat16");
+        }
+    } else {
+        // The C kernel sizes the output/output_grad buffers in the input_grad format, so all dtypes must match.
+        TT_FATAL(
+            output_tensor.dtype() == DataType::BFLOAT16 || output_tensor.dtype() == DataType::BFLOAT8_B,
+            "Output_tensor dtype should be bfloat16 or bfloat8_b");
+        TT_FATAL(
+            output_grad_tensor.dtype() == output_tensor.dtype(),
+            "Output_tensor_grad dtype {} should match output_tensor dtype {}",
+            output_grad_tensor.dtype(),
+            output_tensor.dtype());
+        if (tensor_args.input_grad_tensor.has_value()) {
+            TT_FATAL(
+                tensor_args.input_grad_tensor->dtype() == output_tensor.dtype(),
+                "Input_grad_tensor dtype {} should match output_tensor dtype {}",
+                tensor_args.input_grad_tensor->dtype(),
+                output_tensor.dtype());
+        }
+    }
     TT_FATAL(
         output_tensor.logical_volume() > 0,
         "Output to softmax backward must be non-empty, got shape {}",
