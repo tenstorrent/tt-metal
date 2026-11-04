@@ -21,13 +21,15 @@
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
 
+// (glm53_-prefixed copies: tt-llk a88217b6f52 ships these helpers under their original names in
+// ckernel_sfpu_topk_xl.h, and a kernel may not redefine them.)
 // The first fused chunk in each row runs the full TopK init. Later chunks can
 // use this hot-path reinit because copy init only clobbers ADDR_MOD_0/3 and the
 // MOP, while index stamping additionally changes ADDR_MOD_6 from +32 to +4.
 // Fused sort/merge never consumes ADDR_MOD_0/3/4; ADDR_MOD_1/5 and the other
 // TopK state remain live. Restoring +32 and the fused MOP therefore avoids the
 // two redundant ADDR_MOD writes in every subsequent chunk's full init.
-inline void _topk_large_indices_reinit_fused_after_stamp_() {
+inline void glm53_topk_large_indices_reinit_fused_after_stamp_() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -40,7 +42,7 @@ inline void _topk_large_indices_reinit_fused_after_stamp_() {
 // The final TopK XL survivor stores FP32 value words followed by UINT32 index
 // words. Mark indices paired with exact -inf values as invalid without
 // disturbing the engine-specific survivor layout.
-inline void _topk_large_indices_mark_neginf_indices_init_() {
+inline void glm53_topk_large_indices_mark_neginf_indices_init_() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -50,7 +52,7 @@ inline void _topk_large_indices_mark_neginf_indices_init_() {
 }
 
 template <uint32_t K>
-inline void _topk_large_indices_mark_neginf_indices_() {
+inline void glm53_topk_large_indices_mark_neginf_indices_() {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     constexpr uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
     constexpr uint32_t indices_offset = tiles_per_sequence * 64;
@@ -116,7 +118,7 @@ FORCE_INLINE void sort_fused_chunk(
     if constexpr (FullInit) {
         topk_xl_init<K, true>();
     } else {
-        MATH((ckernel::sfpu::_topk_large_indices_reinit_fused_after_stamp_()));
+        MATH((ckernel::sfpu::glm53_topk_large_indices_reinit_fused_after_stamp_()));
     }
     topk_xl_local_sort<K>(dst, ascending);
 }
@@ -250,9 +252,9 @@ FORCE_INLINE void reduce_segmented_row(CircularBuffer& input, uint32_t num_chunk
 
 template <uint32_t K>
 FORCE_INLINE void mark_neginf_indices(uint32_t dst) {
-    MATH((ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_()));
+    MATH((ckernel::sfpu::glm53_topk_large_indices_mark_neginf_indices_init_()));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, dst, VectorMode::RC_custom)));
+        ckernel::sfpu::glm53_topk_large_indices_mark_neginf_indices_<K>, dst, VectorMode::RC_custom)));
 }
 
 template <uint32_t K>
