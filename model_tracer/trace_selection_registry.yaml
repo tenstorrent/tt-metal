@@ -1655,3 +1655,17 @@ registry:
     tt_kmd: "TT-KMD 2.4.1"
     tt_smi: "3.0.38"
     tt_firmware: "18.12.1.0"
+
+  - trace_id: 228
+    status: draft
+    models: [qwen3-0.6b]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 062227d0-c32d-49af-9833-110b0fad63ea
+    tt_metal_sha: 23355059e94f12962948f0d24d1bba29b24dc170
+    config_count: 229
+    loaded_at: '2026-11-04'
+    notes: ''
+    pytest_args: '-k performance-ci-1 --sampling_params {"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "6.7.0"
+    tt_firmware: "19.2.0.0"
