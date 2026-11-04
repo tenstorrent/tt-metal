@@ -276,7 +276,13 @@ def paged_kv_step(
     ids_t = ids if ids is not None else pos
     lat_t = lat if has_lat else kv
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, rows, topk_out]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, rows, topk_out]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        md,
+        ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("DSV41_IDX_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
+        else ttnn.DRAM_MEMORY_CONFIG,
     )
     nsplit = int(
         os.environ.get("DSV41_KVSTEP_SPLIT", "1")

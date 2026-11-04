@@ -112,7 +112,14 @@ class _PagedMixin:
             qh = (
                 ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))
             )  # [1,32,T,512] RM (heads x users)
-        if split > 1 and T > 1:
+        if split > 1 and T > 1 and os.environ.get("DSV41_SDPA2") == "1" and qh is q32:
+            from models.demos.blackhole.deepseek_v41_flash.tt import sdpa2 as S2
+
+            # sdpa2 (default off): same inputs / outputs as the split kernel (tile q only), rows 9..31 of the output are not written (rope_concat reads rows 0..8)
+            o = S2.sparse_sdpa_v2(
+                qh, self.kv.pool, idx, HEAD_DIM, self.scale, 128, split, self._ckc_sp_call(), self.sp_sink, W=4
+            )
+        elif split > 1 and T > 1:
             o = SS.sparse_sdpa_split(
                 qh,
                 self.kv.pool,

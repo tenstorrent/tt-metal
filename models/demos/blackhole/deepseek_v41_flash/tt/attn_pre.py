@@ -3,6 +3,8 @@
 """One program replacing concat + nlp_create_qkv_heads_decode + 2x to_memory_config + partial RoPE (3 ops) + paged_update_cache x2.
 Env DSV41_ATTN_FUSED_PRE=1.  See tt/attn_kernels/pre_*.cpp."""
 
+import os
+
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attn_fused import _acc, _cb, _hash, _kernel
 
@@ -30,7 +32,13 @@ def attn_pre(kvn, q, lat, cache, pos, comp_idx, ch, sh, users):
     else:
         cache_pt = (int(cache.shape[2]) // 32) * 16
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, T, 9, 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, T, 9, 512]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh,
+        ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("DSV41_QKH_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
+        else ttnn.DRAM_MEMORY_CONFIG,
     )
     grid = mesh.compute_with_storage_grid_size()
     allc = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]
@@ -118,7 +126,13 @@ def qk_heads(kvn, q, ch, sh, users):
     assert upc <= 8 and upr <= 8
     mesh = kvn.device()
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, T, 9, 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, T, 9, 512]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh,
+        ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("DSV41_QKH_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
+        else ttnn.DRAM_MEMORY_CONFIG,
     )
     grid = mesh.compute_with_storage_grid_size()
     allc = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]

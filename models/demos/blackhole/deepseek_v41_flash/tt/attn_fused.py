@@ -117,7 +117,11 @@ def rope_concat(o, c, s, users, nh):
     npass = min(nh * T, len(allc) - 2 * T)
     pc = allc[2 * T : 2 * T + npass]
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32, nh * 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, 32, nh * 512]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh,
+        ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_RC_L1") == "1" else ttnn.DRAM_MEMORY_CONFIG,
     )
     bf = ttnn.bfloat16
     X, R, SC, XS, O, P, R2, RI, M, PP = range(10)

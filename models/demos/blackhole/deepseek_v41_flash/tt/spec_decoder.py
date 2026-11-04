@@ -74,6 +74,50 @@ class SpecVerifier(DSV41Decoder):
         self.logits = logits
         return logits
 
+    # ---- per-layer gate (tests/tt_opt/test_tt_opt_decode_perlayer.py): gate_mode None | "write" | "inject"; gate_store / gate_golden: {("in", lid): (x rows, pre rows), ("route", lid): rows}
+    def _gate_rows(self, t):
+        cols = self.md.shape[1]
+        return [ttnn.to_torch(ttnn.get_device_tensors(t)[r * cols]) for r in range(self.md.shape[0])]
+
+    def _gate_up(self, rows, like):
+        t = ttnn.from_torch(
+            torch.cat(rows, dim=0),
+            device=self.md,
+            dtype=like.dtype,
+            layout=like.layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=tuple(self.md.shape)),
+        )
+        mc = like.memory_config()
+        if mc != ttnn.DRAM_MEMORY_CONFIG:
+            t = ttnn.to_memory_config(t, mc)
+        return t
+
+    def _gate_in(self, lid, x, pre):
+        """write: record (x, pre) at the top of every layer; inject: replace them by the golden's (the layer then runs on the golden's input)."""
+        if self.gate_mode == "write":
+            ttnn.synchronize_device(self.md)
+            cols = self.md.shape[1]
+            rep = all(
+                torch.equal(
+                    ttnn.to_torch(ttnn.get_device_tensors(t)[r * cols]),
+                    ttnn.to_torch(ttnn.get_device_tensors(t)[r * cols + 1]),
+                )
+                for t in (x, pre)
+                for r in range(self.md.shape[0])
+            )
+            self.gate_store[("in", lid)] = (self._gate_rows(x), self._gate_rows(pre), rep)
+            return x, pre
+        g = self.gate_golden[("in", lid)]
+        return self._gate_up(g[0], x), self._gate_up(g[1], pre)
+
+    def _gate_out(self, lid, layer):
+        moe = getattr(layer, "moe", None)
+        lr = getattr(moe, "last_routing", None)
+        if lr is not None:
+            ttnn.synchronize_device(self.md)
+            self.gate_store[("route", lid)] = self._gate_rows(lr[1])
+
     def _dbg(self, tag, x):
         ttnn.synchronize_device(self.md)
         if (
@@ -451,6 +495,8 @@ class SpecDecoder(SpecVerifier):
                 os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
             )
             for lid, layer, st in self.layers:
+                if getattr(self, "gate_mode", None):
+                    x, pre = self._gate_in(lid, x, pre)
                 if lid in self.engram:
                     x = self._engram_fwd(lid, x)
                     if dbg:
@@ -458,6 +504,8 @@ class SpecDecoder(SpecVerifier):
                 if lid in TAP_LAYERS:
                     taps.append(self._tap(x))
                 x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
+                if getattr(self, "gate_mode", None):
+                    self._gate_out(lid, layer)
                 if dbg:
                     self._dbg(f"layer {lid}", x)
             self._dbg_done = True
@@ -483,6 +531,8 @@ class SpecDecoder(SpecVerifier):
                 os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
             )
             for lid, layer, st in self.layers:
+                if getattr(self, "gate_mode", None):
+                    x, pre = self._gate_in(lid, x, pre)
                 if lid in self.engram:
                     x = self._engram_fwd(lid, x)
                     if dbg:
@@ -490,6 +540,8 @@ class SpecDecoder(SpecVerifier):
                 if lid in TAP_LAYERS:
                     taps.append(self._tap(x))
                 x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
+                if getattr(self, "gate_mode", None):
+                    self._gate_out(lid, layer)
                 if dbg:
                     self._dbg(f"layer {lid}", x)
             self._dbg_done = True

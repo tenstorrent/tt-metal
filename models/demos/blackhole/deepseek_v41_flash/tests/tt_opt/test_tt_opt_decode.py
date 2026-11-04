@@ -98,6 +98,8 @@ def _setup(md, minimal=False, tracy_layers=True):
             base = torch.cat(
                 [base, torch.tensor([111, 58, 45, 69]) if not BASE_POS else BASE_POS + torch.tensor([29, 37, 41, 53])]
             )
+        while X.shape[1] < KSEL + 1:  # k=5 window (6 rows per user): deterministic extra draft columns
+            X = torch.cat([X, torch.remainder(X[:, -1:] * 31 + 7 * X.shape[1] + 5, 100000)], dim=1)
         for b in range(B):  # pages of the users (a prefill admits them)
             m.pool.release(b)
             m.pool.admit(b, int(base[b]) + 64)

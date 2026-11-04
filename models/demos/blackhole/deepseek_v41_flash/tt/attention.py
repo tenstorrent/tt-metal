@@ -248,6 +248,13 @@ class DSV41Attention:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        self.ckc_lofi32 = ttnn.init_device_compute_kernel_config(
+            md.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         self.ckc_hifi2 = (
             ttnn.init_device_compute_kernel_config(  # DSV41_ATTN_LIN_HIFI2=1: HiFi2, fp32 accumulation kept
                 md.arch(),
@@ -350,6 +357,10 @@ class DSV41Attention:
     # ---- helpers --------------------------------------------------------------------------------------
     def _lin(self, x, w, name, **kw):
         ckc = self.ckc_lofi if os.environ.get("DSV41_ATTN_LIN_LOFI") == "1" else self.ckc
+        if (
+            os.environ.get("DSV41_ATTN_LIN_LOFI") == "fp32"
+        ):  # LoFi WITH fp32 accumulation (dramshard study: -13.2 us/layer at T=4, layer PCC 0.99962)
+            ckc = self.ckc_lofi32
         if os.environ.get("DSV41_ATTN_LIN_HIFI2") == "1":
             ckc = self.ckc_hifi2
         if os.environ.get("DSV41_ATTN_BFP4") == "1" and hasattr(self, "wqkv_b4"):

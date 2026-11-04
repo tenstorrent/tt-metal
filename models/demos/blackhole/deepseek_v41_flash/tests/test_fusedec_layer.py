@@ -18,6 +18,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tests import l1_clean as L1C
 from models.demos.blackhole.deepseek_v41_flash.tests import test_fusedec_round_prof as H
 from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder, dev_id
 
@@ -139,6 +140,20 @@ def test_fusedec_layer(mesh_device):
                 ttnn.ReadDeviceProfiler(md)
             outs = _grab(o[0])
             rec_ = dict(ranges=ranges, env=kv)
+            if os.environ.get("FD_TRACE") == "1":
+                # replay profile: the layer captured once and replayed FD_TREPS times; the digest rows carry METAL TRACE ID / REPLAY SESSION ID (offline: dsv4-logs/cores/tracewin.py)
+                _l1 = L1C.snapshot(md, "pre-capture " + name) if os.environ.get("FD_L1CLEAN") == "1" else None
+                tid = ttnn.begin_trace_capture(md, cq_id=0)
+                keep.append(lay.forward(x, pre, states[st]))
+                ttnn.end_trace_capture(md, tid, cq_id=0)
+                ttnn.synchronize_device(md)
+                ttnn.ReadDeviceProfiler(md)
+                for _ in range(int(os.environ.get("FD_TREPS", "3"))):
+                    ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
+                    ttnn.ReadDeviceProfiler(md)
+                rec_["trace_id"] = int(tid)
+                if _l1 is not None:
+                    rec_["l1_clean"] = bool(L1C.assert_clean(md, _l1, "post-replay " + name))
             if ref is None:
                 ref = outs
             else:

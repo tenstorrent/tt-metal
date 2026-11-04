@@ -73,7 +73,13 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     k_in_df = ttnn.bfloat8_b if fp8 else ttnn.bfloat16
     bf = ttnn.bfloat16
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, H, S, v_dim]), bf, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, H, S, v_dim]),
+        bf,
+        ttnn.ROW_MAJOR_LAYOUT,
+        md,
+        ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
+        else ttnn.DRAM_MEMORY_CONFIG,
     )
     cores = [(i % grid.x, i // grid.x) for i in range(n_cores)]
     core_set = _core_set(n_cores, grid.x)
