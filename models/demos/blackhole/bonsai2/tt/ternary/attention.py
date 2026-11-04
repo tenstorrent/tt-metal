@@ -7,6 +7,7 @@ The converter kept every attention weight as is (no row or column reorder)."""
 import numpy as np
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
 
@@ -43,7 +44,9 @@ class TernaryAttention:
 
     def project_q(self, x):
         lead = tuple(list(x.shape)[:-1])
-        self._xr = self.rot_in(x)  # k and v reuse it
+        self._xr = prerot.take(x)  # k and v reuse it
+        if self._xr is None:
+            self._xr = self.rot_in(x)
         return self.q(self._xr, lead=lead)
 
     def project_k(self, x):

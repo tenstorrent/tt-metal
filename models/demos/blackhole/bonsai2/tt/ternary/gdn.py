@@ -13,6 +13,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.bonsai2.tt.gdn_step.gdn_step import GDNStep
+from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
 
@@ -102,7 +103,9 @@ class TernaryGDN:
         """The whole one-token GDN layer: in_proj, the fused step (conv, gates, state update, gated norm; updates
         gdn's conv and recurrent state in place), out_proj. x [1, 1, 5120] -> [1, 1, 5120]."""
         lead = tuple(list(x.shape)[:-1])
-        xr = self.rot_in(x)
+        xr = prerot.take(x)
+        if xr is None:
+            xr = self.rot_in(x)
         qkv, z = self.qkvz(xr, lead=lead, split=self.split)
         ttnn.deallocate(xr)
         ab = ttnn.linear(x, self.ab_w, compute_kernel_config=compute_kernel_config, program_config=self.ab_pc)

@@ -325,7 +325,14 @@ class Qwen36DecoderLayer:
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
         single_decode = self.num_devices == 1 and mode == "decode" and x.shape[-2] <= ttnn.TILE_SIZE
-        if single_decode:
+        if single_decode and getattr(self, "_bonsai_attn_nrot", None) is not None:
+            # Bonsai: norm + rotation in one op; the ternary attention / GDN takes the rotated copies
+            # (models/demos/blackhole/bonsai2/tt/ternary/rotate.py NormRotation, prerot.py).
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            attn_input, _xr = self._bonsai_attn_nrot(x)
+            prerot.put(attn_input, _xr)
+        elif single_decode:
             attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
@@ -432,7 +439,12 @@ class Qwen36DecoderLayer:
             h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        if single_decode:
+        if single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            ff_input, _xr = self._bonsai_ff_nrot(h)
+            prerot.put(ff_input, _xr)
+        elif single_decode:
             # Interleaved L1: the single-device MLP's decode matmuls mcast an interleaved in0.
             ff_input = sharded_decode_rms_norm(self.ffn_norm, h, self.args.dim)
         else:

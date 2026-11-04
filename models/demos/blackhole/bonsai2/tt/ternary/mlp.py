@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import (
     PAGE_SPLIT,
     TernaryDecodeLinear3,
@@ -47,7 +48,9 @@ class TernaryMLP:
     def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [..., dim] bf16 TILE, one token (one tile row) -> the same shape."""
         lead = tuple(list(x.shape)[:-1])
-        xr = self.rot_in(x)
+        xr = prerot.take(x)
+        if xr is None:
+            xr = self.rot_in(x)
         if self.gateup is not None:
             h = self.gateup(xr, lead=lead)
             ttnn.deallocate(xr)
@@ -134,6 +137,14 @@ def swap_in_ternary_mlp(model) -> None:
             rotations,
             os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
         )
+    if os.environ.get("BONSAI_NORM_ROT") == "1":
+        # decode norms fused with the 5120-wide rotation (rotate.NormRotation): every layer, both norms
+        from models.demos.blackhole.bonsai2.tt.ternary.rotate import NormRotation
+
+        for layer in model.layers:
+            for norm, attr in ((layer.attention_norm, "_bonsai_attn_nrot"), (layer.ffn_norm, "_bonsai_ff_nrot")):
+                w = ttnn.to_torch(norm.weight).float().reshape(-1)
+                setattr(layer, attr, NormRotation(device, signs[5120], w, norm.eps))
     if os.environ.get("BONSAI_TERNARY_HEAD") == "1":
         model.ternary_lm_head = TernaryLMHead(device, pack_lm_head(), rotations[5120])
     print(f"BONSAI_TERNARY_MLP_SWAP_S={time.time() - t0:.1f}", flush=True)
