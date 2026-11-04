@@ -32,7 +32,8 @@ struct SliceRmProgramFactory {
 
     // The input DFB's entry size for the L1 free right now: a wide row is split into chunks when a
     // double-buffered row no longer fits. Shapes and slice_start fix everything else in the plan.
-    static uint32_t dfb_entry_size(const SliceParams& args, const SliceInputs& tensor_args, const TensorSpec& output);
+    static uint32_t dfb_entry_size(
+        const SliceParams& args, const SliceInputs& tensor_args, const tt::tt_metal::TensorSpec& output);
 };
 
 }  // namespace ttnn::prim
