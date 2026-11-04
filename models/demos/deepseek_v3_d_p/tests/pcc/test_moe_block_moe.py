@@ -57,6 +57,7 @@ def _random_moe_weights(hidden, inter, n_routed, seed):
                 fabric_payload_size=_PAYLOAD,
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
                 l1_small_size=_L1_SMALL,
+                trace_region_size=64 << 20,
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -104,6 +105,30 @@ def test_glm_moe_block(mesh_device, device_params):
     logger.info(f"MoE block (GLM-5.3, random weights, {CHUNK} tokens) vs the CPU MoE: {msg}")
     ttnn.deallocate(y_tt)
     assert ok, f"MoE block vs the CPU MoE: {msg} (need {FINAL_PCC})"
+
+    # (the block's eager and traced time a call - weights resident, programs built: GLMBLOCK, the GLM MoE perf probe)
+    calls = int(os.environ.get("GLM_BLOCK_CALLS", "10"))
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.deallocate(ffn(x_tt))
+    ttnn.synchronize_device(mesh_device)
+    eager = (time.perf_counter() - t0) / calls
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    y_tr = ffn(x_tt)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    traced = (time.perf_counter() - t0) / calls
+    y2 = ttnn.to_torch(y_tr, mesh_composer=comp).float()
+    ttnn.release_trace(mesh_device, tid)
+    ttnn.deallocate(y_tr)
+    logger.info(
+        f"GLMBLOCK {CHUNK} tokens: eager {eager * 1e3:.2f} ms a call, traced {traced * 1e3:.2f} ms a replay; the traced "
+        f"output bit-identical to the eager one: {bool(torch.equal(y2, y))}"
+    )
 
 
 def _k3_moe_reference(x, gate, routed, shared, latent):
