@@ -107,6 +107,23 @@ class _HeadsOutTransformer:
     def concatenate_heads(self, x, *args, **kwargs):
         return HeadsOut(x) if not args and not kwargs else ttnn.transformer.concatenate_heads(x, *args, **kwargs)
 
+    def chunked_scaled_dot_product_attention(self, q, k, v, page_table, *args, **kwargs):
+        """The prefill's paged SDPA with q chunks of BONSAI_SDPA_Q (256) rows, k chunks of BONSAI_SDPA_K (128) and the
+        approximate exp (BONSAI_SDPA_EXP_APPROX=1), fp32 DEST kept: the precise fp32 exp bounds the 128 / 128 default
+        (T = 2048: 1.35 -> 0.71 ms at chunk start 0, 3.64 -> 1.67 ms at 2048). Chunk starts are multiples of 2048, so
+        both chunk sizes divide them."""
+        qc, kc = int(os.environ.get("BONSAI_SDPA_Q", "256")), int(os.environ.get("BONSAI_SDPA_K", "128"))
+        T = list(q.shape)[-2]
+        pc = kwargs.get("program_config")
+        if pc is not None and T % qc == 0 and 2048 % qc == 0 and 2048 % kc == 0:
+            kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+                q_chunk_size=qc,
+                k_chunk_size=kc,
+                exp_approx_mode=os.environ.get("BONSAI_SDPA_EXP_APPROX", "1") == "1",
+            )
+        return ttnn.transformer.chunked_scaled_dot_product_attention(q, k, v, page_table, *args, **kwargs)
+
 
 class TernaryAttentionPrefillTtnn:
     """ttnn stand-in for the prefill attention (inside attn_qg.QGSplitTtnn): q, k, v, o in the exact ternary weights.
