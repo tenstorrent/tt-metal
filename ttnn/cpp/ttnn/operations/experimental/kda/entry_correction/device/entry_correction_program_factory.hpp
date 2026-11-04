@@ -3,17 +3,14 @@
 
 #pragma once
 
-#include <tt-metalium/workload_descriptor.hpp>
-
-#include "ttnn/distributed/types.hpp"
-
 #include "entry_correction_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct EntryCorrectionProgramFactory {
-    // One program per coordinate: the chronology depends on the sequence-parallel rank.
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+    // One program per SP rank: the chronology depends on it.
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const EntryCorrectionParams&,
         const EntryCorrectionInputs&,
         std::vector<Tensor>&,

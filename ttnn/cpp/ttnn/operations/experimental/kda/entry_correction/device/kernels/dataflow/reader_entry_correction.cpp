@@ -1,68 +1,61 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
-
-constexpr uint32_t cb_seed = get_compile_time_arg_val(0);
-constexpr uint32_t cb_tail = get_compile_time_arg_val(1);
-constexpr uint32_t cb_m = get_compile_time_arg_val(2);
-constexpr uint32_t cb_base = get_compile_time_arg_val(3);
-constexpr uint32_t cb_a = get_compile_time_arg_val(4);
-constexpr uint32_t cb_b = get_compile_time_arg_val(5);
-constexpr uint32_t cb_ctl = get_compile_time_arg_val(6);
-constexpr uint32_t cb_ctl_writer = get_compile_time_arg_val(7);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(8);
-constexpr uint32_t sp_size = get_compile_time_arg_val(9);
-constexpr uint32_t local_rows = get_compile_time_arg_val(10);
-constexpr uint32_t kt = get_compile_time_arg_val(11);
-constexpr bool has_actual_end = get_compile_time_arg_val(12);
-// A head's cores each form every final_stride-th tile row of the final state.
-constexpr uint32_t final_stride = get_compile_time_arg_val(13);
-// Interleaved terms: this core reads its chunk rows of F(0) and F(I) one chunk at a time.
-constexpr bool streamed = get_compile_time_arg_val(14);
-constexpr auto a_args = TensorAccessorArgs<15>();
-constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-constexpr auto entry_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-constexpr auto tail_args = TensorAccessorArgs<entry_args.next_compile_time_args_offset()>();
-constexpr auto start_args = TensorAccessorArgs<tail_args.next_compile_time_args_offset()>();
-constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
-constexpr auto terms_args = TensorAccessorArgs<end_args.next_compile_time_args_offset()>();
-constexpr uint32_t state_tiles = kt * kt;
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
 // rows of A and B this core forms the final state of.
-void kernel_main() {
-    size_t arg = 0;
-    const uint32_t a_address = get_common_arg_val<uint32_t>(0);
-    const uint32_t b_address = get_common_arg_val<uint32_t>(1);
-    const uint32_t entry_address = get_common_arg_val<uint32_t>(2);
-    const uint32_t tail_address = get_common_arg_val<uint32_t>(3);
-    const uint32_t start_address = get_common_arg_val<uint32_t>(4);
-    const uint32_t end_address = get_common_arg_val<uint32_t>(5);
-    const uint32_t terms_address = get_common_arg_val<uint32_t>(6);
-    const uint32_t head = get_arg_val<uint32_t>(arg++);
-    const uint32_t first_chunk = get_arg_val<uint32_t>(arg++);
-    const uint32_t last_chunk = get_arg_val<uint32_t>(arg++);
-    // The first tile row of the final state this core forms (kt: none); it forms every final_stride-th row on.
-    const uint32_t final_row = get_arg_val<uint32_t>(arg++);
+// final_stride: a head's cores each form every final_stride-th tile row of the final state.
+// streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
+template <
+    uint32_t kt,
+    uint32_t core_chunks,
+    uint32_t final_stride,
+    uint32_t streamed,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows,
+    uint32_t has_actual_end>
+TT_KERNEL void reader(uint32_t head, uint32_t first_chunk, uint32_t last_chunk, uint32_t final_row) {
+    constexpr uint32_t state_tiles = kt * kt;
+    // final_row: the first tile row of the final state this core forms (kt: none).
     const bool owns_final = final_row < kt;
+    DataflowBuffer seed(dfb::seed);
+    DataflowBuffer tail(dfb::tail);
+    DataflowBuffer terms(dfb::terms);
+    DataflowBuffer a(dfb::a);
+    DataflowBuffer b(dfb::b);
+    DataflowBuffer ctl(dfb::ctl);
+    DataflowBuffer ctl_writer(dfb::ctl_writer);
+    Noc noc;
 
     // The chronology: valid chunks and the reset chunk (where the tail's seed takes over).
-    cb_reserve_back(cb_ctl, 1);
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
-    const auto start = TensorAccessor(start_args, start_address);
-    noc_async_read(start.get_noc_addr(0), get_write_ptr(cb_ctl), sizeof(uint32_t));
-    noc_async_read_barrier();
+    ctl.reserve_back(1);
+    ctl_writer.reserve_back(1);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctl.get_write_ptr());
+    auto* writer_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctl_writer.get_write_ptr());
+    // Both bounds in one round trip, each into its own channel's slot.
+    noc.async_read(TensorAccessor(tensor::actual_start), ctl, sizeof(uint32_t), {.page_id = 0}, {});
+    if constexpr (has_actual_end) {
+        noc.async_read(
+            TensorAccessor(*tensor::get_token_if_present<"actual_end">()),
+            ctl_writer,
+            sizeof(uint32_t),
+            {.page_id = 0},
+            {});
+    }
+    noc.async_read_barrier();
     const uint32_t actual_start = words[0];
     kda_chronology::Topology topology{};
     if constexpr (has_actual_end) {
-        const auto end = TensorAccessor(end_args, end_address);
-        noc_async_read(end.get_noc_addr(0), get_write_ptr(cb_ctl), sizeof(uint32_t));
-        noc_async_read_barrier();
-        topology = kda_chronology::derive_interval(actual_start, words[0], sp_rank, sp_size, local_rows);
+        topology = kda_chronology::derive_interval(actual_start, writer_words[0], sp_rank, sp_size, local_rows);
     } else {
         topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
     }
@@ -88,74 +81,71 @@ void kernel_main() {
     words[5] = need_tail;
     words[6] = final_row;
     words[7] = final_stride;
-    cb_reserve_back(cb_ctl_writer, 1);
-    volatile tt_l1_ptr uint32_t* writer_words =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl_writer));
     writer_words[0] = chunks;
     writer_words[1] = final;
     writer_words[2] = final_row;
     writer_words[3] = final_stride;
-    cb_push_back(cb_ctl_writer, 1);
-    cb_push_back(cb_ctl, 1);
+    ctl_writer.push_back(1);
+    ctl.push_back(1);
 
     // Each of the head's cores reads its own copy of the head's seeds.
-    const auto read_seed = [&](uint32_t cb, uint32_t address, const auto& args) {
-        cb_reserve_back(cb, state_tiles);
-        const uint32_t local = get_write_ptr(cb);
-        const auto states = TensorAccessor(args, address);
-        const uint32_t tile = get_tile_size(cb);
+    const auto read_seed = [&](auto& buffer, const auto& states) {
+        buffer.reserve_back(state_tiles);
+        const uint32_t tile = buffer.get_entry_size();
         for (uint32_t i = 0; i < state_tiles; ++i) {
-            noc_async_read_page(head * state_tiles + i, states, local + i * tile);
+            noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb, state_tiles);
+        noc.async_read_barrier();
+        buffer.push_back(state_tiles);
     };
     if (need_group) {
-        read_seed(cb_seed, entry_address, entry_args);
+        read_seed(seed, TensorAccessor(tensor::entry));
     }
     if (need_tail) {
-        read_seed(cb_tail, tail_address, tail_args);
+        read_seed(tail, TensorAccessor(tensor::tail_entry));
     }
     if constexpr (streamed) {
         // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
+        // Each chunk's F(0) row then its F(I) row go to the terms buffer together.
         constexpr uint32_t num_chunks = local_rows / 32;
-        const auto terms = TensorAccessor(terms_args, terms_address);
-        const uint32_t tile = get_tile_size(cb_base);
+        const auto accessor = TensorAccessor(tensor::terms);
+        const uint32_t tile = terms.get_entry_size();
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t zero_page = (head * 2 * num_chunks + first_chunk + c) * kt;
-            cb_reserve_back(cb_base, kt);
-            cb_reserve_back(cb_m, kt);
+            terms.reserve_back(2 * kt);
             for (uint32_t j = 0; j < kt; ++j) {
-                noc_async_read_page(zero_page + j, terms, get_write_ptr(cb_base) + j * tile);
-                noc_async_read_page(zero_page + num_chunks * kt + j, terms, get_write_ptr(cb_m) + j * tile);
+                noc.async_read(accessor, terms, tile, {.page_id = zero_page + j}, {.offset_bytes = j * tile});
+                noc.async_read(
+                    accessor,
+                    terms,
+                    tile,
+                    {.page_id = zero_page + num_chunks * kt + j},
+                    {.offset_bytes = (kt + j) * tile});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_base, kt);
-            cb_push_back(cb_m, kt);
+            noc.async_read_barrier();
+            terms.push_back(2 * kt);
         }
     } else if (chunks != 0) {
         // This core's chunk rows are in place in its shard of the emitted terms.
-        cb_reserve_back(cb_m, chunks * kt);
-        cb_reserve_back(cb_base, chunks * kt);
-        cb_push_back(cb_m, chunks * kt);
-        cb_push_back(cb_base, chunks * kt);
+        terms.reserve_back(2 * core_chunks * kt);
+        terms.push_back(2 * core_chunks * kt);
     }
     if (final) {
         // Tile rows of A and of B: each row of the final state is A[row] @ seed + B[row].
-        const auto a = TensorAccessor(a_args, a_address);
-        const auto b = TensorAccessor(b_args, b_address);
-        const uint32_t tile = get_tile_size(cb_b);
+        const auto a_states = TensorAccessor(tensor::final_a);
+        const auto b_states = TensorAccessor(tensor::final_b);
+        const uint32_t tile = b.get_entry_size();
         for (uint32_t row = final_row; row < kt; row += final_stride) {
-            cb_reserve_back(cb_a, kt);
-            cb_reserve_back(cb_b, kt);
+            a.reserve_back(kt);
+            b.reserve_back(kt);
             for (uint32_t c = 0; c < kt; ++c) {
                 const uint32_t page = head * state_tiles + row * kt + c;
-                noc_async_read_page(page, a, get_write_ptr(cb_a) + c * tile);
-                noc_async_read_page(page, b, get_write_ptr(cb_b) + c * tile);
+                noc.async_read(a_states, a, tile, {.page_id = page}, {.offset_bytes = c * tile});
+                noc.async_read(b_states, b, tile, {.page_id = page}, {.offset_bytes = c * tile});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_a, kt);
-            cb_push_back(cb_b, kt);
+            noc.async_read_barrier();
+            a.push_back(kt);
+            b.push_back(kt);
         }
     }
 }

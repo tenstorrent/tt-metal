@@ -3,178 +3,244 @@
 
 #include "ttnn/operations/experimental/kda/entry_correction/device/entry_correction_program_factory.hpp"
 
-#include <string>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
 
-namespace {
-
-using tt::tt_metal::CoreRangeSet;
-
-constexpr uint32_t cb_seed = 0;
-constexpr uint32_t cb_tail = 1;
-constexpr uint32_t cb_m = 2;
-constexpr uint32_t cb_base = 3;
-constexpr uint32_t cb_out = 4;
-constexpr uint32_t cb_a = 5;
-constexpr uint32_t cb_b = 6;
-constexpr uint32_t cb_final = 7;
-constexpr uint32_t cb_ctl = 8;
-constexpr uint32_t cb_ctl_writer = 9;
-constexpr uint32_t cb_diff = 10;
-constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/";
-
-tt::tt_metal::ProgramDescriptor build_program(
+ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::create_mesh_workload_artifacts(
     const EntryCorrectionParams& attrs,
     const EntryCorrectionInputs& in,
-    const std::vector<Tensor>& outputs,
-    const ttnn::MeshCoordinate& coord) {
-    auto* mesh = in.final_b.device();
-    const auto& output = outputs[0];
-    const auto& final_state = outputs[1];
-    const uint32_t sp_size = mesh->shape()[attrs.sequence_parallel_axis];
-    const uint32_t sp_rank = coord[attrs.sequence_parallel_axis];
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    namespace m2 = tt::tt_metal::experimental;
+    const auto& terms = in.terms.mesh_tensor();
+    const auto& final_a = in.final_a.mesh_tensor();
+    const auto& final_b = in.final_b.mesh_tensor();
+    const auto& entry = in.entry.mesh_tensor();
+    const auto& tail_entry = in.tail_entry.mesh_tensor();
+    const auto& output = outputs[0].mesh_tensor();
+    const auto& final_state = outputs[1].mesh_tensor();
+    const auto& device = final_b.device();
+
     const uint32_t batch_heads = in.final_b.logical_shape()[0];
     const uint32_t kt = in.final_b.logical_shape()[1] / tt::constants::TILE_HEIGHT;
     const uint32_t state_tiles = kt * kt;
     const uint32_t num_chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     const uint32_t cores_per_head = attrs.cores.size() / batch_heads;
     const uint32_t per_core = num_chunks / cores_per_head;
-    const uint32_t fp32_tile = tt::constants::TILE_HW * sizeof(float);
-    const uint32_t bf16_tile = tt::constants::TILE_HW * sizeof(uint16_t);
-    const CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
-    const auto& end = in.actual_end.value_or(in.actual_start);
-
+    const tt::tt_metal::CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
     // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
     const bool streamed = !in.terms.memory_config().is_sharded();
-    // The F(0) (half 0) or F(I) (half 1) rows of the core's terms shard, in place, or two chunk rows when streamed.
-    const auto terms_cb = [&](uint32_t index, uint32_t half) {
-        if (streamed) {
-            return kda_factory_detail::cb_descriptor(index, 2 * kt, fp32_tile, tt::DataFormat::Float32, cores);
-        }
-        auto cb = kda_factory_detail::cb_descriptor(index, per_core * kt, fp32_tile, tt::DataFormat::Float32, cores);
-        cb.buffer = in.terms.buffer();
-        cb.address_offset = half * per_core * kt * fp32_tile;
-        return cb;
+
+    const m2::KernelSpecName reader_kernel{"reader"};
+    const m2::KernelSpecName writer_kernel{"writer"};
+    const m2::KernelSpecName compute_kernel{"compute"};
+    const m2::DFBSpecName seed_dfb{"seed"};
+    const m2::DFBSpecName tail_dfb{"tail"};
+    const m2::DFBSpecName terms_dfb{"terms"};
+    const m2::DFBSpecName diff_dfb{"diff"};
+    const m2::DFBSpecName out_dfb{"out"};
+    const m2::DFBSpecName a_dfb{"a"};
+    const m2::DFBSpecName b_dfb{"b"};
+    const m2::DFBSpecName final_dfb{"final_rows"};
+    const m2::DFBSpecName ctl_dfb{"ctl"};
+    const m2::DFBSpecName ctl_writer_dfb{"ctl_writer"};
+    const m2::TensorParamName terms_name{"terms"};
+    const m2::TensorParamName final_a_name{"final_a"};
+    const m2::TensorParamName final_b_name{"final_b"};
+    const m2::TensorParamName entry_name{"entry"};
+    const m2::TensorParamName tail_entry_name{"tail_entry"};
+    const m2::TensorParamName actual_start_name{"actual_start"};
+    const m2::TensorParamName output_name{"output"};
+    const m2::TensorParamName final_state_name{"final_state"};
+
+    constexpr auto fp32 = tt::DataFormat::Float32;
+    const auto make_dfb = [](const m2::DFBSpecName& name, uint32_t entries, tt::DataFormat format) {
+        return m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = tt::tile_size(format),
+            .num_entries = entries,
+            .data_format_metadata = format,
+        };
     };
-    tt::tt_metal::ProgramDescriptor desc;
-    desc.cbs = {
-        kda_factory_detail::cb_descriptor(cb_seed, state_tiles, fp32_tile, tt::DataFormat::Float32, cores),
-        kda_factory_detail::cb_descriptor(cb_tail, state_tiles, fp32_tile, tt::DataFormat::Float32, cores),
-        terms_cb(cb_base, 0),
-        terms_cb(cb_m, 1),
-        kda_factory_detail::cb_descriptor(
-            cb_diff, (streamed ? 2 : per_core) * kt, fp32_tile, tt::DataFormat::Float32, cores),
-        kda_factory_detail::cb_descriptor(cb_out, 2 * kt, bf16_tile, tt::DataFormat::Float16_b, cores),
-        kda_factory_detail::cb_descriptor(cb_a, kt, fp32_tile, tt::DataFormat::Float32, cores),
-        kda_factory_detail::cb_descriptor(cb_b, kt, fp32_tile, tt::DataFormat::Float32, cores),
-        kda_factory_detail::cb_descriptor(cb_final, 2 * kt, fp32_tile, tt::DataFormat::Float32, cores),
-        kda_factory_detail::cb_descriptor(cb_ctl, 1, 64, tt::DataFormat::UInt32, cores),
-        kda_factory_detail::cb_descriptor(cb_ctl_writer, 1, 64, tt::DataFormat::UInt32, cores),
+    // A chunk row of F(0) then of F(I). In place, the core's whole terms shard: its chunk rows of F(0), then of F(I).
+    // Streamed, two chunks' rows.
+    auto terms_buffer = make_dfb(terms_dfb, (streamed ? 2 : per_core) * 2 * kt, fp32);
+    if (!streamed) {
+        terms_buffer.borrowed_from = terms_name;
+    }
+    const auto control = [](const m2::DFBSpecName& name) {
+        return m2::DataflowBufferSpec{
+            .unique_id = name, .entry_size = 64, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32};
+    };
+    m2::Group<m2::DataflowBufferSpec> dfbs = {
+        make_dfb(seed_dfb, state_tiles, fp32),
+        make_dfb(tail_dfb, state_tiles, fp32),
+        std::move(terms_buffer),
+        make_dfb(diff_dfb, (streamed ? 2 : per_core) * kt, fp32),
+        make_dfb(out_dfb, 2 * kt, tt::DataFormat::Float16_b),
+        make_dfb(a_dfb, kt, fp32),
+        make_dfb(b_dfb, kt, fp32),
+        make_dfb(final_dfb, 2 * kt, fp32),
+        control(ctl_dfb),
+        control(ctl_writer_dfb),
     };
 
-    std::vector<uint32_t> reader_ct = {
-        cb_seed,
-        cb_tail,
-        cb_m,
-        cb_base,
-        cb_a,
-        cb_b,
-        cb_ctl,
-        cb_ctl_writer,
-        sp_rank,
-        sp_size,
-        attrs.local_rows,
-        kt,
-        static_cast<uint32_t>(in.actual_end.has_value()),
-        cores_per_head,
-        static_cast<uint32_t>(streamed)};
-    for (const auto* tensor :
-         {&in.final_a, &in.final_b, &in.entry, &in.tail_entry, &in.actual_start, &end, &in.terms}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
-    }
-    std::vector<uint32_t> writer_ct = {cb_out, cb_final, cb_ctl_writer, num_chunks, kt};
-    for (const auto* tensor : {&output, &final_state}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
-    }
-
-    tt::tt_metal::KernelDescriptor reader{
-        .kernel_source = std::string(kernel_dir) + "dataflow/reader_entry_correction.cpp",
-        .core_ranges = cores,
-        .compile_time_args = std::move(reader_ct),
-        .config = tt::tt_metal::ReaderConfigDescriptor{},
-    };
-    tt::tt_metal::KernelDescriptor writer{
-        .kernel_source = std::string(kernel_dir) + "dataflow/writer_entry_correction.cpp",
-        .core_ranges = cores,
-        .compile_time_args = std::move(writer_ct),
-        .config = tt::tt_metal::WriterConfigDescriptor{},
-    };
-    tt::tt_metal::KernelDescriptor compute{
-        .kernel_source = std::string(kernel_dir) + "compute/entry_correction.cpp",
-        .core_ranges = cores,
+    m2::KernelSpec reader{
+        .unique_id = reader_kernel,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/dataflow/"
+            "reader_entry_correction.cpp",
+        .dfb_bindings =
+            {
+                m2::ProducerOf(seed_dfb, "seed"),
+                m2::ProducerOf(tail_dfb, "tail"),
+                m2::ProducerOf(terms_dfb, "terms"),
+                m2::ProducerOf(a_dfb, "a"),
+                m2::ProducerOf(b_dfb, "b"),
+                m2::ProducerOf(ctl_dfb, "ctl"),
+                m2::ProducerOf(ctl_writer_dfb, "ctl_writer"),
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{final_a_name, "final_a"},
+                m2::TensorBinding{final_b_name, "final_b"},
+                m2::TensorBinding{entry_name, "entry"},
+                m2::TensorBinding{tail_entry_name, "tail_entry"},
+                m2::TensorBinding{actual_start_name, "actual_start"},
+                m2::TensorBinding{terms_name, "terms"},
+            },
         .compile_time_args =
-            {cb_seed, cb_tail, cb_m, cb_base, cb_diff, cb_out, cb_a, cb_b, cb_final, cb_ctl, kt, uint32_t(streamed)},
-        .config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config),
+            {{"kt", kt},
+             {"core_chunks", per_core},
+             {"final_stride", cores_per_head},
+             {"streamed", static_cast<uint32_t>(streamed)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    m2::KernelSpec writer{
+        .unique_id = writer_kernel,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/dataflow/"
+            "writer_entry_correction.cpp",
+        .dfb_bindings =
+            {
+                m2::ConsumerOf(out_dfb, "out"),
+                m2::ConsumerOf(final_dfb, "final_rows"),
+                m2::ConsumerOf(ctl_writer_dfb, "ctl"),
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{output_name, "output"},
+                m2::TensorBinding{final_state_name, "final_state"},
+            },
+        .compile_time_args = {{"num_chunks", num_chunks}, {"kt", kt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    for (const auto& name : {seed_dfb, tail_dfb, terms_dfb, diff_dfb, a_dfb, b_dfb}) {
+        compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+    }
+    m2::KernelSpec compute{
+        .unique_id = compute_kernel,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/compute/"
+            "entry_correction.cpp",
+        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                m2::ConsumerOf(seed_dfb, "seed"),
+                m2::ConsumerOf(tail_dfb, "tail"),
+                m2::ConsumerOf(terms_dfb, "terms"),
+                m2::ProducerOf(diff_dfb, "diff"),
+                m2::ConsumerOf(diff_dfb, "diff"),
+                m2::ProducerOf(out_dfb, "out"),
+                m2::ConsumerOf(a_dfb, "a"),
+                m2::ConsumerOf(b_dfb, "b"),
+                m2::ProducerOf(final_dfb, "final_rows"),
+                m2::ConsumerOf(ctl_dfb, "ctl"),
+            },
+        .compile_time_args = {{"kt", kt}, {"core_chunks", per_core}, {"streamed", static_cast<uint32_t>(streamed)}},
+        .hw_config = std::move(compute_hw),
     };
 
-    // Every core reads the same buffers, so they are bound once per kernel.
-    reader.emplace_common_runtime_args(
-        {in.final_a.buffer(),
-         in.final_b.buffer(),
-         in.entry.buffer(),
-         in.tail_entry.buffer(),
-         in.actual_start.buffer(),
-         end.buffer(),
-         in.terms.buffer()});
-    writer.emplace_common_runtime_args({output.buffer(), final_state.buffer()});
+    m2::KernelRunArgs reader_run{.kernel = reader_kernel};
+    m2::KernelRunArgs writer_run{.kernel = writer_kernel};
     for (uint32_t index = 0; index < attrs.cores.size(); ++index) {
         const uint32_t head = index / cores_per_head;
         const uint32_t part = index % cores_per_head;
         const uint32_t first = part * per_core;
         const auto& core = attrs.cores[index];
-        tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
         // The first final-state tile row this core forms (kt: none).
-        for (uint32_t value : {head, first, first + per_core, part < kt ? part : kt}) {
-            reader_rt.push_back(value);
-        }
-        reader.emplace_runtime_args(core, reader_rt);
-        tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
-        writer_rt.push_back(head);
-        writer_rt.push_back(first);
-        writer.emplace_runtime_args(core, writer_rt);
+        m2::AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            core,
+            {{"head", head},
+             {"first_chunk", first},
+             {"last_chunk", first + per_core},
+             {"final_row", part < kt ? part : kt}});
+        m2::AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"head", head}, {"first_chunk", first}});
     }
-    desc.kernels = {std::move(reader), std::move(writer), std::move(compute)};
-    return desc;
-}
 
-}  // namespace
+    m2::ProgramSpec spec{
+        .name = "entry_correction",
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters =
+            {
+                m2::TensorParameter{.unique_id = terms_name, .spec = terms.tensor_spec()},
+                m2::TensorParameter{.unique_id = final_a_name, .spec = final_a.tensor_spec()},
+                m2::TensorParameter{.unique_id = final_b_name, .spec = final_b.tensor_spec()},
+                m2::TensorParameter{.unique_id = entry_name, .spec = entry.tensor_spec()},
+                m2::TensorParameter{.unique_id = tail_entry_name, .spec = tail_entry.tensor_spec()},
+                m2::TensorParameter{
+                    .unique_id = actual_start_name, .spec = in.actual_start.mesh_tensor().tensor_spec()},
+                m2::TensorParameter{.unique_id = output_name, .spec = output.tensor_spec()},
+                m2::TensorParameter{.unique_id = final_state_name, .spec = final_state.tensor_spec()},
+            },
+        .work_units =
+            {
+                m2::WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {reader_kernel, writer_kernel, compute_kernel},
+                    .target_nodes = cores,
+                },
+            },
+    };
 
-tt::tt_metal::WorkloadDescriptor EntryCorrectionProgramFactory::create_workload_descriptor(
-    const EntryCorrectionParams& attrs,
-    const EntryCorrectionInputs& in,
-    std::vector<Tensor>& outputs,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    // The programs differ only in sp_rank, so the TP ranks of an SP rank share one.
-    const uint32_t axis = attrs.sequence_parallel_axis;
-    tt::tt_metal::WorkloadDescriptor workload;
-    for (const auto& range : tensor_coords.ranges()) {
-        for (uint32_t rank = range.start_coord()[axis]; rank <= range.end_coord()[axis]; ++rank) {
-            auto start = range.start_coord();
-            auto end = range.end_coord();
-            start[axis] = end[axis] = rank;
-            workload.programs.push_back(
-                {ttnn::MeshCoordinateRange(start, end), build_program(attrs, in, outputs, start)});
-        }
-    }
-    return workload;
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+    run_args.tensor_args = {
+        {terms_name, terms},
+        {final_a_name, final_a},
+        {final_b_name, final_b},
+        {entry_name, entry},
+        {tail_entry_name, tail_entry},
+        {actual_start_name, in.actual_start.mesh_tensor()},
+        {output_name, output},
+        {final_state_name, final_state},
+    };
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows,
+        reader_kernel);
 }
 
 }  // namespace ttnn::experimental::prim
