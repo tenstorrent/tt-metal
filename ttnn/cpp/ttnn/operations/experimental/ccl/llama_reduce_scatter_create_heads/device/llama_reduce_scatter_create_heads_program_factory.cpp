@@ -787,6 +787,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (forward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     forward_fabric_node_id.value(),
                     link_idx,
@@ -799,6 +800,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (backward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     backward_fabric_node_id.value(),
                     link_idx,

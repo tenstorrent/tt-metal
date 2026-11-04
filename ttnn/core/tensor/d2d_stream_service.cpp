@@ -1560,7 +1560,7 @@ Program build_receiver_program(
     // connection runs receiver -> sender.
     std::vector<uint32_t> rt_args;
     tt::tt_fabric::append_fabric_connection_rt_args(
-        receiver_node, sender_node, link_index, program, service_core, rt_args);
+        mesh_device, receiver_node, sender_node, link_index, program, service_core, rt_args);
     SetRuntimeArgs(program, kernel, service_core, rt_args);
     return program;
 }
@@ -1681,7 +1681,7 @@ Program build_sender_program(
         // receiver backing tensor base address (the direct fabric-write destination).
         std::vector<uint32_t> rt_args;
         tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_node, receiver_node, link_indices[lane], program, service_core, rt_args);
+            mesh_device, sender_node, receiver_node, link_indices[lane], program, service_core, rt_args);
         rt_args.push_back(receiver_tensor_addr);
         SetRuntimeArgs(program, kernel, service_core, rt_args);
     }
@@ -2549,10 +2549,10 @@ Program build_exit_relay_program(
         // RT args: the cable connection on this lane's link, the credit connections
         // (master only), then the per-slot words.
         std::vector<uint32_t> rt;
-        tt::tt_fabric::append_fabric_connection_rt_args(exit_node, entry_node, z_links[lane], program, core, rt);
+        tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, entry_node, z_links[lane], program, core, rt);
         if (master) {
             for (const auto& [node, link] : credit_conns) {
-                tt::tt_fabric::append_fabric_connection_rt_args(exit_node, node, link, program, core, rt);
+                tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, node, link, program, core, rt);
             }
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
@@ -2713,10 +2713,10 @@ Program build_entry_relay_program(
         // direction connections, then 11 words per slot (the same for both lanes).
         std::vector<uint32_t> rt;
         if (master) {
-            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, exit_node, z_link, program, core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, exit_node, z_link, program, core, rt);
         }
         for (const auto& [node, link] : conns[lane]) {
-            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, node, link, program, core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, node, link, program, core, rt);
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
             if (k == own_slot) {
