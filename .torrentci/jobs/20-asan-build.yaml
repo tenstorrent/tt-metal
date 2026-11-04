@@ -41,6 +41,13 @@ jobs:
       - {name: CCACHE_MAXSIZE, value: 4G}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      # TEMPORARY diagnostics (torrentci#2377)
+      - {name: CCACHE_LOGFILE, value: /tmp/ccache.log}
+    # TEMPORARY prototype (torrentci#2377): CPM source cache.
+    cache:
+      key: tt-metal-cpm-v1-${commit_sha}
+      restore-keys: [tt-metal-cpm-v1-]
+      save-paths: [.cpmcache]
     artifacts:
       publish:
         # Consumed as packages-artifact-name by smoke, sdk-examples and
@@ -53,6 +60,13 @@ jobs:
           path: ttnn-import.tar.zst
           content-type: application/zstd
     steps:
+      # TEMPORARY diagnostics (torrentci#2377)
+      - id: diag-timeline
+        kind: shell
+        shell:
+          run:
+            - .torrentci-diag/pod-timeline.sh
+            - "du -sh .cpmcache 2>/dev/null || echo 'no .cpmcache restored'"
       - id: check-image
         kind: shell
         shell:
@@ -77,22 +91,31 @@ jobs:
             - ccache -p | grep -v '^(default)' || true
             - ccache -s -v
             - ccache -z
+            - .torrentci-diag/mark.sh configure-start
             - >-
-              ./build_metal.sh --build-dir build --build-type ASan
+              bash -o pipefail -c './build_metal.sh --build-dir build --build-type ASan
               --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
               --build-all --enable-ccache --configure-only
-              --use-system-sfpi --disable-profiler
+              --use-system-sfpi --disable-profiler 2>&1 | python3 -u .torrentci-diag/ts.py'
+            - .torrentci-diag/mark.sh configure-end
+            - "du -sh .cpmcache; find .cpmcache -type l | wc -l"
       - id: compile
         kind: shell
         shell:
           run:
-            - cmake --build build --target install
+            - .torrentci-diag/mark.sh compile-start
+            - "bash -o pipefail -c 'cmake --build build --target install 2>&1 | python3 -u .torrentci-diag/ts.py'"
+            - .torrentci-diag/mark.sh compile-end
             - ccache -s -v
+            - ls -l /tmp/ccache.log
+            - python3 .torrentci-diag/ccache_log_summary.py /tmp/ccache.log
       - id: package
         kind: shell
         shell:
           run:
-            - cmake --build build --target package
+            - .torrentci-diag/mark.sh package-start
+            - "bash -o pipefail -c 'cmake --build build --target package 2>&1 | python3 -u .torrentci-diag/ts.py'"
+            - .torrentci-diag/mark.sh package-end
             - ls -1sh build/*.deb build/*.ddeb || true
       - id: stage-packages
         kind: shell
@@ -118,3 +141,4 @@ jobs:
             - du -sh ttnn-import ttnn-import/build/lib
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
             - ls -l ttnn-import.tar.zst
+            - .torrentci-diag/mark.sh steps-end
