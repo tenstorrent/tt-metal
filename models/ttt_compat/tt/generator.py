@@ -4239,7 +4239,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # As in the single-user branch: a reused row keeps old block IDs past each prompt, and the padded
             # prefill would write the pad tail into them. -1 makes paged_fill_cache skip the column.
             page_table = page_table[:, :num_blocks].clone()
-            for row, row_len in enumerate(prefill_len):
+            # qwen25_vl passes one padded length for every row
+            row_lens = [prefill_len] * page_table.shape[0] if isinstance(prefill_len, int) else prefill_len
+            for row, row_len in enumerate(row_lens):
                 page_table[row, num_blocks_in_seq(int(row_len), block_size) :] = -1
             if trace_enabled:
                 if page_table.shape[1] < num_blocks:

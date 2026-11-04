@@ -26,6 +26,7 @@
     pytest --timeout 60 models/ttt_compat/tests/test_decode_output_rows.py
     pytest --timeout 60 models/ttt_compat/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/ttt_compat/tests/test_batched_prefill_slots.py
+    pytest --timeout 60 models/ttt_compat/tests/test_prefill_page_table.py
     pytest --timeout 300 models/ttt_compat/tests/test_batched_prefill_extract.py
     pytest --timeout 60 models/ttt_compat/tests/test_accuracy_precision_family.py
     pytest --timeout 300 models/ttt_compat/tests/test_load_state_dict_layers.py
