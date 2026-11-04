@@ -408,7 +408,7 @@ TEST_F(MeshTensorTest2x4, CombineOneDeviceTensorTakesTheRequestedShardLabel) {
         tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor device_tensor = tt::tt_metal::to_device(
         Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec), mesh_device_.get());
-    const auto label = device_tensor.tensor_topology();
+    const auto& label = device_tensor.tensor_topology();
     auto device_tensors = get_device_tensors(device_tensor);
     ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
 
