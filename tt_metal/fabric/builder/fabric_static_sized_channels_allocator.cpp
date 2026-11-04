@@ -4,6 +4,7 @@
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/fabric_slot_allocator.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -662,6 +663,19 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
     size_t vc2_sender_buffer_slots, vc2_receiver_buffer_slots;
 
+    // Blackhole routers take their slots from the staged allocator (fabric_slot_allocator.hpp): each channel kind's
+    // full-rate depth, scaled to the budget. Wormhole keeps the tier table below: the full-rate depths are the
+    // Blackhole router's credit loops.
+    if (arch == tt::ARCH::BLACKHOLE) {
+        configure_staged_buffer_slots(
+            topology,
+            num_sender_buffer_slots_per_vc,
+            num_remote_sender_buffer_slots_per_vc,
+            num_receiver_buffer_slots_per_vc,
+            num_remote_receiver_buffer_slots_per_vc);
+        return;
+    }
+
     // Determine which VCs are active based on channel usage
     bool vc1_present = (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0);
     bool vc2_present = (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0);
@@ -725,6 +739,82 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
         num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+    }
+}
+
+void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
+    Topology topology,
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+        num_sender_buffer_slots_per_vc,
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+        num_remote_sender_buffer_slots_per_vc,
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+        num_receiver_buffer_slots_per_vc,
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+        num_remote_receiver_buffer_slots_per_vc) {
+    namespace sa = slot_allocator;
+    static_assert(sa::NUM_VCS == builder_config::MAX_NUM_VCS);
+    // VC0's worker-connected sender channel is its worker and its other senders forward; VC1's senders all forward;
+    // VC2's sender is its worker.
+    sa::RouterShape shape;
+    shape.buffer_bytes = this->available_channel_buffering_space;
+    shape.slot_bytes = this->channel_buffer_size_bytes;
+    shape.one_d = !(topology == Topology::Mesh || topology == Topology::Torus);
+    const size_t vc0_senders = num_used_sender_channels_per_vc[0];
+    shape.vcs[0] = {
+        std::min<size_t>(vc0_senders, 1),
+        vc0_senders - std::min<size_t>(vc0_senders, 1),
+        num_used_receiver_channels_per_vc[0]};
+    shape.vcs[1] = {0, num_used_sender_channels_per_vc[1], num_used_receiver_channels_per_vc[1]};
+    shape.vcs[2] = {num_used_sender_channels_per_vc[2], 0, num_used_receiver_channels_per_vc[2]};
+
+    const sa::Allocation allocation = sa::allocate_slots(shape);
+    TT_FATAL(
+        !allocation.error.has_value(),
+        "Fabric channel slots ({} B slots, {} B of channel buffers): {}",
+        this->channel_buffer_size_bytes,
+        this->available_channel_buffering_space,
+        allocation.error.value_or(""));
+    for (const auto& note : allocation.notes) {
+        log_debug(tt::LogFabric, "Fabric channel slots: {}", note);
+    }
+
+    // VC0's forwarding channels are its sender channels other than the worker-connected one, in channel order.
+    const uint32_t worker_channel = get_worker_connected_sender_channel();
+    std::vector<size_t> vc0_forwarding_channels;
+    for (size_t i = 0; i < vc0_senders; ++i) {
+        if (i != worker_channel) {
+            vc0_forwarding_channels.push_back(i);
+        }
+    }
+    for (const auto& c : allocation.channels) {
+        size_t channel = c.index;
+        if (c.kind == sa::ChannelKind::Receiver) {
+            num_receiver_buffer_slots_per_vc[c.vc][channel] = c.slots;
+            num_remote_receiver_buffer_slots_per_vc[c.vc][channel] = c.slots;
+        } else {
+            if (c.vc == 0) {
+                channel = c.kind == sa::ChannelKind::Worker ? worker_channel : vc0_forwarding_channels.at(c.index);
+            }
+            num_sender_buffer_slots_per_vc[c.vc][channel] = c.slots;
+            num_remote_sender_buffer_slots_per_vc[c.vc][channel] = c.slots;
+        }
+        log_debug(
+            tt::LogFabric,
+            "Fabric channel slots: VC{} {} channel {}: {} slots (stage {}: {})",
+            c.vc,
+            sa::to_string(c.kind),
+            channel,
+            c.slots,
+            c.stage,
+            c.reason);
+    }
+    if (allocation.unused_slots > 0) {
+        log_debug(
+            tt::LogFabric,
+            "Fabric channel slots: {} of {} slots unused (no group of the leftover order takes them in whole steps)",
+            allocation.unused_slots,
+            allocation.total_slots);
     }
 }
 
