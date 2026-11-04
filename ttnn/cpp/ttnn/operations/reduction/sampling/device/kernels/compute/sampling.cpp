@@ -34,13 +34,15 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
-    // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
-    // never be drawn and the rest of the tail was under-sampled (unit test
-    // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
-    // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
-    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
-    constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
+    // The writer compares an FP32 cumulative probability against a uniform random threshold in
+    // [0, 1). Because this compute kernel keeps 16-bit dest on Wormhole/Blackhole so top-k indices
+    // stay UInt16, packing the random tile directly as Float32 would still quantize to BF16 (1/256
+    // spacing near 1.0, capped at 255/256). Instead, each element is drawn in [0, 256) using the
+    // largest FP32 float strictly below 256.0f (0x437FFFFFU = nextafterf(256.0f, 0.0f)) and floored
+    // on the SFPU, yielding an exact integer digit in {0, ..., 255} in BF16. The writer combines
+    // three independent digits into a 24-bit lattice threshold k / 2^24 in [0, 1 - 2^-24], matching
+    // the full FP32 significand resolution on [0.5, 1.0).
+    constexpr uint32_t rand_scale = 0x437FFFFFU;  // nextafterf(256.0f, 0.0f)
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {

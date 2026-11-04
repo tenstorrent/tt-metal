@@ -197,7 +197,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t num_out_tiles = Ht;
 
-    // random number
+    // Random digits stay in a BF16 tile (each element is an exact integer in 0..255 floored on the
+    // SFPU, and the writer combines 3 digits into a 24-bit k/2^24 FP32 threshold). Keeping the CB
+    // format Float16_b preserves 16-bit dest on Wormhole/Blackhole so top-k indices stay UInt16.
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
 
     // final indices

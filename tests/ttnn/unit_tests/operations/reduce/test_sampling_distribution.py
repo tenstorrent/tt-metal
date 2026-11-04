@@ -1,9 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Distribution-level check of ttnn.sampling: with fixed candidate logits, many seeded draws
-must reproduce the reference distribution (softmax -> top-k -> top-p (nucleus incl. the
-crossing token) -> renormalise). Reports per-user total variation and the realised
-probability of tail tokens, which is where a quantised random threshold would show."""
+"""Distribution-level check of ttnn.sampling.
+
+The writer constructs a 24-bit uniform threshold k / 2^24 in [0, 1 - 2^-24] from three independent
+BF16 integer digits in {0, ..., 255} (see sampling.cpp and writer_interleaved.cpp), matching the
+24-bit FP32 significand grid on [0.5, 1.0), and defaults any right-endpoint CDF rounding shortfall
+to the last kept nucleus token rather than wrapping around to top-1.
+
+Draw count: N calls (default 3000, overridable via SAMPLING_DRAWS) across USERS (32) independent
+per-user RNG streams seeded once via ttnn.manual_seed. Same assertions on Wormhole and Blackhole.
+"""
 
 import os
 
@@ -238,3 +244,65 @@ def test_sampling_softmax_gap(device):
     assert (
         not bad
     ), f"P(second) off by more than 50% at gaps {bad} (before the 16-bit threshold: 0.67x at 4, 0.20x at 5, 0 at 6)"
+
+
+def _grid_tail_hits(bits: int, tail_mass: float) -> int:
+    """Count how many lattice points of k / 2^bits (for k in 0 .. 2^bits - 1) fall in [1 - tail_mass, 1)."""
+    span = 1 << bits
+    scaled = (1.0 - tail_mass) * span
+    first_k = int(scaled) if scaled.is_integer() else int(scaled) + 1
+    return max(0, span - first_k)
+
+
+def _simulate_writer_cdf_lookup(bf16_probs, rand_q24: int, fallback_to_last_kept: bool = True) -> int:
+    """Bit-accurate host model of writer_interleaved.cpp's FP32 normalized CDF loop."""
+    import struct
+
+    def f32(val: float) -> float:
+        return struct.unpack("f", struct.pack("f", val))[0]
+
+    cum_prob_f = 0.0
+    for p in bf16_probs:
+        cum_prob_f = f32(cum_prob_f + f32(p))
+
+    rand_f = f32(float(rand_q24) * f32(1.0 / 16777216.0))
+    cum_sum_f = 0.0
+    sampled_idx = (len(bf16_probs) - 1) if fallback_to_last_kept else 0
+    for idx, p in enumerate(bf16_probs):
+        cum_sum_f = f32(cum_sum_f + f32(f32(p) / cum_prob_f))
+        if cum_sum_f > rand_f:
+            sampled_idx = idx
+            break
+    return sampled_idx
+
+
+@pytest.mark.skipif(False, reason="Pure host-side mathematical & IEEE-754 validation; runs without hardware")
+def test_host_24bit_threshold_grid_and_cdf_tail_invariants():
+    """Host-only verification of the 24-bit threshold lattice and CDF right-endpoint fallback:
+    1. A single BF16 threshold (8-bit grid near 1.0, max 255/256) draws the gap=6.25 tail token
+       (P ≈ 0.00193) 0 times, whereas the 24-bit k/2^24 lattice matches P within 1 ULP (2^-24).
+    2. A 16-bit threshold (k/2^16, max 1 - 2^-16) draws a tail token of mass 2^-17 0 times,
+       whereas the 24-bit lattice assigns it exactly 128 equiprobable steps (128 / 2^24 = 2^-17).
+    3. When sum_i (p_i / cum_prob_f) rounds 1-2 ULPs below 1.0f in IEEE-754 FP32 (e.g. the 19-token
+       nucleus in test_sampling_threshold_uniformity), upper lattice points k near 2^24 - 1 must
+       select the last kept tail token rather than wrapping around to index 0 (top-1).
+    """
+    logits = torch.tensor([0.0, -6.25], dtype=torch.float32)
+    p_tail = torch.softmax(logits.to(torch.bfloat16).float(), dim=-1)[1].item()
+    assert 1.0 - p_tail > 255.0 / 256.0
+    assert _grid_tail_hits(8, p_tail) == 0
+
+    hits_24 = _grid_tail_hits(24, p_tail)
+    assert abs(hits_24 / float(1 << 24) - p_tail) < (1.0 / float(1 << 24))
+
+    # Deep tail beyond 16-bit resolution
+    assert _grid_tail_hits(16, 2.0**-17) == 0
+    assert _grid_tail_hits(24, 2.0**-17) == 128
+
+    # Verify CDF right-endpoint rounding fallback on the 19-token nucleus from test_sampling_threshold_uniformity
+    near_equal_logits = -0.01 * torch.arange(20, dtype=torch.float32)
+    bf16_probs = torch.softmax(near_equal_logits.to(torch.bfloat16).float(), dim=-1).to(torch.bfloat16).float()[:19].tolist()
+    top_lattice_point = (1 << 24) - 1  # d0=255, d1=255, d2=255 -> 1 - 2^-24 (0x3f7fffff)
+    assert _simulate_writer_cdf_lookup(bf16_probs, top_lattice_point, fallback_to_last_kept=False) == 0
+    assert _simulate_writer_cdf_lookup(bf16_probs, top_lattice_point, fallback_to_last_kept=True) == 18
+
