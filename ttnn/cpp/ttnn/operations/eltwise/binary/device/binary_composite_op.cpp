@@ -75,8 +75,13 @@ PromotedScalarInput promote_int32_scalar_input(
         // Sharded inputs use the existing tilize path, as binary_ng did before
         // promotion, so later output memory-layout changes also use tile pages.
         if (input.is_sharded() && operation_sub_core_grids.has_value()) {
+            // An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+            const auto& memory_config = input.memory_config();
+            const auto& input_shard_grid = memory_config.shard_spec().has_value()
+                                               ? memory_config.shard_spec()->grid
+                                               : memory_config.nd_shard_spec().value().grid;
             TT_FATAL(
-                operation_sub_core_grids->contains(input.shard_spec()->grid),
+                operation_sub_core_grids->contains(input_shard_grid),
                 "INT32 scalar promotion requires the requested grid to contain all input shard cores");
         }
         const auto typecast_input =
