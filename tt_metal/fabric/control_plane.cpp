@@ -3199,6 +3199,23 @@ std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_co
         return active_ethernet_cores;  // Return empty set if no ethernet cores
     }
 
+    if (!this->hal_.get().has_eth_base_firmware()) {
+        // No base firmware shares the core: it is active exactly when the cluster's link table lists a peer for its
+        // channel.
+        const auto& connections = cluster.get_ethernet_connections();
+        if (const auto chip_links = connections.find(chip_id); chip_links != connections.end()) {
+            const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
+            for (const auto& [eth_channel, peer] : chip_links->second) {
+                tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                if (skip_reserved_cores && eth_routing_info.at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+                    continue;
+                }
+                active_ethernet_cores.insert(eth_core);
+            }
+        }
+        return active_ethernet_cores;
+    }
+
     if (cluster.arch() == ARCH::BLACKHOLE) {
         // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
         // without links. Only risc1 on these cores is available for Metal and should not be classified as idle

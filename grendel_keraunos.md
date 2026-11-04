@@ -70,9 +70,9 @@ Check: two UMD attaches in a row on the MMK model, with no `INIT` from the test.
 
 When the opened descriptor lists Keraunos ethernet cores, the Quasar HAL installs the ethernet memory map and firmware for `HalProgrammableCoreType::IDLE_ETH`. The processor count is eight, from the PF_CTRL hart field. `l1_noc_offset` is 0: the ethernet coordinate selects the core, and the resolver adds the SRAM window. The device mailbox is the uncached alias at `+0x800000`. The host writes the 0-based offsets. `fw_launch_addr` is 0, and a register-width write there programs `tt_cluster_ctrl` for every hart. A larger write at the same address stays in SRAM.
 
-The firmware is `tt-2xx/idle_erisc.cc`. It is built with `COMPILE_FOR_IDLE_ERISC`, and the host map is compiled with `COMPILE_FOR_ERISC`. It uses that map, the mailbox, the launch message, and the go message. It does not program a NOC. `tt-1xx/active_erisc.cc` stays the image when the descriptor has no Keraunos chiplet. Today's Quasar descriptors have `eth: []`, so that image is not loaded.
+The firmware is `tt-2xx/idle_erisc.cc`. It is built with `COMPILE_FOR_IDLE_ERISC`, and the host map is compiled with `COMPILE_FOR_ERISC`. It uses that map, the mailbox, the launch message, and the go message. It does not program a NOC. A linked Ethernet core, `ACTIVE_ETH`, is a CCE whose Ethernet link has a peer and runs the same image. Today's Quasar descriptors have `eth: []`, so that image is not loaded.
 
-Fabric discovery does not mark these cores active, and the idle-ethernet walk would write the tt-1xx map into their SRAM. The initializer walks `logical_eth_core_to_chan_map` instead, holds the harts with `RiscType::ALL_NEO_DMS`, loads the one firmware binary, writes the mailbox, programs the reset vector, and releases the same harts. The uncore stays as bring-up left it. Those cores are idle ethernet, so `CreateKernel(..., EthernetConfig)` uses this map. They are not the dispatch core. `TT_METAL_SLOW_DISPATCH_MODE` stays the user's choice.
+Fabric discovery marks one of these cores active only when its Ethernet link has a peer, and the idle-ethernet walk would write the tt-1xx map into their SRAM. The initializer walks `logical_eth_core_to_chan_map` instead, holds the harts with `RiscType::ALL_NEO_DMS`, loads the one firmware binary, writes the mailbox, programs the reset vector, and releases the same harts. The uncore stays as bring-up left it. Those cores are idle ethernet, so `CreateKernel(..., EthernetConfig)` uses this map. They are not the dispatch core. `TT_METAL_SLOW_DISPATCH_MODE` stays the user's choice.
 
 Check: the Mimir contract suite on `mimir_1x1.yaml` and `mimir_2x_package.yaml` is unchanged. A Quasar descriptor with `eth: []` still loads no ethernet firmware.
 
@@ -129,7 +129,7 @@ Check: the step 5 case on JTAG with `mmk.yaml`.
 ## Decisions
 
 - **New descriptor.** `mmk.yaml` is the two-Mimir plus Keraunos package. The one-Mimir and two-Mimir files stay the regression for packages that have no Keraunos.
-- **Same launch path as ERISC.** Logical ethernet cores, `IDLE_ETH`, `EthernetConfig`. The memory map and the firmware are the eight-hart image. The tt-1xx active ERISC image stays with on-package Quasar ethernet.
+- **Same launch path as ERISC.** Logical ethernet cores, `IDLE_ETH`, `EthernetConfig`. The memory map and the firmware are the eight-hart image. A linked core, `ACTIVE_ETH` (a CCE whose Ethernet link has a peer), runs the same image.
 - **Who owns bring-up.** `bringup_mmk.py` releases the uncore and brings up the link and D2D. Metal resets the ethernet processors.
 - **Address space.** Chippy uses the chiplet-local window. `keraunos_address_map.hpp` is the package SPA table for a later `full_package` path.
 - **Dispatch.** `TT_METAL_SLOW_DISPATCH_MODE` still chooses. A Keraunos case on a package with no Tensix cores skips while that variable is unset.
