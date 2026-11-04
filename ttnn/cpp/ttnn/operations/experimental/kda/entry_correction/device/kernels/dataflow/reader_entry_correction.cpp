@@ -8,14 +8,17 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/semaphore.h"
 #include "experimental/kernel_args.h"
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
 // rows of A and B this core forms the final state of.
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
 // streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
+// seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
 template <
     uint32_t kt,
+    uint32_t seed_receivers,
     uint32_t core_chunks,
     uint32_t final_stride,
     uint32_t streamed,
@@ -23,7 +26,8 @@ template <
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t has_actual_end>
-TT_KERNEL void reader(uint32_t head, uint32_t first_chunk, uint32_t last_chunk, uint32_t final_row) {
+TT_KERNEL void reader(
+    uint32_t head, uint32_t first_chunk, uint32_t last_chunk, uint32_t final_row, uint32_t seed_sender) {
     constexpr uint32_t state_tiles = kt * kt;
     // final_row: the first tile row of the final state this core forms (kt: none).
     const bool owns_final = final_row < kt;
@@ -88,21 +92,49 @@ TT_KERNEL void reader(uint32_t head, uint32_t first_chunk, uint32_t last_chunk, 
     ctl_writer.push_back(1);
     ctl.push_back(1);
 
-    // Each of the head's cores reads its own copy of the head's seeds.
-    const auto read_seed = [&](auto& buffer, const auto& states) {
-        buffer.reserve_back(state_tiles);
-        const uint32_t tile = buffer.get_entry_size();
-        for (uint32_t i = 0; i < state_tiles; ++i) {
-            noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
+    // The head's first core reads the head's seeds and writes them to the head's other cores, at the same buffer
+    // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy.
+    Semaphore landed(sem::seed_landed);
+    const uint32_t seeds = need_group + need_tail;
+    if (seed_sender) {
+        const auto send = [&](auto& buffer, const auto& states) {
+            buffer.reserve_back(state_tiles);
+            const uint32_t tile = buffer.get_entry_size();
+            for (uint32_t i = 0; i < state_tiles; ++i) {
+                noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
+            }
+            noc.async_read_barrier();
+            const uint32_t local = buffer.get_write_ptr();
+            for (uint32_t d = 0; d < seed_receivers; ++d) {
+                const uint32_t xy = get_vararg(d);
+                noc_async_write(local, get_noc_addr(xy & 0xFFFF, xy >> 16, local), state_tiles * tile);
+            }
+            buffer.push_back(state_tiles);
+        };
+        if (need_group) {
+            send(seed, TensorAccessor(tensor::entry));
         }
-        noc.async_read_barrier();
-        buffer.push_back(state_tiles);
-    };
-    if (need_group) {
-        read_seed(seed, TensorAccessor(tensor::entry));
-    }
-    if (need_tail) {
-        read_seed(tail, TensorAccessor(tensor::tail_entry));
+        if (need_tail) {
+            send(tail, TensorAccessor(tensor::tail_entry));
+        }
+        if (seeds != 0) {
+            noc_async_write_barrier();
+            for (uint32_t d = 0; d < seed_receivers; ++d) {
+                const uint32_t xy = get_vararg(d);
+                landed.up(noc, xy & 0xFFFF, xy >> 16, seeds);
+            }
+            noc_async_atomic_barrier();
+        }
+    } else if (seeds != 0) {
+        landed.wait_min(seeds);
+        if (need_group) {
+            seed.reserve_back(state_tiles);
+            seed.push_back(state_tiles);
+        }
+        if (need_tail) {
+            tail.reserve_back(state_tiles);
+            tail.push_back(state_tiles);
+        }
     }
     if constexpr (streamed) {
         // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
