@@ -70,6 +70,18 @@ ttnn::Tensor padded_slice(
         if (result.buffer() == dst.buffer()) {
             return result;
         }
+        // Guard against a caller-preallocated out= whose layout differs from the slice
+        // result. ttnn::copy requires matching layouts, so a mismatched preallocation
+        // would fail deep inside copy. Fail up front with a message the caller can act
+        // on. (The alternative — silently returning `result` without copying into the
+        // caller's buffer — reintroduces the stale-preallocated-buffer bug this PR
+        // fixes.)
+        TT_FATAL(
+            result.layout() == dst.layout(),
+            "padded_slice preallocated out= has layout {} but the slice result has layout {}. "
+            "Allocate out= with the same layout as the expected result, or omit out=.",
+            dst.layout(),
+            result.layout());
         return ttnn::copy(result, dst);
     };
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
@@ -139,6 +151,14 @@ ttnn::Tensor padded_slice(
         TT_FATAL(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
+        // If the caller preallocated out=, return it instead of allocating a fresh empty
+        // tensor, so out.buffer_address() is preserved. The tensor is empty by shape so
+        // no payload fill is required.
+        if (optional_output_tensor.has_value() &&
+            optional_output_tensor->storage_type() == StorageType::DEVICE &&
+            optional_output_tensor->logical_shape() == actual_shape) {
+            return *optional_output_tensor;
+        }
         return ttnn::empty(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
