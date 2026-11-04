@@ -784,6 +784,89 @@ def resolve_word(text: str, addr32: dict):
 # NOT a separate file, so a field-name/THCON split would be wrong.
 
 
+# --- Tensix write vs a later RISC store of the same register (tensix-risc-order) ---
+# A RISC core that polls a semaphore (`while (semaphore_read(semaphore::X) > 0)`, the
+# body of wait_for_idle / wait_for_next_context) and then stores to CONFIG over MMIO
+# is ordered only against the Tensix instructions that come BEFORE the SEMGET that
+# released X. A Tensix config write the same thread issued AFTER that SEMGET can
+# still be queued (e.g. behind a STALLWAIT) when the RISC store lands, and then
+# overwrites it.
+RISC_POLL_CALLS = ("semaphore_read",)
+# Only the decrementing op releases a "wait until the count drops" poll — the
+# context-release idiom. An `== 0` poll released by a SEMPOST is a blind spot.
+RELEASE_SEMAPHORE_OPS = ("get",)
+_GPR_TOKEN_RE = re.compile(r"p_gpr\w*::\s*[A-Za-z_]\w*")
+_ADDR32_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*_ADDR32\b")
+# A register's name up to its REG index (THCON_SEC0_REG2_Out_data_format ->
+# THCON_SEC0_REG2), to relate a `FIELD_ADDR32 + i` store to the words it spans.
+_REG_PREFIX_RE = re.compile(r"^(.*?_REG_?\d+)_")
+
+
+def ordered_write_target(fact: dict):
+    """(namespace, token) of the register an in-stream Tensix write targets:
+    namespace "cfg" (Config), "thread" (ThreadConfig, written by SETC16) or "gpr";
+    token is the *_ADDR32 word name (cfg/thread) or the p_gpr_*::NAME (gpr).
+    (None, None) when it does not resolve (e.g. a SETADC address-counter write)."""
+    name = fact.get("name", "")
+    text = fact.get("text", "")
+    if fact.get("family") == "call":
+        if CFG_RMW_TEMPLATE_CALL not in text:
+            return None, None
+        m = _ADDR32_TOKEN_RE.search(text)
+        if m:
+            return "cfg", m.group(0)
+        a = _RMW_ALIAS_RE.search(text)
+        return ("cfg", a.group(1) + "_ADDR32") if a else (None, None)
+    if is_gpr_source_write(name):
+        toks = _GPR_TOKEN_RE.findall(text)
+        return ("gpr", re.sub(r"\s+", "", toks[-1])) if toks else (None, None)
+    m = _ADDR32_TOKEN_RE.search(text)
+    if not m:
+        return None, None
+    return ("thread" if is_thread_config_write(name) else "cfg"), m.group(0)
+
+
+def risc_store_target(pw: dict):
+    """(namespace, token, runtime_offset) of a RISC MMIO store (a pointer_write)."""
+    idx = pw.get("index_text", "") or ""
+    kind, _ = classify_write(pw)
+    if kind in GPR_WRITE_KINDS:
+        toks = _GPR_TOKEN_RE.findall(idx)
+        return (
+            ("gpr", re.sub(r"\s+", "", toks[-1]), False)
+            if toks
+            else (None, None, False)
+        )
+    if kind in CFG_WRITE_KINDS:
+        m = _ADDR32_TOKEN_RE.search(idx)
+        return (
+            ("cfg", m.group(0), has_runtime_word_offset(idx))
+            if m
+            else (None, None, False)
+        )
+    return None, None, False
+
+
+def same_register(
+    write_tok: str, store_tok: str, store_runtime_off: bool, addr32: dict
+) -> bool:
+    """True if a Tensix write to `write_tok` can hit the word a RISC store to
+    `store_tok` writes. Resolves both through cfg_defines when available; a store
+    with a runtime offset (`FIELD_ADDR32 + i`) covers the words after its base that
+    belong to the same REG (its span is not known statically)."""
+    if write_tok == store_tok:
+        return True
+    w, _ = resolve_word(write_tok, addr32) if addr32 else (None, None)
+    s, _ = resolve_word(store_tok, addr32) if addr32 else (None, None)
+    if w is not None and s is not None and w == s:
+        return True
+    if store_runtime_off:
+        wp, sp = _REG_PREFIX_RE.match(write_tok), _REG_PREFIX_RE.match(store_tok)
+        if wp and sp and wp.group(1) == sp.group(1):
+            return w is None or s is None or w >= s
+    return False
+
+
 # --- reconfig-stall -----------------------------------------------------------
 # Candidate functions: names that rewrite config a running unit samples.
 RECONFIG_FN_SUBSTR = (
