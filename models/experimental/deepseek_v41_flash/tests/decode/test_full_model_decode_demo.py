@@ -255,13 +255,19 @@ def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages
     assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
+    assert all(
+        layer.mlp.experts.fused_all_reduce_axis is not None for layer in model.layers
+    ), "every MoE layer must all-reduce its TP partial inside fused_experts (DEEPSEEK_V4_FUSE_ALL_REDUCE=1)"
     attn = model.layers[0].self_attn
     assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
     assert not attn.q_a_proj.partial_width_sharded
     assert not attn.kv_proj.partial_width_sharded
     assert attn.kv_proj.num_inputB_cores == 16
     assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
-    logger.info(f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} ({model.pipeline_devices} chips)")
+    logger.info(
+        f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} ({model.pipeline_devices} chips), "
+        "MoE all-reduce fused into fused_experts"
+    )
 
 
 def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
@@ -561,7 +567,7 @@ class _InterruptFlag:
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "num_command_queues": 2,
-            # The CCL semaphores and width_sharded_all_reduce's scratch live as long as their cached programs.
+            # The CCL semaphores and the all-reduce scratch (fused_experts' at TP4) live as long as their cached programs.
             # Without L1_SMALL they land in L1 wherever the first layer's temporaries leave the allocator, and
             # cap the circular buffers of every later program on the stage (fused_experts clashes at 40 layers).
             "l1_small_size": _L1_SMALL_SIZE,
