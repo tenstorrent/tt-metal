@@ -216,6 +216,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def minimal_prefill_matmul_blocks(num_devices: int, grid) -> Tuple[int, int]:
+    if is_wormhole_b0() and num_devices == 1 and grid is not None and (grid.x, grid.y) == (8, 8):
+        return 4, 4
+    return 8, 1
+
+
 def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
     return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
         base_model_name in ("Llama-3.1-8B", "Llama-3.2-1B", "Qwen3-0.6B")
@@ -1530,10 +1536,15 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
@@ -1881,10 +1892,15 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_qkv_prefill_matmul(seq_len):
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
