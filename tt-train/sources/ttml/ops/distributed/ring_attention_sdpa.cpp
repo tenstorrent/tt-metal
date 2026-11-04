@@ -17,6 +17,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/ring_lse_merge/ring_lse_merge.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 #include "ops/binary_ops.hpp"
@@ -49,6 +50,18 @@ ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
         {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
     };
     return ttnn::pad(lse, padding, 0.0F, false, std::nullopt);
+}
+
+// Online-softmax merge of one partial attention result into the FP32 accumulator, as one device op.
+// running_lse and step_intermediates are both in the (B, H, S, 32) FP32 intermediates layout
+// (logsumexp in column 0). A step logsumexp of -inf means "no contribution" and leaves the
+// accumulator and running logsumexp unchanged as long as the running logsumexp is finite.
+void merge_partial_into(
+    ttnn::Tensor& output_accum,
+    ttnn::Tensor& running_lse,
+    const ttnn::Tensor& step_output,
+    const ttnn::Tensor& step_intermediates) {
+    ttml::metal::ring_lse_merge(output_accum, running_lse, step_output, step_intermediates);
 }
 
 }  // namespace
@@ -97,16 +110,6 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    // global_lse: running logsumexp across all steps
-    // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
-    // Initialized to -inf (no contribution: exp(-inf) = 0)
-    ttnn::Tensor global_lse = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
-
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
@@ -127,6 +130,22 @@ autograd::TensorPtr ring_attention_sdpa(
         std::ref(*mesh_device));
     ttnn::Tensor no_contrib_intermediate = pad_lse_to_intermediates_layout(col0_neg_inf);
 
+    // global_lse: running logsumexp across all steps, updated in place by the merge.
+    // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
+    // Kept in the same (B, H, S, 32) intermediates layout as the kernels' own logsumexp, so the
+    // merge needs no slice and backward can consume it as is. Starts at -inf in column 0
+    // (no contribution yet: exp(-inf) = 0); step 0 always contributes, so it is finite after it.
+    // It needs a buffer of its own: pad_lse_to_intermediates_layout fills the tile padding of its
+    // input in place and returns a view of it, so a second pad of col0_neg_inf would alias
+    // no_contrib_intermediate, and the in-place merge would corrupt the causal "no contribution" source.
+    ttnn::Tensor global_lse = ttnn::empty(
+        ttnn::Shape{batch_num, heads, seq_len_local, 32U},
+        ttnn::DataType::FLOAT32,
+        ttnn::Layout::TILE,
+        mesh_device,
+        ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
+    ttnn::copy(no_contrib_intermediate, global_lse);
+
     for (uint32_t step = 0; step < ring_size; ++step) {
         // For causal masking, initialize intermediate_tensor to "no contribution" values
         // Devices that are skipped will keep these values, indicating zero contribution
@@ -146,32 +165,8 @@ autograd::TensorPtr ring_attention_sdpa(
             output_tensor,
             intermediate_tensor);
 
-        // Extract logsumexp from column 0 of intermediate
-        // Intermediate shape: (B, H, S, 32) FP32, logsumexp in column 0
-        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
-        ttnn::Tensor lse_chunk = ttnn::slice(intermediate_tensor, lse_start, lse_end, slice_step);
-
-        // Combine via logaddexp: new_lse = log(exp(global_lse) + exp(lse_chunk))
-        // Numerically stable form: m = max(a,b); result = m + log(exp(a-m) + exp(b-m))
-        ttnn::Tensor m = ttnn::maximum(global_lse, lse_chunk);
-        ttnn::Tensor exp_global = ttnn::exp(ttnn::subtract(global_lse, m));
-        ttnn::Tensor exp_chunk = ttnn::exp(ttnn::subtract(lse_chunk, m));
-        ttnn::Tensor new_lse = ttnn::add(m, ttnn::log(ttnn::add(exp_global, exp_chunk)));
-
-        // Weights for combining outputs: w = exp(lse - new_lse) = Z_i / Z_combined
-        ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(global_lse, new_lse));
-        ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
-
-        // Weighted combination of accumulated output and this step's output.
-        // The step output is upcast so the whole combine stays FP32; mixed-dtype
-        // binary ops would otherwise round the products back to bf16.
-        ttnn::Tensor step_output_fp32 = ttnn::typecast(output_tensor, ttnn::DataType::FLOAT32);
-        output_accum =
-            ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(step_output_fp32, new_weight));
-
-        global_lse = new_lse;
+        // Merge this step's partial result: one device op (was 17 ttnn ops).
+        merge_partial_into(output_accum, global_lse, output_tensor, intermediate_tensor);
 
         if (step < ring_size - 1) {
             k_current = ttnn_fixed::distributed::ring_shift(
@@ -220,7 +215,8 @@ autograd::TensorPtr ring_attention_sdpa(
         // u = rowsum(dO * O_global) is the global softmax-backward correction. Per-chunk
         // contributions then sum to the exact dQ/dK/dV. Feeding per-chunk O/lse here would
         // bias dQ/dK (per-chunk u instead of global) — only dV would come out right.
-        ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(final_lse);
+        // final_lse is already in the intermediates layout (logsumexp in column 0, zeros elsewhere).
+        const ttnn::Tensor& global_intermediates = final_lse;
 
         // Zero sources for resetting the step buffers before every ring step.
         const ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);

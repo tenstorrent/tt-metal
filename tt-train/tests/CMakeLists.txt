@@ -58,6 +58,7 @@ set(SOURCES
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
+    ops/ring_lse_merge_op_test.cpp
     ops/distributed/mesh_workload_cache_hit_test.cpp
     ops/distributed/gumbel_sample_mesh_test.cpp
     ops/distributed/moe_ep_mesh_test.cpp
