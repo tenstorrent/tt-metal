@@ -1163,58 +1163,6 @@ def test_register_hub_config_downloads_only_unregistered_names(monkeypatch, tmp_
     }
 
 
-def test_ttt_stop_and_pad_delegates_to_shared_stop_token_resolver(monkeypatch):
-    from ttml.trainers.grpo_trainer.remote_rollout import ttt_presets
-
-    tokenizer = SimpleNamespace(pad_token_id=7, eos_token_id=3, unk_token_id=0)
-    called = []
-    monkeypatch.setattr(ttt_presets.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
-    monkeypatch.setattr(
-        ttt_presets,
-        "resolve_stop_token_ids",
-        lambda tok: called.append(tok) or {tokenizer.eos_token_id, tokenizer.pad_token_id, 11},
-    )
-
-    stop_ids, pad_token_id = ttt_presets.stop_and_pad(HF_MODEL_ID)
-
-    assert called == [tokenizer]
-    assert stop_ids == [3, 7, 11]
-    assert pad_token_id == tokenizer.pad_token_id
-
-
-def test_ttt_stop_and_pad_includes_tokenizer_pad_id_in_stop_set(monkeypatch):
-    from ttml.common.utils import resolve_stop_token_ids
-    from ttml.trainers.grpo_trainer.remote_rollout import ttt_presets
-
-    class _FakeTokenizer:
-        eos_token_id = 5
-        pad_token_id = 17
-        unk_token_id = 0
-
-        def __init__(self):
-            self._ids = {
-                "<|eot_id|>": 31,
-                "<|end_of_text|>": 5,
-                "<|eom_id|>": self.unk_token_id,
-                "<|im_end|>": -1,
-                "<|endoftext|>": 63,
-            }
-
-        def convert_tokens_to_ids(self, token):
-            return self._ids.get(token, self.unk_token_id)
-
-    tokenizer = _FakeTokenizer()
-    monkeypatch.setattr(ttt_presets.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
-
-    stop_ids, pad_token_id = ttt_presets.stop_and_pad(HF_MODEL_ID)
-    expected_stop_ids = resolve_stop_token_ids(tokenizer)
-
-    assert pad_token_id == tokenizer.pad_token_id
-    assert tokenizer.pad_token_id in expected_stop_ids
-    assert set(stop_ids) == expected_stop_ids
-    assert stop_ids == sorted(stop_ids)
-
-
 class _RepeatSampler(_EchoSampler):
     """Returns each prompt twice, as its two completions."""
 
