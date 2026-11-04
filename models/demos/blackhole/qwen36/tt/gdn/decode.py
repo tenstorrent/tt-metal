@@ -82,7 +82,7 @@ class _PrefillInProjTtnn:
             if m == 2048:
                 kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
-                    in0_block_w=4,
+                    in0_block_w=8,
                     out_subblock_h=1,
                     out_subblock_w=4,
                     out_block_h=7,
@@ -91,6 +91,7 @@ class _PrefillInProjTtnn:
                     per_core_N=40,
                     transpose_mcast=False,
                     fused_activation=None,
+                    fuse_batch=True,
                 )
         elif kwargs.get("program_config") is None and list(b.shape)[-2:] == [6144, 5120]:
             shp = list(a.shape)
