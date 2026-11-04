@@ -109,7 +109,7 @@ class _PrefillInProjTtnn:
             if m == 2048:
                 kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
-                    in0_block_w=8,
+                    in0_block_w=12,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=7,
