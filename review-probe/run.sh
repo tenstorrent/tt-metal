@@ -71,7 +71,9 @@ if [ "${MERGED:-}" = true ]; then
             export MERGED_SHA=$(cat "$WS/merged.sha")
             if setup_side merged; then SIDES="$SIDES merged"; if [ -s "$WS/pr.diff" ]; then note merged applied; else note merged "applied (no head changes)"; fi; else note merged "not applied: setup failed"; fi
         else
-            note merged "not applied: $why"
+            # git apply lists every file it applied cleanly before the one that failed: keep the lines that say why
+            err=$(printf '%s\n' "$why" | grep -Ei "error|conflict|^U |does not|fatal|already exists" | head -5)
+            note merged "not applied: ${err:-$(printf '%s' "$why" | tail -c 380)}"
             rm -rf "$WS/merged"
         fi
     fi
