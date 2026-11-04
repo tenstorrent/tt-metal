@@ -96,5 +96,5 @@ def rms_norm_compute_config(device):
 
 
 def bf16_stats_rms_norm_compute_config(device):
-    """The previous ttnn.rms_norm default: bf16 statistics, so the row-major gain still fits in L1."""
+    """bf16 statistics and approximate rsqrt: with fp32 statistics the row-major gain overflows L1."""
     return _bf16_stats_rms_norm_config(device.arch())

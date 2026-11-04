@@ -212,3 +212,46 @@ def test_rms_norm_default_precision(device, w, outliers, use_weight):
     output_tensor = ttnn.to_torch(ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight))
 
     assert ulp_distance(expected, output_tensor).max().item() <= 1
+
+
+@pytest.mark.parametrize(
+    "h, w, grid_x, grid_y, strategy",
+    [(32, 4096, 8, 2, ttnn.ShardStrategy.WIDTH), (256, 4096, 8, 8, ttnn.ShardStrategy.BLOCK)],
+    ids=["width_sharded", "block_sharded"],
+)
+def test_rms_norm_default_precision_sharded(device, h, w, grid_x, grid_y, strategy):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < grid_x or grid.y < grid_y:
+        pytest.skip(f"needs a {grid_x}x{grid_y} core grid")
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, h, w)).to(torch.bfloat16)
+    torch_weight = (torch.randn((w,)) * 0.1 + 1).to(torch.bfloat16)
+
+    x = torch_input_tensor.double()
+    expected = x / torch.sqrt((x * x).mean(-1, keepdim=True) + 1e-6) * torch_weight.double()
+    expected = expected.to(torch.bfloat16)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, h, w),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+    )
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight, memory_config=memory_config))
+
+    assert ulp_distance(expected, output_tensor).max().item() <= 1
+
+
+@pytest.mark.parametrize(
+    "arch, math_approx_mode, fp32_dest_acc_en",
+    [("WORMHOLE_B0", False, True), ("BLACKHOLE", False, True), ("QUASAR", True, False)],
+)
+def test_rms_norm_default_compute_config(arch, math_approx_mode, fp32_dest_acc_en):
+    config = ttnn.rmsnorm_default_compute_config(getattr(ttnn.device.Arch, arch))
+    assert config.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert config.math_approx_mode == math_approx_mode
+    assert config.fp32_dest_acc_en == fp32_dest_acc_en
