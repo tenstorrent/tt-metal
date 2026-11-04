@@ -1,0 +1,138 @@
+{
+ "focus": {
+  "shape": {
+   "dh": 128,
+   "dv": 128,
+   "Sq": 16,
+   "Sk": 8,
+   "fp32": false,
+   "kv": "DataType.BFLOAT16",
+   "segs": [
+    [
+     1024,
+     true
+    ]
+   ],
+   "R": 16,
+   "mask_cols": 24,
+   "logit": 1.0,
+   "fid": "MathFidelity.HiFi2"
+  },
+  "base": {
+   "pcc": 0.997697,
+   "rel_rms": 0.06887,
+   "max_abs": 0.0548,
+   "ns": 12526737.0,
+   "ns_per_block": 97865.0,
+   "n_blocks": 128,
+   "zones": {
+    "compute_a": {
+     "n": 6,
+     "median_ns": 4364.0
+    },
+    "compute_copy_max": {
+     "n": 6,
+     "median_ns": 721.0
+    },
+    "compute_finalize": {
+     "n": 1,
+     "median_ns": 7253.0
+    },
+    "compute_k_wait": {
+     "n": 6,
+     "median_ns": 16.0
+    },
+    "compute_l": {
+     "n": 6,
+     "median_ns": 2643.0
+    },
+    "compute_pv": {
+     "n": 6,
+     "median_ns": 13393.0
+    },
+    "compute_pv_rescale": {
+     "n": 6,
+     "median_ns": 31367.0
+    },
+    "compute_qk": {
+     "n": 6,
+     "median_ns": 13357.0
+    },
+    "compute_rescale": {
+     "n": 6,
+     "median_ns": 17064.0
+    },
+    "compute_rowmax": {
+     "n": 6,
+     "median_ns": 15873.0
+    },
+    "compute_rowsum": {
+     "n": 6,
+     "median_ns": 3190.0
+    },
+    "compute_sub_exp": {
+     "n": 6,
+     "median_ns": 34316.0
+    },
+    "compute_unit": {
+     "n": 1,
+     "median_ns": 12526336.0
+    }
+   }
+  },
+  "fused_l": {
+   "pcc": 0.997713,
+   "rel_rms": 0.06881,
+   "max_abs": 0.0548,
+   "ns": 11328347.0,
+   "ns_per_block": 88503.0,
+   "n_blocks": 128,
+   "zones": {
+    "compute_a": {
+     "n": 6,
+     "median_ns": 4473.0
+    },
+    "compute_copy_max": {
+     "n": 6,
+     "median_ns": 924.0
+    },
+    "compute_finalize": {
+     "n": 1,
+     "median_ns": 7207.0
+    },
+    "compute_k_wait": {
+     "n": 6,
+     "median_ns": 16.0
+    },
+    "compute_pv_rescale": {
+     "n": 6,
+     "median_ns": 16376.0
+    },
+    "compute_qk": {
+     "n": 6,
+     "median_ns": 13259.0
+    },
+    "compute_rescale": {
+     "n": 6,
+     "median_ns": 15367.0
+    },
+    "compute_rowmax": {
+     "n": 6,
+     "median_ns": 16196.0
+    },
+    "compute_rowsum": {
+     "n": 6,
+     "median_ns": 8472.0
+    },
+    "compute_sub_exp": {
+     "n": 6,
+     "median_ns": 34315.0
+    },
+    "compute_unit": {
+     "n": 1,
+     "median_ns": 11327938.0
+    }
+   }
+  }
+ }
+}

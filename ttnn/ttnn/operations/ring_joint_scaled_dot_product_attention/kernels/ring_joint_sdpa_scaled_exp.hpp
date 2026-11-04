@@ -24,7 +24,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace scaled_exp_bf16 {
 using namespace ckernel;
 
@@ -166,8 +166,15 @@ inline void init() {
     TTI_SFPCONFIG(0xff0, 8, 1);  // Misc: UsesLoadMod0ForStore all, UnitDelayKind = WaitForElapsedInstructions
     load_consts<scale_bf16>();
 }
+// stall = true: the stock _llk_math_eltwise_sfpu_start_ (STALLWAIT(SFPU, MATH)); false: only point the SFPU at the
+// DEST tile — on the PACK thread the MATH_PACK semaphore (posted with WAIT_SFPU | MATH) already ordered the tile.
+template <bool stall = true>
 inline void tile(uint32_t dst_index) {
-    _llk_math_eltwise_sfpu_start_(dst_index);
+    if constexpr (stall) {
+        _llk_math_eltwise_sfpu_start_(dst_index);
+    } else {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    }
     load_tile_consts();
     LMEXP_PROLOGUE();
     TTI_REPLAY(0, LMEXP_BODY_LEN, 1, 1);
@@ -180,6 +187,31 @@ inline void tile(uint32_t dst_index) {
     TTI_SFPNOP;  // drain margin for the last scheduled store
     TTI_SFPNOP;
     TTI_SFPNOP;
+    _llk_math_eltwise_sfpu_done_();
+}
+// n consecutive DEST tiles starting at tile 0 of the current half, ONE SFPU start (stall) and ONE counter reset per
+// group: each tile's stream advances the DEST RWC by exactly one tile (32 ADDR_MOD_6 (+2) LOADMACROs = 64 rows), so the
+// next tile needs no SETC16 / SETRWC. stall_cond: the STALLWAIT(STALL_SFPU, cond) condition at group start (orders the
+// previous group's SETRWC, a math-pipe instruction, before this group's SFPU stream).
+template <uint32_t stall_cond>
+inline void tiles(uint32_t n) {
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
+    TTI_STALLWAIT(p_stall::STALL_SFPU, stall_cond);
+#pragma GCC unroll 0
+    for (uint32_t j = 0; j < n; ++j) {
+        load_tile_consts();
+        LMEXP_PROLOGUE();
+        TTI_REPLAY(0, LMEXP_BODY_LEN, 1, 1);
+        LMEXP_BODY();
+#pragma GCC unroll 0
+        for (int k = 1; k < LMEXP_NBODIES; ++k) {
+            TTI_REPLAY(0, LMEXP_BODY_LEN, 0, 0);
+        }
+        LMEXP_EPILOGUE();
+        TTI_SFPNOP;  // drain margin for the last scheduled store
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
     _llk_math_eltwise_sfpu_done_();
 }
 #else
@@ -227,10 +259,13 @@ inline void face() {
         TTI_REPLAY(0, 22, 0, 0);
     }
 }
-inline void tile(uint32_t dst_index) { _llk_math_eltwise_unary_sfpu_params_(face, dst_index, VectorMode::RC); }
+template <bool stall = true>
+inline void tile(uint32_t dst_index) {
+    _llk_math_eltwise_unary_sfpu_params_(face, dst_index, VectorMode::RC);
+}
 #endif
 }  // namespace scaled_exp_bf16
-#endif  // TRISC_MATH
+#endif  // TRISC_MATH || TRISC_PACK
 
 template <uint32_t scale_bf16>
 struct ScaledExp : compute_kernel_lib::UnaryOp<ScaledExp<scale_bf16>, compute_kernel_lib::Dst::D0> {
@@ -244,7 +279,24 @@ struct ScaledExp : compute_kernel_lib::UnaryOp<ScaledExp<scale_bf16>, compute_ke
         if constexpr (DST_ACCUM_MODE) {  // fp32 DEST: stock accurate fp32 exp (different algorithm)
             exp_tile<false, true>(slot_offset, VectorMode::RC, static_cast<uint16_t>(scale_bf16));
         } else {
-            MATH((scaled_exp_bf16::tile(slot_offset)));
+            MATH((scaled_exp_bf16::tile<true>(slot_offset)));
         }
+    }
+};
+
+// ---- exp_matmul_overlap: the same exp issued from the PACK thread (TRISC2) ----
+// PackThreadScaledExp<scale>::init() / tile(dst): run on TRISC2 only (no-ops elsewhere). init() = the stock exp SFPU
+// init (config reg, ADDR_MOD_6/7, counters) on the pack thread + the LOADMACRO templates/constants; tile(dst) is
+// bit-identical to ScaledExp (same instruction stream, other issuing thread).
+template <uint32_t scale_bf16, bool stall>
+struct PackThreadScaledExp {
+    static ALWI void init() {
+        exp_packthread_tile_init<false>();
+        PACK((scaled_exp_bf16::init<scale_bf16>()));
+    }
+    static ALWI void tile(uint32_t dst) { PACK((scaled_exp_bf16::tile<stall>(dst))); }
+    template <uint32_t stall_cond>
+    static ALWI void tiles(uint32_t n) {
+        PACK((scaled_exp_bf16::tiles<stall_cond>(n)));
     }
 };

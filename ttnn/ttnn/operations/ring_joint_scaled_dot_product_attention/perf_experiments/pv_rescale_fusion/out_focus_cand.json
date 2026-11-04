@@ -1,0 +1,1518 @@
+{
+ "0": {
+  "op_span_ns": 68823873.33333333,
+  "cores": 110,
+  "core_end_q_ns": [
+   67031805.0,
+   67046074.0,
+   67104540.0,
+   68805924.0,
+   68823873.0
+  ],
+  "core_start_q_ns": [
+   0.0,
+   86.0,
+   216.0
+  ],
+  "max_markers_per_risc": 122,
+  "zones": {
+   "BRISC-FW@BRISC": {
+    "n": 110,
+    "mean_ns": 67646220.0,
+    "median_ns": 67106433.0,
+    "max_ns": 68825782.0,
+    "sum_per_core_ns": 67646220.0,
+    "last_end_max_ns": 68823976.0
+   },
+   "NCRISC-FW@NCRISC": {
+    "n": 110,
+    "mean_ns": 65148317.0,
+    "median_ns": 66919730.0,
+    "max_ns": 68801493.0,
+    "sum_per_core_ns": 65148317.0,
+    "last_end_max_ns": 68799781.0
+   },
+   "TRISC-FW@TRISC_0": {
+    "n": 106,
+    "mean_ns": 67600327.0,
+    "median_ns": 67100539.0,
+    "max_ns": 68824993.0,
+    "sum_per_core_ns": 67600327.0,
+    "last_end_max_ns": 68823365.0
+   },
+   "TRISC-FW@TRISC_1": {
+    "n": 106,
+    "mean_ns": 67600204.0,
+    "median_ns": 67100444.0,
+    "max_ns": 68824827.0,
+    "sum_per_core_ns": 67600204.0,
+    "last_end_max_ns": 68823201.0
+   },
+   "TRISC-FW@TRISC_2": {
+    "n": 106,
+    "mean_ns": 67600363.0,
+    "median_ns": 67100622.0,
+    "max_ns": 68824941.0,
+    "sum_per_core_ns": 67600363.0,
+    "last_end_max_ns": 68823315.0
+   },
+   "compute_copy_max@TRISC_0": {
+    "n": 636,
+    "mean_ns": 916.0,
+    "median_ns": 916.0,
+    "max_ns": 934.0,
+    "sum_per_core_ns": 5497.0,
+    "last_end_max_ns": 982954.0
+   },
+   "compute_copy_max@TRISC_1": {
+    "n": 636,
+    "mean_ns": 925.0,
+    "median_ns": 925.0,
+    "max_ns": 938.0,
+    "sum_per_core_ns": 5550.0,
+    "last_end_max_ns": 982892.0
+   },
+   "compute_copy_max@TRISC_2": {
+    "n": 636,
+    "mean_ns": 946.0,
+    "median_ns": 946.0,
+    "max_ns": 958.0,
+    "sum_per_core_ns": 5678.0,
+    "last_end_max_ns": 983130.0
+   },
+   "compute_finalize@TRISC_0": {
+    "n": 668,
+    "mean_ns": 6773.0,
+    "median_ns": 7056.0,
+    "max_ns": 7090.0,
+    "sum_per_core_ns": 42684.0,
+    "last_end_max_ns": 68823208.0
+   },
+   "compute_finalize@TRISC_1": {
+    "n": 668,
+    "mean_ns": 6877.0,
+    "median_ns": 7156.0,
+    "max_ns": 7191.0,
+    "sum_per_core_ns": 43339.0,
+    "last_end_max_ns": 68823116.0
+   },
+   "compute_finalize@TRISC_2": {
+    "n": 668,
+    "mean_ns": 6798.0,
+    "median_ns": 7082.0,
+    "max_ns": 7115.0,
+    "sum_per_core_ns": 42840.0,
+    "last_end_max_ns": 68823220.0
+   },
+   "compute_k_wait@TRISC_0": {
+    "n": 636,
+    "mean_ns": 43.0,
+    "median_ns": 40.0,
+    "max_ns": 59.0,
+    "sum_per_core_ns": 256.0,
+    "last_end_max_ns": 895554.0
+   },
+   "compute_k_wait@TRISC_1": {
+    "n": 636,
+    "mean_ns": 17.0,
+    "median_ns": 16.0,
+    "max_ns": 22.0,
+    "sum_per_core_ns": 100.0,
+    "last_end_max_ns": 895425.0
+   },
+   "compute_k_wait@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14.0,
+    "median_ns": 13.0,
+    "max_ns": 16.0,
+    "sum_per_core_ns": 83.0,
+    "last_end_max_ns": 895656.0
+   },
+   "compute_qk@TRISC_0": {
+    "n": 636,
+    "mean_ns": 12852.0,
+    "median_ns": 12852.0,
+    "max_ns": 12879.0,
+    "sum_per_core_ns": 77111.0,
+    "last_end_max_ns": 908435.0
+   },
+   "compute_qk@TRISC_1": {
+    "n": 636,
+    "mean_ns": 13276.0,
+    "median_ns": 13270.0,
+    "max_ns": 13336.0,
+    "sum_per_core_ns": 79656.0,
+    "last_end_max_ns": 908708.0
+   },
+   "compute_qk@TRISC_2": {
+    "n": 636,
+    "mean_ns": 13461.0,
+    "median_ns": 13459.0,
+    "max_ns": 13501.0,
+    "sum_per_core_ns": 80768.0,
+    "last_end_max_ns": 909134.0
+   },
+   "compute_rescale@TRISC_0": {
+    "n": 636,
+    "mean_ns": 15337.0,
+    "median_ns": 15331.0,
+    "max_ns": 15375.0,
+    "sum_per_core_ns": 92024.0,
+    "last_end_max_ns": 982006.0
+   },
+   "compute_rescale@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15345.0,
+    "median_ns": 15344.0,
+    "max_ns": 15367.0,
+    "sum_per_core_ns": 92072.0,
+    "last_end_max_ns": 981941.0
+   },
+   "compute_rescale@TRISC_2": {
+    "n": 636,
+    "mean_ns": 15340.0,
+    "median_ns": 15337.0,
+    "max_ns": 15368.0,
+    "sum_per_core_ns": 92042.0,
+    "last_end_max_ns": 982160.0
+   },
+   "compute_rowmax@TRISC_0": {
+    "n": 636,
+    "mean_ns": 14240.0,
+    "median_ns": 14239.0,
+    "max_ns": 14258.0,
+    "sum_per_core_ns": 85443.0,
+    "last_end_max_ns": 923451.0
+   },
+   "compute_rowmax@TRISC_1": {
+    "n": 636,
+    "mean_ns": 14975.0,
+    "median_ns": 14976.0,
+    "max_ns": 14993.0,
+    "sum_per_core_ns": 89849.0,
+    "last_end_max_ns": 923717.0
+   },
+   "compute_rowmax@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14457.0,
+    "median_ns": 14458.0,
+    "max_ns": 14476.0,
+    "sum_per_core_ns": 86744.0,
+    "last_end_max_ns": 923623.0
+   },
+   "compute_rowsum@TRISC_0": {
+    "n": 636,
+    "mean_ns": 8365.0,
+    "median_ns": 8364.0,
+    "max_ns": 8387.0,
+    "sum_per_core_ns": 50191.0,
+    "last_end_max_ns": 966623.0
+   },
+   "compute_rowsum@TRISC_1": {
+    "n": 636,
+    "mean_ns": 8461.0,
+    "median_ns": 8458.0,
+    "max_ns": 8496.0,
+    "sum_per_core_ns": 50768.0,
+    "last_end_max_ns": 966553.0
+   },
+   "compute_rowsum@TRISC_2": {
+    "n": 636,
+    "mean_ns": 8799.0,
+    "median_ns": 8799.0,
+    "max_ns": 8819.0,
+    "sum_per_core_ns": 52796.0,
+    "last_end_max_ns": 966786.0
+   },
+   "compute_sub_exp@TRISC_0": {
+    "n": 636,
+    "mean_ns": 34747.0,
+    "median_ns": 34747.0,
+    "max_ns": 34772.0,
+    "sum_per_core_ns": 208482.0,
+    "last_end_max_ns": 958227.0
+   },
+   "compute_sub_exp@TRISC_1": {
+    "n": 636,
+    "mean_ns": 34311.0,
+    "median_ns": 34311.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205867.0,
+    "last_end_max_ns": 958061.0
+   },
+   "compute_sub_exp@TRISC_2": {
+    "n": 636,
+    "mean_ns": 34302.0,
+    "median_ns": 34301.0,
+    "max_ns": 34319.0,
+    "sum_per_core_ns": 205811.0,
+    "last_end_max_ns": 957954.0
+   },
+   "compute_unit@TRISC_0": {
+    "n": 668,
+    "mean_ns": 10726638.0,
+    "median_ns": 11172234.0,
+    "max_ns": 11286160.0,
+    "sum_per_core_ns": 67598058.0,
+    "last_end_max_ns": 68823290.0
+   },
+   "compute_unit@TRISC_1": {
+    "n": 668,
+    "mean_ns": 10726648.0,
+    "median_ns": 11172259.0,
+    "max_ns": 11286154.0,
+    "sum_per_core_ns": 67598122.0,
+    "last_end_max_ns": 68823139.0
+   },
+   "compute_unit@TRISC_2": {
+    "n": 668,
+    "mean_ns": 10726676.0,
+    "median_ns": 11172250.0,
+    "max_ns": 11286333.0,
+    "sum_per_core_ns": 67598297.0,
+    "last_end_max_ns": 68823242.0
+   },
+   "port_ready_fence@BRISC": {
+    "n": 4,
+    "mean_ns": 28548.0,
+    "median_ns": 28553.0,
+    "max_ns": 44421.0,
+    "sum_per_core_ns": 28548.0,
+    "last_end_max_ns": 46507.0
+   },
+   "port_send@BRISC": {
+    "n": 4,
+    "mean_ns": 3622753.0,
+    "median_ns": 3588740.0,
+    "max_ns": 4890714.0,
+    "sum_per_core_ns": 3622753.0,
+    "last_end_max_ns": 4937207.0
+   },
+   "port_wait_arrivals@BRISC": {
+    "n": 4,
+    "mean_ns": 55.0,
+    "median_ns": 55.0,
+    "max_ns": 56.0,
+    "sum_per_core_ns": 55.0,
+    "last_end_max_ns": 68799751.0
+   },
+   "port_wait_consumers@BRISC": {
+    "n": 4,
+    "mean_ns": 65145872.0,
+    "median_ns": 65179822.0,
+    "max_ns": 66361796.0,
+    "sum_per_core_ns": 65145872.0,
+    "last_end_max_ns": 68799670.0
+   },
+   "reader_kv_barrier@NCRISC": {
+    "n": 636,
+    "mean_ns": 2595.0,
+    "median_ns": 2263.0,
+    "max_ns": 7088.0,
+    "sum_per_core_ns": 15568.0,
+    "last_end_max_ns": 814735.0
+   },
+   "reader_kv_issue@NCRISC": {
+    "n": 636,
+    "mean_ns": 2251.0,
+    "median_ns": 2239.0,
+    "max_ns": 3146.0,
+    "sum_per_core_ns": 13508.0,
+    "last_end_max_ns": 810265.0
+   },
+   "reader_kv_reserve@NCRISC": {
+    "n": 636,
+    "mean_ns": 82508.0,
+    "median_ns": 82806.0,
+    "max_ns": 84799.0,
+    "sum_per_core_ns": 495045.0,
+    "last_end_max_ns": 808001.0
+   },
+   "reader_landing_wait@NCRISC": {
+    "n": 2004,
+    "mean_ns": 169.0,
+    "median_ns": 84.0,
+    "max_ns": 2536.0,
+    "sum_per_core_ns": 3186.0,
+    "last_end_max_ns": 68398207.0
+   },
+   "reader_q_read@NCRISC": {
+    "n": 668,
+    "mean_ns": 12678.0,
+    "median_ns": 3686.0,
+    "max_ns": 111176.0,
+    "sum_per_core_ns": 79894.0,
+    "last_end_max_ns": 67201367.0
+   },
+   "reader_q_reserve@NCRISC": {
+    "n": 668,
+    "mean_ns": 150476.0,
+    "median_ns": 178892.0,
+    "max_ns": 179019.0,
+    "sum_per_core_ns": 948282.0,
+    "last_end_max_ns": 67197152.0
+   },
+   "reader_unit@NCRISC": {
+    "n": 668,
+    "mean_ns": 10705738.0,
+    "median_ns": 11171176.0,
+    "max_ns": 11207052.0,
+    "sum_per_core_ns": 67466350.0,
+    "last_end_max_ns": 68799382.0
+   },
+   "writer_out_wait@BRISC": {
+    "n": 668,
+    "mean_ns": 10724171.0,
+    "median_ns": 11169458.0,
+    "max_ns": 11284876.0,
+    "sum_per_core_ns": 67582509.0,
+    "last_end_max_ns": 68823238.0
+   },
+   "writer_out_write@BRISC": {
+    "n": 668,
+    "mean_ns": 2575.0,
+    "median_ns": 2569.0,
+    "max_ns": 4396.0,
+    "sum_per_core_ns": 16226.0,
+    "last_end_max_ns": 68823844.0
+   }
+  }
+ },
+ "1": {
+  "op_span_ns": 68818000.74074073,
+  "cores": 110,
+  "core_end_q_ns": [
+   67033593.0,
+   67047333.0,
+   67106996.0,
+   68796840.0,
+   68818001.0
+  ],
+  "core_start_q_ns": [
+   0.0,
+   93.0,
+   190.0
+  ],
+  "max_markers_per_risc": 122,
+  "zones": {
+   "BRISC-FW@BRISC": {
+    "n": 110,
+    "mean_ns": 67643254.0,
+    "median_ns": 67107969.0,
+    "max_ns": 68819041.0,
+    "sum_per_core_ns": 67643254.0,
+    "last_end_max_ns": 68818107.0
+   },
+   "NCRISC-FW@NCRISC": {
+    "n": 110,
+    "mean_ns": 65146107.0,
+    "median_ns": 66922016.0,
+    "max_ns": 68794734.0,
+    "sum_per_core_ns": 65146107.0,
+    "last_end_max_ns": 68793897.0
+   },
+   "TRISC-FW@TRISC_0": {
+    "n": 106,
+    "mean_ns": 67597504.0,
+    "median_ns": 67104183.0,
+    "max_ns": 68818252.0,
+    "sum_per_core_ns": 67597504.0,
+    "last_end_max_ns": 68817488.0
+   },
+   "TRISC-FW@TRISC_1": {
+    "n": 106,
+    "mean_ns": 67597381.0,
+    "median_ns": 67104085.0,
+    "max_ns": 68818077.0,
+    "sum_per_core_ns": 67597381.0,
+    "last_end_max_ns": 68817327.0
+   },
+   "TRISC-FW@TRISC_2": {
+    "n": 106,
+    "mean_ns": 67597540.0,
+    "median_ns": 67104263.0,
+    "max_ns": 68818193.0,
+    "sum_per_core_ns": 67597540.0,
+    "last_end_max_ns": 68817444.0
+   },
+   "compute_copy_max@TRISC_0": {
+    "n": 636,
+    "mean_ns": 918.0,
+    "median_ns": 917.0,
+    "max_ns": 933.0,
+    "sum_per_core_ns": 5506.0,
+    "last_end_max_ns": 986661.0
+   },
+   "compute_copy_max@TRISC_1": {
+    "n": 636,
+    "mean_ns": 925.0,
+    "median_ns": 925.0,
+    "max_ns": 944.0,
+    "sum_per_core_ns": 5552.0,
+    "last_end_max_ns": 986599.0
+   },
+   "compute_copy_max@TRISC_2": {
+    "n": 636,
+    "mean_ns": 947.0,
+    "median_ns": 946.0,
+    "max_ns": 958.0,
+    "sum_per_core_ns": 5681.0,
+    "last_end_max_ns": 986837.0
+   },
+   "compute_finalize@TRISC_0": {
+    "n": 668,
+    "mean_ns": 6773.0,
+    "median_ns": 7055.0,
+    "max_ns": 7094.0,
+    "sum_per_core_ns": 42683.0,
+    "last_end_max_ns": 68817329.0
+   },
+   "compute_finalize@TRISC_1": {
+    "n": 668,
+    "mean_ns": 6877.0,
+    "median_ns": 7156.0,
+    "max_ns": 7199.0,
+    "sum_per_core_ns": 43339.0,
+    "last_end_max_ns": 68817241.0
+   },
+   "compute_finalize@TRISC_2": {
+    "n": 668,
+    "mean_ns": 6798.0,
+    "median_ns": 7083.0,
+    "max_ns": 7116.0,
+    "sum_per_core_ns": 42839.0,
+    "last_end_max_ns": 68817348.0
+   },
+   "compute_k_wait@TRISC_0": {
+    "n": 636,
+    "mean_ns": 42.0,
+    "median_ns": 39.0,
+    "max_ns": 60.0,
+    "sum_per_core_ns": 254.0,
+    "last_end_max_ns": 899278.0
+   },
+   "compute_k_wait@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15.0,
+    "median_ns": 14.0,
+    "max_ns": 19.0,
+    "sum_per_core_ns": 87.0,
+    "last_end_max_ns": 899142.0
+   },
+   "compute_k_wait@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14.0,
+    "median_ns": 13.0,
+    "max_ns": 16.0,
+    "sum_per_core_ns": 83.0,
+    "last_end_max_ns": 899376.0
+   },
+   "compute_qk@TRISC_0": {
+    "n": 636,
+    "mean_ns": 12852.0,
+    "median_ns": 12852.0,
+    "max_ns": 12874.0,
+    "sum_per_core_ns": 77111.0,
+    "last_end_max_ns": 912156.0
+   },
+   "compute_qk@TRISC_1": {
+    "n": 636,
+    "mean_ns": 13280.0,
+    "median_ns": 13273.0,
+    "max_ns": 13341.0,
+    "sum_per_core_ns": 79679.0,
+    "last_end_max_ns": 912429.0
+   },
+   "compute_qk@TRISC_2": {
+    "n": 636,
+    "mean_ns": 13464.0,
+    "median_ns": 13463.0,
+    "max_ns": 13504.0,
+    "sum_per_core_ns": 80782.0,
+    "last_end_max_ns": 912855.0
+   },
+   "compute_rescale@TRISC_0": {
+    "n": 636,
+    "mean_ns": 15338.0,
+    "median_ns": 15335.0,
+    "max_ns": 15376.0,
+    "sum_per_core_ns": 92029.0,
+    "last_end_max_ns": 985719.0
+   },
+   "compute_rescale@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15346.0,
+    "median_ns": 15345.0,
+    "max_ns": 15378.0,
+    "sum_per_core_ns": 92074.0,
+    "last_end_max_ns": 985647.0
+   },
+   "compute_rescale@TRISC_2": {
+    "n": 636,
+    "mean_ns": 15341.0,
+    "median_ns": 15339.0,
+    "max_ns": 15364.0,
+    "sum_per_core_ns": 92046.0,
+    "last_end_max_ns": 985867.0
+   },
+   "compute_rowmax@TRISC_0": {
+    "n": 636,
+    "mean_ns": 14240.0,
+    "median_ns": 14239.0,
+    "max_ns": 14260.0,
+    "sum_per_core_ns": 85438.0,
+    "last_end_max_ns": 927173.0
+   },
+   "compute_rowmax@TRISC_1": {
+    "n": 636,
+    "mean_ns": 14974.0,
+    "median_ns": 14974.0,
+    "max_ns": 14992.0,
+    "sum_per_core_ns": 89843.0,
+    "last_end_max_ns": 927440.0
+   },
+   "compute_rowmax@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14456.0,
+    "median_ns": 14457.0,
+    "max_ns": 14470.0,
+    "sum_per_core_ns": 86739.0,
+    "last_end_max_ns": 927345.0
+   },
+   "compute_rowsum@TRISC_0": {
+    "n": 636,
+    "mean_ns": 8366.0,
+    "median_ns": 8364.0,
+    "max_ns": 8390.0,
+    "sum_per_core_ns": 50195.0,
+    "last_end_max_ns": 970342.0
+   },
+   "compute_rowsum@TRISC_1": {
+    "n": 636,
+    "mean_ns": 8464.0,
+    "median_ns": 8460.0,
+    "max_ns": 8499.0,
+    "sum_per_core_ns": 50785.0,
+    "last_end_max_ns": 970272.0
+   },
+   "compute_rowsum@TRISC_2": {
+    "n": 636,
+    "mean_ns": 8799.0,
+    "median_ns": 8798.0,
+    "max_ns": 8820.0,
+    "sum_per_core_ns": 52796.0,
+    "last_end_max_ns": 970502.0
+   },
+   "compute_sub_exp@TRISC_0": {
+    "n": 636,
+    "mean_ns": 34746.0,
+    "median_ns": 34745.0,
+    "max_ns": 34776.0,
+    "sum_per_core_ns": 208479.0,
+    "last_end_max_ns": 961946.0
+   },
+   "compute_sub_exp@TRISC_1": {
+    "n": 636,
+    "mean_ns": 34309.0,
+    "median_ns": 34307.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205855.0,
+    "last_end_max_ns": 961781.0
+   },
+   "compute_sub_exp@TRISC_2": {
+    "n": 636,
+    "mean_ns": 34301.0,
+    "median_ns": 34301.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205808.0,
+    "last_end_max_ns": 961676.0
+   },
+   "compute_unit@TRISC_0": {
+    "n": 668,
+    "mean_ns": 10726322.0,
+    "median_ns": 11172300.0,
+    "max_ns": 11290139.0,
+    "sum_per_core_ns": 67596067.0,
+    "last_end_max_ns": 68817411.0
+   },
+   "compute_unit@TRISC_1": {
+    "n": 668,
+    "mean_ns": 10726334.0,
+    "median_ns": 11172319.0,
+    "max_ns": 11290123.0,
+    "sum_per_core_ns": 67596141.0,
+    "last_end_max_ns": 68817264.0
+   },
+   "compute_unit@TRISC_2": {
+    "n": 668,
+    "mean_ns": 10726360.0,
+    "median_ns": 11172321.0,
+    "max_ns": 11290310.0,
+    "sum_per_core_ns": 67596307.0,
+    "last_end_max_ns": 68817370.0
+   },
+   "port_ready_fence@BRISC": {
+    "n": 4,
+    "mean_ns": 11111.0,
+    "median_ns": 11103.0,
+    "max_ns": 22136.0,
+    "sum_per_core_ns": 11111.0,
+    "last_end_max_ns": 24204.0
+   },
+   "port_send@BRISC": {
+    "n": 4,
+    "mean_ns": 3654877.0,
+    "median_ns": 3616044.0,
+    "max_ns": 4914037.0,
+    "sum_per_core_ns": 3654877.0,
+    "last_end_max_ns": 4916159.0
+   },
+   "port_wait_arrivals@BRISC": {
+    "n": 4,
+    "mean_ns": 55.0,
+    "median_ns": 55.0,
+    "max_ns": 56.0,
+    "sum_per_core_ns": 55.0,
+    "last_end_max_ns": 68793830.0
+   },
+   "port_wait_consumers@BRISC": {
+    "n": 4,
+    "mean_ns": 65125288.0,
+    "median_ns": 65164080.0,
+    "max_ns": 66295787.0,
+    "sum_per_core_ns": 65125288.0,
+    "last_end_max_ns": 68793750.0
+   },
+   "reader_kv_barrier@NCRISC": {
+    "n": 636,
+    "mean_ns": 2851.0,
+    "median_ns": 2563.0,
+    "max_ns": 8310.0,
+    "sum_per_core_ns": 17108.0,
+    "last_end_max_ns": 816944.0
+   },
+   "reader_kv_issue@NCRISC": {
+    "n": 636,
+    "mean_ns": 2292.0,
+    "median_ns": 2239.0,
+    "max_ns": 4123.0,
+    "sum_per_core_ns": 13754.0,
+    "last_end_max_ns": 813999.0
+   },
+   "reader_kv_reserve@NCRISC": {
+    "n": 636,
+    "mean_ns": 82235.0,
+    "median_ns": 82594.0,
+    "max_ns": 84614.0,
+    "sum_per_core_ns": 493412.0,
+    "last_end_max_ns": 811734.0
+   },
+   "reader_landing_wait@NCRISC": {
+    "n": 2004,
+    "mean_ns": 171.0,
+    "median_ns": 84.0,
+    "max_ns": 4633.0,
+    "sum_per_core_ns": 3236.0,
+    "last_end_max_ns": 68390574.0
+   },
+   "reader_q_read@NCRISC": {
+    "n": 668,
+    "mean_ns": 12463.0,
+    "median_ns": 3870.0,
+    "max_ns": 111739.0,
+    "sum_per_core_ns": 78540.0,
+    "last_end_max_ns": 67192651.0
+   },
+   "reader_q_reserve@NCRISC": {
+    "n": 668,
+    "mean_ns": 150454.0,
+    "median_ns": 178890.0,
+    "max_ns": 179006.0,
+    "sum_per_core_ns": 948142.0,
+    "last_end_max_ns": 67191129.0
+   },
+   "reader_unit@NCRISC": {
+    "n": 668,
+    "mean_ns": 10705425.0,
+    "median_ns": 11171599.0,
+    "max_ns": 11204261.0,
+    "sum_per_core_ns": 67464376.0,
+    "last_end_max_ns": 68793499.0
+   },
+   "writer_out_wait@BRISC": {
+    "n": 668,
+    "mean_ns": 10723774.0,
+    "median_ns": 11169469.0,
+    "max_ns": 11288839.0,
+    "sum_per_core_ns": 67580012.0,
+    "last_end_max_ns": 68817365.0
+   },
+   "writer_out_write@BRISC": {
+    "n": 668,
+    "mean_ns": 2656.0,
+    "median_ns": 2584.0,
+    "max_ns": 5036.0,
+    "sum_per_core_ns": 16740.0,
+    "last_end_max_ns": 68817972.0
+   }
+  }
+ },
+ "2": {
+  "op_span_ns": 68818331.85185185,
+  "cores": 110,
+  "core_end_q_ns": [
+   67037554.0,
+   67047225.0,
+   67108360.0,
+   68797624.0,
+   68818332.0
+  ],
+  "core_start_q_ns": [
+   0.0,
+   87.0,
+   218.0
+  ],
+  "max_markers_per_risc": 122,
+  "zones": {
+   "BRISC-FW@BRISC": {
+    "n": 110,
+    "mean_ns": 67644448.0,
+    "median_ns": 67110251.0,
+    "max_ns": 68820249.0,
+    "sum_per_core_ns": 67644448.0,
+    "last_end_max_ns": 68818435.0
+   },
+   "NCRISC-FW@NCRISC": {
+    "n": 110,
+    "mean_ns": 65145900.0,
+    "median_ns": 66920611.0,
+    "max_ns": 68795616.0,
+    "sum_per_core_ns": 65145900.0,
+    "last_end_max_ns": 68793904.0
+   },
+   "TRISC-FW@TRISC_0": {
+    "n": 106,
+    "mean_ns": 67598710.0,
+    "median_ns": 67102152.0,
+    "max_ns": 68819459.0,
+    "sum_per_core_ns": 67598710.0,
+    "last_end_max_ns": 68817824.0
+   },
+   "TRISC-FW@TRISC_1": {
+    "n": 106,
+    "mean_ns": 67598588.0,
+    "median_ns": 67102057.0,
+    "max_ns": 68819288.0,
+    "sum_per_core_ns": 67598588.0,
+    "last_end_max_ns": 68817660.0
+   },
+   "TRISC-FW@TRISC_2": {
+    "n": 106,
+    "mean_ns": 67598748.0,
+    "median_ns": 67102237.0,
+    "max_ns": 68819399.0,
+    "sum_per_core_ns": 67598748.0,
+    "last_end_max_ns": 68817773.0
+   },
+   "compute_copy_max@TRISC_0": {
+    "n": 636,
+    "mean_ns": 918.0,
+    "median_ns": 918.0,
+    "max_ns": 937.0,
+    "sum_per_core_ns": 5509.0,
+    "last_end_max_ns": 985447.0
+   },
+   "compute_copy_max@TRISC_1": {
+    "n": 636,
+    "mean_ns": 926.0,
+    "median_ns": 925.0,
+    "max_ns": 942.0,
+    "sum_per_core_ns": 5553.0,
+    "last_end_max_ns": 985385.0
+   },
+   "compute_copy_max@TRISC_2": {
+    "n": 636,
+    "mean_ns": 947.0,
+    "median_ns": 947.0,
+    "max_ns": 956.0,
+    "sum_per_core_ns": 5680.0,
+    "last_end_max_ns": 985621.0
+   },
+   "compute_finalize@TRISC_0": {
+    "n": 668,
+    "mean_ns": 6771.0,
+    "median_ns": 7053.0,
+    "max_ns": 7095.0,
+    "sum_per_core_ns": 42672.0,
+    "last_end_max_ns": 68817667.0
+   },
+   "compute_finalize@TRISC_1": {
+    "n": 668,
+    "mean_ns": 6876.0,
+    "median_ns": 7155.0,
+    "max_ns": 7200.0,
+    "sum_per_core_ns": 43329.0,
+    "last_end_max_ns": 68817574.0
+   },
+   "compute_finalize@TRISC_2": {
+    "n": 668,
+    "mean_ns": 6797.0,
+    "median_ns": 7082.0,
+    "max_ns": 7119.0,
+    "sum_per_core_ns": 42832.0,
+    "last_end_max_ns": 68817679.0
+   },
+   "compute_k_wait@TRISC_0": {
+    "n": 636,
+    "mean_ns": 42.0,
+    "median_ns": 39.0,
+    "max_ns": 60.0,
+    "sum_per_core_ns": 253.0,
+    "last_end_max_ns": 898069.0
+   },
+   "compute_k_wait@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15.0,
+    "median_ns": 14.0,
+    "max_ns": 19.0,
+    "sum_per_core_ns": 87.0,
+    "last_end_max_ns": 897930.0
+   },
+   "compute_k_wait@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14.0,
+    "median_ns": 13.0,
+    "max_ns": 16.0,
+    "sum_per_core_ns": 83.0,
+    "last_end_max_ns": 898171.0
+   },
+   "compute_qk@TRISC_0": {
+    "n": 636,
+    "mean_ns": 12852.0,
+    "median_ns": 12852.0,
+    "max_ns": 12879.0,
+    "sum_per_core_ns": 77114.0,
+    "last_end_max_ns": 910947.0
+   },
+   "compute_qk@TRISC_1": {
+    "n": 636,
+    "mean_ns": 13280.0,
+    "median_ns": 13274.0,
+    "max_ns": 13341.0,
+    "sum_per_core_ns": 79680.0,
+    "last_end_max_ns": 911223.0
+   },
+   "compute_qk@TRISC_2": {
+    "n": 636,
+    "mean_ns": 13464.0,
+    "median_ns": 13464.0,
+    "max_ns": 13498.0,
+    "sum_per_core_ns": 80786.0,
+    "last_end_max_ns": 911643.0
+   },
+   "compute_rescale@TRISC_0": {
+    "n": 636,
+    "mean_ns": 15338.0,
+    "median_ns": 15334.0,
+    "max_ns": 15376.0,
+    "sum_per_core_ns": 92028.0,
+    "last_end_max_ns": 984504.0
+   },
+   "compute_rescale@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15345.0,
+    "median_ns": 15344.0,
+    "max_ns": 15371.0,
+    "sum_per_core_ns": 92072.0,
+    "last_end_max_ns": 984433.0
+   },
+   "compute_rescale@TRISC_2": {
+    "n": 636,
+    "mean_ns": 15341.0,
+    "median_ns": 15339.0,
+    "max_ns": 15367.0,
+    "sum_per_core_ns": 92044.0,
+    "last_end_max_ns": 984653.0
+   },
+   "compute_rowmax@TRISC_0": {
+    "n": 636,
+    "mean_ns": 14240.0,
+    "median_ns": 14239.0,
+    "max_ns": 14258.0,
+    "sum_per_core_ns": 85440.0,
+    "last_end_max_ns": 925959.0
+   },
+   "compute_rowmax@TRISC_1": {
+    "n": 636,
+    "mean_ns": 14974.0,
+    "median_ns": 14974.0,
+    "max_ns": 14994.0,
+    "sum_per_core_ns": 89844.0,
+    "last_end_max_ns": 926222.0
+   },
+   "compute_rowmax@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14456.0,
+    "median_ns": 14457.0,
+    "max_ns": 14473.0,
+    "sum_per_core_ns": 86739.0,
+    "last_end_max_ns": 926133.0
+   },
+   "compute_rowsum@TRISC_0": {
+    "n": 636,
+    "mean_ns": 8366.0,
+    "median_ns": 8365.0,
+    "max_ns": 8391.0,
+    "sum_per_core_ns": 50196.0,
+    "last_end_max_ns": 969127.0
+   },
+   "compute_rowsum@TRISC_1": {
+    "n": 636,
+    "mean_ns": 8464.0,
+    "median_ns": 8460.0,
+    "max_ns": 8497.0,
+    "sum_per_core_ns": 50786.0,
+    "last_end_max_ns": 969057.0
+   },
+   "compute_rowsum@TRISC_2": {
+    "n": 636,
+    "mean_ns": 8800.0,
+    "median_ns": 8798.0,
+    "max_ns": 8818.0,
+    "sum_per_core_ns": 52797.0,
+    "last_end_max_ns": 969287.0
+   },
+   "compute_sub_exp@TRISC_0": {
+    "n": 636,
+    "mean_ns": 34746.0,
+    "median_ns": 34745.0,
+    "max_ns": 34776.0,
+    "sum_per_core_ns": 208478.0,
+    "last_end_max_ns": 960731.0
+   },
+   "compute_sub_exp@TRISC_1": {
+    "n": 636,
+    "mean_ns": 34309.0,
+    "median_ns": 34307.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205854.0,
+    "last_end_max_ns": 960566.0
+   },
+   "compute_sub_exp@TRISC_2": {
+    "n": 636,
+    "mean_ns": 34301.0,
+    "median_ns": 34301.0,
+    "max_ns": 34320.0,
+    "sum_per_core_ns": 205805.0,
+    "last_end_max_ns": 960462.0
+   },
+   "compute_unit@TRISC_0": {
+    "n": 668,
+    "mean_ns": 10726379.0,
+    "median_ns": 11171820.0,
+    "max_ns": 11288899.0,
+    "sum_per_core_ns": 67596424.0,
+    "last_end_max_ns": 68817749.0
+   },
+   "compute_unit@TRISC_1": {
+    "n": 668,
+    "mean_ns": 10726389.0,
+    "median_ns": 11171839.0,
+    "max_ns": 11288901.0,
+    "sum_per_core_ns": 67596490.0,
+    "last_end_max_ns": 68817597.0
+   },
+   "compute_unit@TRISC_2": {
+    "n": 668,
+    "mean_ns": 10726417.0,
+    "median_ns": 11171843.0,
+    "max_ns": 11289082.0,
+    "sum_per_core_ns": 67596664.0,
+    "last_end_max_ns": 68817701.0
+   },
+   "port_ready_fence@BRISC": {
+    "n": 4,
+    "mean_ns": 5615.0,
+    "median_ns": 5583.0,
+    "max_ns": 11194.0,
+    "sum_per_core_ns": 5615.0,
+    "last_end_max_ns": 13241.0
+   },
+   "port_send@BRISC": {
+    "n": 4,
+    "mean_ns": 3643289.0,
+    "median_ns": 3600386.0,
+    "max_ns": 4899850.0,
+    "sum_per_core_ns": 3643289.0,
+    "last_end_max_ns": 4902044.0
+   },
+   "port_wait_arrivals@BRISC": {
+    "n": 4,
+    "mean_ns": 55.0,
+    "median_ns": 55.0,
+    "max_ns": 56.0,
+    "sum_per_core_ns": 55.0,
+    "last_end_max_ns": 68793890.0
+   },
+   "port_wait_consumers@BRISC": {
+    "n": 4,
+    "mean_ns": 65142346.0,
+    "median_ns": 65185204.0,
+    "max_ns": 66307760.0,
+    "sum_per_core_ns": 65142346.0,
+    "last_end_max_ns": 68793809.0
+   },
+   "reader_kv_barrier@NCRISC": {
+    "n": 636,
+    "mean_ns": 3025.0,
+    "median_ns": 2710.0,
+    "max_ns": 8253.0,
+    "sum_per_core_ns": 18152.0,
+    "last_end_max_ns": 816560.0
+   },
+   "reader_kv_issue@NCRISC": {
+    "n": 636,
+    "mean_ns": 2309.0,
+    "median_ns": 2239.0,
+    "max_ns": 4198.0,
+    "sum_per_core_ns": 13852.0,
+    "last_end_max_ns": 812795.0
+   },
+   "reader_kv_reserve@NCRISC": {
+    "n": 636,
+    "mean_ns": 82123.0,
+    "median_ns": 82511.0,
+    "max_ns": 84747.0,
+    "sum_per_core_ns": 492736.0,
+    "last_end_max_ns": 810533.0
+   },
+   "reader_landing_wait@NCRISC": {
+    "n": 2004,
+    "mean_ns": 190.0,
+    "median_ns": 84.0,
+    "max_ns": 5385.0,
+    "sum_per_core_ns": 3586.0,
+    "last_end_max_ns": 68391464.0
+   },
+   "reader_q_read@NCRISC": {
+    "n": 668,
+    "mean_ns": 12559.0,
+    "median_ns": 3540.0,
+    "max_ns": 112649.0,
+    "sum_per_core_ns": 79144.0,
+    "last_end_max_ns": 67195040.0
+   },
+   "reader_q_reserve@NCRISC": {
+    "n": 668,
+    "mean_ns": 151221.0,
+    "median_ns": 179761.0,
+    "max_ns": 179885.0,
+    "sum_per_core_ns": 952980.0,
+    "last_end_max_ns": 67192204.0
+   },
+   "reader_unit@NCRISC": {
+    "n": 668,
+    "mean_ns": 10705353.0,
+    "median_ns": 11171283.0,
+    "max_ns": 11203716.0,
+    "sum_per_core_ns": 67463924.0,
+    "last_end_max_ns": 68793506.0
+   },
+   "writer_out_wait@BRISC": {
+    "n": 668,
+    "mean_ns": 10723938.0,
+    "median_ns": 11169230.0,
+    "max_ns": 11287623.0,
+    "sum_per_core_ns": 67581044.0,
+    "last_end_max_ns": 68817696.0
+   },
+   "writer_out_write@BRISC": {
+    "n": 668,
+    "mean_ns": 2547.0,
+    "median_ns": 2564.0,
+    "max_ns": 4178.0,
+    "sum_per_core_ns": 16054.0,
+    "last_end_max_ns": 68818303.0
+   }
+  }
+ },
+ "3": {
+  "op_span_ns": 68820368.14814815,
+  "cores": 110,
+  "core_end_q_ns": [
+   67034887.0,
+   67046691.0,
+   67106090.0,
+   68796847.0,
+   68820368.0
+  ],
+  "core_start_q_ns": [
+   0.0,
+   92.0,
+   227.0
+  ],
+  "max_markers_per_risc": 122,
+  "zones": {
+   "BRISC-FW@BRISC": {
+    "n": 110,
+    "mean_ns": 67642322.0,
+    "median_ns": 67107087.0,
+    "max_ns": 68821416.0,
+    "sum_per_core_ns": 67642322.0,
+    "last_end_max_ns": 68820473.0
+   },
+   "NCRISC-FW@NCRISC": {
+    "n": 110,
+    "mean_ns": 65145860.0,
+    "median_ns": 66923361.0,
+    "max_ns": 68797173.0,
+    "sum_per_core_ns": 65145860.0,
+    "last_end_max_ns": 68796324.0
+   },
+   "TRISC-FW@TRISC_0": {
+    "n": 106,
+    "mean_ns": 67596467.0,
+    "median_ns": 67103797.0,
+    "max_ns": 68820634.0,
+    "sum_per_core_ns": 67596467.0,
+    "last_end_max_ns": 68819867.0
+   },
+   "TRISC-FW@TRISC_1": {
+    "n": 106,
+    "mean_ns": 67596346.0,
+    "median_ns": 67103703.0,
+    "max_ns": 68820457.0,
+    "sum_per_core_ns": 67596346.0,
+    "last_end_max_ns": 68819695.0
+   },
+   "TRISC-FW@TRISC_2": {
+    "n": 106,
+    "mean_ns": 67596506.0,
+    "median_ns": 67103879.0,
+    "max_ns": 68820579.0,
+    "sum_per_core_ns": 67596506.0,
+    "last_end_max_ns": 68819815.0
+   },
+   "compute_copy_max@TRISC_0": {
+    "n": 636,
+    "mean_ns": 918.0,
+    "median_ns": 919.0,
+    "max_ns": 939.0,
+    "sum_per_core_ns": 5509.0,
+    "last_end_max_ns": 1000570.0
+   },
+   "compute_copy_max@TRISC_1": {
+    "n": 636,
+    "mean_ns": 925.0,
+    "median_ns": 925.0,
+    "max_ns": 939.0,
+    "sum_per_core_ns": 5551.0,
+    "last_end_max_ns": 1000501.0
+   },
+   "compute_copy_max@TRISC_2": {
+    "n": 636,
+    "mean_ns": 947.0,
+    "median_ns": 947.0,
+    "max_ns": 957.0,
+    "sum_per_core_ns": 5682.0,
+    "last_end_max_ns": 1000741.0
+   },
+   "compute_finalize@TRISC_0": {
+    "n": 668,
+    "mean_ns": 6773.0,
+    "median_ns": 7055.0,
+    "max_ns": 7094.0,
+    "sum_per_core_ns": 42682.0,
+    "last_end_max_ns": 68819696.0
+   },
+   "compute_finalize@TRISC_1": {
+    "n": 668,
+    "mean_ns": 6877.0,
+    "median_ns": 7156.0,
+    "max_ns": 7197.0,
+    "sum_per_core_ns": 43337.0,
+    "last_end_max_ns": 68819608.0
+   },
+   "compute_finalize@TRISC_2": {
+    "n": 668,
+    "mean_ns": 6798.0,
+    "median_ns": 7083.0,
+    "max_ns": 7120.0,
+    "sum_per_core_ns": 42837.0,
+    "last_end_max_ns": 68819720.0
+   },
+   "compute_k_wait@TRISC_0": {
+    "n": 636,
+    "mean_ns": 42.0,
+    "median_ns": 39.0,
+    "max_ns": 61.0,
+    "sum_per_core_ns": 255.0,
+    "last_end_max_ns": 913186.0
+   },
+   "compute_k_wait@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15.0,
+    "median_ns": 14.0,
+    "max_ns": 19.0,
+    "sum_per_core_ns": 88.0,
+    "last_end_max_ns": 913048.0
+   },
+   "compute_k_wait@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14.0,
+    "median_ns": 13.0,
+    "max_ns": 16.0,
+    "sum_per_core_ns": 83.0,
+    "last_end_max_ns": 913284.0
+   },
+   "compute_qk@TRISC_0": {
+    "n": 636,
+    "mean_ns": 12852.0,
+    "median_ns": 12851.0,
+    "max_ns": 12881.0,
+    "sum_per_core_ns": 77112.0,
+    "last_end_max_ns": 926067.0
+   },
+   "compute_qk@TRISC_1": {
+    "n": 636,
+    "mean_ns": 13279.0,
+    "median_ns": 13273.0,
+    "max_ns": 13344.0,
+    "sum_per_core_ns": 79676.0,
+    "last_end_max_ns": 926344.0
+   },
+   "compute_qk@TRISC_2": {
+    "n": 636,
+    "mean_ns": 13464.0,
+    "median_ns": 13463.0,
+    "max_ns": 13499.0,
+    "sum_per_core_ns": 80782.0,
+    "last_end_max_ns": 926764.0
+   },
+   "compute_rescale@TRISC_0": {
+    "n": 636,
+    "mean_ns": 15338.0,
+    "median_ns": 15334.0,
+    "max_ns": 15378.0,
+    "sum_per_core_ns": 92027.0,
+    "last_end_max_ns": 999619.0
+   },
+   "compute_rescale@TRISC_1": {
+    "n": 636,
+    "mean_ns": 15346.0,
+    "median_ns": 15344.0,
+    "max_ns": 15375.0,
+    "sum_per_core_ns": 92075.0,
+    "last_end_max_ns": 999548.0
+   },
+   "compute_rescale@TRISC_2": {
+    "n": 636,
+    "mean_ns": 15341.0,
+    "median_ns": 15339.0,
+    "max_ns": 15372.0,
+    "sum_per_core_ns": 92044.0,
+    "last_end_max_ns": 999768.0
+   },
+   "compute_rowmax@TRISC_0": {
+    "n": 636,
+    "mean_ns": 14240.0,
+    "median_ns": 14239.0,
+    "max_ns": 14259.0,
+    "sum_per_core_ns": 85438.0,
+    "last_end_max_ns": 941082.0
+   },
+   "compute_rowmax@TRISC_1": {
+    "n": 636,
+    "mean_ns": 14974.0,
+    "median_ns": 14974.0,
+    "max_ns": 14990.0,
+    "sum_per_core_ns": 89843.0,
+    "last_end_max_ns": 941348.0
+   },
+   "compute_rowmax@TRISC_2": {
+    "n": 636,
+    "mean_ns": 14456.0,
+    "median_ns": 14456.0,
+    "max_ns": 14470.0,
+    "sum_per_core_ns": 86737.0,
+    "last_end_max_ns": 941254.0
+   },
+   "compute_rowsum@TRISC_0": {
+    "n": 636,
+    "mean_ns": 8366.0,
+    "median_ns": 8365.0,
+    "max_ns": 8392.0,
+    "sum_per_core_ns": 50195.0,
+    "last_end_max_ns": 984240.0
+   },
+   "compute_rowsum@TRISC_1": {
+    "n": 636,
+    "mean_ns": 8464.0,
+    "median_ns": 8460.0,
+    "max_ns": 8502.0,
+    "sum_per_core_ns": 50785.0,
+    "last_end_max_ns": 984173.0
+   },
+   "compute_rowsum@TRISC_2": {
+    "n": 636,
+    "mean_ns": 8799.0,
+    "median_ns": 8798.0,
+    "max_ns": 8821.0,
+    "sum_per_core_ns": 52796.0,
+    "last_end_max_ns": 984404.0
+   },
+   "compute_sub_exp@TRISC_0": {
+    "n": 636,
+    "mean_ns": 34747.0,
+    "median_ns": 34745.0,
+    "max_ns": 34776.0,
+    "sum_per_core_ns": 208479.0,
+    "last_end_max_ns": 975850.0
+   },
+   "compute_sub_exp@TRISC_1": {
+    "n": 636,
+    "mean_ns": 34309.0,
+    "median_ns": 34307.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205853.0,
+    "last_end_max_ns": 975689.0
+   },
+   "compute_sub_exp@TRISC_2": {
+    "n": 636,
+    "mean_ns": 34301.0,
+    "median_ns": 34301.0,
+    "max_ns": 34321.0,
+    "sum_per_core_ns": 205808.0,
+    "last_end_max_ns": 975581.0
+   },
+   "compute_unit@TRISC_0": {
+    "n": 668,
+    "mean_ns": 10726158.0,
+    "median_ns": 11172342.0,
+    "max_ns": 11304644.0,
+    "sum_per_core_ns": 67595033.0,
+    "last_end_max_ns": 68819787.0
+   },
+   "compute_unit@TRISC_1": {
+    "n": 668,
+    "mean_ns": 10726170.0,
+    "median_ns": 11172354.0,
+    "max_ns": 11304636.0,
+    "sum_per_core_ns": 67595112.0,
+    "last_end_max_ns": 68819632.0
+   },
+   "compute_unit@TRISC_2": {
+    "n": 668,
+    "mean_ns": 10726197.0,
+    "median_ns": 11172366.0,
+    "max_ns": 11304811.0,
+    "sum_per_core_ns": 67595278.0,
+    "last_end_max_ns": 68819742.0
+   },
+   "port_ready_fence@BRISC": {
+    "n": 4,
+    "mean_ns": 101.0,
+    "median_ns": 101.0,
+    "max_ns": 101.0,
+    "sum_per_core_ns": 101.0,
+    "last_end_max_ns": 2257.0
+   },
+   "port_send@BRISC": {
+    "n": 4,
+    "mean_ns": 3688309.0,
+    "median_ns": 3677579.0,
+    "max_ns": 4882290.0,
+    "sum_per_core_ns": 3688309.0,
+    "last_end_max_ns": 4884568.0
+   },
+   "port_wait_arrivals@BRISC": {
+    "n": 4,
+    "mean_ns": 56.0,
+    "median_ns": 56.0,
+    "max_ns": 56.0,
+    "sum_per_core_ns": 56.0,
+    "last_end_max_ns": 68796279.0
+   },
+   "port_wait_consumers@BRISC": {
+    "n": 4,
+    "mean_ns": 65105261.0,
+    "median_ns": 65116011.0,
+    "max_ns": 66277789.0,
+    "sum_per_core_ns": 65105261.0,
+    "last_end_max_ns": 68796197.0
+   },
+   "reader_kv_barrier@NCRISC": {
+    "n": 636,
+    "mean_ns": 3387.0,
+    "median_ns": 3252.0,
+    "max_ns": 7502.0,
+    "sum_per_core_ns": 20325.0,
+    "last_end_max_ns": 832641.0
+   },
+   "reader_kv_issue@NCRISC": {
+    "n": 636,
+    "mean_ns": 2261.0,
+    "median_ns": 2239.0,
+    "max_ns": 3414.0,
+    "sum_per_core_ns": 13565.0,
+    "last_end_max_ns": 827920.0
+   },
+   "reader_kv_reserve@NCRISC": {
+    "n": 636,
+    "mean_ns": 81632.0,
+    "median_ns": 81828.0,
+    "max_ns": 84755.0,
+    "sum_per_core_ns": 489790.0,
+    "last_end_max_ns": 825656.0
+   },
+   "reader_landing_wait@NCRISC": {
+    "n": 2004,
+    "mean_ns": 168.0,
+    "median_ns": 84.0,
+    "max_ns": 1781.0,
+    "sum_per_core_ns": 3179.0,
+    "last_end_max_ns": 68392370.0
+   },
+   "reader_q_read@NCRISC": {
+    "n": 668,
+    "mean_ns": 12334.0,
+    "median_ns": 3757.0,
+    "max_ns": 126433.0,
+    "sum_per_core_ns": 77729.0,
+    "last_end_max_ns": 67193124.0
+   },
+   "reader_q_reserve@NCRISC": {
+    "n": 668,
+    "mean_ns": 150487.0,
+    "median_ns": 178899.0,
+    "max_ns": 178998.0,
+    "sum_per_core_ns": 948351.0,
+    "last_end_max_ns": 67190821.0
+   },
+   "reader_unit@NCRISC": {
+    "n": 668,
+    "mean_ns": 10705254.0,
+    "median_ns": 11171412.0,
+    "max_ns": 11196707.0,
+    "sum_per_core_ns": 67463301.0,
+    "last_end_max_ns": 68795926.0
+   },
+   "writer_out_wait@BRISC": {
+    "n": 668,
+    "mean_ns": 10723696.0,
+    "median_ns": 11169514.0,
+    "max_ns": 11303362.0,
+    "sum_per_core_ns": 67579516.0,
+    "last_end_max_ns": 68819733.0
+   },
+   "writer_out_write@BRISC": {
+    "n": 668,
+    "mean_ns": 2572.0,
+    "median_ns": 2568.0,
+    "max_ns": 3931.0,
+    "sum_per_core_ns": 16210.0,
+    "last_end_max_ns": 68820339.0
+   }
+  }
+ }
+}

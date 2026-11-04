@@ -67,6 +67,10 @@ CB_ROW_FACTOR = 11
 CB_OUT_BLK = 12
 CB_OUT_ACC = 13
 CB_OUT_TILES = 16
+# Credit-only CB (no payload): the streamed bf16-DEST block posts one token per finished P row (pack thread) so P.V /
+# rowsum (unpack) never read a row before its in-place exp landed. 4 pages x 32 B = 128 B, outside compute_cb_plan.
+CB_P_TOKEN = 14
+P_TOKEN_DEPTH = 4
 # ---- CB indices (port cores) ----
 CB_PORT_CHUNKS = 0
 
@@ -795,6 +799,13 @@ def run_ring_joint_sdpa(
 
         program.cbs = [cb(*e) for e in cb_plan] + [
             ttnn.CBDescriptor(
+                total_size=P_TOKEN_DEPTH * 32,
+                core_ranges=ccrs,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=CB_P_TOKEN, data_format=ttnn.bfloat16, page_size=32)
+                ],
+            ),
+            ttnn.CBDescriptor(
                 total_size=2 * group * run_pages * page_bytes,
                 core_ranges=_crs(port_cores),
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_PORT_CHUNKS, k.dtype, page_bytes)],
@@ -827,7 +838,7 @@ def run_ring_joint_sdpa(
                 CB_OUT_TILES,
             ]
             + unit_ct
-            + [scale_bits]
+            + [scale_bits, CB_P_TOKEN]
         )
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

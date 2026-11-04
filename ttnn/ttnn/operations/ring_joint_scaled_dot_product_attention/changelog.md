@@ -181,3 +181,132 @@
 Summary: 2 ideas measured, 2 graduated, 0 null. The focus is 1.59x faster on every chip (121.3 → 76.5 ms). One measured
 regression is recorded, not carved out: the small joint bf16-DEST shape (+9 %), which is transport-bound and taken up
 in Perf 2.
+
+## Perf 2
+- Date: 2026-11-04. Focus (mandatory, `LOOSE_CASES[0]`, exact config, no proxy): Wan2.2 Q/K/V (1, 40, 8192, 128) per
+  device, bf16 / bf16, fp32_dest_acc_en=False, HiFi2, math_approx_mode=False, 1x4 ring, cluster_axis 1, 2 links,
+  logical_n 32760. roofline 18076.5 us, target 24101.9 us. Experiment cap 2.
+
+### Measured breakdown (start of round = Perf 1 result, one fresh-cache call, every chip)
+- Op span 76.48 ms on all 4 chips (4.2x roofline). Core end quantiles [74.54, 74.56, 74.62, 76.45, 76.48] ms.
+- Per key block (TRISC_1, sampled zones, ns): sub_exp 34 324 | rescale 17 055 | rowmax 15 151 | PV 13 377 |
+  QK 13 310 | rowsum 3 195 | copy_max 712 | k/v waits 15. Sum 97.1 us × 128 blocks = 12.42 ms = the `compute_unit`
+  median, so the zones cover the whole unit. These phases run serially on the math thread, so the zone times add up.
+- The reader waits in `kv cb_reserve_back` for 92 of the 97 us of each block, and the writer is idle, so the op is
+  compute-bound. Perf 1's ablation (exp payload stubbed: op −49 %) still holds for the exp share.
+- Cross-device part on the focus:
+  - TRANSPORT: `port_send` takes 3.5 ms (max 4.65 ms) and is hidden behind compute.
+  - OVERLAP: landing waits average 165 ns, so the exposed exchange is ≈ 0.
+  - No cross-device idea had measured headroom on the focus. The local compute ranks first even under the
+    "cross-device first" rule.
+- Roofline gate: QK + PV ≈ 26.7 us per block, at the HiFi2 rate (≈ 20 ms over the op, close to the 18 ms roofline).
+  The other ≈ 70 us per block is all headroom.
+- Ranked bottlenecks:
+  1. sub_exp (35 %). The SFPU exp is already at its SFPLOADMACRO floor in isolation, so only running it concurrently
+     with other work can hide it.
+  2. rescale (18 %).
+  3. rowmax (16 %).
+
+### Portfolio (cap 2: both tested)
+1. **[tested] exp_matmul_overlap** (local compute, overlap across TRISCs). Stream the score block through the phases
+   one q tile-row at a time and issue the exp from the PACK thread. The exp of row i then runs while the MATH thread
+   does the FPU work of other rows: QK of row i+2, the max of row i+1, and the rowsum and P·V of row i−1.
+2. **[tested] pv_rescale_fusion** (local compute, fusion). Fold O_acc = a·O_acc + P·V and the l update into the P·V
+   matmul's DEST: the matmul accumulates, an ELWMUL of a·O_acc goes on top, and the result packs straight to O_acc.
+   This drops `cb_out_blk` and the 64-tile add pass.
+3. [not tested, next round] Column-only exp for a (16 full-tile exps where only column 0 is used), and alternating
+   m buffers instead of `copy_max`.
+4. [not tested] Larger Sk (Sq 8 × Sk 16) to amortise the per-block rescale. With `cb_out_blk` removed, Sq 16 × Sk 16
+   would need ≈ 1.57 MB of CBs against the 1.3 MB budget.
+5. Cross-device (TRANSPORT / OVERLAP): none on the focus, because the exposed exchange is ≈ 0. The Perf 1
+   transport-bound small joint bf16 shape (+9 %) was not re-targeted. Its guard below now measures flat against
+   Perf 1, and the focus had far larger measured headroom.
+
+### Per-idea verdicts
+- **exp_matmul_overlap: WIN.** Measured in an op copy on the 4-chip mesh, focus: 76.03 → **52.36 ms per chip**;
+  per key block 96.53 → 66.05 us.
+  - Bit-identical to the op on all 17 cases tried (focus, padded, linear, bf8 K/V, bf8 Q+K/V, joint L128 / L512,
+    ragged q, dh 64 / 96 / 256, fp32, minimal). The pack-thread exp is ScaledExp's exact instruction stream.
+  - Option menu (op ms / us per block, all bit-identical unless noted):
+
+    | option | op ms | us/block | note |
+    |---|---|---|---|
+    | streamed rows, exp still on MATH | 68.72 | 87.23 | the reorganisation alone |
+    | + exp on PACK, one stall per tile | 55.35 | 69.94 | |
+    | + one SFPU start per 8-tile section | 54.90 | 69.35 | |
+    | + blocked pack | 53.97 | 68.17 | |
+    | **+ each row's exp split across two FPU sections** | **52.36** | **66.05** | graduated |
+    | no SFPU stall | — | — | INCORRECT (pcc 0.02) |
+    | stock reduce_tile MAX with m_acc preloaded | — | — | INCORRECT (inf) |
+    | `TRISC_CFG` group stall | same as grp | | correct on 3 cases, but its ordering is not guaranteed: rejected |
+
+  - No-exp ablation floor: 60.22 us per block, so ≈ 5.8 us of exp is still exposed.
+  - Domain: every bf16-DEST regime. Compute-bound shapes 0.69–0.80x per block (bf8 K/V 0.70x, dh 64 0.69x, joint
+    L512 0.70x, dh 256 0.80x). Small, transfer-bound shapes are flat.
+  - Exception (correctness / feasibility): fp32 DEST, for two reasons. The block max-row reduce takes bf16
+    operands only. The fp32 exp is a different (stock) algorithm.
+- **pv_rescale_fusion: WIN in isolation, NOT graduated (conflict).**
+  - Measured in an op copy on the mesh, focus: 76.48 → 68.82 ms (−10 %). Single core: 97.87 → 88.50 us per block
+    (rescale + PV + rowsum 34.4 → 24.8 us).
+  - Precision: rel-RMS ×1.000 / ×1.008 (normal / large logits) on the 128-block walk, but ×1.026 on 32-block walks.
+    fp32 DEST is a measured precision regression (+17–28 % rel-RMS).
+  - Domain swept (bf16 DEST): bf8 K/V −8.8 %, dh 64 −12.9 %, dh 96 −7.7 %, dh 256 −12.4 %, MLA −15.5 %, small
+    −2.6 %, ragged −9.2 %, tails −4.7 / −8.4 %, joint −9.1 %.
+  - Why it was not graduated: it moves the P·V matmul and the `a` exp (a MATH-thread SFPU op). In the graduated
+    streamed block, P·V runs per row inside the S2 section, and a MATH-thread SFPU op inside the streamed region
+    races the pack-thread exp's LREG / LOADMACRO state. The two cannot both graduate as measured, and the overlap's
+    win is 3x larger.
+  - Next round: re-target it as an S2-section fusion, O(i−1) = a(i−1)·O_acc + P(i−1)·V per row, with `a` computed
+    on the pack thread. The rescale (17.06 us of the now 66 us block, 26 %) is now the top phase outside the stream.
+
+### Graduated: exp_matmul_overlap (bf16 DEST, every shape; fp32 DEST carve-out)
+- `kernels/ring_joint_scaled_dot_product_attention_compute.cpp`: `if constexpr (!DST_ACCUM_MODE) stream_block(...)`.
+  - It replaces the bf16-DEST QK, mask, rowmax + BinaryMax, sub_exp, rowsum and P·V phases. The old helper sequence
+    is deleted for bf16 DEST.
+  - The fp32-DEST body keeps the helper phases. That is the carve-out above, earned by correctness / feasibility,
+    not by a measurement.
+  - The rescale, `copy_max` and finalize are unchanged, and shared by both paths.
+  - The bench's variant switches (`EMO_*`) were not graduated. The winning option is the only path; the rejected
+    options are recorded above.
+- `kernels/ring_joint_sdpa_scaled_exp.hpp`: the exp namespace now compiles for the pack thread too. Added the
+  grouped `tiles<cond>(n)` (one SFPU start and one RWC reset per DEST section) and `PackThreadScaledExp`.
+- Descriptor: new credit-only `CB_P_TOKEN = 14` (4 × 32 B), compute compile-time arg 27. `compute_cb_plan` and the
+  L1 fit are unchanged. `l1_ledger.md` gained a row.
+- Instrumentation: `compute_stream` (one sampled zone per streamed block; its steps interleave across the TRISCs,
+  so per-phase zones no longer measure separable work). The fp32 body keeps `compute_k_wait / qk / mask / rowmax /
+  sub_exp / rowsum / v_wait / pv`. `compute_rescale / copy_max / unit / finalize` are unchanged. Max 122 markers per
+  RISC.
+- **Whole op, focus: 76.48 → 52.69 ms on every chip** (52695.1 / 52692.6 / 52694.5 / 52693.3 us), **1.45x**.
+  - Per block: compute_stream 48.6 us + rescale 17.06 us + copy ≈ 0.7 us ≈ 66.4 us.
+  - Core-end quantiles [51.04, 51.06, 51.12, 52.67, 52.70] ms. Landing waits 175–204 ns mean. `port_send` still
+    hidden (max 5.9 ms).
+  - Now 2.9x roofline. The 24.1 ms target is 2.2x away.
+  - Since Phase 0: 121.3 → 52.7 ms (2.30x).
+
+### Guard set (same session, A/B; 1 compile call + 8 measured calls each; per-call slowest / fastest chip, median, us)
+| case (1x4 ring unless noted) | base (Perf 1 op) | graduated |
+|---|---|---|
+| (1,6,1024,128) + joint L128 replicated, bf16 DEST | 1018.0 / 788 (bimodal 744–947) | 1016.7 / 847 (tight 737–860); means 834 vs 835: flat |
+| same, fp32 DEST (unchanged code) | 954.7 / 900 | 972.9 / 896 (within the ±40 us noise) |
+| (1,10,512,128) bf16 DEST | 686.1 / 610 | 682.4 / 612 (flat) |
+| (1,8,1024,128) fp32 DEST, Linear (unchanged code) | 1542.3 / 1098 | 1518.0 / 1096 (flat) |
+| (1,2,128,64) bf16 DEST, exact | 63.7 / 26.8 | 63.7 / 24.8 (fastest −7 %) |
+- No material regression. One base run of the fp32 joint case failed once and passed on rerun (base code, an infra
+  transient). The graduated runs all passed.
+- Golden: `scripts/run_safe_pytest.sh --run-all eval/golden_tests/ring_joint_scaled_dot_product_attention/`
+  **391 passed / 0 failed** (1424 xfailed, 5984 skipped), the same counts as Perf 1. The unit dir is 91/91.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `eltwise_chain(BinaryFpu Sub bcast-col → ScaledExp → PackTile)` | capability | No chain element runs an SFPU op on the PACK thread (between `tile_regs_wait` and the pack of the same DEST half) while MATH fills the other half: every chain op is issued from TRISC1. The exp also needs one `STALLWAIT(SFPU, MATH)` + RWC reset per DEST section, which has no API. | 96 530 per key block (whole helper sequence, bench) | 66 050 | `ring_joint_scaled_dot_product_attention_compute.cpp:213` (`exp_chunk`), `ring_joint_sdpa_scaled_exp.hpp:290` |
+| `matmul_block` (Q·K^T and P·V) | capability | The helper owns a whole phase over a whole block with one output CB. The overlap needs per-row sub-blocks interleaved with other ops in one DEST section, out-of-order / blocked packs into a held-`wr_ptr` score block, and P·V co-resident in DEST with the max and rowsum results, packed to three different CBs. | (same row) | (same row) | `…_compute.cpp:185` (`qk_chunk`), `:236` (`s2`) |
+| `reduce<MAX, REDUCE_ROW>` + `binary_sfpu<BinaryMax>` | capability | The running max has to fold into the row reduce. BinaryMax is a MATH-thread SFPU op and would race the pack-thread exp's LREG / LOADMACRO state, so m_acc is preloaded (within-face transposed) into the GMPOOL accumulator. The helper has neither a DEST-seeded accumulator nor the one-MOP-per-row `reduce_block_max_row`. | (same row) | (same row) | `…_compute.cpp:236–250` |
+| `reduce<SUM, REDUCE_ROW>` | capability | Has to share a DEST section with the max and P·V of other rows (it acquires its own DEST per row and has a single output CB). | (same row) | (same row) | `…_compute.cpp:236` (`s2`) |
+
+The helper ns / raw ns pair is one measured sequence: all four bypasses replace a single helper sequence together.
+The bypassed helpers are still used by the fp32-DEST body, the rescale and the finalize.
+
+Summary: 2 ideas measured, 1 graduated (exp_matmul_overlap, bf16 DEST everywhere). The other (pv_rescale_fusion) is a
+WIN in isolation, not graduated because it conflicts with the streamed P·V; it is recorded as the next target. 0 null.
+The focus is **1.45x faster on every chip (76.48 → 52.69 ms)**, with no guard regression and the golden suite green.
