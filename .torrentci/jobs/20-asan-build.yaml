@@ -142,3 +142,8 @@ jobs:
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
             - ls -l ttnn-import.tar.zst
             - .torrentci-diag/mark.sh steps-end
+            # TEMPORARY prototype (torrentci#2377): the cache archive refuses
+            # links, so replace each link in .cpmcache with a copy of its target.
+            - find .cpmcache -type l -printf '%p -> %l\n'
+            - .torrentci-diag/derefer-links.sh .cpmcache
+            - .torrentci-diag/mark.sh cache-ready
