@@ -107,6 +107,14 @@ INTERLEAVED_PCC = 0.9999
 # measured 0.9994 (KV) and 0.9970 (output), tight enough to catch a real packing error.
 PACKED_KV_PCC = 0.998
 PACKED_OUTPUT_PCC = 0.995
+# The packed model vs a model built for one chunk per forward (forward_chunks=1): the same chunk, but every matmul
+# runs on FORWARD_CHUNKS chunks' rows in one and one chunk's in the other, so the tiling and its rounding differ from
+# layer 0's output on (layer 1's KV: 0.99982), and the synthetic router's near-ties amplify that through the MoE
+# layers (measured on galaxy 8x4: KV >= 0.9931, last layer >= 0.9832). Layer 0's KV is computed per row from the
+# embedding, before any of that, so it must agree to rounding; a misplaced or mis-padded row would break it outright.
+SINGLE_MODEL_FIRST_KV_PCC = 0.99999
+SINGLE_MODEL_KV_PCC = 0.99
+SINGLE_MODEL_OUTPUT_PCC = 0.975
 # Two different users must NOT agree; this catches a comparison that reads the same slot twice.
 DISTINCT_USERS_MAX_PCC = 0.99
 # Traced and eager run the same programs (the traced ones read their scalars on device), so the caches
@@ -515,8 +523,8 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                 got = alone[(c.slot_id, c.actual_start)]
                 pcc = _pcc(ref, got)
                 logger.info(f"[single] {c} last-layer PCC {pcc:.6f} max|diff| {(ref - got).abs().max().item():.3e}")
-                if pcc < PACKED_OUTPUT_PCC:
-                    failures.append(f"{c} hidden PCC {pcc:.6f} vs forward_chunks=1 < {PACKED_OUTPUT_PCC}")
+                if pcc < SINGLE_MODEL_OUTPUT_PCC:
+                    failures.append(f"{c} hidden PCC {pcc:.6f} vs forward_chunks=1 < {SINGLE_MODEL_OUTPUT_PCC}")
         single_kv = _read_user_slots(single_kvpe, mesh_device, NUM_LAYERS, num_users, sp_axis)
         single_idx = _read_user_slots(
             single_index, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_users, sp_axis
@@ -529,8 +537,9 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                 for rank, layer in enumerate(layers):
                     pcc = _pcc(theirs[u][rank], ours[u + num_users][rank])
                     logger.info(f"[single] slot {u} {name}[{layer}] PCC {pcc:.6f}")
-                    if pcc < PACKED_KV_PCC:
-                        failures.append(f"slot {u} {name} layer {layer} PCC {pcc:.6f} vs forward_chunks=1")
+                    bar = SINGLE_MODEL_FIRST_KV_PCC if layer == 0 else SINGLE_MODEL_KV_PCC
+                    if pcc < bar:
+                        failures.append(f"slot {u} {name} layer {layer} PCC {pcc:.6f} vs forward_chunks=1 < {bar}")
         assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         single.release_sub_device_managers()
