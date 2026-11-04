@@ -10,13 +10,52 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_TERMS, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+
+
+def _bfp8_lofi_exact(w):
+    """[K, N] -> the nearest values a bfloat8_b block of 16 along N holds that LoFi (SrcA: hidden + 4 mantissa bits)
+    also keeps whole: per value step = max(2^(block exponent - 6), 2^(own exponent - 4)). The block exponent is that of
+    the rounded block's maximum (the device conversion's shared exponent), so a maximum that rounds up into the next
+    binade re-rounds the block on the coarser grid."""
+    b = w.float().reshape(w.shape[0], -1, 16)
+
+    def log2f(x):
+        return torch.floor(torch.log2(x.abs().clamp_min(1e-30)))
+
+    emax = log2f(b.abs().amax(-1, keepdim=True))
+    for _ in range(3):
+        fine = torch.pow(2.0, emax - 6).expand_as(b)
+        e = log2f(b)
+        step = torch.maximum(fine, torch.pow(2.0, e - 4))
+        q = torch.round(b / step) * step
+        e2 = log2f(q)  # rounding up can carry into the next binade: its LoFi step is coarser
+        step = torch.where(e2 > e, torch.maximum(fine, torch.pow(2.0, e2 - 4)), step)
+        q = torch.round(b / step) * step
+        emax_q = log2f(q.abs().amax(-1, keepdim=True))
+        if not bool((emax_q > emax).any()):
+            break
+        emax = torch.maximum(emax, emax_q)
+    return q.reshape(w.shape)
+
+
+def router_weight_terms(w, terms):
+    """[K, N] router weight -> [terms * K, N]: w ~ q1 + q2 + ..., each term on the LoFi-exact bfloat8_b grid
+    (q1 = r(w), q2 = r(w - q1), ...), for the decode router stream multiplying each term by the same activation."""
+    out, rest = [], w.float()
+    for _ in range(terms):
+        q = _bfp8_lofi_exact(rest)
+        out.append(q)
+        rest = rest - q
+    return torch.cat(out, dim=0)
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -64,6 +103,10 @@ class TopKRouter:
         self.hidden_dim = hf_config.hidden_size
         self.tensor_cache_path = tensor_cache_path
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
+        # TEMP experiment GPT_OSS_DENSE_ROUNDED_DECODE (utils/lazy_state_dict.py): the decode stream copy rounded
+        self._decode_weight = (
+            state_dict["weight_decode"].transpose(0, 1) if state_dict and "weight_decode" in state_dict else None
+        )
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
         self.weight = ttnn.as_tensor(
             torch_weight,
@@ -98,7 +141,13 @@ class TopKRouter:
 
         if indexed_decode:
             assert ccl_manager is not None, "fused decode routing shares its output buffers through the CCL manager"
-            self._init_indexed_decode(mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager)
+            self._init_indexed_decode(
+                mesh_device,
+                torch_weight if self._decode_weight is None else self._decode_weight,
+                torch_bias,
+                tensor_cache_path,
+                ccl_manager,
+            )
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
@@ -121,14 +170,19 @@ class TopKRouter:
         self.ccl_manager = ccl_manager
         banks = mesh_device.dram_grid_size().x
         layout = None
+        self.x_repeat = ROUTER_DECODE_TERMS
         if torch_weight is not None:
-            layout = stream_linear_layout(torch_weight, torch_bias.reshape(-1), banks)
+            w = torch_weight if self.x_repeat == 1 else router_weight_terms(torch_weight, self.x_repeat)
+            layout = stream_linear_layout(w, torch_bias.reshape(-1), banks)
+        tag = "" if self.x_repeat == 1 else f"_t{self.x_repeat}"
+        if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE"):
+            tag += "_drnd"
         self.weight_stream = as_stream_tensor(
             mesh_device,
             [layout] * mesh_device.shape[1] if layout is not None else None,
-            linear_stream_rows(mesh_device, self.hidden_dim, self.num_experts),
+            linear_stream_rows(mesh_device, self.hidden_dim * self.x_repeat, self.num_experts),
             ROUTER_DECODE_WEIGHT_DTYPE,
-            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}"),
+            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}{tag}"),
         )
 
     def _init_fused_op(self, device, B):
@@ -403,14 +457,22 @@ class TopKRouter:
         entries (shared by every layer; not to be deallocated)."""
         router = self.ccl_manager.get_decode_linear_stream(
             "router",
-            self.hidden_dim // ttnn.TILE_SIZE,
+            self.hidden_dim // ttnn.TILE_SIZE * self.x_repeat,
             self.num_experts,
             ROUTER_DECODE_WEIGHT_DTYPE,
             readers=1,
             out_mode=4,
             out_page_bytes=64,
             heads=(self.top_k, self.num_experts),
+            x_repeat=self.x_repeat,
         )
+        if DECODE_ROUTER_FAST_TOPK:  # TEMP experiment (fused_decode/config.py): one-pass top-4 in the writer
+            return router(
+                hidden_states,
+                self.weight_stream,
+                self.ccl_manager.get_decode_router_out(),
+                extra_defines=[("ROUTER_FAST_TOPK", "1")],
+            )
         return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out())
 
     def _fused_call(self, hidden_states, use_throughput_experts):

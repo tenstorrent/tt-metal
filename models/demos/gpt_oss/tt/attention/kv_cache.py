@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -33,6 +35,8 @@ def init_kv_cache(
     Returns:
         List [k_cache, v_cache]
     """
+    if os.environ.get("GPT_OSS_KV_BF16") == "1":  # TEMP experiment knob
+        cache_dtype = ttnn.bfloat16
     # Determine cache shape based on paged vs non-paged attention
     kv_cache_repeats = mesh_device.shape[0] if config.users_row_sharded else 1
     if paged_attention_config:

@@ -6,6 +6,7 @@ import math
 import ttnn
 
 from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
+from ..fused_decode.config import FULL_FIDELITY
 from .weights import AttentionWeights
 
 
@@ -118,7 +119,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
     """
     w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
     # The prefill attention casts the heads to bf8 before the concat (already bf8 here); the caller owns the input.
-    cast = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
+    cast = tensor if FULL_FIDELITY or tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
     # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
     out = ttnn.linear(cast, w, bias=b, dtype=activation_dtype, program_config=program_config)
     if cast is not tensor:
@@ -242,7 +243,8 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     Nt_per_core = N_tiles // mm_core_grid.x
     Mt_per_core = max(1, math.ceil(M_tiles / grid_y))
 
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    if not FULL_FIDELITY:
+        tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
 
     mm_config = ttnn.MinimalMatmulConfig(
         M_block_size=m_block,

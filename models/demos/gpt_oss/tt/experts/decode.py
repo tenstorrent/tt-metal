@@ -6,6 +6,7 @@
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
+from ..fused_decode.config import FULL_FIDELITY
 from .config import ExpertConfig, ProgramConfig
 from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
 from .weights import ExpertWeights
@@ -37,7 +38,7 @@ def decode_forward(
     Returns:
         Expert output [1, batch, 1, hidden_size]
     """
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b
     batch_dim = 1
     seq_dim = 2
     batch_size = hidden_states.shape[batch_dim]
@@ -512,7 +513,7 @@ def _dense_down(act, w, weights, plan, ck):
     return out
 
 
-def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights, stream, send=None):
+def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights, stream, send=None, gain=None):
     """Decode MoE for one token over its top-k experts with the DRAM-streaming ops of fused_decode/stream.py.
 
     hidden_states: the flat BF16 norm output of the layer boundary (fused_decode/boundary.py, one token).
@@ -523,5 +524,7 @@ def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights
     Returns that partial sum (the layer's next boundary all-reduces it and adds it to the residual); send: fuse the
     boundary's fabric send into the down op (ccl.CCLManager.decode_boundary_send).
     """
-    act = stream["gate_up"](hidden_states, expert_indices, expert_weights, weights.gate_up_stream, stream["act"])
+    act = stream["gate_up"](
+        hidden_states, expert_indices, expert_weights, weights.gate_up_stream, stream["act"], gain=gain
+    )
     return stream["down"](act, expert_indices, expert_weights, weights.down_stream, stream["partial"], send=send)

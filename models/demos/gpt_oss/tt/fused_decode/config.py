@@ -14,6 +14,32 @@ import os
 
 import ttnn
 
+# TEMP experiment: GPT_OSS_FULL_FIDELITY=1 turns the fused decode path off (decode runs the ttnn-op path) and runs every
+# ttnn.matmul / linear / sparse_matmul at HiFi4 with FP32 accumulation (bf8 experts, bf16 expert outputs and dense
+# weights set where those are chosen). For measuring the accuracy ceiling only.
+FULL_FIDELITY = os.environ.get("GPT_OSS_FULL_FIDELITY", "0") == "1"
+if FULL_FIDELITY and not getattr(ttnn, "_gpt_oss_full_fidelity", False):
+    _FF_ACC = os.environ.get("GPT_OSS_FULL_FIDELITY_FP32", "1") == "1"
+    _FF_ACC_ROWS = int(os.environ.get("GPT_OSS_FULL_FIDELITY_FP32_ROWS", "32"))
+
+    def _ff_wrap(fn):
+        def wrapped(*args, **kwargs):
+            # FP32 accumulation only for decode-sized inputs (<= 32 rows): long-prefill program configs overflow L1
+            rows = args[0].shape[-2] if args and hasattr(args[0], "shape") and len(args[0].shape) >= 2 else 0
+            kwargs["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("GPT_OSS_FF_FIDELITY", "HiFi4")),
+                math_approx_mode=False,
+                fp32_dest_acc_en=_FF_ACC and rows <= _FF_ACC_ROWS,
+                packer_l1_acc=False,
+            )
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    for _name in ("matmul", "linear", "sparse_matmul"):
+        setattr(ttnn, _name, _ff_wrap(getattr(ttnn, _name)))
+    ttnn._gpt_oss_full_fidelity = True
+
 # Smallest compute grid the fused decode layout was validated on (residual / all-reduce 10x3, SDPA 8x8, the stream ops'
 # cores next to the 8 DRAM banks of the 11x10 Blackhole grid).
 FUSED_DECODE_MIN_GRID = (10, 9)
@@ -122,7 +148,7 @@ def dense_moe_decode_supported(mesh_device, mesh_config, hf_config, use_throughp
 
 def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device):
     """Whether the decoder layers of this model use the fused decode path (see fused_decode_layout_supported)."""
-    if mesh_config is None:
+    if mesh_config is None or FULL_FIDELITY:
         return False
     grid = mesh_device.compute_with_storage_grid_size()
     return fused_decode_layout_supported(
@@ -146,16 +172,129 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
 QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+# TEMP experiment: GPT_OSS_ROUTER_TERMS=2 streams the decode router weight as two bfloat8_b terms that LoFi keeps whole
+# (w ~ q1 + q2, topk.py router_weight_terms) against the activation read twice (LinearStream x_repeat): a manual HiFi2
+# for the router's 32 columns.
+ROUTER_DECODE_TERMS = int(os.environ.get("GPT_OSS_ROUTER_TERMS", "1"))
+# TEMP experiment (layer-PCC campaign phase 4): GPT_OSS_MOE_DECODE_GAIN multiplies the decode MoE's SwiGLU output in
+# ExpertGateUpStream (folded into its 1/alpha constant: no extra op). LoFi keeps 1 + 6 mantissa bits of the activation
+# operand by truncation, so the gate|up and down matmuls each come out slightly small; on device the expert path is a
+# uniform x0.985 (captured buffers, 2 layers x 8 steps). Default 1.0: unchanged.
+MOE_DECODE_GAIN = float(os.environ.get("GPT_OSS_MOE_DECODE_GAIN", "1.0"))
+# GPT_OSS_MOE_DECODE_GAIN_LAYERS: comma list of one gain per layer (overrides the global gain; each distinct value is
+# its own gate|up program, still no extra op).
+MOE_DECODE_GAIN_LAYERS = [
+    float(v) for v in os.environ.get("GPT_OSS_MOE_DECODE_GAIN_LAYERS", "").split(",") if v.strip()
+]
+
+
+def moe_decode_gain(layer_idx):
+    """The decode MoE gain of a layer (GPT_OSS_MOE_DECODE_GAIN_LAYERS, else GPT_OSS_MOE_DECODE_GAIN)."""
+    if MOE_DECODE_GAIN_LAYERS and layer_idx is not None:
+        assert int(layer_idx) < len(MOE_DECODE_GAIN_LAYERS), "GPT_OSS_MOE_DECODE_GAIN_LAYERS needs a gain per layer"
+        return MOE_DECODE_GAIN_LAYERS[int(layer_idx)]
+    return MOE_DECODE_GAIN
+
+
 # Routed expert weights of the decode MoE streams (ExpertGateUpStream / ExpertDownStream): bfloat4_b, or bfloat8_b for
 # the layers in GPT_OSS_ROUTED_DECODE_BF8_LAYERS ("all", "" or a comma list of layer ids; default ""). bf8 holds the
 # MXFP4 checkpoint values exactly, bf4 rounds ~20% of them (12.8% relative error on layer 10's down weights) and
 # flattens the next-token distribution; a bf8 layer streams 1.9x the expert bytes.
 ROUTED_DECODE_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_DECODE_BF8_LAYERS"
+# TEMP experiment: GPT_OSS_DECODE_EXPERTS_SPLIT holds the routed experts' MXFP4 weights exactly in the decode streams,
+# as a BFP4 part plus a BFP2 part read by the compressed custom_mm (fused_decode/mxfp4_split.py). Overrides the GPTQ /
+# bf8 expert switches for the streams it covers. Spec: "1" / "all" (gate|up and down), "gate_up" or "down", optionally
+# ":<comma list of layer ids>" (default every layer); "" / "0" = off.
+DECODE_EXPERTS_SPLIT_SPEC = os.environ.get("GPT_OSS_DECODE_EXPERTS_SPLIT", "0").strip()
+DECODE_EXPERTS_SPLIT = DECODE_EXPERTS_SPLIT_SPEC not in ("", "0")
+
+
+# GPT_OSS_DECODE_SPLIT_RANKS=k or a comma list of k per layer (with GPT_OSS_DECODE_EXPERTS_SPLIT): only each token's top-k
+# routed experts read the exact split parts; the others read a BFP4 rounding (along K) stored after them. Unset: every
+# routed expert is exact.
+_SPLIT_RANKS_SPEC = os.environ.get("GPT_OSS_DECODE_SPLIT_RANKS", "").strip()
+DECODE_SPLIT_RANKS = [int(v) for v in _SPLIT_RANKS_SPEC.split(",")] if _SPLIT_RANKS_SPEC else None
+
+
+# GPT_OSS_DECODE_SPLIT_COMPACT=1: the split down stream's BFP2 call reads a compact copy of the exact experts' activations
+# (no bias multiplier tiles, so no zero tiles and no bfp2 <-> zero unpacker stalls).
+DECODE_SPLIT_COMPACT = os.environ.get("GPT_OSS_DECODE_SPLIT_COMPACT", "0") == "1"
+
+
+# GPT_OSS_DECODE_SPLIT_REST_PKG=1 (with GPT_OSS_DECODE_SPLIT_RANKS and GPT_OSS_DECODE_SPLIT_COMPACT): the inexact routed
+# ranks read the package's GPTQ bfloat4_b tiles (GPT_OSS_DECODE_BF4_ROUNDED, 16-value groups along N, normal tile
+# orientation) instead of a K-grouped rounding: the same bytes, the package's accuracy for those experts.
+DECODE_SPLIT_REST_PKG = os.environ.get("GPT_OSS_DECODE_SPLIT_REST_PKG", "0") == "1"
+
+
+# GPT_OSS_DECODE_SPLIT_ROUND_ONLY=1: a split stream with no exact rank (split_r0) stores only its rounded BFP4 parts,
+# columns contiguous like the BFP4 streams. Its [BFP4][BFP2][rounded BFP4] segments made every read skip the two exact
+# parts it never reads (2.3x the bytes per column apart): the K-GPTQ base (k0) ran 0.7% slower than the package.
+DECODE_SPLIT_ROUND_ONLY = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_ONLY", "0") == "1"
+
+
+# GPT_OSS_DECODE_SPLIT_NATIVE=1 (with GPT_OSS_DECODE_SPLIT_ROUND_ONLY): a round-only rank-0 stream runs as a plain
+# bfloat4_b stream (the package's reader and custom_mm) of transposed tiles: its rounded part is already the package
+# column layout (K tiles + a bias tile, 576-byte BFP4 tiles), only transposed with the bias terms at K 0 and 16.
+DECODE_SPLIT_NATIVE = os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE", "0") == "1"
+
+
+# GPT_OSS_DECODE_SPLIT_SEPARATE=1: a split stream with 0 < k exact ranks stores, per DRAM bank, every segment's exact
+# parts ([BFP4][BFP2]) first and then every segment's rounded part, so the exact ranks and the rounded ranks both read
+# contiguous columns (interleaved, a rounded rank's column reads skip the exact parts).
+DECODE_SPLIT_SEPARATE = os.environ.get("GPT_OSS_DECODE_SPLIT_SEPARATE", "0") == "1"
+
+
+def decode_split_ranks(layer_idx):
+    """The exact routed ranks k of a layer (GPT_OSS_DECODE_SPLIT_RANKS), or None (every routed expert exact)."""
+    if DECODE_SPLIT_RANKS is None:
+        return None
+    if len(DECODE_SPLIT_RANKS) == 1:
+        return DECODE_SPLIT_RANKS[0]
+    assert layer_idx is not None, "a per-layer GPT_OSS_DECODE_SPLIT_RANKS needs the layer index"
+    return DECODE_SPLIT_RANKS[int(layer_idx)]
+
+
+# GPT_OSS_DECODE_SPLIT_RANKS_GATE_UP / _DOWN: the exact ranks of one projection's split stream instead of
+# GPT_OSS_DECODE_SPLIT_RANKS (e.g. gate|up 0 = every routed expert reads the rounded part, down 1 = the top-1 is exact).
+def decode_split_dtype(layer_idx=None, stream=None):
+    """The decode stream weight dtype of a layer's split stream ("gate_up" / "down"): "split" or "split_r<k>"
+    (fused_decode/mxfp4_split.py)."""
+    k = decode_split_ranks(layer_idx)
+    if k is not None and stream is not None:
+        override = os.environ.get(f"GPT_OSS_DECODE_SPLIT_RANKS_{stream.upper()}", "").strip()
+        if override:
+            k = int(override)
+    return "split" if k is None else f"split_r{k}"
+
+
+def decode_experts_split(layer_idx):
+    """The decode streams ("gate_up", "down") of a layer held exactly by GPT_OSS_DECODE_EXPERTS_SPLIT."""
+    if not DECODE_EXPERTS_SPLIT:
+        return frozenset()
+    which, _, layers = DECODE_EXPERTS_SPLIT_SPEC.partition(":")
+    streams = {"1": ("gate_up", "down"), "all": ("gate_up", "down"), "gate_up": ("gate_up",), "down": ("down",)}[which]
+    if layers and (layer_idx is None or int(layer_idx) not in {int(x) for x in layers.split(",")}):
+        return frozenset()
+    return frozenset(streams)
 
 
 def routed_decode_bf8_layers():
     """Raw GPT_OSS_ROUTED_DECODE_BF8_LAYERS spec (recorded in the weight-cache marker)."""
     return os.getenv(ROUTED_DECODE_BF8_LAYERS_ENV, "").strip()
+
+
+# TEMP experiment: GPT_OSS_DECODE_DOWN_BF8_DIR=<dir of layer_<L>.pt> streams the down projection of the bfloat4_b layers
+# in bfloat8_b with that directory's exact MXFP4 down weights (rows in the decode gate|up's channel order), while gate|up
+# stays bfloat4_b: down is a third of the expert bytes, so about a third of the all-bf8 decode cost.
+def decode_down_bf8_dir():
+    return os.getenv("GPT_OSS_DECODE_DOWN_BF8_DIR", "").strip()
+
+
+# TEMP experiment: GPT_OSS_DECODE_GATEUP_BF8_DIR=<dir of layer_<L>.pt>: the same for gate|up (exact MXFP4 gate_up_proj and
+# its bias, columns in the decode channel order), streamed in bfloat8_b; two thirds of the expert bytes.
+def decode_gateup_bf8_dir():
+    return os.getenv("GPT_OSS_DECODE_GATEUP_BF8_DIR", "").strip()
 
 
 def routed_decode_weights_dtype(layer_idx):
@@ -178,6 +317,11 @@ DOWN_STREAM_READERS = 2
 # replacing the fused-QK RoPE op and the fused K/V cache update (2 ops per layer); its weights are then stored in the
 # K / V-first slot order (stream.py qkv_column_order). GPT_OSS_QKV_FUSED_ROPE_KV=0: the separate ops.
 QKV_FUSED_ROPE_KV = os.environ.get("GPT_OSS_QKV_FUSED_ROPE_KV", "1") == "1"
+# TEMP experiment (GPT_OSS_QKV_ROPE_EXACT=1): the fused QKV kernel loads y / cos / sin into DST exactly instead of
+# through LoFi custom_mm loads, and computes y @ T as y_hi @ T + y_lo @ T (kernels/stream_qkv_rope_compute.cpp).
+QKV_ROPE_EXACT = os.environ.get("GPT_OSS_QKV_ROPE_EXACT") == "1"
+# GPT_OSS_QKV_ROPE_EXACT=2: the cheaper variant (exact y / cos / sin loads, y @ T still through LoFi; QKV_ROPE_EXACT_LITE)
+QKV_ROPE_EXACT_LITE = os.environ.get("GPT_OSS_QKV_ROPE_EXACT") == "2"
 
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2
@@ -205,6 +349,25 @@ SDPA_DECODE_K_CHUNK_FULL = 256
 # layer (182 -> 267 GB/s of KV), at 200 positions 11.9 -> 13.0 us (measured standalone, per-device gpt-oss-20b shapes).
 SDPA_DECODE_B1_GRID = (11, 10)
 SDPA_DECODE_B1_CORES_PER_HEAD = 32
+
+
+# TEMP experiment (GPT_OSS_DECODE_BOUNDARY_EARLY_SUM=1; unset = unchanged): the one-row boundary reader
+# (kernels/boundary_reader.cpp BND_EARLY_SUM) publishes the residual and the all-reduce slots before the RMSNorm inputs,
+# so the gamma DRAM read and the reduce-scaler fill overlap the slot sum instead of gating it (1.4-1.5 us of the
+# 7.2 us router op and of the QKV op's boundary in a device profile, where the slots had long arrived). Same CB bytes:
+# bit-identical.
+DECODE_BOUNDARY_EARLY_SUM = os.environ.get("GPT_OSS_DECODE_BOUNDARY_EARLY_SUM") == "1"
+# TEMP experiment (GPT_OSS_DECODE_ROUTER_FAST_TOPK=1; unset = unchanged): the one-row decode router's top-4 + softmax
+# (kernels/router_topk.hpp topk_softmax_fast, in the router LinearStream writer) in one pass of register insertions over
+# word reads of the logits instead of 4 argmax passes; ~1.9 us of the 7.2 us router op ran after its matmul in a
+# device profile. Same ids (ties to the lower id), weights and stage bytes: bit-identical.
+DECODE_ROUTER_FAST_TOPK = os.environ.get("GPT_OSS_DECODE_ROUTER_FAST_TOPK") == "1"
+# TEMP experiment (GPT_OSS_DECODE_EXPERT_TAIL_SPLIT=1; unset = unchanged): the plain routed-expert streams
+# (ExpertGateUpStream / ExpertDownStream, BFP4 / BFP8 weights; not the split or native experiments) read and multiply
+# each core's last weight column in sub-blocks (fused_decode/stream.py _tail_split_defines), so compute ends about one
+# sub-block after the last packet instead of one whole column (91 / 100 tiles, ~0.7 us after the reads in a device
+# profile). Same weight layout and caches; same MVMUL sequence: bit-identical.
+DECODE_EXPERT_TAIL_SPLIT = os.environ.get("GPT_OSS_DECODE_EXPERT_TAIL_SPLIT") == "1"
 
 
 def sdpa_decode_program_config(sliding_window, one_user=False):
