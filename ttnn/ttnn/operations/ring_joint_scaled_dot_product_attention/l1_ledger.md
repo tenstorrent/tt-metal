@@ -70,11 +70,13 @@ dh = dv = 128 (computed from `compute_cb_plan`): fp32 DEST, (Sq, Sk) = (8, 8) �
 106 cores = 12.08 waves); bf16 DEST (FOCUS), (16, 8) → 1,190 KiB before Refinement 3, 1,030 KiB after (single l / O accumulators; 640 units = 6.04 waves). Golden 1×10×512×128 on a
 4-ring: (1, 16) → 650 KiB (occupancy-driven Sq = 1).
 
-Not CBs: four global semaphores per worker core (arrival, ready, consumers_done, poll scratch — the compute reader's
+Not CBs: (Refinement 5, R2) two program semaphores per row-group core (`kv_mcast` data-ready / consumer-ready, added
+by `McastFamily.attach`); the multicast lands in the members' existing `cb_k_block` / `cb_v_block` slots, so R2 adds
+no CB and no L1 beyond the semaphore words. Four global semaphores per worker core (arrival, ready, consumers_done, poll scratch — the compute reader's
 private NoC-read target for a port's arrival count; verifier fix, see verification_report.md).
 Port core: `2·port_batch_chunks·run_pages·page_bytes` = 112 KiB (+ packet-header pool).
 
-## Data-movement budget (chosen split R1, per device per call)
+## Data-movement budget (chosen split R2 `qstationary_kv_row_mcast` since Refinement 5; R1 rows kept for reference, per device per call)
 
 FOCUS (Wan2.2 480p: n = 8192, H = 40, dh = dv = 128, bf16, G = 4 ring balanced, 2 links, Sq = 16, `Uq = 16` Q blocks
 per head). B = local K+V block = n·H·(dh+dv)·2 = 167.8 MB; Q = out = 83.9 MB.
@@ -86,14 +88,16 @@ per head). B = local K+V block = n·H·(dh+dv)·2 = 167.8 MB; Q = out = 83.9 MB.
 | remote K/V (G−1 blocks) | 1 landing write + `Uq` compute reads each; relayed share (1 block-equivalent on a balanced 4-ring) +1 read | landing in DRAM is required (R10 rejected); re-read per Q block as above | — |
 | joint K/V (replicated) | `Uq` reads (Phase 0 cases) | local source, streamed per unit like local K/V | — |
 | joint K/V (sharded, R4) | own slice: `Uq` reads; each remote slice: 1 landing write (own joint landing slots, `(G−1)·b·h·L_dev` rows) + `Uq` reads; relays +1 read | second transport entry kind on the same relay, interleaved per (batch, kv head) after the main slice, so its landing count is entry index `2·entry + 1` | links: `(G−1)·b·(hk·dh + hv·dv)·L_dev·2 B` per device |
+| K/V with R2 (Refinement 5, non-causal) | per pass, one compute read per ROW GROUP (the injector) instead of one per core; cores in no group and every tail piece still read their own. FOCUS: 106 compute cores → 10 groups of 8 + 9 groups of 2 + 8 single cores = 27 key streams per pass × 6 passes + 32 tail pieces = 194 head streams (R1: 640) → compute K/V reads ≈ 194 × 16.8 MB ≈ 3.25 GB (R1 ≈ 10.74 GB) | a group's members hold consecutive q blocks of one (b, head group) per pass (host `plan_work_split`), so they walk the same key-block stream | NoC multicast along the grid row: (106 − 27) × 6 = 474 member streams × 16.8 MB ≈ 8.0 GB of row-local multicast payload; 2 handshakes (K, V) per key block per group |
 | out / joint_out | 1 write | normalized once per unit | — |
 | landing counters | — | — | ≤ 2·num_links 4-byte polls per (unit, remote source) when not yet landed; `C` 4-byte increments per port per call |
 
-Totals (FOCUS): DRAM reads ≈ 83.9 MB (Q) + 64 × 167.8 MB (compute K/V) + 3 × 167.8 MB (transport) ≈ 11.33 GB;
+Totals (FOCUS, R2): DRAM reads ≈ 83.9 MB (Q) + 3.25 GB (compute K/V) + 3 × 167.8 MB (transport) ≈ 3.84 GB
+(R1: 83.9 MB + 64 × 167.8 MB + 3 × 167.8 MB ≈ 11.33 GB);
 DRAM writes ≈ 503 MB (landing) + 83.9 MB (out) ≈ 0.59 GB; links: busiest direction (G²/8)·B = 335.6 MB over
 2 links; NoC cross-core: negligible.
 
-> Cheapest-traffic split considered: R2 `qstationary_kv_row_mcast` (row group ≈ 10 compute cores per head per wave) —
+> (Pre-Refinement-5 record, kept for history; R2 is now implemented — see the R2 row above.) Cheapest-traffic split considered: R2 `qstationary_kv_row_mcast` (row group ≈ 10 compute cores per head per wave) —
 > DRAM K/V reads ≈ 10.7 GB → ≈ 1.1 GB per call (−9.7 GB DRAM); adds ≈ 1.1 GB of NoC multicast payload (each K/V
 > byte once per row) + one handshake per key block per row. Implemented: R1 `qstationary_dram_kv`. Deferred
 > because R2 layers onto R1 unchanged (stepping stone, `blocking-model.md` §5): R1's units are already head-major

@@ -45,6 +45,14 @@ Q_HEADS_PER_UNIT = None
 Q_BLOCK_DEPTH = 1  # cb_q_block depth (Q retained for the unit's whole key walk)
 KV_BLOCK_DEPTH = 2  # cb_k_block / cb_v_block depth: reader one key block ahead of compute
 OUT_BLOCK_DEPTH = 1  # cb_out_tiles depth: the writer drains a unit during the next unit's walk
+# K/V row multicast (design regime R2 `qstationary_kv_row_mcast`): compute cores of one logical grid row are cut
+# into row groups (x-contiguous runs, one NoC multicast rectangle each) of g_r cores, g_r a divisor of the units per
+# head Uq and <= this cap; per pass the members hold g_r consecutive q blocks of one (batch, head group), and the
+# group's first core (the injector) reads every K/V block once (landing wait included) and multicasts it along the
+# row (mcast_pipe SenderPipe / ReceiverPipe). None = up to the whole row run; 1 = off (R1: every core reads its own
+# K/V). Non-causal only: a causal unit's visible key prefix depends on its q block.
+KV_MCAST_GROUP = None
+LAST_KV_GROUPS = {}  # {mesh coord: row groups} of the last call (introspection for tests / probes only)
 PORT_BATCH_CHUNKS = 4  # chunks per port batch; cb_port_chunks holds 2 batches (fabric_all_gather README)
 L1_CB_BUDGET = 1300 * 1024  # per-core CB budget for choose_block_extents (design: ~1.3 MB on Blackhole)
 # Precision policy (compute_kernel_config is a FLOOR): with fp32 DEST accumulation requested, the compute kernel runs
@@ -78,9 +86,13 @@ CB_P_TOKEN = 14
 P_TOKEN_DEPTH = 4
 # ---- CB indices (port cores) ----
 CB_PORT_CHUNKS = 0
+KV_MCAST_PREFIX = "kv_mcast"  # named CT args kv_mcast_ct_offset / kv_mcast_rt_offset (compute-core reader)
 
 NOC0 = ttnn.NOC.RISCV_0_default
 NOC1 = ttnn.NOC.RISCV_1_default
+# compute-core reader: NCRISC on NoC0 (what ReaderConfigDescriptor resolves to); the K/V multicast family must name
+# the same NoC (the injector multicasts from this kernel)
+READER_NOC = NOC0
 _OPP = {"fwd": "bwd", "bwd": "fwd"}
 
 
@@ -185,26 +197,100 @@ TAIL_FIXED_ROWS = 0.45  # F / c
 TAIL_READ_PER_PIECE = 0.05  # d / c for a 2 KB K/V tile (scaled by the K/V tile size)
 
 
-def plan_work_split(Sq, *, n_q_t, Lq_t, BH, C, kv_tile_bytes=2048, tail_rows=None):
-    """Balanced tail split. Units are Sq-row q blocks of one (batch, q head), head-major ([main blocks], [joint
-    blocks] per head) as in ring_joint_sdpa_common.hpp. The first W = U // C waves stay whole units round-robin
-    (core c owns units c, c + C, ..., c + (W-1) C); the remainder units (the last U - W*C) are re-blocked into
-    `tail pieces` of r q tile-rows (r a power of two dividing Sq, picked by the cost model below among the r whose
-    piece count fits C cores) and
-    piece c goes to core c AFTER its full units. A piece's compute runs on r rows (cb credits r-sized; r | Sq keeps
-    every block contiguous in its CB, and the piece is the core's last unit so nothing follows it).
+def plan_kv_mcast_groups(cores, Uq, cap=None):
+    """Row groups of the K/V multicast (R2): per logical grid row, every x-contiguous run of compute cores is cut
+    greedily into groups of the largest size g that divides Uq and is <= cap (and <= what is left of the run); a
+    size-1 remainder is no group (that core reads its own K/V). cores: the compute CoreCoords (index = core_idx).
+    Returns a list of groups, each a list of core indices in increasing x (index 0 = the injector)."""
+    if cap is not None and cap <= 1:
+        return []
+    by_row = {}
+    for ci, c in enumerate(cores):
+        by_row.setdefault(c.y, []).append((c.x, ci))
+    sizes = [d for d in range(2, Uq + 1) if Uq % d == 0 and (cap is None or d <= cap)]
+    groups = []
+    for y in sorted(by_row):
+        row = sorted(by_row[y])
+        runs, cur = [], [row[0]]
+        for prev, nxt in zip(row, row[1:]):
+            if nxt[0] == prev[0] + 1:
+                cur.append(nxt)
+            else:
+                runs.append(cur)
+                cur = [nxt]
+        runs.append(cur)
+        for run in runs:
+            o = 0
+            while o < len(run):
+                fit = [d for d in sizes if d <= len(run) - o]
+                if not fit:
+                    break
+                g = max(fit)
+                groups.append([ci for _, ci in run[o : o + g]])
+                o += g
+    return groups
 
-    Returns (W, pieces, r): pieces[c] = (bh, row0, rows, joint) for c < len(pieces) <= C."""
+
+def plan_work_split(Sq, *, n_q_t, Lq_t, BH, C, kv_tile_bytes=2048, tail_rows=None, groups=()):
+    """Balanced tail split. Units are Sq-row q blocks of one (batch, q head), head-major ([main blocks], [joint
+    blocks] per head) as in ring_joint_sdpa_common.hpp. Every core runs W = U // C whole units, one per pass;
+    pass i covers (about) units [i C, (i + 1) C) so the passes advance head-major in lockstep with the transport.
+
+    Without row groups core c owns units c, c + C, ..., c + (W-1) C. With row groups (K/V multicast, R2) every pass
+    hands each group of g cores one g-aligned run of g consecutive units (g | Uq, so the run is one head's) and each
+    other core one unit, greedily in unit order (largest piece that fits the cursor's alignment first); a unit no
+    remaining piece of the pass can take goes to the tail. If the passes cannot be filled the groups are dropped.
+
+    The remainder units are re-blocked into `tail pieces` of r q tile-rows (r a power of two dividing Sq, picked by
+    the cost model below among the r whose piece count fits C cores) and piece c goes to core c AFTER its full
+    units. A piece's compute runs on r rows (cb credits r-sized; r | Sq keeps every block contiguous in its CB, and
+    the piece is the core's last unit so nothing follows it). Tail pieces never use the multicast.
+
+    Returns (W, units, pieces, r, groups): units[c] = core c's W unit indices, pieces[c] = (bh, row0, rows, joint)
+    for c < len(pieces) <= C, groups = the row groups actually used."""
     assert Sq & (Sq - 1) == 0, "Sq must be a power of two"
     nqb_main = -(-n_q_t // Sq)
     nqb_joint = -(-Lq_t // Sq)
     Uq = nqb_main + nqb_joint
     U = BH * Uq
-    W, rem = divmod(U, C)
-    if rem == 0:
-        return W, [], Sq
+    W = U // C
+    units = [[c + i * C for i in range(W)] for c in range(C)]
+    tail_units = list(range(W * C, U))
+    if groups:
+        assert all(Uq % len(g_) == 0 for g_ in groups)
+        grouped = {ci for g_ in groups for ci in g_}
+        pieces_of_pass = sorted([(len(g_), g_) for g_ in groups], key=lambda t: -t[0])
+        pieces_of_pass += [(1, [ci]) for ci in range(C) if ci not in grouped]
+        g_units = [[] for _ in range(C)]
+        g_tail, cur, ok = [], 0, True
+        for _ in range(W):
+            todo = list(pieces_of_pass)
+            while todo:
+                if cur >= U:
+                    ok = False
+                    break
+                pick = next((t for t in todo if cur % t[0] == 0 and cur + t[0] <= U), None)
+                if pick is None:
+                    g_tail.append(cur)
+                    cur += 1
+                    continue
+                todo.remove(pick)
+                for k_, ci in enumerate(pick[1]):
+                    g_units[ci].append(cur + k_)
+                cur += pick[0]
+            if not ok:
+                break
+        if ok:
+            units, tail_units = g_units, g_tail + list(range(cur, U))
+        else:
+            groups = []
+    if not tail_units:
+        return W, units, [], Sq, list(groups)
+    if len(tail_units) > C:  # more tail units than cores (only reachable with row groups): drop the groups
+        assert groups
+        return plan_work_split(Sq, n_q_t=n_q_t, Lq_t=Lq_t, BH=BH, C=C, kv_tile_bytes=kv_tile_bytes, tail_rows=tail_rows)
     tail = []
-    for u in range(W * C, U):
+    for u in tail_units:
         bh, qb = divmod(u, Uq)
         if qb < nqb_main:
             row0 = qb * Sq
@@ -236,7 +322,7 @@ def plan_work_split(Sq, *, n_q_t, Lq_t, BH, C, kv_tile_bytes=2048, tail_rows=Non
         r = min(cands)[1]
     pieces = split(r)
     assert len(pieces) <= C
-    return W, pieces, r
+    return W, units, pieces, r, list(groups)
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -695,9 +781,7 @@ def run_ring_joint_sdpa(
     cb_plan = compute_cb_plan(
         Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q.dtype, kv_dtype=k.dtype, acc_dtype=acc_dtype, mask_tiles=mask_tiles
     )
-    W_full, tail_pieces, tail_r = plan_work_split(
-        Sq, n_q_t=NQ, Lq_t=LQ, BH=BG, C=C, kv_tile_bytes=ttnn.tile_size(k.dtype)
-    )
+    Uq = -(-NQ // Sq) + -(-LQ // Sq)  # units per (batch, head group)
     out_mem = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([b, hq, n_q, dv]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mem
@@ -766,6 +850,7 @@ def run_ring_joint_sdpa(
     scale_bits = _bf16_bits(scale)
 
     mesh_desc = ttnn.MeshProgramDescriptor()
+    LAST_KV_GROUPS.clear()
     for coord, ch in chips.items():
         p = ch["p"]
         program = ttnn.ProgramDescriptor()
@@ -773,6 +858,15 @@ def run_ring_joint_sdpa(
         port_keys = [(d, l) for d in ("fwd", "bwd") for l in range(num_links)]
         port_cores = [ports[pk] for pk in port_keys]
         compute = ch["compute"]
+        # work split (per chip: the row groups follow this chip's compute grid, i.e. the grid left after the ports)
+        kv_groups = [] if is_causal else plan_kv_mcast_groups(compute, Uq, KV_MCAST_GROUP)
+        W_full, unit_lists, tail_pieces, tail_r, kv_groups = plan_work_split(
+            Sq, n_q_t=NQ, Lq_t=LQ, BH=BG, C=C, kv_tile_bytes=ttnn.tile_size(k.dtype), groups=kv_groups
+        )
+        if W_full == 0:
+            kv_groups = []
+        if kv_groups:
+            LAST_KV_GROUPS[coord] = kv_groups
         part_chunks = {
             l: (
                 _chunks_per_part(kpe, l, num_links, num_banks, run_pages),
@@ -1008,13 +1102,34 @@ def run_ring_joint_sdpa(
                 + [W_full]
                 + tail_args(ci)
                 + [p]
+                + unit_lists[ci]
             )
-            writer_rt[core.x][core.y] = [addr(out), addr(jout), ci, W_full] + tail_args(ci) + [tail_r]
-            compute_rt[core.x][core.y] = [ci, len(segments)] + seg_compute + [W_full] + tail_args(ci) + [tail_r, p]
+            writer_rt[core.x][core.y] = [addr(out), addr(jout), ci, W_full] + tail_args(ci) + [tail_r] + unit_lists[ci]
+            compute_rt[core.x][core.y] = (
+                [ci, len(segments)] + seg_compute + [W_full] + tail_args(ci) + [tail_r, p] + unit_lists[ci]
+            )
 
         prefix = "ring_joint_scaled_dot_product_attention"
         port_crs = _crs(port_cores)
         port_ct = [CB_PORT_CHUNKS, page_bytes, run_pages, num_banks, group]
+        reader_kernel = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / f"{prefix}_reader.cpp"),
+            core_ranges=ccrs,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            config=dm("RISCV_1", READER_NOC),
+        )
+        # K/V row multicast (R2): one McastFamily per chip, one group per row group (fixed sender = the injector,
+        # receivers = the group's x-contiguous rectangle, sender included / self-excluded), handshake per block.
+        if kv_groups:
+            fam = ttnn.McastFamily(mesh_device, ttnn.McastConfig(noc=READER_NOC))
+            for grp in kv_groups:
+                c0, c1 = compute[grp[0]], compute[grp[-1]]
+                fam.add_group(ttnn.CoreRangeSet([ttnn.CoreRange(c0, c1)]), [c0])
+            fam.prepare_arguments()
+            fam.attach(program, KV_MCAST_PREFIX, [reader_kernel])
+        else:
+            ttnn.attach_absent(reader_kernel, KV_MCAST_PREFIX)
         program.kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"{prefix}_port_reader.cpp"),
@@ -1038,13 +1153,7 @@ def run_ring_joint_sdpa(
                 runtime_args=psender_rt,
                 config=dm("RISCV_0", NOC1),
             ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / f"{prefix}_reader.cpp"),
-                core_ranges=ccrs,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
+            reader_kernel,
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"{prefix}_writer.cpp"),
                 core_ranges=ccrs,
@@ -1103,6 +1212,8 @@ def run_ring_joint_sdpa(
                 tuple((c.x, c.y) for c in port_cores),
                 len(compute),
                 tuple(segments),
+                tuple(tuple(u) for u in unit_lists),
+                tuple(tuple(g_) for g_ in kv_groups),
                 has_joint,
                 out_mem,  # the writer's out / joint_out TensorAccessorArgs are compile-time
             )

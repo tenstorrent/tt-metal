@@ -156,7 +156,7 @@ No SUPPORTED change.
 
 **Outcome**: all three values in SUPPORTED, no EXCLUSIONS. Golden slice `-k "sharded or non_aligned or cross"` 320 passed / 0 failed; `test_ring_mock.py` + `test_fabric_configs.py` + `test_regression.py` 118 passed; unit acceptance + causal_heads 27 passed; new `test_..._joint_cross.py` 14 passed (both DEST widths).
 
-### [ ] Refinement 5 — Perf-flagged case: K/V reuse multicast across a grid row (design regime R2) — scheme-change
+### [x] Refinement 5 — Perf-flagged case: K/V reuse multicast across a grid row (design regime R2) — scheme-change
 
 **Type**: perf
 
@@ -165,6 +165,8 @@ No SUPPORTED change.
 **Verifier notes**: validate by building the variant and measuring device time, not by a remove-a-stage ablation (a broadcast's benefit is under-shown by one). Re-measure the per-chip breakdown first. If, after Refinement 3, the case is still compute-bound with DRAM well below its bound, record that and keep the scheme for when it binds. The row group is the compute grid minus the port cores (the port cores sit in logical grid row 0 next to the Ethernet links — measured placement on the 1×4 ring — so derive the row groups on the grid that is left).
 
 **Done when**: measured device time (fastest chip; slowest chip guarded) improves on the perf-flagged case with its soft precision gate holding, the golden suite is green, and there is no regression across the config-spanning guard set (as in Refinement 3, plus a GQA / causal representative from Refinement 2).
+
+**Outcome**: R2 built and on by default (`KV_MCAST_GROUP = None`; 1 = R1). Focus (Wan2.2, bf16, 1×4 ring, 3 calls each, A/B in one session): slowest chip 42 770 → 42 765 us, fastest 42 611 → 42 585 us. That is flat, because the focus is compute-bound: before R2 the reader already sat in `kv cb_reserve_back` for 46 of every ~53 us key block. R2 does remove the DRAM pressure: compute K/V reads ≈ 10.7 → 3.25 GB per call, per-block K/V barrier 4.9 → 0.85 us, transport `port_send` 5.5–8.5 → 3.0–4.1 ms (back at the link roofline), worst landing wait 330–460 → 12–15 us. Guard set (slowest-chip median of 8 calls, R1 → R2): joint L128 bf16 1063.9 → 562.2 us (1.89×), joint L128 fp32 963.7 → 832.6 (1.16×), (1,10,512,128) bf16 662.2 → 489.5 (1.35×), (1,8,1024,128) fp32 Linear 1531.8 → 1003.3 (1.53×), GQA 16/4 (1,16,2048,64) 1506.9 → 1469.4 (−2.5 %), (1,2,128,64) 61.5 → 61.7 (no row group forms, so it is R1; noise). Causal runs R1 by construction. The binding resource at the focus is still the per-block compute: MATH / PACK / UNPACK are balanced, ~53 us per 16×8 block. Next lever: the `matmul_output_subblock` row-pair pipeline that Refinement 3 named. It was not tried here because it is a compute-kernel rewrite, outside this dataflow topology change.
 
 ### [ ] Refinement 6 — Perf-flagged case: OVERLAP — exposed transport per chip (first-wave landing, landing notification, tail chain)
 

@@ -424,3 +424,51 @@ The focus is **1.45x faster on every chip (76.48 → 52.69 ms)**, with no guard 
 - Issues encountered: None.
 - Tests added: `tests/ttnn/unit_tests/operations/ring_joint_scaled_dot_product_attention/test_ring_joint_scaled_dot_product_attention_joint_cross.py`
   (sharded L 333 / 512 / 118, replicated L 333 / 118, cross q32 / q64; fp32 and bf16 DEST; 1×4 ring).
+
+## Refinement 5 — Perf-flagged case: K/V reuse multicast across a grid row (design regime R2) — scheme-change
+- Date: 2026-11-04
+- What was done (OVERLAP is unchanged; this is a local-dataflow topology change, design regime R2 `qstationary_kv_row_mcast`):
+  - Host: `plan_kv_mcast_groups` cuts each logical grid row of the compute grid left after the ports into
+    x-contiguous row groups of size g | Uq (largest first, capped by the new knob `KV_MCAST_GROUP`, None = whole row
+    run, 1 = off ⇒ R1). FOCUS: the ports take (0..2, 0) and (0, 1), giving 10 groups of 8, 9 groups of 2 and 8 single
+    cores.
+  - Host: `plan_work_split` now returns explicit per-core unit lists. Per pass it hands each group a g-aligned run of
+    g consecutive units (one head's) and each single core one unit, greedily in head-major order, so passes stay in
+    lockstep with the head-major transport. Units that no piece can take go to the tail; if passes cannot be filled
+    the groups are dropped. Without groups the lists equal the old `c + i·C`.
+  - Wiring: one `McastFamily` per chip (fixed sender = the group's first core, handshake), attached to the
+    compute-core reader. With no group `attach_absent` compiles the path out. The reader's NoC is now explicit
+    (`READER_NOC` = NoC0, what `ReaderConfigDescriptor` resolved to) so the family and the kernel agree.
+  - Reader: on whole units the injector alone awaits landings and reads each K/V block, then `send`s the K block and
+    the V block into the same CB slots of every member. Members reserve, `receive` twice and push: no DRAM read and
+    no landing poll. Tail pieces and single cores read their own K/V (R1). Compute and writer only switched to the
+    unit lists.
+  - Profiler: compute zone `compute_rowmax` kept at a line whose 16-bit source-location hash does not collide with
+    the ERISC firmware zones (Refinement 4's line shift had broken `TT_METAL_DEVICE_PROFILER` runs with "Source
+    location hashes are colliding"). `probes/perf_breakdown.py` gained `FOCUS_KV_MCAST` and `FOCUS_HK`.
+  - Reused: the CB inventory (multicast lands in `cb_k_block` / `cb_v_block`), unit decode, key plan, tail split,
+    transport. Added: the row-group planner, the unit lists, the reader's two pipe roles, the mcast family.
+- Measured (device profiler, A/B in one session, R1 = `KV_MCAST_GROUP = 1`):
+  - Focus (3 calls): slowest chip 42 770 → 42 765 us, fastest 42 611 → 42 585 us. Flat: the focus is compute-bound
+    (reader in `kv cb_reserve_back` 46 us of every ~53 us block before R2).
+  - What R2 changed at the focus: compute K/V DRAM reads ≈ 10.7 → 3.25 GB; per-block K/V barrier 4.9 → 0.85 us;
+    member wait for a multicast block 5.8 us inside the 47 us reserve; `port_send` 5.5–8.5 → 3.0–4.1 ms (transport
+    back at the link roofline once compute cores stop contending for DRAM); worst landing wait 330–460 → 12–15 us.
+  - Guard set (slowest-chip median of 8 calls, us, R1 → R2):
+    - joint L128 bf16 DEST (1,6,1024,128): 1063.9 → 562.2 (1.89×)
+    - joint L128 fp32 DEST: 963.7 → 832.6 (1.16×)
+    - (1,10,512,128) bf16 DEST: 662.2 → 489.5 (1.35×)
+    - (1,8,1024,128) fp32 DEST, Linear: 1531.8 → 1003.3 (1.53×)
+    - GQA (1,16/4,2048,64) bf16 DEST: 1506.9 → 1469.4 (−2.5 %)
+    - (1,2,128,64): 61.5 → 61.7 (no group forms, so R1 runs)
+    - Causal runs R1 by construction.
+  - Remaining headroom at the focus is the per-block compute (balanced MATH / PACK / UNPACK, Refinement 3). The next
+    candidate is the `matmul_output_subblock` row-pair pipeline. It was not tried here because it is a compute rewrite.
+- Accuracy achieved: R2 output is bit-identical to R1 on every pinned case (mha bf16 / fp32-Linear, GQA, replicated
+  joint L128, sharded joint L333). PCC vs torch ≥ 0.999 (fp32 DEST) / 0.995 (bf16 DEST). `test_op_loose` (focus) passes.
+- Golden test progress (slices): test_regression + test_ring_mock + test_fabric_configs 118 passed / 0 failed; a
+  1-in-10 sample of the TILE `test_op` cells: 167 passed, 601 skipped, 0 failed. Unit dir 122/122.
+- Issues encountered: the mcast family's NoC must equal the reader kernel's (ReaderConfigDescriptor resolves to
+  NoC0 on Blackhole), which is now explicit. The profiler zone-hash collision is described above.
+- Tests added: `tests/ttnn/unit_tests/operations/ring_joint_scaled_dot_product_attention/test_ring_joint_scaled_dot_product_attention_kv_mcast.py`
+  (R2 vs R1 bit-identical + torch PCC, asserts the row groups were used; 5 cases, ring and line).

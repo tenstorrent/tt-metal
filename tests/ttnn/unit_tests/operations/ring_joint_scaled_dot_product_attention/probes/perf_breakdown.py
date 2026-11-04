@@ -8,7 +8,7 @@ logical_n = 32760), from the device profiler's KERNEL spans and the op's MaybeDe
   python tests/.../probes/perf_breakdown.py [out.json]     # host-side analysis (the CSV is flushed at mesh close)
 
 Env: FOCUS_HEADS (40), FOCUS_N (8192 rows per device), FOCUS_LINKS (2), FOCUS_FP32 (0), FOCUS_FID (HiFi2; fidelity
-ablation only), PERF_OUT (json path).
+ablation only), FOCUS_KV_MCAST (R2 row-group cap; 1 = off), PERF_OUT (json path).
 Prints per chip: op span (first kernel start -> last kernel end), compute-core span quantiles, port spans, and per
 zone (count, mean / median ns per execution, per RISC).
 """
@@ -30,11 +30,15 @@ N = int(os.environ.get("FOCUS_N", "8192"))
 LINKS = int(os.environ.get("FOCUS_LINKS", "2"))
 FP32 = os.environ.get("FOCUS_FP32", "0") == "1"
 D = int(os.environ.get("FOCUS_DH", "128"))
+HK = int(os.environ.get("FOCUS_HK", "0")) or H  # K/V heads (GQA when < FOCUS_HEADS)
 JOINT_L = int(os.environ.get("FOCUS_JOINT_L", "0"))  # replicated joint tokens (0 = none)
 TOPO = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[os.environ.get("FOCUS_TOPO", "ring")]
 PAD = int(os.environ.get("FOCUS_PAD", "8"))  # logical_n = G * N - PAD
 REPS = int(os.environ.get("FOCUS_REPS", "1"))  # measured calls (each read separately; see spans())
 FID = getattr(ttnn.MathFidelity, os.environ.get("FOCUS_FID", "HiFi2"))  # ablation only: the focus is HiFi2
+KV_MCAST = os.environ.get("FOCUS_KV_MCAST")  # K/V row multicast cap (R2): unset = op default, 1 = off (R1)
+if KV_MCAST is not None:
+    pdmod.KV_MCAST_GROUP = None if KV_MCAST in ("", "none", "None") else int(KV_MCAST)
 FREQ_GHZ = 1.35
 LOG = "generated/profiler/.logs/profile_log_device.csv"
 
@@ -97,14 +101,14 @@ def _analyze(chips=None):
 @pytest.mark.parametrize("mesh_shape,fabric_config", [((1, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY)])
 def test_perf_breakdown(mesh_shape, fabric_config, mesh_device):
     G = 4
-    mk = lambda: ttnn.from_torch(  # noqa: E731
-        torch.randn((1, H, G * N, D), dtype=torch.bfloat16),
+    mk = lambda h=H: ttnn.from_torch(  # noqa: E731
+        torch.randn((1, h, G * N, D), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=mesh_shape),
     )
-    q, k, v = mk(), mk(), mk()
+    q, k, v = mk(), mk(HK), mk(HK)
     joint = [None, None, None]
     if JOINT_L:
         joint = [

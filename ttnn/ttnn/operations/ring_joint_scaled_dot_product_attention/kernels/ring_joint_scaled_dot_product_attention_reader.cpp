@@ -10,9 +10,19 @@
 // Remote segments wait once per (unit, segment) for the landing counters of every port carrying a share of that
 // source (OVERLAP: the local and joint blocks run before the first wait). At the end: +1 consumers_done on every
 // port of this device, so the ports may re-arm their counters.
+//
+// K/V row multicast (design regime R2, host plan_kv_mcast_groups / plan_work_split): when the host attached a
+// `kv_mcast` family, the cores of a row group hold, per pass (whole unit i < W), consecutive q blocks of ONE
+// (batch, head group), so they walk the identical key-block stream. The group's injector (SenderPipe face) alone
+// awaits the landings and reads each K/V block from DRAM, then multicasts the K block and the V block into the same
+// cb_k / cb_v slots of every member (members push the same blocks in the same order, so the CB write pointers agree
+// across the group); members (ReceiverPipe face) reserve the slots, ack, wait for the data and push. Cores in no
+// group, and every core's tail piece, read their own K/V (R1).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ring_joint_sdpa_common.hpp"
 
@@ -34,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t LQ = get_compile_time_arg_val(8);  // joint q tile-rows of a unit's row space
     constexpr uint32_t n_kv_t = get_compile_time_arg_val(9);
     constexpr uint32_t BG = get_compile_time_arg_val(10);  // b * hq / g (batch, head group) pairs
-    constexpr uint32_t C = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t C = get_compile_time_arg_val(11);
     constexpr uint32_t hq = get_compile_time_arg_val(12);
     constexpr uint32_t hk = get_compile_time_arg_val(13);
     constexpr uint32_t hv = get_compile_time_arg_val(14);
@@ -62,6 +72,9 @@ void kernel_main() {
     // sharded-joint landing (aliases of lk / lv otherwise: valid, never addressed)
     constexpr auto ljk_args = TensorAccessorArgs<lv_args.next_compile_time_args_offset()>();
     constexpr auto ljv_args = TensorAccessorArgs<ljk_args.next_compile_time_args_offset()>();
+    constexpr auto kv_mc = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("kv_mcast_ct_offset"),
+        get_named_compile_time_arg_val("kv_mcast_rt_offset")>();
 
     uint32_t a = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(a++);
@@ -74,7 +87,7 @@ void kernel_main() {
     const uint32_t lv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t ljk_addr = get_arg_val<uint32_t>(a++);
     const uint32_t ljv_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t core_idx = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t core_idx = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
     const uint32_t cdone_addr = get_arg_val<uint32_t>(a++);
     // Private L1 word the remote counter is read into. Never a counter word: placement changes between calls, so a
@@ -112,11 +125,22 @@ void kernel_main() {
     const uint32_t W = get_arg_val<uint32_t>(tail_idx);
     [[maybe_unused]] const uint32_t my_pos = get_arg_val<uint32_t>(tail_idx + 6);  // group position p
     const uint32_t my_units = W + get_arg_val<uint32_t>(tail_idx + 1);
+    const uint32_t units_idx = tail_idx + 7;  // the W whole-unit indices of this core, one per pass
+
+    // ---- K/V row multicast roles (whole units only) ----
+    Noc noc;
+    auto kv_sender = kv_mc.optional_sender(noc);
+    auto kv_receiver = kv_sender ? decltype(kv_mc.optional_receiver(noc)){} : kv_mc.optional_receiver(noc);
+    const uint32_t k_block_bytes = Sk * DHt * kv_tile;
+    const uint32_t v_block_bytes = Sk * DVt * kv_tile;
 
     for (uint32_t i = 0; i < my_units; ++i) {
         MaybeDeviceZoneScope("reader_unit");
         uint32_t kb = 0;  // key blocks issued for this unit (zone sampling)
-        const AttnUnit unit = i < W ? decode_unit<Sq, NQ, LQ>(core_idx + i * C) : tail_piece(tail_idx + 1);
+        const AttnUnit unit =
+            i < W ? decode_unit<Sq, NQ, LQ>(get_arg_val<uint32_t>(units_idx + i)) : tail_piece(tail_idx + 1);
+        const bool mc_send = i < W && kv_sender.has_value();    // injector: read + multicast
+        const bool mc_recv = i < W && kv_receiver.has_value();  // member: the injector's blocks land here
         const uint32_t b = unit.bh / groups;
         const uint32_t h = (unit.bh - b * groups) * g;  // first q head of the unit (all g share the K/V heads)
         const uint32_t kh = h / (hq / hk), vh = h / (hq / hv);
@@ -179,7 +203,7 @@ void kernel_main() {
                 k_base = (kind == 2 ? slot * k_slot_pages : 0) + k_head * n_kv_t * DHt;
                 v_base = (kind == 2 ? slot * v_slot_pages : 0) + v_head * n_kv_t * DVt;
             }
-            if (kind >= 2) {
+            if (kind >= 2 && !mc_recv) {
                 MaybeDeviceZoneScope("reader_landing_wait");
                 // ---- await_landing: count needed = ee * S_in + rank + 1 on every port carrying the source, ee the
                 // entry index over (entry, kind): main slice ee = entry * num_kinds, joint slice + 1 ----
@@ -207,10 +231,18 @@ void kernel_main() {
                     cb_reserve_back(cb_k, Sk * DHt);
                     cb_reserve_back(cb_v, Sk * DVt);
                 }
+                const uint32_t kw = get_write_ptr(cb_k);
+                const uint32_t vw = get_write_ptr(cb_v);
+                if (mc_recv) {
+                    MaybeDeviceZoneScopeIf("reader_kv_mc_recv", zs);
+                    kv_receiver->receive();  // K block (slot reserved above: ack = slot free)
+                    kv_receiver->receive();  // V block
+                    cb_push_back(cb_k, Sk * DHt);
+                    cb_push_back(cb_v, Sk * DVt);
+                    continue;
+                }
                 {
                     MaybeDeviceZoneScopeIf("reader_kv_issue", zs);
-                    const uint32_t kw = get_write_ptr(cb_k);
-                    const uint32_t vw = get_write_ptr(cb_v);
                     for (uint32_t t = 0; t < skv; ++t) {
                         const uint32_t kpage = k_base + (t0 + t) * DHt;
                         const uint32_t vpage = v_base + (t0 + t) * DVt;
@@ -249,6 +281,11 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScopeIf("reader_kv_barrier", zs);
                     noc_async_read_barrier();
+                }
+                if (mc_send) {
+                    MaybeDeviceZoneScopeIf("reader_kv_mc_send", zs);
+                    kv_sender->send(kw, kw, k_block_bytes);  // waits the members' acks, multicasts, signals
+                    kv_sender->send(vw, vw, v_block_bytes);
                 }
                 cb_push_back(cb_k, Sk * DHt);
                 cb_push_back(cb_v, Sk * DVt);

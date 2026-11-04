@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t DVt = get_compile_time_arg_val(7);
     constexpr uint32_t NQ = get_compile_time_arg_val(8);  // unit row space (q_heads_per_unit heads stacked)
     constexpr uint32_t LQ = get_compile_time_arg_val(9);
-    constexpr uint32_t C = get_compile_time_arg_val(12);
+    [[maybe_unused]] constexpr uint32_t C = get_compile_time_arg_val(12);
     constexpr bool causal = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t mask_cols = get_compile_time_arg_val(22);
     constexpr uint32_t joint_cols = get_compile_time_arg_val(23);
@@ -37,7 +37,7 @@ void kernel_main() {
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const uint32_t jout_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_idx = get_arg_val<uint32_t>(2);
+    [[maybe_unused]] const uint32_t core_idx = get_arg_val<uint32_t>(2);
 
     // ---- startup_block ----
     dataflow_kernel_lib::
@@ -124,7 +124,7 @@ void kernel_main() {
     const uint32_t tail_rows_c = get_arg_val<uint32_t>(9);  // compute rows (credit) of the tail piece
     for (uint32_t i = 0; i < my_units; ++i) {
         const bool is_tail = i >= W;
-        const AttnUnit unit = is_tail ? tail_piece(4) : decode_unit<Sq, NQ, LQ>(core_idx + i * C);
+        const AttnUnit unit = is_tail ? tail_piece(4) : decode_unit<Sq, NQ, LQ>(get_arg_val<uint32_t>(10 + i));
         const uint32_t credit = (is_tail ? tail_rows_c : Sq) * DVt;
         {
             MaybeDeviceZoneScope("writer_out_wait");

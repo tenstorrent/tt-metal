@@ -142,7 +142,7 @@ void kernel_main() {
     constexpr uint32_t NQ = get_compile_time_arg_val(19);  // unit row space (q_heads_per_unit heads stacked)
     constexpr uint32_t LQ = get_compile_time_arg_val(20);
     constexpr uint32_t n_kv_t = get_compile_time_arg_val(21);
-    constexpr uint32_t C = get_compile_time_arg_val(23);
+    [[maybe_unused]] constexpr uint32_t C = get_compile_time_arg_val(23);
     constexpr uint32_t n_q_t = get_compile_time_arg_val(28);  // per-head q tiles (causal row positions)
     constexpr bool causal = get_compile_time_arg_val(30) != 0;
     constexpr bool balanced = get_compile_time_arg_val(31) != 0;
@@ -152,7 +152,6 @@ void kernel_main() {
     // causal: [diagonal, all -inf]; else the key-tail masks [main tail, joint tail (non-aligned / sharded joint)]
     constexpr uint32_t mask_tiles = get_compile_time_arg_val(35);
 
-    const uint32_t core_idx = get_arg_val<uint32_t>(0);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
     constexpr uint32_t SEG = 3;  // per segment: valid_tiles, masked (0 none, else key-tail mask tile + 1), src
 
@@ -166,6 +165,7 @@ void kernel_main() {
     const uint32_t my_units = W + get_arg_val<uint32_t>(tail_idx);
     const uint32_t tail_rows = get_arg_val<uint32_t>(tail_idx + 5);
     [[maybe_unused]] const uint32_t my_pos = get_arg_val<uint32_t>(tail_idx + 6);  // group position p
+    // then the W whole-unit indices of this core (host plan_work_split), one per pass
 
     // ---- per-(row, key tile) mask of the current block: 0 none, else mask tile index + 1 ----
     // causal: the global tile of every compute row (filled per unit) against the block's key tiles (shared plan in
@@ -480,7 +480,8 @@ void kernel_main() {
         uint32_t m_old = cb_max_acc, m_new = cb_max_blk;  // bf16 DEST swaps them per block; fp32 DEST copies
         [[maybe_unused]] uint32_t max_gq = 0, min_gq = 0;
         if constexpr (causal) {
-            const AttnUnit unit = i < W ? decode_unit<Sq, NQ, LQ>(core_idx + i * C) : tail_piece(tail_idx);
+            const AttnUnit unit =
+                i < W ? decode_unit<Sq, NQ, LQ>(get_arg_val<uint32_t>(tail_idx + 7 + i)) : tail_piece(tail_idx);
             max_gq = unit_max_gtile<balanced>(unit, my_pos, n_q_t, G);
             min_gq = max_gq;
             for (uint32_t r = 0; r < R; ++r) {
