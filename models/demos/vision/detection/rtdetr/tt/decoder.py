@@ -211,9 +211,10 @@ class TtRTDetrMultiscaleDeformableAttention:
         )
         value_list = ttnn.split(value, level_sizes, dim=1)
 
+        # The grid is fp32, twice the bytes of the bf16 the budget helper assumes.
         sampling_locations = ttnn.to_memory_config(
             sampling_locations,
-            interleaved_memory_config(self.l1_budget, padded_volume(sampling_locations)),
+            interleaved_memory_config(self.l1_budget, 2 * padded_volume(sampling_locations)),
         )
         sampling_grids = sampling_locations * 2.0 - 1.0
         sampling_grids = ttnn.permute(sampling_grids, (0, 2, 1, 3, 4, 5))
@@ -224,8 +225,8 @@ class TtRTDetrMultiscaleDeformableAttention:
         sampling_grids = ttnn.to_layout(
             sampling_grids,
             ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=interleaved_memory_config(self.l1_budget, padded_volume(sampling_grids)),
+            dtype=ttnn.float32,
+            memory_config=interleaved_memory_config(self.l1_budget, 2 * padded_volume(sampling_grids)),
         )
         sampling_grid_list = ttnn.split(sampling_grids, 1, dim=2)
 
@@ -333,7 +334,14 @@ class TtRTDetrMultiscaleDeformableAttention:
             ),
         )
 
-        sampling_offsets = ttnn.linear(hidden_states, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
+        # Sampling locations stay fp32 down to grid_sample: a bf16 coordinate in [-1, 1] is off by a
+        # sizeable fraction of a pixel on the larger feature maps.
+        sampling_offsets = ttnn.linear(
+            hidden_states,
+            self.sampling_offsets_weight,
+            bias=self.sampling_offsets_bias,
+            dtype=ttnn.float32,
+        )
         sampling_offsets = ttnn.reshape(
             sampling_offsets,
             (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points, 2),
@@ -355,6 +363,7 @@ class TtRTDetrMultiscaleDeformableAttention:
         )
 
         num_reference_levels = reference_points.shape[-2]
+        reference_points = ttnn.typecast(reference_points, ttnn.float32)
         reference_points_xy = reference_points[..., :2]
         reference_points_wh = reference_points[..., 2:]
         reference_points_xy = ttnn.reshape(
