@@ -965,6 +965,7 @@ _PACK_CLOSED_OFF_ROWS = (
     ("LoFi", 0, "F32", "B4", "B4", 1, 3, 8, False),
     ("LoFi", 0, "F32", "B4", "B4", 1, 3, 32, False),
     ("LoFi", 0, "F32", "B4", "B4", 1, 5, 8, False),
+    ("LoFi", 0, "F32", "B4", "B4", 1, 5, 32, False),
     ("LoFi", 0, "F32", "B8", "B4", 1, 2, 3, False),
     ("LoFi", 0, "F32", "B8", "B4", 1, 2, 8, False),
     ("LoFi", 0, "F32", "B8", "B4", 1, 2, 32, False),

@@ -1549,6 +1549,7 @@ inline constexpr matmul_pack_closed_off_cell matmul_pack_closed_off_cells[] = {
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 32, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 8, false},
+    {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 32, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 3, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 32, false},
