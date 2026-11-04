@@ -16,6 +16,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -64,6 +65,8 @@ class Qwen36Model:
         self.device = mesh_device
         self.mesh_device = mesh_device  # Generator reads model.mesh_device
         self.num_devices = mesh_device.get_num_devices()
+        if tpc.is_2d_mesh(mesh_device):
+            self.num_devices = args.num_devices  # the TP degree (mesh axis 1); rows replicate or split the sequence
         # CCL for multi-device all-reduce; None on single device (ops no-op).
         if self.num_devices > 1:
             from models.tt_transformers.tt.ccl import TT_CCL
@@ -185,7 +188,7 @@ class Qwen36Model:
             )
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
-            lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            lm_mapper = tpc.tp_shard_mapper(mesh_device, -1)
             lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
         else:
             lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
@@ -1898,12 +1901,26 @@ class Qwen36Model:
         return cos, sin
 
     def _forward_prefill_chunk_tp(
-        self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
+        self,
+        token_buf,
+        cos_buf,
+        sin_buf,
+        chunk_start_idx_tensor,
+        full_page_table,
+        chunk_page_table,
+        seq_len=None,
+        gdn_capture_state=True,
+        gdn_carry_state=True,
+        sp=None,
     ):
         """TP trace-safe single-chunk prefill (replicated persistent buffers).
         Full chunk (valid_len==chunk_size); flexible SDPA via device chunk_start_idx.
-        Returns hidden [1,1,chunk_size,dim]."""
-        chunk_size = self._chunked_chunk_size
+        seq_len: tokens in token_buf (default _chunked_chunk_size); another size serves a prefill-only bucket.
+        gdn_capture_state=False skips the GDN decode-state (conv_states) refresh, for prefill-only traces.
+        gdn_carry_state=False: GDN layers start from zero state and drop their final state (prefill-only bucket traces).
+        sp: tt/sp.py SeqParallel; token_buf/cos/sin hold this row's seq_len tokens of a sequence split over mesh rows.
+        Returns hidden [1,1,seq_len,dim]."""
+        chunk_size = self._chunked_chunk_size if seq_len is None else seq_len
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, chunk_size, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -1921,10 +1938,19 @@ class Qwen36Model:
                     page_table=full_page_table,
                     chunk_page_table=chunk_page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    sp=sp,
                 )
             else:
                 # valid_len=None: no GDN mask; trace-safe static conv capture (matches valid_len==chunk_size).
-                x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=None)
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=None,
+                    gdn_capture_state=gdn_capture_state,
+                    gdn_carry_state=gdn_carry_state,
+                    sp=sp,
+                )
             ttnn.deallocate(x)
             x = x_new
         return x

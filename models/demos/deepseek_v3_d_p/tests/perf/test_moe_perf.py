@@ -70,19 +70,15 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-10-15: mean of 23 CI LoudBox (bh_loudbox) runs, 37705811976 through
-        # 38733452366 (3,000,492-3,066,813 ns, sd 0.6%). Main stepped down between
-        # ca3797a3df8 (last pass, run 37648881647) and 496333d8fac (first miss, run 37705811976).
-        expected_ns_8x1=3_031_260,
+        # CI LoudBox (bh_loudbox) run 40424867859, 2026-10-27. A 23-run cut of this slot had sd 0.6%.
+        expected_ns_8x1=2_951_400,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-10-15 alongside the 8x1 slot: 5 of the same 23 runs read 5,439,456-5,442,690 ns,
-        # just under the old 5,445,465 floor, and the rest passed just above it (passing values are
-        # not logged), so the centre sits at that floor.
+        # CI LoudBox (bh_loudbox) run 40424867859, 2026-10-27.
         # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
         # speedup -- diff the Matmul/CCL/Other split against a main run before trusting a miss.
         # This gate has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
-        expected_ns_2x4=5_445_000,
+        expected_ns_2x4=5_274_000,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

@@ -31,7 +31,7 @@
 #include "impl/debug/debug_helpers.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -63,7 +63,7 @@ static void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
