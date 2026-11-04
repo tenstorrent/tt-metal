@@ -83,7 +83,6 @@ class DispatcherCoreData:
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
-    # Inspector's record of the kernel on this RISC, None if Inspector doesn't know it.
     kernel: KernelData | None = None
     # Host-assigned id from the previous launch message entry (best-effort).
     # Not serialized by default; used by scripts that need accurate previous-op tracking.

@@ -129,7 +129,6 @@ class RunningOperationAggregation:
         self.previous_operation_parameters = previous_operation_parameters
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
-        # Inspector records of the kernels the op runs, by watcher kernel id.
         self.kernels: dict[int, KernelData] = {}
 
     def add_core(self, device_label: str, location: OnChipCoordinate, core: DispatcherCoreData) -> None:

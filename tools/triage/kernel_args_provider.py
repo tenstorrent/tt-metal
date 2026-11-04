@@ -9,14 +9,14 @@ Usage:
 
 Description:
     Data provider for the arguments of the kernel each RISC runs: its compile-time args, its runtime
-    args on this core and its common runtime args, for dump_callstacks and dump_running_operations.
+    args on this core and its common runtime args.
 
     Compile-time args come from Inspector, which copies them when the kernel is compiled; they never
     change. Runtime args are read from L1, where the kernel reads them: kernel_config_base plus the
     RISC's rta_offset (crta_offset for common args) from the launch message. The host's copies can be
     older or newer than what a hung kernel uses, so L1 is the only exact source. L1 holds where each
     list starts but not how long it is, so Inspector gives the number of words to read. With watcher
-    asserts on, each list starts with a count word, which is skipped.
+    asserts enabled, each list is shifted by one word.
 
     Each value carries the name metal gives it: Metal 2.0 arg names, tensor::<accessor> and
     scratch::<accessor> slots. Other values are known by position only.
@@ -109,7 +109,7 @@ class KernelArgsProvider:
 @triage_singleton
 def run(args, context: Context) -> KernelArgsProvider:
     configuration = get_configuration_provider(args, context)
-    # Metal's rule for the count word: is_watcher_assert_enabled in tt_metal/impl/program/dispatch.cpp
+    # With watcher asserts enabled, each runtime arg list is shifted by one word.
     disabled_features = (configuration.get("watcher_disabled_features") or "").split(", ")
     watcher_asserts = configuration.get_bool("watcher_enabled") and "ASSERT" not in disabled_features
     return KernelArgsProvider(get_dispatcher_data(args, context), watcher_asserts)

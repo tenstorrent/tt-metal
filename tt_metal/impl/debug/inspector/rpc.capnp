@@ -23,7 +23,7 @@ struct RuntimeArgCount {
 
 # Values live in L1 at kernel_config_base + rta_offset (crta_offset for common args).
 struct RuntimeArgs {
-    names @0 :List(Text);  # by word index, empty if unnamed; words past the end are unnamed
+    names @0 :List(Text);  # names[i] names word i, empty if unnamed; words past the end, like varargs, are unnamed
     counts @1 :List(RuntimeArgCount);  # kernel cores not listed have no args
 }
 
@@ -34,7 +34,7 @@ struct KernelData {
     source @3 :Text;
     programId @4 :UInt64;
     processorElfPaths @5 :List(Text);
-    compileTimeArgs @6 :List(KernelArg);  # positional in order, then named
+    compileTimeArgs @6 :List(KernelArg);  # positional, then named
     runtimeArgs @7 :RuntimeArgs;
     commonRuntimeArgs @8 :RuntimeArgs;
 }

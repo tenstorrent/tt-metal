@@ -76,7 +76,9 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
         .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
-        .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
+        .compile_time_args = {{"ct_marker", 0x5678}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"rt_marker"}, .common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 1},
     };
@@ -108,13 +110,15 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
     };
 
     // The reader and writer get their buffer addresses from the tensor arguments and the compute kernel
-    // needs none; the writer's one runtime arg is the GlobalSemaphore it bumps, and its unnamed one is
-    // checked by triage, same as in add_2_integers_hang. Kernels without runtime args may be left out.
+    // needs none; the writer's one runtime arg is the GlobalSemaphore it bumps, and its ct_marker, rt_marker
+    // and unnamed runtime arg are checked by triage, same as in add_2_integers_hang. Kernels without runtime
+    // args may be left out.
     // The framework applies these run args for us; the factory must not call SetProgramRunArgs itself.
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
+            .runtime_arg_values = {{"rt_marker", {{NodeCoord{0, 0}, 0x9abc}}}},
             .common_runtime_arg_values =
                 {{"incremented_semaphore", operation_attributes.incremented_semaphore_address}},
             .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{NodeCoord{0, 0}, {0x1234}}}},

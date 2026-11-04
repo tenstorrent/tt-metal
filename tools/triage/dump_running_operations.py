@@ -20,7 +20,7 @@ Description:
       - Includes current Op Id/Name/Params, previous Op (Prev Op Id/Name/Params), and device/core coverage:
           - Device Cnt / Core Cnt: total unique devices/cores running this Op Id
           - Devices / Cores: enumerated lists (may be truncated with "..." for readability)
-          - CT Args (with -v): one line per kernel the op runs, with its compile-time args
+          - CT Args: one line per kernel the op runs, with its compile-time args
             (see kernel_args_provider)
 
     Companion scripts:
@@ -77,7 +77,7 @@ class RunningOperationSummary:
     core_count: int = triage_field("Core Cnt")
     devices: list[str] = triage_field("Devices", collection_serializer(", "))
     cores: list[str] = triage_field("Cores", collection_serializer("\n"))
-    compile_time_args: list[str] = triage_field("CT Args", collection_serializer("\n"), verbose=1)
+    compile_time_args: list[str] = triage_field("CT Args", collection_serializer("\n"))
 
 
 def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOperationSummary:

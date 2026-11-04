@@ -5,7 +5,6 @@
 #pragma once
 
 #include <chrono>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,16 +32,16 @@ namespace tt::tt_metal::inspector {
 using time_point = std::chrono::time_point<std::chrono::high_resolution_clock>;
 
 struct KernelArg {
-    std::string name;  // empty when the arg has no name
+    std::string name;  // empty if unnamed
     uint32_t value{};
 };
 
-// Values are read from L1, since host copies go stale.
+// Triage reads the values from L1, since host copies go stale.
 struct RuntimeArgs {
-    // Names by word index, empty when the word has no name. Words past the end have no name.
+    // names[i] names word i, empty if unnamed. Words past the end, like varargs, are unnamed.
     std::vector<std::string> names;
     // Arg count -> cores with that many args.
-    std::map<uint32_t, CoreRangeSet> counts;
+    std::unordered_map<uint32_t, CoreRangeSet> counts;
 };
 
 struct KernelData {
@@ -55,8 +54,7 @@ struct KernelData {
     // kernel are left empty. Served to tt-triage over RPC so it doesn't have to reconstruct paths from per-processor
     // naming conventions.
     std::vector<std::string> processor_elf_paths;
-    // Positional args in order, then named args.
-    std::vector<KernelArg> compile_time_args;
+    std::vector<KernelArg> compile_time_args;  // positional, then named
     RuntimeArgs runtime_args;
     RuntimeArgs common_runtime_args;
 };

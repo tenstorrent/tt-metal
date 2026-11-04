@@ -139,7 +139,9 @@ int main() {
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
-        .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
+        .compile_time_args = {{"ct_marker", 0x5678}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"rt_marker"}, .common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = writer_dm_config,
         .advanced_options = {.num_runtime_varargs = 1},
     };
@@ -183,13 +185,14 @@ int main() {
 
     // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
     // arguments and the compute kernel needs none; the writer's one runtime arg is the GlobalSemaphore it bumps.
-    // The writer also gets one unnamed runtime arg the kernel never reads, which test_dump_callstacks_kernel_args
-    // checks.
+    // The writer's ct_marker, rt_marker and unnamed runtime arg are never read by the kernel; test_dump_callstacks
+    // checks them.
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
+            .runtime_arg_values = {{"rt_marker", {{node, 0x9abc}}}},
             .common_runtime_arg_values =
                 {{"incremented_semaphore", static_cast<uint32_t>(incremented_semaphore.address())}},
             .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {0x1234}}}},

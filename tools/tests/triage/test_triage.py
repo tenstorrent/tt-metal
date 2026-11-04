@@ -715,7 +715,8 @@ class TestTriage:
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
             assert any(
-                "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800" in op.compile_time_args for op in matching
+                "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800, ct_marker=0x5678" in op.compile_time_args
+                for op in matching
             ), f"Writer compile-time args missing. Got: {[op.compile_time_args for op in matching]}"
 
     def test_dump_semaphores(self):
@@ -784,6 +785,7 @@ class TestTriage:
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
+        semaphores = self.run_triage_script("dump_semaphores.py")
         result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
@@ -862,24 +864,20 @@ class TestTriage:
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
 
-    def test_dump_callstacks_kernel_args(self):
-        # The hang app's writer gets the address of the GlobalSemaphore that starts at 5 as a named common arg, and
-        # 0x1234 as its one unnamed runtime arg. A tensor's compile-time args are its accessor flags (2: in DRAM) and
-        # its page size (2048 B), and its address is a common arg.
-        semaphores = self.run_triage_script("dump_semaphores.py")
-        incremented_semaphore = next(
-            row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
-        )
-        result = self.run_triage_script("dump_callstacks.py")
-        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
-        args = {row.risc_name: row.result.kernel_args for row in result if row.location == location}
-
         def named(kernel_args):
             return [(arg.name, arg.value) for arg in kernel_args]
 
+        incremented_semaphore = next(
+            row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
+        )
+        args = {check.risc_name: check.result.kernel_args for check in filtered_results}
         writer, reader = args["brisc"], args["ncrisc"]
-        assert named(writer.compile_time_args) == [("tensor::out[0]", 2), ("tensor::out[1]", 2048)]
-        assert named(writer.runtime_args) == [(None, 0x1234)]
+        assert named(writer.compile_time_args) == [
+            ("tensor::out[0]", 2),
+            ("tensor::out[1]", 2048),
+            ("ct_marker", 0x5678),
+        ]
+        assert named(writer.runtime_args) == [("rt_marker", 0x9ABC), (None, 0x1234)]
         assert [arg.name for arg in writer.common_runtime_args] == ["incremented_semaphore", "tensor::out"]
         assert writer.common_runtime_args[0].value == incremented_semaphore
         assert named(reader.compile_time_args) == [

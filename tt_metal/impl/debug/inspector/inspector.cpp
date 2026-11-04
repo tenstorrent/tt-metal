@@ -305,7 +305,7 @@ void Inspector::program_offsets_finalized(const detail::ProgramImpl* program) no
             if (!kernel) {
                 continue;
             }
-            std::map<uint32_t, std::vector<CoreCoord>> cores_by_count;
+            std::unordered_map<uint32_t, std::vector<CoreCoord>> cores_by_count;
             for (const auto& core : kernel->cores_with_runtime_args()) {
                 cores_by_count[kernel->logical_runtime_arg_count(core)].push_back(core);
             }

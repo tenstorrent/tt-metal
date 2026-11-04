@@ -60,7 +60,7 @@ class CallstacksDataWithArgs(CallstacksData):
 
 
 @dataclass
-class CallstacksDataWithLocals(CallstacksDataWithArgs):
+class CallstacksDataWithArgsAndLocals(CallstacksDataWithArgs):
     """CallstacksDataWithArgs plus the Locals column, used only with --full-callstack."""
 
     frame_locals: str | None = triage_field("Locals")
@@ -99,7 +99,7 @@ def dump_callstacks(
         if not callstack_provider.full_callstack or callstack_provider.gdb_callstack:
             return CallstacksDataWithArgs(**vars(callstacks), kernel_args=kernel_args)
         frame_locals = _format_frame_locals(callstacks.kernel_callstack_with_message.callstack)
-        return CallstacksDataWithLocals(**vars(callstacks), kernel_args=kernel_args, frame_locals=frame_locals)
+        return CallstacksDataWithArgsAndLocals(**vars(callstacks), kernel_args=kernel_args, frame_locals=frame_locals)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
