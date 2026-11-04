@@ -124,20 +124,11 @@ public:
                 const size_t position = bottom_up ? step : free_blocks.size() - 1 - step;
                 const size_t block = free_blocks[position];
                 if (policy == SearchPolicy::BEST) {
-                    if (size_of(block) == size) {
-                        target_block = block;
-                        target_class = &free_blocks;
-                        target_position = position;
-                        break;
-                    }
-                    if (size_of(block) >= size &&
-                        (!target_block.has_value() || size_of(block) < size_of(*target_block))) {
-                        target_block = block;
-                        target_class = &free_blocks;
-                        target_position = position;
-                    }
-                    if (target_block.has_value()) {
-                        break;
+                    // Every block of a higher class is larger than every block of this one, so the
+                    // first fitting block ends the search.
+                    if (size_of(block) >= size) {
+                        free_blocks.erase(free_blocks.begin() + static_cast<std::ptrdiff_t>(position));
+                        return block;
                     }
                 } else {
                     if (size_of(block) < size) {
