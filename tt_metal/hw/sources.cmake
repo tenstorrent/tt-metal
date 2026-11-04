@@ -1,3 +1,5 @@
+# A device version of an observability/api header, in observability/api/, belongs in this list too: an installed
+# runtime's JIT stages it from libexec (tt_metal/jit_build/staged_includes.hpp).
 set(HW_JIT_API_HEADERS
     inc/experimental/drisc_mode.h
     inc/experimental/gddr_dma.h

@@ -324,6 +324,74 @@ set(GPP_FLAGS_common
     -fno-tree-loop-distribute-patterns
 )
 
+# Every observability/api header must compile on its own for the device, as the JIT build stages it
+# (tt_metal/jit_build/staged_includes.hpp): the host's folder, tt_metal/observability/api, merged with this one's,
+# observability/api, where a header replaces the host header of the same name. The view below is that merge, as links.
+# A header that breaks the device compile -- C++20, an exception, RTTI, a dynamic initializer, a host-only include --
+# then fails this build, naming the header, instead of a user's first kernel.
+file(
+    GLOB OBSERVABILITY_API_HOST_FILES
+    CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tt_metal/observability/api/*.h"
+    "${PROJECT_SOURCE_DIR}/tt_metal/observability/api/*.hpp"
+)
+file(
+    GLOB OBSERVABILITY_API_DEVICE_FILES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/observability/api/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/observability/api/*.hpp"
+)
+set(OBSERVABILITY_API_DEVICE_VIEW "${CMAKE_CURRENT_BINARY_DIR}/observability_api_device_view")
+file(REMOVE_RECURSE "${OBSERVABILITY_API_DEVICE_VIEW}")
+file(MAKE_DIRECTORY "${OBSERVABILITY_API_DEVICE_VIEW}/observability/api")
+set(OBSERVABILITY_API_DEVICE_NAMES "")
+foreach(header IN LISTS OBSERVABILITY_API_HOST_FILES OBSERVABILITY_API_DEVICE_FILES)
+    get_filename_component(name "${header}" NAME)
+    file(REMOVE "${OBSERVABILITY_API_DEVICE_VIEW}/observability/api/${name}")
+    file(
+        CREATE_LINK
+            "${header}"
+            "${OBSERVABILITY_API_DEVICE_VIEW}/observability/api/${name}"
+        SYMBOLIC
+    )
+    list(APPEND OBSERVABILITY_API_DEVICE_NAMES "${name}")
+endforeach()
+list(REMOVE_DUPLICATES OBSERVABILITY_API_DEVICE_NAMES)
+# The JIT's language and code-generation flags, from jit_build/build.cpp.
+set(OBSERVABILITY_API_DEVICE_FLAGS
+    -std=c++17
+    -ftt-nttp
+    -ftt-constinit
+    -ftt-consteval
+    -ftt-no-dyninit
+    -fno-exceptions
+    -fno-rtti
+    -fno-use-cxa-atexit
+    -Wall
+    -Werror
+)
+set(OBSERVABILITY_API_CHECKS "")
+foreach(ARCH IN LISTS ARCHS)
+    foreach(name IN LISTS OBSERVABILITY_API_DEVICE_NAMES)
+        set(stamp "${OBSERVABILITY_API_DEVICE_VIEW}/checked/${ARCH}/${name}")
+        add_custom_command(
+            OUTPUT
+                ${stamp}
+            COMMAND
+                ${GPP_CMD} ${GPP_FLAGS_${ARCH}} ${OBSERVABILITY_API_DEVICE_FLAGS} -fsyntax-only -x c++
+                -I${OBSERVABILITY_API_DEVICE_VIEW} -include observability/api/${name} /dev/null
+            COMMAND
+                ${CMAKE_COMMAND} -E touch ${stamp}
+            DEPENDS
+                ${OBSERVABILITY_API_HOST_FILES}
+                ${OBSERVABILITY_API_DEVICE_FILES}
+            COMMENT "Checking observability/api/${name} compiles for the ${ARCH} device"
+            VERBATIM
+        )
+        list(APPEND OBSERVABILITY_API_CHECKS ${stamp})
+    endforeach()
+endforeach()
+
 # We are going to build 5 or 6 object files foreach ARCH
 # old-style
 foreach(ARCH IN LISTS ARCHS)
@@ -492,6 +560,7 @@ add_custom_target(
     DEPENDS
         ${LD_FILES}
         ${OBJ_FILES}
+        ${OBSERVABILITY_API_CHECKS}
 )
 
 add_library(hw INTERFACE)
@@ -513,6 +582,19 @@ file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*.h)
 file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*.h)
 
 include(sources.cmake)
+
+# An installed runtime stages the device's observability/api headers from libexec, so each must be in
+# HW_JIT_API_HEADERS.
+foreach(header IN LISTS OBSERVABILITY_API_DEVICE_FILES)
+    file(RELATIVE_PATH relative "${CMAKE_CURRENT_SOURCE_DIR}" "${header}")
+    if(NOT relative IN_LIST HW_JIT_API_HEADERS)
+        message(
+            FATAL_ERROR
+            "tt_metal/hw/${relative} is not in HW_JIT_API_HEADERS (tt_metal/hw/sources.cmake), so an install would not "
+            "ship it to the JIT"
+        )
+    endif()
+endforeach()
 
 target_sources(
     hw
