@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "tensor_shape.h"
 
 namespace ckernel::packer
 {
@@ -588,9 +589,9 @@ inline void set_packer_config(
     cache_exponential_section_sizes_in_gprs<false>(num_faces, partial_face);
 }
 
-inline void set_packer_l1_offset(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void set_packer_l1_offset(const std::uint32_t pack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    const std::uint32_t face_dim = tensor_shape.face_r_dim * FACE_C_DIM;
 
     std::uint32_t l1_offset_1 = IS_BFP_FORMAT(pack_dst_format)
                                     ? 1
@@ -666,12 +667,12 @@ template <bool is_fp32_dest_acc_en>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size  = 0,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t tile_size           = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                 = false)
 {
     // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -758,7 +759,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     }
 
     // Set l1 address offset
-    set_packer_l1_offset(pack_dst_format, face_r_dim);
+    set_packer_l1_offset(pack_dst_format, tensor_shape);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
@@ -779,15 +780,14 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size           = 0,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t num_faces           = 4,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
     const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0 pack hardware configuration supports only PackMode::Default and PackMode::Untilize");
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -831,7 +831,7 @@ inline void configure_pack(
 
     set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
 
-    set_packer_l1_offset(pack_dst_format, face_r_dim);
+    set_packer_l1_offset(pack_dst_format, tensor_shape);
 
     // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
     // is pack_mode-dependent (Untilize packs a single face row, Default a full face) and hw-configure
