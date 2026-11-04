@@ -577,9 +577,11 @@ void kernel_main() {
 
     // Tensor addresses are the same on every core, so the factory passes them as the first common runtime args.
     constexpr uint32_t address_common_arg_count = ring_joint::kWriterAddressCommonArgCount;
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t joint_out_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t stats_addr = get_common_arg_val<uint32_t>(2);
+    uint32_t common_argidx = 0;
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t joint_out_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t stats_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    ASSERT(common_argidx == address_common_arg_count);
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
