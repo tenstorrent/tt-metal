@@ -19,8 +19,8 @@ extern "C" __attribute__((noinline, used)) void set_word()
 }
 
 // CHECK-LABEL: <set_word>:
-// CHECK-NEXT: ttsetdmareg 1,5752,0,10
-// CHECK-NEXT: ttsetdmareg 0,4660,0,11
+// CHECK-NEXT: ttsetdmareg 1,5752,0,10{{$}}
+// CHECK-NEXT: ttsetdmareg 0,4660,0,11{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_halves()
@@ -30,8 +30,8 @@ extern "C" __attribute__((noinline, used)) void set_halves()
 }
 
 // CHECK-LABEL: <set_halves>:
-// CHECK-NEXT: ttsetdmareg 1,5752,0,126
-// CHECK-NEXT: ttsetdmareg 0,4660,0,127
+// CHECK-NEXT: ttsetdmareg 1,5752,0,126{{$}}
+// CHECK-NEXT: ttsetdmareg 0,4660,0,127{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void add_gpr_and_immediate()
@@ -41,8 +41,8 @@ extern "C" __attribute__((noinline, used)) void add_gpr_and_immediate()
 }
 
 // CHECK-LABEL: <add_gpr_and_immediate>:
-// CHECK-NEXT: ttadddmareg 0,1,3,2
-// CHECK-NEXT: ttadddmareg 1,1,63,2
+// CHECK-NEXT: ttadddmareg 0,1,3,2{{$}}
+// CHECK-NEXT: ttadddmareg 1,1,63,2{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void subtract_gpr_and_immediate()
@@ -52,8 +52,8 @@ extern "C" __attribute__((noinline, used)) void subtract_gpr_and_immediate()
 }
 
 // CHECK-LABEL: <subtract_gpr_and_immediate>:
-// CHECK-NEXT: ttsubdmareg 0,4,6,5
-// CHECK-NEXT: ttsubdmareg 1,4,7,5
+// CHECK-NEXT: ttsubdmareg 0,4,6,5{{$}}
+// CHECK-NEXT: ttsubdmareg 1,4,7,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void multiply_low_u16_gpr_and_immediate()
@@ -63,8 +63,8 @@ extern "C" __attribute__((noinline, used)) void multiply_low_u16_gpr_and_immedia
 }
 
 // CHECK-LABEL: <multiply_low_u16_gpr_and_immediate>:
-// CHECK-NEXT: ttmuldmareg 0,7,9,8
-// CHECK-NEXT: ttmuldmareg 1,7,10,8
+// CHECK-NEXT: ttmuldmareg 0,7,9,8{{$}}
+// CHECK-NEXT: ttmuldmareg 1,7,10,8{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void bitwise_gpr_and_immediate()
@@ -78,12 +78,12 @@ extern "C" __attribute__((noinline, used)) void bitwise_gpr_and_immediate()
 }
 
 // CHECK-LABEL: <bitwise_gpr_and_immediate>:
-// CHECK-NEXT: ttbitwopdmareg 0,0,10,12,11
-// CHECK-NEXT: ttbitwopdmareg 1,0,10,1,11
-// CHECK-NEXT: ttbitwopdmareg 0,1,13,15,14
-// CHECK-NEXT: ttbitwopdmareg 1,1,13,2,14
-// CHECK-NEXT: ttbitwopdmareg 0,2,16,18,17
-// CHECK-NEXT: ttbitwopdmareg 1,2,16,3,17
+// CHECK-NEXT: ttbitwopdmareg 0,0,10,12,11{{$}}
+// CHECK-NEXT: ttbitwopdmareg 1,0,10,1,11{{$}}
+// CHECK-NEXT: ttbitwopdmareg 0,1,13,15,14{{$}}
+// CHECK-NEXT: ttbitwopdmareg 1,1,13,2,14{{$}}
+// CHECK-NEXT: ttbitwopdmareg 0,2,16,18,17{{$}}
+// CHECK-NEXT: ttbitwopdmareg 1,2,16,3,17{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void shift_gpr_and_immediate()
@@ -95,10 +95,10 @@ extern "C" __attribute__((noinline, used)) void shift_gpr_and_immediate()
 }
 
 // CHECK-LABEL: <shift_gpr_and_immediate>:
-// CHECK-NEXT: ttshiftdmareg 0,0,19,21,20
-// CHECK-NEXT: ttshiftdmareg 1,0,19,4,20
-// CHECK-NEXT: ttshiftdmareg 0,1,22,24,23
-// CHECK-NEXT: ttshiftdmareg 1,1,22,5,23
+// CHECK-NEXT: ttshiftdmareg 0,0,19,21,20{{$}}
+// CHECK-NEXT: ttshiftdmareg 1,0,19,4,20{{$}}
+// CHECK-NEXT: ttshiftdmareg 0,1,22,24,23{{$}}
+// CHECK-NEXT: ttshiftdmareg 1,1,22,5,23{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void compare_modes()
@@ -112,12 +112,12 @@ extern "C" __attribute__((noinline, used)) void compare_modes()
 }
 
 // CHECK-LABEL: <compare_modes>:
-// CHECK-NEXT: ttcmpdmareg 0,0,25,27,26
-// CHECK-NEXT: ttcmpdmareg 1,0,25,6,26
-// CHECK-NEXT: ttcmpdmareg 0,1,28,30,29
-// CHECK-NEXT: ttcmpdmareg 1,1,28,7,29
-// CHECK-NEXT: ttcmpdmareg 0,2,31,33,32
-// CHECK-NEXT: ttcmpdmareg 1,2,31,8,32
+// CHECK-NEXT: ttcmpdmareg 0,0,25,27,26{{$}}
+// CHECK-NEXT: ttcmpdmareg 1,0,25,6,26{{$}}
+// CHECK-NEXT: ttcmpdmareg 0,1,28,30,29{{$}}
+// CHECK-NEXT: ttcmpdmareg 1,1,28,7,29{{$}}
+// CHECK-NEXT: ttcmpdmareg 0,2,31,33,32{{$}}
+// CHECK-NEXT: ttcmpdmareg 1,2,31,8,32{{$}}
 // CHECK-NEXT: ret
 
 // Descriptor operation() returns the same word the issuing calls emit.
@@ -152,17 +152,17 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttsetdmareg 1,5752,0,126
-// CHECK-NEXT: ttsetdmareg 0,4660,0,127
-// CHECK-NEXT: ttadddmareg 0,1,3,2
-// CHECK-NEXT: ttsubdmareg 1,4,63,5
-// CHECK-NEXT: ttmuldmareg 0,7,9,8
-// CHECK-NEXT: ttbitwopdmareg 1,0,10,1,11
-// CHECK-NEXT: ttbitwopdmareg 0,1,13,15,14
-// CHECK-NEXT: ttbitwopdmareg 1,2,16,3,17
-// CHECK-NEXT: ttshiftdmareg 0,0,19,21,20
-// CHECK-NEXT: ttshiftdmareg 1,1,22,5,23
-// CHECK-NEXT: ttcmpdmareg 0,0,25,27,26
-// CHECK-NEXT: ttcmpdmareg 1,1,28,7,29
-// CHECK-NEXT: ttcmpdmareg 0,2,31,33,32
+// CHECK-NEXT: ttsetdmareg 1,5752,0,126{{$}}
+// CHECK-NEXT: ttsetdmareg 0,4660,0,127{{$}}
+// CHECK-NEXT: ttadddmareg 0,1,3,2{{$}}
+// CHECK-NEXT: ttsubdmareg 1,4,63,5{{$}}
+// CHECK-NEXT: ttmuldmareg 0,7,9,8{{$}}
+// CHECK-NEXT: ttbitwopdmareg 1,0,10,1,11{{$}}
+// CHECK-NEXT: ttbitwopdmareg 0,1,13,15,14{{$}}
+// CHECK-NEXT: ttbitwopdmareg 1,2,16,3,17{{$}}
+// CHECK-NEXT: ttshiftdmareg 0,0,19,21,20{{$}}
+// CHECK-NEXT: ttshiftdmareg 1,1,22,5,23{{$}}
+// CHECK-NEXT: ttcmpdmareg 0,0,25,27,26{{$}}
+// CHECK-NEXT: ttcmpdmareg 1,1,28,7,29{{$}}
+// CHECK-NEXT: ttcmpdmareg 0,2,31,33,32{{$}}
 // CHECK-NEXT: ret
