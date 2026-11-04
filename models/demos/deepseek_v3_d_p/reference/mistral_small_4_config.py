@@ -53,7 +53,7 @@ class MistralSmall4Config:
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 48
+    MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group
