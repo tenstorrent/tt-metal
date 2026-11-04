@@ -24,7 +24,6 @@
 #include <map>
 #include <optional>
 #include <cmath>
-#include <cstdlib>  // L1 STUDY (temporary): std::getenv
 #include <limits>
 
 #include <tt-metalium/buffer.hpp>
@@ -969,74 +968,36 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // 3 K/V pages with group delivery.
-    uint32_t fit_slots = fit_slots_for(kv_cb_pages, false);
+    // The K/V depth with the fewest passes (a pass re-streams every piece and repeats every step's fixed cost); at
+    // equal passes the deeper one: pair steps (4 pages), then the default depth (3 with group delivery), then 2.
+    struct KvLayout {
+        uint32_t pages;
+        bool pairs;
+    };
+    std::vector<KvLayout> kv_layouts;
+    if (pair_steps_eligible) {
+        kv_layouts.push_back({4, true});
+    }
+    kv_layouts.push_back({kv_cb_pages, false});
+    if (kv_cb_pages > 2) {
+        kv_layouts.push_back({2, false});
+    }
+    uint32_t fit_slots = 0;
+    for (const auto& layout : kv_layouts) {
+        const uint32_t slots = fit_slots_for(layout.pages, layout.pairs);
+        if (slots > 0 && passes_for(slots) < passes_for(fit_slots)) {
+            fit_slots = slots;
+            kv_cb_pages = layout.pages;
+            pair_steps = layout.pairs;
+        }
+    }
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
         "k_chunk_size.",
-        cb_bytes_for_slots(1, kv_cb_pages, false),
+        cb_bytes_for_slots(1, 2, false),
         usable_l1,
         Sk_chunk_t * tt::constants::TILE_HEIGHT);
-    // Pair steps (4 K/V pages) only when they fit without an extra pass (a pass re-streams every piece).
-    if (pair_steps_eligible) {
-        const uint32_t pair_slots = fit_slots_for(4, true);
-        if (pair_slots > 0 && passes_for(pair_slots) <= passes_for(fit_slots)) {
-            pair_steps = true;
-            kv_cb_pages = 4;
-            fit_slots = pair_slots;
-        }
-    }
-    // ---- L1 STUDY (temporary, not for commit) ----
-    // Logs the pass split each candidate layout would get, with the state slots (output, sum) in bf16 or fp32, and
-    // lets TT_SPARSE_STUDY_KV = 2 | 3 | 4p force 2 / 3 K/V pages without pair steps or 4 pages with them, to time the
-    // space-freeing choices at bf16.
-    {
-        const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
-        const auto study_bytes = [&](uint32_t slots, uint32_t kv_pages, bool pairs, bool fp32_state) -> uint64_t {
-            uint64_t bytes = cb_bytes_for_slots(slots, kv_pages, pairs);
-            if (fp32_state) {
-                bytes += static_cast<uint64_t>(slots) * (out_im_tiles * (fp32_tile - out_tile_size) +
-                                                         statistics_tiles * (fp32_tile - stats_tile_size));
-            }
-            return bytes;
-        };
-        for (const bool fp32_state : {false, true}) {
-            for (const auto& [kv_pages, pairs] : {std::pair{2u, false}, std::pair{3u, false}, std::pair{4u, true}}) {
-                if (pairs && !pair_steps_eligible) {
-                    continue;
-                }
-                uint32_t slots = max_slots;
-                while (slots > 0 && study_bytes(slots, kv_pages, pairs, fp32_state) > usable_l1) {
-                    --slots;
-                }
-                const uint32_t passes = passes_for(slots);
-                const uint32_t per_pass = slots > 0 ? tt::div_up(max_q_per_core, passes) : 0;
-                log_info(
-                    tt::LogOp,
-                    "SparseRingSDPA L1 study: {} state, {} K/V pages, pairs {}: {} Q blocks per core -> {} pass(es) of "
-                    "{} ({} of {} B; {} B to spare)",
-                    fp32_state ? "fp32" : "bf16",
-                    kv_pages,
-                    pairs ? "on" : "off",
-                    max_q_per_core,
-                    passes,
-                    per_pass,
-                    per_pass > 0 ? study_bytes(per_pass, kv_pages, pairs, fp32_state) : 0,
-                    usable_l1,
-                    per_pass > 0 ? static_cast<int64_t>(usable_l1) -
-                                       static_cast<int64_t>(study_bytes(per_pass, kv_pages, pairs, fp32_state))
-                                 : 0);
-            }
-        }
-        if (const char* forced = std::getenv("TT_SPARSE_STUDY_KV")) {
-            pair_steps = std::string(forced) == "4p";
-            kv_cb_pages = pair_steps ? 4u : static_cast<uint32_t>(std::stoi(forced));
-            fit_slots = fit_slots_for(kv_cb_pages, pair_steps);
-            log_info(tt::LogOp, "SparseRingSDPA L1 study: forced {} K/V pages, pairs {}", kv_cb_pages, pair_steps);
-        }
-    }
-    // ---- end L1 STUDY ----
     const uint32_t num_q_passes = passes_for(fit_slots);
     // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
     const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
