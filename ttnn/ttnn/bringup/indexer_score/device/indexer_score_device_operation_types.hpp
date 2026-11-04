@@ -156,6 +156,11 @@ struct operation_attributes_t {
     // causal diagonal, no straddle. Host-scalar chunk_start_idx only (the metadata path derives the rotated
     // geometry on device). HASHED (it selects the causal geometry; cheap insurance against a stale override).
     bool natural_query_blocks{false};
+    // Bring-up fork option (DeepSeek-V4.1 P.31; default 0 = block_cyclic_chunk_local): with natural_query_blocks, the
+    // query tokens per SP rank, when the queries' chunk differs from the key cache's (a small chunk scoring keys a
+    // larger chunk wrote): device (d, c) holds positions chunk_start_idx + d*natural_query_rows + c*Sq + [0, Sq).
+    // The keys keep the cache's block-cyclic layout (block_cyclic_chunk_local). HASHED.
+    uint32_t natural_query_rows{0};
     // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
     // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
     // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.

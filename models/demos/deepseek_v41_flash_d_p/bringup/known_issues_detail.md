@@ -988,3 +988,92 @@ layer 20 + k is exact from start + (k + 1) x 127; the checked rows agree with th
 (final hidden 0.19732 both, limit 0.25615; worst window KV L27 0.17080 both, limit 0.21494; top-5 1.0).
 Test gotcha: `testing/e2e_limits.check` takes the limit kind from the metric's `err_` prefix; a `skip_err_*` name gets
 the overlap limit (KeyError 'overlap'), so the test calls `err_limit` / `overlap_limit` directly.
+
+## P.31 DECODER_SKIP=replay128: the decoder tail and the short turn
+
+Owner pick 2026-11-03 (DeepSeek-V4.1-Flash's SWA Bounded Replay, arXiv 2609.19969, n_win 128; approximate by design;
+default off, ab.keep_default). Third value of P.30's switch `DECODER_SKIP` (off | exact | replay128).
+
+What it does (tt/model.py; one code path with exact but the tail length):
+- `begin_chunk(tokens, start, last=None, replay=False)`. `last` None (new default: not told, the framework harness and
+  the engine) runs every layer in every value (= P.30's True under exact). False skips the decoder (P.30). True under
+  replay128 runs the decoder only on the chunk's last <= 128 rows. `replay=True` (a request's first chunk on a cached
+  prefix, started `model.replay_rows` before its new tokens): under replay128 every layer's window is truncated at the
+  chunk start (`TtWindowCache.truncate`: the carry masked as P.30's `missing`, start class 0); under exact a no-op.
+  The caller's numbers: `replay_rows` exact 0 (the prefix's last chunk ran every layer: its window rows exist),
+  replay128 128; `last_rows` exact 2688 (P.30's pull-back of a short last chunk), replay128 0 (no pull-back).
+- The decoder tail (`build_tail`, called at load before the first chunk; lazily by the first tail chunk else): the
+  decoder layers 20-39 as a TtDS41Model of their own (`tail_of`), chunk `tail_chunk` = 32 SP TP rows rounded up to the
+  indexer's top-k keys (1024 on 8x4 = one tile row a chip: the 128 rows sit on mesh row 0, the rest of the chunk is the
+  pad past actual_end; 512 on 2x2 / 4x4 / 2x4). Its own window tables, rope rows, attention / indexer / norm / mHC
+  weights (duplicated: ~2.4 GiB a chip for 20 layers' attention, not measured), its MoE the main layer's at the tail
+  chunk (`TtMoEBlockLayer.at_chunk` -> `MoELayer.at`: the routed experts' device weights shared, the flat op replanned),
+  no compressor (layer 20's compressed KV / index keys come from the main state: `DS41DeviceState(compress=)` shares
+  them). Its indexers score keys the 5120-row chunks laid out: `TtIndexer.key_rows` + the fork option
+  `ring_indexer_score_dsa(natural_query_rows=)` (indexer_score CHANGELOG, P.31). The window path below 128 rows a chip
+  is bfp8_blocks (DS41-204). The sparse attention's window lists are the layer's own tables' (`_index_static`: base-0
+  table).
+- The request's last chunk under replay128: layers 0-19 over the chunk; layer 20 `kv_only` over the chunk (P.30's KV
+  projection: every compressed row and index key); then dec = ceil32(end - 128), rows [dec, end) moved to the tail's
+  load-time input by `tt/tail_send.py:TailSend` (2D fabric, prepared, one program a (offset, pieces) pattern; DS41-203);
+  the tail's layers 20-39 at start dec with every window truncated there; `final_norm` returns a `TailHidden` (the
+  tail's rows, positions from `.start`), `to_host` / `logits` / `free` take it. The tail's own state (`state.tail_state`)
+  holds its window caches (tail geometry: NOT the served 0_window_kv layout; decode would need them in the server's;
+  window KV is not gated for replay128, owner) and its top-k / candidate stores.
+- L1: the main and the tail MoE blocks coexist (DS41-202): `reserve_l1` 48 KB at the top before the main block is
+  built; the tail block's 41216 B of persistent words go there (checked: no new allocated L1 block below the
+  reservation; logged). MoEOptions.one_arena=False for the tail block (at 1024 tokens its exchange arena would start at
+  187584, below a head program's static CBs ending at 193920 on core (10, 0)), and the head's arena re-settled after the
+  exchange build (moe_block.py; a no-op when it lands where baked).
+- Runner (tt/runners/adapter.py): `last` defaults to None (the engine never passes it): every layer, as before.
+
+The gate's ladder / profile pass no `last` (framework harness): both A/B sides run the full chunk there (no difference
+by design, as P.30). The change is measured by tests/bringup/test_short_turn.py (gate unit P.31#test_short_turn):
+
+| short turn: 512 tokens on a 51200-token cached prefix (rung last's golden state), warm | exact | replay128 |
+|---|---|---|
+| chunk | [51200, 51712) | [51072, 51712) (128 replayed) |
+| wall (median of 5) ms | 224.1 | 216.4 |
+| device (rt profiler) ms | 178.27 | 142.62 |
+| final hidden rel at the last position (limit 0.2422) | 0.1339 | 0.1985 |
+| top-5 / top-1 at the last position | 1 / 1 | 1 / 1 |
+| final hidden rel over the last 128 rows (diagnostic) | 0.1776 | 0.5388 |
+The 128-row error is the truncated windows (the tail's first rows see few window keys; the last row sees 128).
+Change-on ladder rung last via measure: rc 0, final hidden 0.1902 / 0.2422 (= P.30), top-5 1.0.
+Fork test test_natural_query_rows (8x4): 128 (start, device) pairs, min PCC 0.9999984, worst rel 0.00193.
+Load: model 225-260 s, tail 50 s (in test_short_turn; not in the ladder / profile, which never build it).
+
+Gotchas: `ttnn.point_to_point` is 1D-only (DS41-203). The indexer's validation tied the queries' rows to the key stripe
+twice (the q_isl check and the causal geometry): the fork option covers both. MoE blocks: see DS41-202.
+Re-run: `DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py -s` (exact: DS41_DECODER_SKIP=exact);
+`BRINGUP_TEST_MESH=8x4 scripts/run_safe_pytest.sh --run-all
+ttnn/ttnn/bringup/indexer_score/tests/unit/test_natural_query_rows.py`; `measure --task P.31`.
+OV-3: nothing padded to get around a limit (the tail chunk is the smallest whole-tile SPMD chunk; its rows past
+actual_end are the model's usual pad). OV-23: one Python-built op added (TailSend), prepared (prepare_program /
+run_prepared, one program a pattern; host time not separated). OV-25: no fork suite run; only the new fork test.
+
+## Two MoE blocks (two chunk sizes) on one mesh: the second's persistent L1 lands inside the first's arenas
+
+DS41-202 (P.31). An MoEBlock (models/demos/moe_block) keeps persistent words at the top of L1 (semaphores, mailboxes,
+the exchange's words) and bakes two per-call arenas into its kernels: the fused head's and the exchange's (the
+exchange's = the largest contiguous L1 left less a reserve, tt_k3_token_split_moe.py). A second block (the decoder
+tail's, 1024 tokens) built after the main one puts its words below the main block's, i.e. inside the main block's
+arenas; and its own head arena moved by the 24 KB hole its exchange left unused ("se_engine3: the arena landed at
+674368, not 649792"). Sequence of failures seen on 8x4: (1) one arena a forward: the tail head's static CBs on core
+(10, 0) end at 193920, the exchange arena starts at 187584 (TT_THROW program.cpp:2641); (2) two arenas: the head
+arena 24 KB off; (3) with a re-settle: the exchange's arena 24 KB off ("landed at 163008, not 187584").
+Fix: reserve 48 KB of L1 at the top before the first (main) block is built (`moe_block_adapter.reserve_l1`, from
+`TtDS41Model.build_tail`), free it just before the tail block is built: the tail's words fill it (41216 B measured),
+both blocks bake their arenas in the same L1 left and take them in turn. The block checks every new allocated L1 block
+lies inside the reservation (allocator block table, DS41-114) and logs its size. Cost: the main block's exchange arena
+is 48 KB smaller (only when the tail is built: the ladder / profile never reserve).
+
+## replay128's short turn: device -20 %, wall -3 %: the chunk is host-bound
+
+DS41-205 (P.31). The table is in "P.31 DECODER_SKIP=replay128" above (exact 224.1 / 178.27 ms, replay128 216.4 /
+142.62 ms wall / device, 8x4, 512 tokens on a 51200-token prefix). Device: the encoder half (~89 ms) + layer 20's KV
+projection + the tail's 20 layers at 1024 rows (~50 ms, ~2.5-2.9 ms a layer vs ~4.2 at 5120: small-shape ops and the
+collectives are latency-bound). Wall: the host dispatches the same ~40 layers (~5 ms a layer, DS41-99), plus kv_only's
+steps, the two prepared tail sends and the tail MoE's second L1 arena a layer (one_arena off). The lever left is the
+host (trace), not the tail's device time.

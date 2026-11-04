@@ -227,7 +227,16 @@ class WindowTables:
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18), load time: the region index lists, the chip's own rows' pad-mask iota,
         # the SP row's iota for the served write's mask (``mask_local``) and the neighbour send
         self.region_index, self._chip_iota, self.send = None, None, None
-        if window_region():
+        # the window path of this geometry: WINDOW_KV_FORMAT, except that a chip with fewer than 128 own rows (the
+        # decoder tail's 32 on 8x4, DECODER_SKIP=replay128, P.31) cannot take its carry from one neighbour: bfp8_tiles
+        # then runs as bfp8_blocks (the same bfloat8_b window rows, the region replicated)
+        fmt = settings.get("WINDOW_KV_FORMAT")
+        if fmt in ("bfp8_tiles", "bf16_tiles") and g.q_rows < WINDOW:
+            assert fmt == "bfp8_tiles", f"WINDOW_KV_FORMAT={fmt} needs {WINDOW} rows a chip ({g.q_rows}: chunk {chunk})"
+            fmt = "bfp8_blocks"
+        self.fmt = fmt
+        self.region_on, self.blocks_on = fmt in ("bfp8_tiles", "bf16_tiles"), fmt == "bfp8_blocks"
+        if self.region_on:
             assert (
                 g.q_rows >= WINDOW and g.q_rows % 32 == 0
             ), f"WINDOW_KV_FORMAT=bfp8_tiles: {g.q_rows} query rows a chip; the carry must be the previous chip's"
@@ -250,7 +259,7 @@ class WindowTables:
             if settings.get("CKV_FORMAT") == "bfp4_rows":
                 for n in ns:
                     self._packed[("rows", n)] = self._pair(n, ROW_BFP4_BYTES)
-            if window_bfp8():
+            if self.blocks_on:
                 self._packed[("blocks", g.w)] = self._pair(g.w // 32, WINDOW_BLOCK_BYTES)
                 # the carry read from the served cache (TtWindowCache.carry_owner): each chip's 4 carry blocks, over
                 # TP, over the mesh (chip-linear r TP + c)
@@ -449,7 +458,10 @@ class TtWindowCache:
         # zeros or another request's rows there), None = none. A chunk whose carry [start - 128, start) touches them
         # masks its whole carry (``carry_class`` 0: the window index lists of position 0) and reads no carry rows
         self.missing = None
-        if window_region():
+        # DECODER_SKIP=replay128 (P.31): a chunk start whose window is truncated there (a replay of a cached prefix's
+        # last tokens, the decoder tail): its carry masked as ``missing`` would (start class 0), None = none
+        self.cut = None
+        if tables.region_on:
             _, page, carry = region_geometry()  # (bf16_tiles, P.26: [1, 1, 128, 512] bf16 rows)
             bf = region_bf16()
             self.rtail = ttnn.zeros(
@@ -505,8 +517,18 @@ class TtWindowCache:
             self.missing = (m[0], int(start))
         # (a hole inside: ``missing`` stays the whole interval, conservative)
 
+    def truncate(self, start: int | None) -> None:
+        """DECODER_SKIP=replay128 (P.31): the next chunk at ``start`` reads no carry (its window truncated there; host
+        only, the kept tail dropped); None: no truncation."""
+        self.cut = None if start is None else int(start)
+        if start is not None:
+            self._drop_tail()
+
     def carry_masked(self, start: int) -> bool:
-        """True when a position of the carry [start - 128, start) was skipped: the chunk reads no carry row."""
+        """True when a position of the carry [start - 128, start) was skipped (or the window is truncated at
+        ``start``, P.31): the chunk reads no carry row."""
+        if self.cut is not None and self.cut == start:
+            return True
         m = self.missing
         return m is not None and m[0] < start and m[1] > start - WINDOW
 
@@ -578,7 +600,7 @@ class TtWindowCache:
             return
         if self.rtail is not None:  # WINDOW_KV_FORMAT=bfp8_tiles: the last chip's send writes it every chunk
             self.rtail_end = start
-        if self._tail_buf is not None and window_bfp8():  # (keep_blocks' buffer: written by every whole chunk)
+        if self._tail_buf is not None and self.tables.blocks_on:  # (keep_blocks' buffer: every whole chunk writes it)
             self._tail_blocks = (start, self._tail_buf)
         if self._tail is not None:  # (GLUE_FOLD, bf16 table: rows of the forward's own; re-keyed, never allocated)
             self._tail = (start, self._tail[1])
@@ -818,12 +840,12 @@ class TtWindowAttention:
             self.pairs = rope.pairs
             self.INTERLEAVED = True  # the table as stored (no per-chunk transform of the window rows)
         # WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks, rows as stored
-        self.win8 = window_bfp8()
+        self.win8 = tables.blocks_on  # (P.31: the tables' path, WINDOW_KV_FORMAT but where a chip owns < 128 rows)
         assert not self.win8 or self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_blocks reads the rows as stored (ATTN_GLUE=on)"
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18): this layer's own window region on every chip (load time, per layer: a
         # sender writes a receiver's region of the same layer only, tt/window_send.py), rows as stored
         self.region = None
-        if window_region():
+        if tables.region_on:
             assert self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_tiles reads the rows as stored (ATTN_GLUE=on)"
             assert tables.send is not None, "WINDOW_KV_FORMAT=bfp8_tiles needs a mesh of more than one chip"
             bf = region_bf16()  # (bf16_tiles, P.26: the region's rows as bf16, one row a page)

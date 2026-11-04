@@ -269,7 +269,13 @@ class TtSparseAttention(TtWindowAttention):
         mine = self._mine(topk)
         cls = g.start_class(start) if cls is None else cls
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the window ids in the chip's own region
-        win = self.tables.region_index[cls] if self.region is not None else table.index[cls]
+        # (a history-only table, base 0, CKV_FORMAT=bfp4_rows: this layer's own window lists, the geometry of its chunk:
+        # the decoder tail's (P.31) reads its KV source's table, made by the main chunk)
+        if self.region is not None:
+            win = self.tables.region_index[cls]
+        else:
+            win = self.tables.index[cls] if table.base == 0 else table.index[cls]
+            assert table.base == 0 or self.tables is table.tables, "a bf16 table's window lists are its own chunk's"
         src = ttnn.concat([win, mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         if mine is not topk:
             dealloc(mine)

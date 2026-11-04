@@ -196,6 +196,11 @@ class MoEOptions:
     # residual's tail "fused" (an explicit choice; "auto" keeps the ops add) is tt/tail_a2a.py's local mode: the
     # combine's rows tilized + the shared expert's owner rows in one program, no all-to-all
     owners_a2a_into_head: bool = False
+    # the fused head inside the exchange's arena when its own arena range fits there (one L1 allocation a forward,
+    # TokenExchange.take_arena). False: two allocations a forward (the head's arena, then the exchange's), as when the
+    # range does not fit. DeepSeek-V4.1 P.31: at 1024 tokens on 8x4 the exchange's arena starts at 187584, below a head
+    # program's static CBs on its core (10, 0) (they end at 193920): one arena clashes there (TT_THROW, program.cpp)
+    one_arena: bool = True
     # x arrives gathered over TP, [1, 1, S/SP, H] a chip (a caller whose norm gathers): no x all-gather in the head; the
     # router's H/TP columns sliced on the chip. Output stays [S/SP, H/TP]. Ops head, "sp_tp" residual only
     x_gathered: bool = False
@@ -628,6 +633,11 @@ class MoEBlock(LightweightModule):
         else:
             self._warm_up()
         self.exchange.build()
+        if self.fused is not None and not options.one_arena:
+            # (two arenas a forward, the head's taken first: L1 the exchange's build gave back above the head's settled
+            # range - a second block on the mesh, DeepSeek-V4.1 P.31: the hole left unused, 24 KB - would move it; fill
+            # it so the head's arena lands where its programs baked it; the exchange rebuilds once on that layout)
+            self.fused.head.settle_arena()
         if self.fused is not None:
             self.fused.attach(self.exchange)
             if layer is not None:  # (the layer's weights as this head laid them out)
@@ -711,7 +721,7 @@ class MoEBlock(LightweightModule):
             if into:  # (straight into the head's x: no copy; before the arena is taken - its CBs are L1)
                 self._tp_a2a(x, cat_dim=2, split_dim=3, out=self.fused.x)
                 self._mark("x_a2a")
-            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes))
+            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes)) if self.options.one_arena else None
             if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
                 if into:
                     se, out = self.fused(self.fused.x, arena)

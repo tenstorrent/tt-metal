@@ -192,6 +192,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t block_keys = 0,
     const std::optional<ttnn::Tensor>& block_bias = std::nullopt,
     const std::optional<ttnn::Tensor>& block_max_out = std::nullopt,
-    bool block_max_pin = false);
+    bool block_max_pin = false,
+    // Bring-up fork (P.31): natural_query_blocks with the queries' own rows per SP rank; 0 = block_cyclic_chunk_local.
+    uint32_t natural_query_rows = 0);
 
 }  // namespace ttnn::experimental::bringup
