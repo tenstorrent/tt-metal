@@ -78,6 +78,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tile_geometry.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tensor_bindings.cpp
