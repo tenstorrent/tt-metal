@@ -355,7 +355,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     std::vector<bool> do_eltwise = {false, true};
 
     /**
-     * These parameters are the same as the SDPA sprint-2 perfomance test parameters.
+     * These parameters are the same as the SDPA sprint-2 performance test parameters.
      * Uncomment to measure perf of the test we care most about.
      */
     // std::vector<uint32_t> q_chunk_sizes = {8};
@@ -414,8 +414,10 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
         for (uint32_t q_chunk_size : q_chunk_sizes) {
             for (uint32_t k_chunk_size : k_chunk_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                    // 16x32 tiny-tile reduce_block_max_row is only supported in non-fp32 dest mode
-                    // (the LLK static_asserts fp32 + num_faces==2). fp32 16x32 is a future item.
+                    // fp32 16x32 is not enabled here: it has not been validated through this metal path
+                    // (the tt-llk fuser cases fpu_reduce_block_max_tiny_* exercise the LLK directly). The
+                    // test kernel passes num_faces as face_r_dim, which blocks that validation; tracked in
+                    // https://github.com/tenstorrent/tt-llk/issues/1716
                     if (fp32_dest_acc_en) {
                         continue;
                     }
