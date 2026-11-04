@@ -60,7 +60,7 @@ def mesh():
         pytest.skip(f"needs a {R}x{C} Galaxy or the mock Galaxy")
     # (the combine sends one row of H bf16 + its 32 B trailer a fabric packet)
     rc = ttnn._ttnn.fabric.FabricRouterConfig()
-    rc.max_packet_payload_size_bytes = max(7232, (2 * _glm53().emb_dim + 32 + 63) // 64 * 64)
+    rc.max_packet_payload_size_bytes = (2 * _glm53().emb_dim + 32 + 63) // 64 * 64
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricReliabilityMode.RELAXED_INIT, router_config=rc
     )

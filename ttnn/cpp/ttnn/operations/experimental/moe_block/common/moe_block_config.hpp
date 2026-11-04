@@ -91,10 +91,12 @@ struct MoEBlockConfig {
 
     // Where the persistent words live
     bool persist_l1_small = false;  // in L1_SMALL (else L1)
-    // With persist_l1_small: the persistent words (MoEBlockResources::persistent_words) packed into one L1_SMALL slab of
-    // at most this many bytes a core, word sets on disjoint cores sharing bytes (0: one L1_SMALL tensor a word set,
-    // each reserving its bytes on every core). A set that no longer fits gets its own tensor (logged).
-    uint32_t words_slab_bytes = 2048;
+    // With persist_l1_small: the persistent words (MoEBlockResources::persistent_words) packed into one L1_SMALL slab
+    // of at most this many bytes a core, word sets on disjoint cores sharing bytes (0: one L1_SMALL tensor a word set,
+    // each reserving its bytes on every core). A set that no longer fits gets its own tensor (logged). 2304: every word
+    // set of the block at 8x4 chunk 5120 fits, the fused tail's included (Kimi-K3: 1376 B used where the tail's 912 B
+    // go; GLM-5.3: 2048 B) - a mesh opens with L1_SMALL for this slab and the model's own use (moe_impl.py)
+    uint32_t words_slab_bytes = 2304;
 
     // The fused head's hand-off stride: 4 B in L1_SMALL, else 16 B.
     uint32_t handoff_bytes() const { return persist_l1_small ? 4u : 16u; }

@@ -71,7 +71,7 @@ def mesh():
     if ttnn.get_num_devices() < R * C:
         pytest.skip(f"needs a {R}x{C} LoudBox")
     rc = ttnn._ttnn.fabric.FabricRouterConfig()
-    rc.max_packet_payload_size_bytes = max(7232, (2 * H + 32 + 63) // 64 * 64)
+    rc.max_packet_payload_size_bytes = (2 * H + 32 + 63) // 64 * 64
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D, ttnn.FabricReliabilityMode.RELAXED_INIT, router_config=rc)
     m = ttnn.open_mesh_device(ttnn.MeshShape(R, C), l1_small_size=5888, trace_region_size=64 << 20)
     yield m

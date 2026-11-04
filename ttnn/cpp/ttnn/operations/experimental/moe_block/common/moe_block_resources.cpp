@@ -238,6 +238,14 @@ std::optional<uint32_t> MoEBlockResources::place_words(
         if (room == 0) {
             return std::nullopt;
         }
+        if (room < config_.words_slab_bytes) {
+            log_warning(
+                tt::LogOp,
+                "moe_block: L1_SMALL holds {} B a bank for the persistent words slab, the config {} B: word sets "
+                "that do not fit get their own L1_SMALL tensors (open the mesh with more L1_SMALL)",
+                room,
+                config_.words_slab_bytes);
+        }
         words_slab_capacity_ = room;
         const auto spec = resources_detail::words_spec(all, room / 4, tt::tt_metal::BufferType::L1_SMALL);
         words_slab_ = ttnn::zeros(

@@ -67,10 +67,10 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe_impl import (
-    MOE_BLOCK_L1_SMALL,
     k3_moe_block_device_params,
     moe_block_enabled,
     moe_block_fabric_payload,
+    model_l1_small_with_block,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
@@ -103,7 +103,7 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM-5.3's MoE is the MoE block by default (tt/moe_impl.py; MOE_IMPL=ttmoe for TtMoe): room for its persistent words
 # and semaphores, which live in L1_SMALL (its first call logs the total), and a fabric payload holding one combine row.
 GLM_MOE_BLOCK = moe_block_enabled(GLM53Config)
-GLM_L1_SMALL_SIZE = MOE_BLOCK_L1_SMALL if GLM_MOE_BLOCK else 1536
+GLM_L1_SMALL_SIZE = model_l1_small_with_block(GLM53Config, 1536) if GLM_MOE_BLOCK else 1536
 
 
 def _glm_payload():

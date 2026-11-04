@@ -8,9 +8,9 @@ latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin ca
 Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $K3_MOE_IMPL first), then the model's
 default.
 
-A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (MOE_BLOCK_L1_SMALL) and a
-fabric payload that holds one combine row (moe_block_fabric_payload); moe_block_mesh_params gives both for any model
-(the prefill runner's mesh open). Paths that cannot give it that (the synthetic-weight block tests, the TtMoe cache
+A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (moe_block_l1_small: the
+words' slab, on top of the model's own L1_SMALL use) and a fabric payload that holds one combine row
+(moe_block_fabric_payload); moe_block_mesh_params gives both for any model (the prefill runner's mesh open). Paths that cannot give it that (the synthetic-weight block tests, the TtMoe cache
 build) pass moe_impl="ttmoe".
 """
 
@@ -24,23 +24,41 @@ BLOCK = "block"
 TTMOE = "ttmoe"
 _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
 
-# L1_SMALL a mesh needs for the block's persistent words + packed semaphores (4608 B measured on GLM-5.3, 5376 B on
-# Kimi-K3 before the words were packed) on top of the model's own L1_SMALL users.
-MOE_BLOCK_L1_SMALL = 5888
-# Kimi-K3: the block's persistent words are packed into one L1_SMALL slab (MoEBlockConfig.words_slab_bytes, 2048 B a
-# core; the 18 word sets of a 5120-token chunk use 1904 B of it - their per-core maximum - where one tensor a set took
-# their 4256 B sum on every core). Measured in the K3 L24 chunked test (torus XY, CI env): the model's own L1_SMALL 832 B
-# before the block, 2880 B with it -> 2880 + 64 B margin. L1_SMALL is carved from the top of L1, and MLA's chunked
-# attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the
-# SC4 DSpark runner, 5888 by 448 B). KimiK3Config.L1_SMALL_SIZE (4096, inherited, not measured) still floors the mesh
-# open (moe_block_mesh_params takes the max).
-_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 2944}
+# The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
+# block's slab), where the model's l1_small_size is not that figure:
+# - Kimi-K3: 1168 B - the K3 L24 test (b08u02, torus XY) held 3008 B before the block's slab, 1840 B of it the fused KDA
+#   output projection's (matmul_reduce_scatter_prefill's 4 semaphores + 110 x 16 B mailbox) - plus those 1840 B once
+#   that op keeps them in L1_SMALL (_KDA_OUTPUT_RS_IN_L1_SMALL: Slavko's matmul_reduce_scatter_prefill fix; layer 0's
+#   KDA then takes them before the block's slab, which still needs all its bytes). KimiK3Config.L1_SMALL_SIZE (4096) is
+#   inherited, not measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked
+#   attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the
+#   SC4 DSpark runner, 5888 by 448 B; 5056 passed K3 L24 on b08u02).
+# - GLM-5.3: 1536 B, its runner adapter's l1_small_size (verified on the traced TtMoe path, whose routing's 512 B the
+#   block does not use).
+# Every other model: its l1_small_size.
+_KDA_OUTPUT_RS_IN_L1_SMALL = False
+_KDA_OUTPUT_RS_L1_SMALL = 1840
+_MODEL_L1_SMALL = {
+    "KimiK3Config": 1168 + (_KDA_OUTPUT_RS_L1_SMALL if _KDA_OUTPUT_RS_IN_L1_SMALL else 0),
+    "GLM53Config": 1536,
+}
+_L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
 
 
-def moe_block_l1_small(model_cfg) -> int:
-    """L1_SMALL a mesh of this model opens with when the MoE block is its MoE."""
+def moe_block_l1_small() -> int:
+    """L1_SMALL the MoE block holds a bank: its persistent words' slab (MoEBlockConfig.words_slab_bytes, sized so every
+    word set of the block fits, the fused tail's included) plus the allocator's alignment."""
+    import ttnn
+
+    return int(ttnn.experimental.moe_block.MoEBlockConfig().words_slab_bytes) + _L1_SMALL_ALIGN
+
+
+def model_l1_small_with_block(model_cfg, l1_small_size: int) -> int:
+    """L1_SMALL a mesh of this model opens with when the MoE block is its MoE: the model's own use (its l1_small_size,
+    or the measured figure where that is not one) plus the block's, at least l1_small_size."""
     name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
-    return _MOE_BLOCK_L1_SMALL_BY_MODEL.get(name, MOE_BLOCK_L1_SMALL)
+    own = _MODEL_L1_SMALL.get(name, l1_small_size)
+    return max(l1_small_size, own + moe_block_l1_small())
 
 
 def moe_impl_of(model_cfg=None, moe_impl: Optional[str] = None) -> str:
@@ -62,7 +80,7 @@ def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
 
 def moe_block_fabric_payload(emb_dim: int) -> int:
     """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned."""
-    return max(7232, (2 * emb_dim + 32 + 63) // 64 * 64)
+    return (2 * emb_dim + 32 + 63) // 64 * 64
 
 
 def moe_block_mesh_params(
@@ -74,13 +92,13 @@ def moe_block_mesh_params(
     if not moe_block_enabled(model_cfg, moe_impl):
         return fabric_payload, l1_small_size
     width = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
-    return max(fabric_payload, moe_block_fabric_payload(width)), max(l1_small_size, moe_block_l1_small(model_cfg))
+    return max(fabric_payload, moe_block_fabric_payload(width)), model_l1_small_with_block(model_cfg, l1_small_size)
 
 
 def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
     """A Kimi-K3 mesh's device_params with what the MoE block needs when it is K3's MoE: a fabric payload holding one
-    combine row of the latent (2 x 3584 + 32 B), L1_SMALL room for its persistent words and semaphores (at least
-    MOE_BLOCK_L1_SMALL) and the XY torus fabric (a pinned TT_MESH_GRAPH_DESC_PATH must be a torus-XY one: on the 2D
+    combine row of the latent (2 x 3584 + 32 B), L1_SMALL room for its persistent words and semaphores
+    (model_l1_small_with_block) and the XY torus fabric (a pinned TT_MESH_GRAPH_DESC_PATH must be a torus-XY one: on the 2D
     mesh fabric the block's first call hangs). Unchanged on TtMoe."""
     if not moe_block_enabled("KimiK3Config", moe_impl):
         return params
@@ -100,5 +118,5 @@ def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> 
     router = out.get("fabric_router_config")
     if router is None or router.max_packet_payload_size_bytes < payload:
         out["fabric_router_config"] = create_fabric_router_config(payload)
-    out["l1_small_size"] = max(int(out.get("l1_small_size", 0)), moe_block_l1_small("KimiK3Config"))
+    out["l1_small_size"] = model_l1_small_with_block("KimiK3Config", int(out.get("l1_small_size", 0)))
     return out
