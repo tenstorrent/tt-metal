@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <tt-metalium/constants.hpp>
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
+#include "api/tile_constants.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 #ifndef FORCE_INLINE
@@ -582,6 +582,17 @@ FORCE_INLINE void advance_q_block(uint32_t& sb, uint32_t& tile_base) {
         sb = 0U;
         tile_base += ((n_heads - 1U) * Ts + 1U) * Th;
     }
+}
+
+// Head-major tile-row `row` of a [B*H, 1, T, V] tensor -> row of the same tokens in the head-merged
+// [B, 1, T, H*V] tensor, counted in rows of Wt tiles: (b*H + h)*Ht + t -> (b*Ht + t)*H + h.
+// Ht = H = 1 is the identity.
+template <uint32_t Ht, uint32_t num_heads>
+FORCE_INLINE uint32_t head_merged_row(const uint32_t row) {
+    const uint32_t t = row % Ht;
+    const uint32_t h = (row / Ht) % num_heads;
+    const uint32_t b = row / (Ht * num_heads);
+    return (b * Ht + t) * num_heads + h;
 }
 
 /**

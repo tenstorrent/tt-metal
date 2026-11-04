@@ -2097,7 +2097,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                 {"number_of_available_cores", number_of_available_cores},
                 {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
                 {"descending", static_cast<uint32_t>(attributes.descending)},
-                {"stable", static_cast<uint32_t>(attributes.stable)},
+                // #53326: the padding sentinel (±inf, or 0/65535 for uint16) can equal real values; index-aware
+                // ties keep padding indices (>= n) past the slice.
+                {"stable", static_cast<uint32_t>(attributes.stable || attributes.sort_dim_padded)},
                 {"log2Wt", log2Wt},
             },
         .hw_config = ComputeHardwareConfig{compute_hw_config},

@@ -7,6 +7,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_cumsum is deprecated and will be removed after 2026-11-26. Use ttnn::cumsum instead.")]]
 Tensor moreh_cumsum(
     const Tensor& input,
     int64_t dim,
