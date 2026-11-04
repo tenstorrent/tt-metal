@@ -314,6 +314,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis, widths, page_channe
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
+            page_channels=page_channels,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:

@@ -32,20 +32,19 @@ inline kda_factory_detail::KdaPrepWorkDist qkv_causal_conv1d_silu_distribution(
         exchange ? std::optional(qkv_causal_conv1d_silu_exchange_core(grid)) : std::nullopt);
 }
 
-// The convolution tail's layout (`history`, `predecessor_carry` and the replacement carry), read off `history`'s shape:
-// token-paged `[1, history_rows, W]`, one token per page, or channel-paged `[1, W / page_channels, history_rows *
-// page_channels]`, `page_channels` channels of every row per page (qkv_conv_dataflow.hpp). `page_channels` is the
-// channels one page holds, W when token-paged. validate_on_program_cache_miss checks the shape.
+// The convolution tail's layout (`history`, `predecessor_carry` and the replacement carry), as the caller declares it
+// in `page_channels`: token-paged `[1, history_rows, W]`, one token per page, or channel-paged `[1, W / page_channels,
+// history_rows * page_channels]`, `page_channels` channels of every row per page (qkv_conv_dataflow.hpp).
+// `page_channels` is the channels one page holds, W when token-paged. validate_on_program_cache_miss checks the shape.
 struct QkvCausalConv1dSiluTailLayout {
     bool token_paged;
     uint32_t page_channels;
 };
 
-inline QkvCausalConv1dSiluTailLayout qkv_causal_conv1d_silu_tail_layout(const tt::tt_metal::Shape& history_shape) {
-    if (history_shape[1] == qkv_conv::history_rows) {
-        return {.token_paged = true, .page_channels = history_shape[2]};
-    }
-    return {.token_paged = false, .page_channels = history_shape[2] / qkv_conv::history_rows};
+inline QkvCausalConv1dSiluTailLayout qkv_causal_conv1d_silu_tail_layout(const QkvCausalConv1dSiluParams& attrs) {
+    return {
+        .token_paged = !attrs.page_channels.has_value(),
+        .page_channels = attrs.page_channels.value_or(attrs.q_width + attrs.k_width + attrs.v_width)};
 }
 
 // Every convolution core stages an equal share of the channel tiles of the rows the exchange core sends.

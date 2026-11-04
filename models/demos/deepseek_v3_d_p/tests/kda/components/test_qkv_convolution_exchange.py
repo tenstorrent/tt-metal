@@ -226,6 +226,7 @@ class _Exchange:
             actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=self.output_memory_config,
+            page_channels=_PAGE_CHANNELS,
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:

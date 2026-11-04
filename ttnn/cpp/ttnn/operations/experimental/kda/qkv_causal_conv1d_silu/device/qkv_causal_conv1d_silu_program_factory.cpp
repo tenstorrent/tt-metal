@@ -110,7 +110,7 @@ void add_history_exchange(
             ttnn::ccl::is_axis_straight(device, axis),
         "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
-    const auto tail = qkv_causal_conv1d_silu_tail_layout(in.history.logical_shape());
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
     const uint32_t max_payload = sp_size > 1
                                      ? static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())
@@ -267,7 +267,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t max_staged_ct =
         exchange ? qkv_causal_conv1d_silu_staged_ct(Ct, static_cast<uint32_t>(dist.cores.size())) : 0;
     const auto exchange_core_xy = device.worker_core_from_logical_core(exchange_core);
-    const auto tail = qkv_causal_conv1d_silu_tail_layout(in.history.logical_shape());
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
 
     const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
     const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};

@@ -228,9 +228,10 @@ class ttKDA:
         self._recurrent_state_shape = ttnn.Shape(
             [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
         )
+        self._convolution_page_channels = convolution_page_channels(self.config)
         self._convolution_state_shape = ttnn.Shape(
             convolution_tail_shape(
-                self.config.conv_kernel_size - 1, self._convolution_width, convolution_page_channels(self.config)
+                self.config.conv_kernel_size - 1, self._convolution_width, self._convolution_page_channels
             )
         )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
@@ -606,6 +607,7 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
+            page_channels=self._convolution_page_channels,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
