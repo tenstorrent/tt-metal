@@ -14,6 +14,7 @@ GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+export LLK_SHUFFLE_SEED="${LLK_SHUFFLE_SEED:-1}" # trial: shuffled measuring order
 
 case "$SPEED_OF_LIGHT" in
   true)
