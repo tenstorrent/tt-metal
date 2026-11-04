@@ -63,3 +63,6 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+
+  # --- Sanity ttnn sim_quasar tests ---
+  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]  # #62095: check_fidelity_phase, HiFi4 default with bf16 operands

@@ -50,6 +50,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -64,7 +66,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology, sparse_mla_overlap_gather_rows
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -197,9 +199,11 @@ LAYER_PCC_THRESHOLD = 0.88
 # ~0.86 (glm_5_3 @L75); indexer-K nope 0.980 (glm_5_3 captures layers 0-2 + every 4th).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
-# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.848, below the bf16 floor).
+# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.857, below the bf16 floor). Raised 0.82 -> 0.83
+# with the mean-centred gate bias (MOE_GATE_BIAS_CENTERED), which took that row from 0.849 to 0.857 and the
+# warm-cache 55k row from 0.9841 to 0.9850; the margin stays ~0.027.
 GLM_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
-KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.82
+KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.83
 
 
 def _sparse_cache_format(has_indexer, kv_cache_format):
@@ -241,9 +245,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
-    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1. CI run 41433485152 / job 125242838736.
+    (78, 11, 10): [0.363, 0.362, 0.367, 0.366, 0.371, 0.371, 0.367, 0.369, 0.376, 0.381, 0.387],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -1961,6 +1964,10 @@ def run_chunked_transformer_updated(
         tp_shard_kv=tp_shard_kv,
         **({"sparse_kv_cache_format": cache_format} if has_indexer else {}),
     )
+    # Kimi-K3's KDA carries live only in the engine's slabs, which the runner hands the model at compile();
+    # this harness builds the model itself, so it attaches them here, once: a reused model keeps its slabs.
+    if isinstance(transformer, TtKimiK3Transformer) and transformer.kda_states is None:
+        attach_kda_states(mesh_device, transformer, sp_axis=sp_axis, tp_axis=tp_axis)
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
     # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
@@ -1997,8 +2004,7 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            # Per-profile, so this holds for either row count.
-            gather_rows = sparse_mla_overlap_gather_rows(next(iter(profiles)))
+            gather_rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS  # the worker rows below the Ethernet row
             assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
             assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))
@@ -2173,7 +2179,7 @@ def run_chunked_transformer_updated(
         if kda_states is None:
             return
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            kda_states.zero_slot(slot)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 

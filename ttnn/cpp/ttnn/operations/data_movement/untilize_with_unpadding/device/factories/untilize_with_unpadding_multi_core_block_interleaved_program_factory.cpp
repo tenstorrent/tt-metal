@@ -143,7 +143,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         push_buffer_pair(cliffrow_set, BI_IN_CLIFFROW, BI_OUT_CLIFFROW);
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // reader
 
@@ -256,7 +256,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         // buffers would set it on the cliffrow set's input even when that set is empty -- a
         // buffer that exists on no core -- and would do so in the full-set kernels too.
         ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
             compute_hw_config.unpack_modes = {{in_name, UnpackMode::UnpackToDest}};
         }
 

@@ -14,13 +14,15 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
-# This is a predefined constant for the number of contiguous tokens in a DRAM bank
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
 # at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
@@ -894,18 +896,17 @@ def kda_segments_per_layer(geometry, kind: str) -> int:
     raise ValueError(f"unknown KDA state kind {kind!r}")
 
 
-# The contract's KDA position axis (k3_disagg_contract.md, tt-blaze #3634). A KDA config has no token
-# axis, so its positions are synthetic: one version of BOTH states spans a window of kda_window()
-# positions, recurrent segment i sits at i * 96 and convolution segment i at i * 64 inside it (at 96
-# heads), and each of the decode side's KDA_VERSIONS windows aliases the one prefill state. Segment
-# indices would not pair: the KV Manager requires equal chunk_n_tokens on both sides, and one
-# /migrate position range serves every config of a layer, so both states must fill the same window.
+# The KDA position axis shared with decode (tt-blaze #6203, blaze/models/kimi_k3/cache_migration.py). A KDA
+# config has no token axis, so its positions are synthetic: BOTH states span one window of kda_window() positions,
+# recurrent segment i at i * 96 and convolution segment i at i * 64 (at 96 heads). The configs are
+# tagged Snapshot, so the KV Manager moves a layer's whole window whatever range /migrate names, and
+# refuses the migration unless both sides tag Snapshot with the same extent and chunk_n_tokens:
+# decode keeps one KDA state per user and publishes this same single window (tt-blaze #6203).
 KDA_POSITION_QUANTUM = 32  # decode's minimum position stride (one tile edge)
-KDA_VERSIONS = 8  # decode's per-user state ring (speculative-decode versions)
 
 
 def kda_window(geometry) -> int:
-    """Positions per version: the least window both states fill evenly at a stride of whole tiles."""
+    """A KDA config's extent: the least window both states fill evenly at a stride of whole tiles."""
     return (
         math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer) * KDA_POSITION_QUANTUM
     )
@@ -915,13 +916,9 @@ def kda_chunk_n_tokens(geometry, kind: str) -> int:
     return kda_window(geometry) // kda_segments_per_layer(geometry, kind)
 
 
-def kda_max_sequence_length(geometry) -> int:
-    return KDA_VERSIONS * kda_window(geometry)
-
-
-def kda_position(geometry, kind: str, segment: int, version: int = 0) -> int:
-    """Table position of global segment ``segment`` in window ``version``."""
-    return version * kda_window(geometry) + segment * kda_chunk_n_tokens(geometry, kind)
+def kda_position(geometry, kind: str, segment: int) -> int:
+    """Table position of global segment ``segment``."""
+    return segment * kda_chunk_n_tokens(geometry, kind)
 
 
 def populate_kv_chunk_address_table_kda(
@@ -943,8 +940,8 @@ def populate_kv_chunk_address_table_kda(
 
     The KDA analogue of the block-cyclic and dflash walks, differing in three ways:
 
-      * **No token axis.** A KDA layer's state is a fixed set of segments, each set at
-        ``kda_position(geometry, kind, i, v)`` for every version window ``v`` (see the constants above).
+      * **No token axis.** A KDA layer's state is a fixed set of segments, each set once at
+        ``kda_position(geometry, kind, i)`` (see the constants above); the config is tagged Snapshot.
       * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
         head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
         column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
@@ -974,10 +971,12 @@ def populate_kv_chunk_address_table_kda(
     assert (
         config.chunk_n_tokens == stride
     ), f"KDA {kind} config has chunk_n_tokens {config.chunk_n_tokens}; the contract stride is {stride}"
-    assert config.max_sequence_length == kda_max_sequence_length(geometry), (
-        f"KDA {kind} config spans {config.max_sequence_length} positions, not "
-        f"{KDA_VERSIONS} windows of {kda_window(geometry)}"
-    )
+    assert (
+        config.max_sequence_length == window
+    ), f"KDA {kind} config spans {config.max_sequence_length} positions, not one window of {window}"
+    assert (
+        config.tensor_type == ttnn.experimental.disaggregation.KvChunkTensorType.Snapshot
+    ), f"KDA {kind} config is tagged {config.tensor_type}, not Snapshot"
     assert (
         config.chunk_size_bytes == segment_bytes
     ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
@@ -1018,8 +1017,7 @@ def populate_kv_chunk_address_table_kda(
                         location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
                         location.size_bytes = segment_bytes
                         location.device_group_index = group_idx
-                        for version in range(KDA_VERSIONS):  # kda_position(), inlined: 17M calls at 32 users
-                            lookup_table.set(row, version * window + segment * stride, slot, location, config_id)
+                        lookup_table.set(row, segment * stride, slot, location, config_id)  # kda_position()
     return lookup_table
 
 
@@ -1035,6 +1033,7 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -1080,6 +1079,8 @@ def init_kvpe_cache(
     seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
+    if bank_aligned:
+        check_kv_bank_aligned(seq_len, seq_len_local, num_dram_banks)
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
@@ -1169,6 +1170,7 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -1194,12 +1196,23 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False, tp_axis=None
+    *,
+    mesh_device,
+    hf_config,
+    max_seq_len,
+    mesh_shape,
+    sp_axis,
+    num_layers,
+    num_users,
+    full_mesh=False,
+    tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -1221,6 +1234,7 @@ def allocate_mla_kvpe_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
 
 

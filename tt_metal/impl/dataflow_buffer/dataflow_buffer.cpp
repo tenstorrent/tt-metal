@@ -15,10 +15,11 @@
 #include <string>
 #include <type_traits>
 
+#include <tt-metalium/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -151,6 +152,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
         (void)alloc_addr;
         const auto& hw_risc_configs = dfb->groups[group_idx].hw_risc_configs;
 
+        // A side with no transaction ids never reaches the DM0 ISR (a Tensix side, or explicit
+        // sync), so its tile counters are neither listed nor held to the ISR image limit.
+        const bool producer_live = dfb->producer_txn_descriptor.num_txn_ids > 0;
+        const bool consumer_live = dfb->consumer_txn_descriptor.num_txn_ids > 0;
         std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
         std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
         for (int bit = 0; bit < 16; bit++) {
@@ -169,8 +174,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
             }
             for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
                 if (rc->is_producer) {
-                    blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
-                } else {
+                    if (producer_live) {
+                        blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                    }
+                } else if (consumer_live) {
                     blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
                 }
             }
@@ -178,10 +185,16 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
 
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
-        const auto prod_desc = build_dm0_txn_descriptor_image(
-            num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
-        const auto cons_desc = build_dm0_txn_descriptor_image(
-            num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        const auto prod_desc =
+            producer_live
+                ? build_dm0_txn_descriptor_image(
+                      num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc)
+                : dfb_dm0_txn_descriptor_image_t{};
+        const auto cons_desc =
+            consumer_live
+                ? build_dm0_txn_descriptor_image(
+                      num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc)
+                : dfb_dm0_txn_descriptor_image_t{};
 
         for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
@@ -330,14 +343,21 @@ void populate_dfb_global_header_participation(
         "DFB count {} exceeds maximum {}",
         dfbs_on_core.size(),
         ::dfb::NUM_DFBS);
+    // A DFB's slot is free on all of its cores, so one core's slots can have gaps; an unused slot is in
+    // no participation mask, so no hart initializes or waits on it.
     uint32_t id_mask = 0;
     for (const auto& dfb : dfbs_on_core) {
         TT_FATAL(
-            dfb->device_slot < ghdr.num_dfbs,
-            "DFB {} device slot {} out of range (num_dfbs {})",
+            dfb->device_slot < ::dfb::NUM_DFBS,
+            "DFB {} device slot {} out of range (maximum {})",
             dfb->id,
             dfb->device_slot,
-            ghdr.num_dfbs);
+            ::dfb::NUM_DFBS);
+        TT_FATAL(
+            !(id_mask & (1u << dfb->device_slot)),
+            "DFB {} device slot {} is shared with another DFB on the same core",
+            dfb->id,
+            dfb->device_slot);
         id_mask |= (1u << dfb->device_slot);
         for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
             if (dfb->risc_mask & (1u << hartid)) {
@@ -373,12 +393,6 @@ void populate_dfb_global_header_participation(
             tc_slots,
             ::dfb::MAX_TRISC_TC_SLOTS);
     }
-    const uint32_t expected_id_mask = ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
-    TT_FATAL(
-        id_mask == expected_id_mask,
-        "DFB device slots must be contiguous 0..{}-1 (id_mask=0x{:x})",
-        ghdr.num_dfbs,
-        id_mask);
 }
 
 void verify_dfb_hart_blobs(
@@ -433,12 +447,12 @@ void verify_dfb_hart_blobs(
                 e,
                 entry->num_tcs);
             TT_FATAL(
-                entry->logical_dfb_id < ghdr->num_dfbs,
-                "hart {} init entry {} logical_dfb_id={} >= num_dfbs={}",
+                entry->logical_dfb_id < ::dfb::NUM_DFBS,
+                "hart {} init entry {} logical_dfb_id={} out of range (maximum {})",
                 hartid,
                 e,
                 entry->logical_dfb_id,
-                ghdr->num_dfbs);
+                ::dfb::NUM_DFBS);
             TT_FATAL(
                 (ghdr->participation_mask[hartid] & (1u << entry->logical_dfb_id)) != 0,
                 "hart {} init entry {} logical_dfb_id={} not in participation_mask=0x{:x}",
@@ -461,7 +475,6 @@ void verify_dfb_hart_blobs(
 
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    const uint32_t valid_dfb_mask = ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
     for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
         uint32_t expected = 0;
         for (const auto& dfb : dfbs_on_core) {
@@ -475,12 +488,6 @@ void verify_dfb_global_header_participation(
             hartid,
             ghdr.participation_mask[hartid],
             expected);
-        TT_FATAL(
-            (ghdr.participation_mask[hartid] & ~valid_dfb_mask) == 0,
-            "participation_mask[{}]=0x{:x} has bits >= num_dfbs {}",
-            hartid,
-            ghdr.participation_mask[hartid],
-            ghdr.num_dfbs);
     }
 }
 
@@ -2169,7 +2176,7 @@ using namespace tt::tt_metal::experimental::dfb::detail;
 // DFB count rather than growing with the number of DFBs elsewhere in the program.
 uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) const {
     const auto& hal = MetalContext::instance(context_id_).hal();
-    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_num_dataflow_buffers();
+    const uint32_t max_slots = hal.get_num_dataflow_buffers();
 
     uint64_t used_slots = 0;
     for (const auto& other : this->dataflow_buffers_) {

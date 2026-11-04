@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include <tt_stl/move_only_function.hpp>
 #include <tt_stl/span.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -19,13 +19,11 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
-#include "context/context_types.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/device/device_impl.hpp"
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -207,11 +205,11 @@ private:
     // close_impl().
     std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
-    // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
+    // DRISC L1 arena for DRAM-sender PrefetcherPipe sender config pages.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
     // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
-    // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
+    // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
@@ -393,8 +391,8 @@ public:
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
-    // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
-    // pages_sent allocations. Constructed eagerly in initialize_impl() when the
+    // DRISC L1 arena. Consumed by the DRAM-sender PrefetcherPipe factory for its
+    // sender config pages. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
@@ -402,16 +400,17 @@ public:
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
+    // WaitForCqOnTensorPrefetcher(cq) if a Tensor prefetcher is running on this mesh, deciding
+    // under the API lock. Returns false, having done nothing, if none is. Does not create the manager.
+    bool wait_for_cq_on_tensor_prefetcher_if_active(MeshCommandQueue& cq) const;
     // Created on first use. One per mesh: the region is provisioned against this device's
     // PCIe endpoint, so two meshes cannot share one. A handle, so a holder that may outlive
     // this mesh (RingAlias) keeps the object valid; see host_region_. After close() it
     // returns the released region, or TT_FATALs if none was ever created.
     std::shared_ptr<experimental::HostRegion> host_region();
 
-    // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
-    // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
-    // safe for a DRISC kernel to occupy. Resolved against `device`'s harvested DRAM topology.
-    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    // tt::tt_metal::pick_unused_dram_logical_core (impl/buffers/dram_sender_topology.hpp) against
+    // `device`'s SoC descriptor.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
@@ -550,7 +549,7 @@ public:
     MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
-    void enqueue_to_thread_pool(std::function<void()>&& f);
+    void enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f);
     void wait_for_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,

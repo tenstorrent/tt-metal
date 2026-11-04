@@ -6,6 +6,7 @@ lists it draws, and the emitter that folds a sweep back into a typed table."""
 
 import math
 from dataclasses import replace
+from itertools import product
 from types import SimpleNamespace
 
 import helpers.ulp_domains as rule
@@ -58,6 +59,7 @@ from helpers.ulp_sweep import (
     finish_emit,
     floor_covered,
     floored_profile,
+    fp16_dest_unusable,
     golden_input,
     measurable_mask,
     merge_measured,
@@ -75,12 +77,17 @@ from helpers.ulp_sweep import (
     write_table,
 )
 from helpers.ulp_table import (
+    MEASURED_ARCH,
+    OTHER_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
     Reading,
     Row,
+    contracts_of,
     load_table,
+    most_specific,
     write_table_file,
 )
 
@@ -88,6 +95,9 @@ F16, F16B, F32 = DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32
 NO, YES = ApproximationMode.No, ApproximationMode.Yes
 D_NO, D_YES = DestAccumulation.No, DestAccumulation.Yes
 GELU = MathOperation.Gelu
+# The pairs that hold fp16 in a 16-bit Dest at `dest_acc=No`, by hand: Blackhole sweeps
+# them at `dest_acc=Yes` only (`fp16_dest_unusable`).
+_FP16_IN_DEST = {(F16, F16), (F16, F16B), (F16, F32), (F32, F16)}
 # An op defined everywhere, so the non-finite tests turn on the exclusion they mean.
 _OP = MathOperation.Abs
 # The key of a cell whose coordinates a test is not about.
@@ -101,11 +111,11 @@ _TWO = (Domain(-_INF, 0, 5), Domain(0, _INF, 2))
 
 @pytest.fixture(autouse=True)
 def _host_only_arch(monkeypatch):
-    """`sweep_cells` asks the chip which cells promote; judge the Wormhole table
-    whatever CHIP_ARCH the host sets."""
+    """`sweep_cells` asks the chip which cells promote; judge the session's table
+    (the one `MEASURED_ARCH` named on first use) whatever CHIP_ARCH the host sets."""
     import helpers.chip_architecture as chip
 
-    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("CHIP_ARCH", MEASURED_ARCH.value)
     monkeypatch.setattr(chip, "_cached_chip_architecture", None)
 
 
@@ -140,7 +150,7 @@ _TABLE = {
         Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05, note="an op-wide anchor"),
         Row(input=F16, output=F16, measured=7, note="superseded"),
         Row(input=F16B, output=F32, measured=9, note="a pair not swept here"),
-        Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=44),
+        Row(input=F16B, output=F16B, arch=OTHER_ARCH, measured=44),
         Row(output=F32, measured=0, note="a wildcard"),
         Row(
             input=F16,
@@ -356,7 +366,7 @@ def test_three_readings_of_one_cell_merge_alike_in_any_order():
 
 @pytest.mark.parametrize(
     "arch, clean",
-    [(ChipArchitecture.BLACKHOLE, True), (ChipArchitecture.WORMHOLE, False)],
+    [(OTHER_ARCH, True), (MEASURED_ARCH, False)],
     ids=["other-arch", "unclean-session"],
 )
 def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, clean):
@@ -373,7 +383,7 @@ def test_emit_refuses_a_partly_measured_grid(table):
     record(GELU, _CELL, 5)
     before = table.read_text()
     with pytest.raises(EmitRefused):  # allow-pytest.raises: host-only test
-        finish_emit(ChipArchitecture.WORMHOLE, True, table)
+        finish_emit(MEASURED_ARCH, True, table)
     assert table.read_text() == before
 
 
@@ -386,9 +396,9 @@ def test_a_whole_table_emit_over_the_real_table_loads(tmp_path):
     write_table_file(load_table(), path)
     ops = sweep._sweep_ops()
     for op in ops:
-        for cell in sweep_cells(ChipArchitecture.WORMHOLE):
+        for cell in sweep_cells(MEASURED_ARCH):
             record(op, cell_key(*cell), 1)
-    written = finish_emit(ChipArchitecture.WORMHOLE, True, path)
+    written = finish_emit(MEASURED_ARCH, True, path)
     assert set(written) == set(ops)
     load_table(path)
 
@@ -399,7 +409,7 @@ def test_the_plugin_prints_the_emit_summary_on_a_clean_session(
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
     monkeypatch.setattr(
-        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+        llk_pytest_plugin, "get_chip_architecture", lambda: MEASURED_ARCH
     )
     _record_grid(GELU, F16, F16, 5)
     session = _session(pytest.ExitCode.OK)
@@ -451,7 +461,7 @@ def test_a_session_that_measured_its_grids_but_did_not_end_clean_writes_nothing(
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
     monkeypatch.setattr(
-        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+        llk_pytest_plugin, "get_chip_architecture", lambda: MEASURED_ARCH
     )
     _record_grid(GELU, F16, F16, 5)
     before = table.read_text()
@@ -882,6 +892,77 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
             assert has_ulp_gate(entry.output), where
 
 
+def test_no_blackhole_cell_holds_fp16_in_a_16_bit_dest():
+    """Blackhole's SFPU reads garbage from fp16 in a 16-bit Dest, so no `Float16` cell
+    at `dest_acc=No` is swept there; every one is swept on Wormhole."""
+    fp16_at_16_bit = lambda cells: {  # noqa: E731
+        (i, o) for i, o, _, d in cells if d == D_NO and F16 in (i, o)
+    }
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.BLACKHOLE)) == set()
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.WORMHOLE)) == _FP16_IN_DEST
+
+
+def test_no_cell_left_out_on_blackhole_resolves_to_a_step_budget_there():
+    """The sweep measures no cell `fp16_dest_unusable` leaves out, so the Blackhole
+    table may not hold one to a step budget, through a dest-less row least of all:
+    Sign from Float16 to Float32 at `dest_acc=No` is 1.3e8 steps off there. Read from
+    `_bh.yaml` itself, so both hardware-free passes check it."""
+    bh = ChipArchitecture.BLACKHOLE
+    left_out = [
+        (i, o)
+        for i, o in product(SWEEP_FORMATS, SWEEP_FORMATS)
+        if fp16_dest_unusable(i, o, D_NO, bh)
+    ]
+    covered = []
+    for op, contracts in contracts_of(load_table(TABLE_PATHS[bh])).items():
+        for (i, o), approx in product(left_out, (*ApproximationMode, None)):
+            query = BudgetKey(
+                approx_mode=approx,
+                input_format=i,
+                output_format=o,
+                dest_acc=D_NO,
+                arch=bh,
+            )
+            found = most_specific(contracts, query)
+            if found is not None and found[1].metric is Metric.ULP:
+                covered.append(f"{op.name} {query.describe()}: {found[0].describe()}")
+    assert not covered, covered
+
+
+def test_a_promoted_cell_is_not_an_fp16_dest_cell():
+    """An exponent-B input packed to Float16 runs at a 32-bit Dest whatever it asks
+    for, so it holds no fp16 in a 16-bit Dest even at `dest_acc=No`."""
+    unusable = {
+        (i, o)
+        for i, o in product(SWEEP_FORMATS, SWEEP_FORMATS)
+        if fp16_dest_unusable(i, o, D_NO, ChipArchitecture.BLACKHOLE)
+    }
+    assert unusable == _FP16_IN_DEST
+    assert not any(
+        fp16_dest_unusable(i, o, d, ChipArchitecture.WORMHOLE)
+        for i, o, d in product(SWEEP_FORMATS, SWEEP_FORMATS, DestAccumulation)
+    )
+
+
+def test_a_pair_swept_at_one_dest_because_the_other_holds_fp16_keeps_its_dest(
+    tmp_path,
+):
+    """On Blackhole a Float16 -> Float32 pair is swept at `dest_acc=Yes` only. Its
+    cells agree, but a dest-less row would also answer the `No` cell nobody measured
+    (where Sign is 1.3e8 steps off), so the row keeps `dest`. A promoted cell is not
+    excluded (its `No` request runs the `Yes` kernel): Sqrt, with no excluded cell in
+    this run, still drops `dest` from its Float16_b -> Float16 pair."""
+    path = tmp_path / "budget.yaml"
+    write_table_file({}, path)
+    sqrt = MathOperation.Sqrt
+    for approx in ApproximationMode:
+        record(GELU, cell_key(F16, F32, approx, D_YES), 0)
+        record(sqrt, cell_key(F16B, F16, approx, D_YES), 0)
+    write_table(path, ChipArchitecture.BLACKHOLE)
+    assert set(_rows(path)) == {_pair(F16, F32, dest_acc=D_YES)}
+    assert set(_rows(path, sqrt)) == {_pair(F16B, F16)}
+
+
 @pytest.mark.parametrize(
     "arch",
     [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
@@ -889,7 +970,8 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
 )
 def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypatch):
     """A cell is swept exactly when the TestConfig built for it runs the Dest it asks
-    for; the promoted exponent-B -> Float16 `No` cells are the ones left out."""
+    for; the promoted exponent-B -> Float16 `No` cells are the ones left out, and on
+    Blackhole the cells that would hold fp16 in a 16-bit Dest."""
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
     built_as_asked = [
         (i, o, a, d)
@@ -904,20 +986,23 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
             skip_build_header=True,
         ).dest_acc
         == d
+        and not fp16_dest_unusable(i, o, d, arch)
     ]
     cells = sweep_cells(arch)
     assert cells == built_as_asked
-    promoted = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
+    one_dest = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
         (i, o) for i, o, _, d in cells if d == D_YES
     }
-    assert promoted == {(F16B, F16)}
+    assert one_dest == {(F16B, F16)} | (
+        _FP16_IN_DEST if arch == ChipArchitecture.BLACKHOLE else set()
+    )
 
 
 def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
-    """`sweep_cells` applies only the Dest promotion off Wormhole, not another arch's
-    format support; a ULP row naming one would send unsupported cells to the device."""
+    """`sweep_cells` applies only the Dest promotion and Blackhole's fp16 rule, not a
+    third architecture's format support; a ULP row naming one would send unsupported
+    cells to the device."""
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
-    from helpers.ulp_table import MEASURED_ARCH
 
     elsewhere = [
         (op.name, key)

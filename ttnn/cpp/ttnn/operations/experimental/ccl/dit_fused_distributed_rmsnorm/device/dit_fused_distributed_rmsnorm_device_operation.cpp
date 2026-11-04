@@ -55,7 +55,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(recip.dtype() == DataType::FLOAT32, "reciprocals must be FLOAT32, got {}", recip.dtype());
             TT_FATAL(recip.layout() == Layout::ROW_MAJOR, "reciprocals must be ROW_MAJOR, got {}", recip.layout());
             TT_FATAL(
-                recip.buffer() != nullptr && recip.storage_type() == StorageType::DEVICE,
+                recip.is_allocated() && recip.storage_type() == StorageType::DEVICE,
                 "reciprocals must be an allocated device tensor");
             // [.., reduce_width] where reduce_width == per-device H (the Welford reduce
             // width). The LLK indexes it by sample count 0..reduce_width-1.
@@ -68,7 +68,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Input must be allocated");
+    TT_FATAL(input.is_allocated(), "Input must be allocated");
     TT_FATAL(input.layout() == Layout::TILE, "Input layout must be TILE, got {}", input.layout());
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32,
@@ -161,7 +161,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     if (tile_row_map.has_value()) {
         const auto& map = tile_row_map.value();
         TT_FATAL(
-            map.storage_type() == StorageType::DEVICE && map.buffer() != nullptr,
+            map.storage_type() == StorageType::DEVICE && map.is_allocated(),
             "affine_tile_row_map must be an allocated device tensor");
         // The reader binds the map's raw buffer address on the input's mesh, so a map that lives on
         // another mesh would be read as unrelated memory.
@@ -280,7 +280,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             e_shape[3]);
         const auto& buf = tensor_args.persistent_output_buffer.value();
         TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
-        TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
+        TT_FATAL(buf.is_allocated(), "persistent_output_buffer must be allocated");
         TT_FATAL(
             buf.layout() == expected.layout(),
             "persistent_output_buffer layout must be {} (got {})",

@@ -18,6 +18,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
+#if defined(ROWS_PER_PASS) && !defined(FUSED_SCALE_MASK) && defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE)
+#include "api/compute/eltwise_unary/exp.h"
+#endif
+
 namespace ckl = compute_kernel_lib;
 
 template <
@@ -31,7 +35,7 @@ template <
     typename DFB1,
     typename DFB2,
     typename DFB3>
-ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
+ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& /*dfb_max_scaler_obj*/, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<
@@ -61,8 +65,8 @@ void kernel_main() {
     constexpr std::uint32_t block_h = get_arg(args::block_h);
     constexpr std::uint32_t block_w = get_arg(args::block_w);
     constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
-    constexpr bool causal_mask = get_arg(args::causal_mask);
-    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
+    constexpr bool causal_mask = get_arg(args::causal_mask) != 0;
+    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask) != 0;
 #ifdef NUMERIC_STABLE
     constexpr bool numeric_stable = true;
 #else
@@ -110,6 +114,153 @@ void kernel_main() {
     constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
 #endif
 
+#if defined(ROWS_PER_PASS) && !defined(FUSED_SCALE_MASK) && defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE)
+    constexpr std::uint32_t shk = (ROWS_PER_PASS <= block_h && block_h % ROWS_PER_PASS == 0) ? ROWS_PER_PASS : 1;
+    constexpr std::uint32_t pass_subblock_w = 2;
+    constexpr std::uint32_t sbw =
+        pass_subblock_w < compute_kernel_lib::DEST_AUTO_LIMIT ? pass_subblock_w : compute_kernel_lib::DEST_AUTO_LIMIT;
+    dfb_max_scaler_obj.wait_front(1);
+    for (std::uint32_t i = 0; i < block_h; i += shk) {
+        dfb_in0_obj.reserve_back(block_w * shk);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_w * shk);
+        dfb_mask_padded_obj.wait_front(1);
+        reconfig_data_format(dfb::in0, dfb::mask_padded);
+        pack_reconfig_data_format(dfb::x);
+        add_bcast_rows_init(dfb::in0, dfb::mask_padded);
+        dfb_x_obj.reserve_back(shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            tile_regs_acquire();
+            add_tiles_bcast_rows(dfb::in0, dfb::mask_padded, j * block_w + block_w_unpadded, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, dfb::x);
+            tile_regs_release();
+        }
+        dfb_x_obj.push_back(shk);
+        dfb_x_obj.wait_front(shk);
+        reconfig_data_format(dfb::in0, dfb::max_scaler);
+        pack_reconfig_data_format(dfb::max);
+        reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(dfb::in0, dfb::max_scaler, dfb::max);
+        dfb_max_obj.reserve_back(shk);
+        for (std::uint32_t j0 = 0; j0 < shk; j0 += sbw) {
+            const std::uint32_t nr = (j0 + sbw > shk) ? (shk - j0) : sbw;
+            tile_regs_acquire();
+            for (std::uint32_t r = 0; r < nr; ++r) {
+                for (std::uint32_t t = 0; t < block_w_unpadded; ++t) {
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+                        dfb::in0, dfb::max_scaler, (j0 + r) * block_w + t, 0, r);
+                }
+            }
+            reconfig_data_format_srca(dfb::in0, dfb::x);
+            for (std::uint32_t r = 0; r < nr; ++r) {
+                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(dfb::x, dfb::max_scaler, j0 + r, 0, r);
+            }
+            reconfig_data_format_srca(dfb::x, dfb::in0);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (std::uint32_t r = 0; r < nr; ++r) {
+                pack_tile(r, dfb::max);
+            }
+            tile_regs_release();
+        }
+        dfb_max_obj.push_back(shk);
+        reduce_uninit();
+        dfb_max_obj.wait_front(shk);
+        reconfig_data_format(dfb::in0, dfb::max);
+        pack_reconfig_data_format(dfb::exps);
+        sub_bcast_cols_init(dfb::in0, dfb::max);
+        exp_tile_init<EXP_APPROX>();
+        dfb_exps_obj.reserve_back(block_w * shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            for (std::uint32_t b = 0; b < block_w_unpadded; b += sbw) {
+                const std::uint32_t n = (b + sbw > block_w_unpadded) ? (block_w_unpadded - b) : sbw;
+                tile_regs_acquire();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    sub_tiles_bcast_cols(dfb::in0, dfb::max, j * block_w + b + d, j, d);
+                }
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    exp_tile<EXP_APPROX>(d);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    pack_tile<true>(d, dfb::exps, j * block_w + b + d);
+                }
+                tile_regs_release();
+            }
+        }
+        reconfig_data_format_srca(dfb::in0, dfb::x);
+        for (std::uint32_t j = 0; j < shk; j += sbw) {
+            const std::uint32_t n = (j + sbw > shk) ? (shk - j) : sbw;
+            tile_regs_acquire();
+            for (std::uint32_t d = 0; d < n; ++d) {
+                sub_tiles_bcast_cols(dfb::x, dfb::max, j + d, j + d, d);
+            }
+            for (std::uint32_t d = 0; d < n; ++d) {
+                exp_tile<EXP_APPROX>(d);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (std::uint32_t d = 0; d < n; ++d) {
+                pack_tile<true>(d, dfb::exps, (j + d) * block_w + block_w_unpadded);
+            }
+            tile_regs_release();
+        }
+        reconfig_data_format_srca(dfb::x, dfb::in0);
+        dfb_exps_obj.push_back(block_w * shk);
+        dfb_in0_obj.pop_front(block_w * shk);
+        dfb_max_obj.pop_front(shk);
+        dfb_x_obj.pop_front(shk);
+        reconfig_data_format(dfb::exps, dfb::sum_scaler);
+        dfb_exps_obj.wait_front(block_w * shk);
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::of(shk, block_w),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](std::uint32_t) {
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
+            });
+        dfb_recip_sum_exps_obj.wait_front(shk);
+        reconfig_data_format(dfb::exps, dfb::recip_sum_exps);
+        pack_reconfig_data_format(dfb::out0);
+        mul_bcast_cols_init(dfb::exps, dfb::recip_sum_exps);
+        dfb_out0_obj.reserve_back(block_w * shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            for (std::uint32_t b = 0; b < block_w; b += sbw) {
+                const std::uint32_t n = (b + sbw > block_w) ? (block_w - b) : sbw;
+                tile_regs_acquire();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    mul_tiles_bcast_cols(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    pack_tile(d, dfb::out0);
+                }
+                tile_regs_release();
+            }
+        }
+        dfb_out0_obj.push_back(block_w * shk);
+        dfb_exps_obj.pop_front(block_w * shk);
+        dfb_recip_sum_exps_obj.pop_front(shk);
+        dfb_out0_obj.wait_front(block_w * shk);
+        dummy_unpack(dfb::out0);
+        dfb_out0_obj.pop_front(block_w * shk);
+    }
+#else
     for (std::uint32_t i = 0; i < block_h; i++) {
         // The in0 row is already resident in L1; advance the DFB to make it available. On Quasar a push with
         // no intervening pack trips the TEN-4746 guard, so emit a no-write PACR first (a no-op on WH/BH).
@@ -331,6 +482,7 @@ void kernel_main() {
         dummy_unpack(dfb::out0);
         dfb_out0_obj.pop_front(block_w);
     }
+#endif
 #ifdef FUSED_SCALE_MASK
     // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row
     // of the block; pop it once here so the buffer is left balanced.

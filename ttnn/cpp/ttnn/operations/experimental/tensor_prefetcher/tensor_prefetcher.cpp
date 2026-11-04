@@ -4,6 +4,9 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include "device/signal_tensor_prefetcher_device_operation.hpp"
+
+#include "ttnn/device_operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -44,18 +47,10 @@ void start_tensor_prefetcher(
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
-    const bool has_gcb = global_cb.has_value();
-    const bool has_pipes = !prefetcher_pipes.empty();
-    TT_FATAL(
-        has_gcb != has_pipes,
-        "queue_tensor_prefetcher_request needs exactly one delivery target: global_cb {} supplied, "
-        "prefetcher_pipes {} supplied",
-        has_gcb ? "was" : "was not",
-        has_pipes ? "was" : "was not");
+    TT_FATAL(!prefetcher_pipes.empty(), "queue_tensor_prefetcher_request needs at least one PrefetcherPipe");
 
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
@@ -84,13 +79,8 @@ void queue_tensor_prefetcher_request(
     // — with capture_into_trace false we hand metal no queue, and the request is sent
     // immediately even mid trace-capture.
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
-    if (has_pipes) {
-        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
-    } else {
-        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, *global_cb, device_subset, inputs, trace_cq);
-    }
+    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+        *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
 }
 
 std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
@@ -116,6 +106,29 @@ void wait_for_cq_on_tensor_prefetcher(
     // queue current. Resolving nullopt to the thread's current queue is what makes the two
     // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
+}
+
+uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id) {
+    return tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id);
+}
+
+void queue_tensor_prefetcher_wait_for_signal(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace) {
+    // A NO_DISPATCH graph capture launches no program, so no op raises the signal that would release
+    // the wait, and every later wait and request would sit behind it.
+    if (ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
+        return;
+    }
+    // Same queue rule as queue_tensor_prefetcher_request: a cq_id keyword has already been made the
+    // thread's current queue, so the only choice left is whether to offer it for capture.
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    tt::tt_metal::experimental::QueueTensorPrefetcherWaitForSignal(*mesh_device, signal_id, trace_cq);
+}
+
+void signal_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, const tt::tt_metal::CoreCoord& core) {
+    ttnn::prim::signal_tensor_prefetcher(
+        mesh_device, tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id), core);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

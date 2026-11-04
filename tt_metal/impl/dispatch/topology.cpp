@@ -26,7 +26,6 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "program/program_impl.hpp"
 #include "program.hpp"
-#include <tt_stl/span.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
@@ -698,7 +697,7 @@ void DispatchTopology::populate_cq_static_args(Device* device) {
         !node_id_to_kernel_.empty(),
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
-    auto cq_program_ptr = std::make_unique<Program>();
+    auto cq_program_ptr = std::make_unique<Program>(std::make_shared<detail::ProgramImpl>(device->get_context_id()));
     for (auto* node_and_kernel : node_id_to_kernel_) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {

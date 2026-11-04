@@ -158,9 +158,9 @@ ProgramDescriptor build_program_descriptor(
     const auto& temp_tensor = tensor_args.buffer_tensor;
     auto& output_tensor = tensor_return_value;
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a device buffer");
-    TT_FATAL(temp_tensor.buffer() != nullptr, "Buffer tensor must be allocated in a device buffer");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in a device buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a device buffer");
+    TT_FATAL(temp_tensor.is_allocated(), "Buffer tensor must be allocated in a device buffer");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in a device buffer");
 
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a MeshDevice");
@@ -285,7 +285,7 @@ ProgramDescriptor build_program_descriptor(
     auto in_cores = in_shard_spec.grid;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -652,13 +652,25 @@ ProgramDescriptor build_program_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                forward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
         writer_rt_args.push_back(static_cast<uint32_t>(backward_fabric_node_id.has_value()));
         if (backward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                backward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         desc.kernels[kWorkerWriterKernelIdx].emplace_runtime_args(

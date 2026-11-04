@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     resolve_checkpoint,
     resolve_trace,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -98,13 +99,6 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        # 4096, between the AttnRes suite's 1152 and the 24576 the rest of the package uses. Both ends
-        # are wrong here. At depth 24 the sealed set has two blocks for the first time and
-        # `inter_block`'s statistics collective needs 16 B per bank more than 1152 provides, so 1152
-        # fails outright. But L1_SMALL comes out of the same L1 the circular buffers use, and at
-        # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
-        # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
-        # clears AttnRes with margin while leaving MLA its working space.
         {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
@@ -203,6 +197,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         weight_cache_path=cache,
     )
 
+    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
     kvpe = None
@@ -273,8 +268,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         # rather than lazy.
         model.forward(tokens_tt, kvpe_cache=kvpe, layer_tap=tap)
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     # Report the inner taps first: when a layer's output is wrong, these say which half.
     for local_idx in range(num_layers):

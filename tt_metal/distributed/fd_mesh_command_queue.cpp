@@ -12,7 +12,6 @@
 #include <mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -25,12 +24,10 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/data_collection.hpp"
 #include "dispatch/device_command.hpp"
@@ -44,7 +41,6 @@
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
-#include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
@@ -60,7 +56,7 @@
 #include "tt_metal/impl/device/dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include <tt_stl/overloaded.hpp>
+#include <internal/mesh_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
@@ -93,7 +89,8 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 class SubDeviceRecorder {
 public:
     SubDeviceRecorder(MeshDevice* mesh_device, SubDeviceId sub_device_id) :
-        context_id_(extract_context_id(mesh_device)), manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
+        context_id_(mesh_device->impl().get_context_id()),
+        manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
         // Skip programs that didn't opt into a user-defined sub-device manager.
         enabled_ = manager_id_ != *mesh_device->get_default_sub_device_manager_id() &&
                    tt::IsProgramMetadataRecordingEnabled(context_id_);
@@ -239,7 +236,9 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     auto target_type = this->get_target_device_type();
     bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
 
-    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
+    // After an L1 ECC halt the dispatcher waits forever on the halted worker, so this would never complete.
+    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire) &&
+        !mesh_device_->impl().metal_context().l1_ecc_halt_detected()) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -646,7 +645,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     TTZoneScopedD(DISPATCH);
 
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
-    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
@@ -730,6 +729,18 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
+void FDMeshCommandQueue::throw_if_reader_failed() {
+    if (!thread_exception_state_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+    if (thread_exception_ptr_) {
+        std::rethrow_exception(thread_exception_ptr_);
+    }
+    // finish_nolock has already rethrown and cleared the exception; the reader thread has exited.
+    TT_THROW("The completion queue reader thread stopped after an earlier error.");
+}
+
 void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
@@ -738,7 +749,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
+    if (tt::IsProgramRealtimeProfilerActive(mesh_device_->impl().get_context_id())) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->impl().get_devices()) {
@@ -768,6 +779,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
             std::rethrow_exception(exception_ptr);
         }
     }
+    this->throw_if_reader_failed();
 }
 
 void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
@@ -1338,12 +1350,16 @@ void FDMeshCommandQueue::enqueue_command_list(
     const std::vector<SubDeviceId>& sub_device_ids,
     const MeshBuffer& buffer,
     SubDeviceManagerId sub_device_manager_id,
-    bool blocking) {
+    bool blocking,
+    const std::function<void()>& before_submit) {
     auto lock = lock_api_function_();
     TT_FATAL(!trace_id_.has_value(), "Command-list replay is not supported during trace capture.");
     TT_FATAL(
         mesh_device_->get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed after the command list was built");
+    if (before_submit) {
+        before_submit();
+    }
     in_use_ = true;
     submit_replay_buffer(worker_descriptors, sub_device_ids, buffer);
     if (blocking) {
@@ -1495,7 +1511,8 @@ void FDMeshCommandQueue::submit_replay_buffer(
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
+    auto cmd_sequence_sizeB =
+        trace_dispatch::compute_trace_cmd_size(mesh_device_->impl().get_context_id(), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,
@@ -1637,7 +1654,7 @@ void FDMeshCommandQueue::record_end() {
         // cache manager to give each range a clean slate.
         this->reset_prefetcher_cache_manager();
 
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
+        auto& sysmem_manager_for_trace = internal::get_device(*mesh_device_, range.start_coord())->sysmem_manager();
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             worker_launch_message_buffer_state[sub_device_id].reset();

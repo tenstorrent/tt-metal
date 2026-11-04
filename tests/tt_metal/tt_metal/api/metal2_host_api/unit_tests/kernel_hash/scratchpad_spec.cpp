@@ -21,9 +21,11 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernelHash) {
@@ -48,6 +50,18 @@ TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernel
     auto hash_small = prog_small.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_large = prog_large.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingDoesNotChangeKernelHash) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    Program private_program = MakeProgramFromSpec(*mesh_device_, spec);
+    spec.scratchpads[0].advanced_options.allow_instance_multi_binding = true;
+    Program shared_program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_EQ(
+        private_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        shared_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 
 TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {

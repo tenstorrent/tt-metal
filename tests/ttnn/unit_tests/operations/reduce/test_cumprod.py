@@ -388,7 +388,9 @@ def test_cumsum_cumprod_tile_axis_program_cache(device):
         ("cumprod", torch.bfloat16, -1),
         ("cumsum", torch.bfloat16, -2),
         ("cumprod", torch.bfloat16, -2),
+        ("cumsum", torch.float32, -1),
         ("cumprod", torch.float32, -1),
+        ("cumsum", torch.float32, -2),
         ("cumprod", torch.float32, -2),
     ]
     size = [2, 64, 96]

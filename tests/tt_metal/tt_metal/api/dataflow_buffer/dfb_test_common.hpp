@@ -5,15 +5,14 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 #include <gtest/gtest.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -34,7 +33,6 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -46,8 +44,6 @@
 #include <functional>
 #include <thread>
 #include <tt-metalium/bfloat16.hpp>
-#include "impl/data_format/bfloat16_utils.hpp"
-#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -548,7 +544,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             << "Tensix consumer kernel must compile with num_entries_per_consumer";
         ASSERT_EQ(*cta_num_entries_per_consumer, num_entries_per_consumer)
             << "digest region must be sized from the same num_entries_per_consumer CTA the kernel compiles with";
-        digest_region_bytes = dfb_tensix_digest_region_bytes(p.num_consumers, *cta_num_entries_per_consumer);
+        digest_region_bytes =
+            dfb_tensix_digest_region_bytes(p.num_consumers, cta_num_entries_per_consumer->to_uint32());
     }
     const uint32_t digest_l1_addr =
         p.consumer_type == M2PorCType::TENSIX ? top_of_l1_scratch_addr(mesh_device, digest_region_bytes) : 0u;

@@ -490,7 +490,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         if (!used_directions.insert(direction.value()).second) {
             continue;
         }
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, peer_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, src_fabric_node_id, peer_node);
         TT_FATAL(
             !links.empty(),
             "No forwarding links from attn_res_gather_softmax source {} to peer {}",
@@ -504,7 +504,14 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // The count first: the kernel reads it before building the manager from what follows.
     gather_rt_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, dst_nodes, per_connection_links, program, gather_kernel_id, gather_core, gather_rt_args);
+        *mesh_device,
+        src_fabric_node_id,
+        dst_nodes,
+        per_connection_links,
+        program,
+        gather_kernel_id,
+        gather_core,
+        gather_rt_args);
 
     for (uint32_t p = 0; p < ring_size; ++p) {
         if (p == my_rank) {
