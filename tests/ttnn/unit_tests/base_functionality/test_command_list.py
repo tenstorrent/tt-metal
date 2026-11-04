@@ -75,6 +75,28 @@ def test_record_build_replay(device, builder, command_lists, blocking):
 
 
 @skip_for_slow_dispatch()
+def test_same_op_recorded_twice_with_different_inputs(device, builder, command_lists):
+    input_a = allocate_input(device)
+    input_b = allocate_input(device)
+    num_entries_before = device.num_program_cache_entries()
+    with builder:
+        out_a = ttnn.relu(input_a)
+        out_b = ttnn.relu(input_b)
+    # The second relu is a program cache hit, so both recordings come from the same cached program.
+    assert device.num_program_cache_entries() - num_entries_before == 1
+
+    command_list = builder.build()
+    command_lists.append(command_list)
+    torch_a = torch.randn(SHAPE, dtype=torch.bfloat16)
+    torch_b = torch.randn(SHAPE, dtype=torch.bfloat16)
+    write_input(torch_a, input_a)
+    write_input(torch_b, input_b)
+    command_list.enqueue(check_dram_overlap=True)
+    assert_with_pcc(torch.relu(torch_a.float()), ttnn.to_torch(out_a).float(), pcc=0.99)
+    assert_with_pcc(torch.relu(torch_b.float()), ttnn.to_torch(out_b).float(), pcc=0.99)
+
+
+@skip_for_slow_dispatch()
 def test_dram_overlap_check_rejects_partial_overlap(device, builder, command_lists, expect_error):
     # 64 and 32 tiles give different per-bank sizes on both Wormhole (12 banks) and Blackhole (8 banks).
     device_input = allocate_input(device, shape=(1, 1, 256, 256))
