@@ -26,8 +26,8 @@ constexpr uint32_t kDerivedSlotCount = 9;
 
 // Common-runtime-arg layout: the tensor addresses first, then the metadata block (when present), then the
 // logical-length pair.
-// Reader addresses: Q, K, V, gathered K, gathered V, attention sink; then joint Q, K, V when the kernel has joint
-// inputs; then gathered joint K, V on the sharded-joint path.
+// Reader addresses: Q, K, V, gathered K, gathered V, then joint Q, K, V when the kernel has joint inputs, then
+// attention sink, then gathered joint K, V on the sharded-joint path.
 constexpr uint32_t kReaderBaseAddressCommonArgCount = 6;
 constexpr uint32_t kReaderJointAddressCommonArgCount = 3;
 constexpr uint32_t kReaderGatheredJointAddressCommonArgCount = 2;

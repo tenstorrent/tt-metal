@@ -556,7 +556,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = 2;
+    layout.reader_kv_cache_batch_idx = kReaderQWorkArgCount - 1;
     layout.reader_logical_nt = kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
@@ -3129,25 +3129,26 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     };
     {
+        // Gate the optional addresses on the same predicates the reader derives from its compile-time joint args
+        const bool kernel_has_joint_inputs = num_joint_q_chunks > 0 || num_joint_k_chunks > 0;
+        const bool kernel_has_gathered_joint_k = joint_is_sharded && num_joint_k_chunks > 0;
         CheckedRuntimeArgList reader_common_args;
         reader_common_args.push_back(q_buf);
         reader_common_args.push_back(k_buf);
         reader_common_args.push_back(v_buf);
         reader_common_args.push_back(gathered_k_buf);
         reader_common_args.push_back(gathered_v_buf);
-        if (L != 0) {
+        if (kernel_has_joint_inputs) {
             reader_common_args.push_back(joint_tensor_q->buffer());
             reader_common_args.push_back(joint_tensor_k->buffer());
             reader_common_args.push_back(joint_tensor_v->buffer());
         }
         reader_common_args.push_back(attention_sink_buf);
-        if (joint_is_sharded) {
+        if (kernel_has_gathered_joint_k) {
             reader_common_args.push_back(gathered_joint_tensor_k->buffer());
             reader_common_args.push_back(gathered_joint_tensor_v->buffer());
         }
-        // The kernel derives its address count from its compile-time joint flags, which come from these values.
-        const bool kernel_has_joint_inputs = num_joint_q_chunks > 0 || num_joint_k_chunks > 0;
-        const bool kernel_has_gathered_joint_k = joint_is_sharded && num_joint_k_chunks > 0;
+        // Ties the push list above to the shared layout contract the kernel indexes by.
         const uint32_t reader_address_common_arg_count =
             ring_joint::reader_address_common_arg_count(kernel_has_joint_inputs, kernel_has_gathered_joint_k);
         TT_FATAL(

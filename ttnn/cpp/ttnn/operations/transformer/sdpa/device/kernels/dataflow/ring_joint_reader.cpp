@@ -282,6 +282,9 @@ void kernel_main() {
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
+    // kv_actual_isl's DRAM addr (metadata common arg 4) is only pushed by the host as part of the
+    // slot_from_metadata block.
+    static_assert(!kv_pad_from_metadata || slot_from_metadata);
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
@@ -525,6 +528,7 @@ void kernel_main() {
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args after the addresses: metadata block first when present, then the logical-length pair.
+    ASSERT(common_argidx == address_common_arg_count);
     constexpr uint32_t metadata_common_arg_base = address_common_arg_count;
     constexpr uint32_t logical_length_common_arg_base =
         metadata_common_arg_base + (slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0);
