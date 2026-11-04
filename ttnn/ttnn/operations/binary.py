@@ -196,8 +196,12 @@ def _integral_float_scalars_as_int(input_tensor_a, input_tensor_b):
     if not torch.is_tensor(tensor_operand) or tensor_operand.dtype not in _promotable_integer_dtypes():
         return input_tensor_a, input_tensor_b
 
+    # The binding receives a Python float as a C++ float, so the device sees it rounded to float32.
     def as_int(value):
-        return int(value) if isinstance(value, float) and value.is_integer() else value
+        if not isinstance(value, float):
+            return value
+        bound = torch.tensor(value, dtype=torch.float32).item()
+        return int(bound) if bound.is_integer() else value
 
     return as_int(input_tensor_a), as_int(input_tensor_b)
 

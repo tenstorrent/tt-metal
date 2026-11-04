@@ -900,6 +900,20 @@ def test_squared_difference_golden_scalar_first(torch_dtype, mask, scalar):
         assert torch.equal(scalar_first, ((wide - (scalar & mask)) ** 2 & mask).to(torch_dtype))
 
 
+@pytest.mark.parametrize("op_name", ("add", "subtract", "squared_difference"))
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.int32, torch.int32), (ttnn.uint32, torch.uint32)))
+def test_integral_float_scalar_golden_rounds_through_float32(device, op_name, ttnn_dtype, torch_dtype):
+    """The binding receives 16777217.0 as the float32 16777216, so the golden has to round it the same
+    way before treating it as an integer, or it disagrees with a correct device result by one."""
+    torch_input = torch.full((1, 1, 32, 32), 16777216, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    op = getattr(ttnn, op_name)
+
+    output = ttnn.to_torch(op(input_tensor, 16777217.0))
+
+    assert torch.equal(output, ttnn.get_golden_function(op)(torch_input, 16777217.0))
+
+
 @pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
 @pytest.mark.parametrize("scalar", (7, 2.5))
 @pytest.mark.parametrize("scalar_first", (True, False))
