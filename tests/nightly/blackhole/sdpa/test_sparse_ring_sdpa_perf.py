@@ -105,19 +105,29 @@ class Bench:
             rt.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
         )
 
-    def shape(self, rows, logical_n=None):
-        """The case for `rows` per device and `logical_n` real tokens (default: every row)."""
+    def shape(self, rows, logical_n=None, lofi=False):
+        """The case for `rows` per device and `logical_n` real tokens (default: every row); lofi: bf16 Q and bf8 K / V
+        rounded for LoFi matmuls (Case(lofi=True))."""
         logical_n = rows * MESH_CONFIG.sp_size if logical_n is None else logical_n
-        if (rows, logical_n) != self.key:
+        if (rows, logical_n, lofi) != self.key:
             self._free()
             geo = Geometry(rows, logical_n, K_CHUNKS[0], dense_chunks=DENSE_CHUNKS[rows])
-            case = Case(self.rt, geo)
+            case = Case(self.rt, geo, dtype=ttnn.bfloat8_b, lofi=True) if lofi else Case(self.rt, geo)
             shape = (1, case.H, case.S * rows, D)
             g = torch.Generator().manual_seed(rows)
             qkv = [torch.randn(shape, generator=g, dtype=torch.bfloat16) for _ in range(3)]
-            self.tensors = tuple(case._upload(x, case.seq_dims) for x in qkv)
-            self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in qkv[1:])
-            self.key, self.case = (rows, logical_n), case
+            if lofi:
+                q, k, v = case.prepare(*qkv)
+                self.tensors = (
+                    case._upload(q, case.seq_dims),
+                    *(case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v)),
+                )
+                pooled = (case.quantize(pool(x, geo, case.S), bits=case.kv_bits()) for x in (k, v))
+                self.pooled = tuple(case._upload(x, case.dims(None, 1), dtype=case.dtype) for x in pooled)
+            else:
+                self.tensors = tuple(case._upload(x, case.seq_dims) for x in qkv)
+                self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in qkv[1:])
+            self.key, self.case = (rows, logical_n, lofi), case
         return self.case
 
     def _free(self):
@@ -177,6 +187,7 @@ class Bench:
             q_chunk_size=BLOCK,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
+            matmul_math_fidelity=case.sparse_config.matmul_math_fidelity,
         )
         return lambda: ttnn.transformer.sparse_ring_sdpa(
             q,
@@ -203,11 +214,18 @@ class Bench:
         )
 
     def baseline(self, rows, logical_n=None):
-        """(dense, gather) replay times for `rows` (and `logical_n`), timed on first use."""
+        """(dense, gather) replay times for `rows` (and `logical_n`) with bf16 inputs, timed on first use."""
         self.shape(rows, logical_n)
         if self.key not in self.baselines:
             mesh = self.rt.mesh_device
             self.baselines[self.key] = (traced_ms(mesh, self.dense()), traced_ms(mesh, self.gather()))
+        return self.baselines[self.key]
+
+    def lofi_gather(self, rows, logical_n=None):
+        """The gather's replay times with the LoFi inputs (bf8 K / V), timed on first use."""
+        self.shape(rows, logical_n, lofi=True)
+        if self.key not in self.baselines:
+            self.baselines[self.key] = traced_ms(self.rt.mesh_device, self.gather())
         return self.baselines[self.key]
 
 
@@ -247,10 +265,13 @@ def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense
     return rec
 
 
-def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="random", logical_n=None):
-    """Time the sparse op on the mask `make(case)` builds and record it against the shape's baselines."""
+def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="random", logical_n=None, lofi=False):
+    """Time the sparse op on the mask `make(case)` builds and record it against the bf16 dense op and the gather of
+    the same inputs (lofi: Bench.shape)."""
     dense, gather = bench.baseline(rows, logical_n)
-    case = bench.shape(rows, logical_n)
+    if lofi:
+        gather = bench.lofi_gather(rows, logical_n)
+    case = bench.shape(rows, logical_n, lofi)
     mask = make(case)
     block_density = _density(mask, case.geo, case.S)
     t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -259,7 +280,7 @@ def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="rando
         times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled))
     finally:
         ttnn.deallocate(t_mask)
-    mode = "sparse" if pooled else "kept"
+    mode = ("sparse" if pooled else "kept") + ("-lofi" if lofi else "")
     return record(
         results_file,
         rows,
@@ -306,9 +327,21 @@ def test_mask_family_perf(bench, results_file, rows, structure, density):
     time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, True, structure=structure)
 
 
+@pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
+@pytest.mark.parametrize("rows", list(WORKING_POINTS), ids=list(WORKING_POINTS.values()))
+def test_lofi_perf(bench, results_file, rows, pooled):
+    """LoFi matmuls with bf8 K / V and bf16 Q (inputs rounded as for LoFi) at density 0.2, against the bf16 dense op."""
+
+    def make(case):
+        return make_mask(case.geo, case.S, case.H, density=0.2, seed=rows)
+
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, lofi=True)
+
+
 @pytest.mark.skipif(MESH_CONFIG.sp_size != 8, reason="the frame-sparse video shapes are per device on SP=8")
+@pytest.mark.parametrize("lofi", [False, True], ids=["bf16", "lofi"])
 @pytest.mark.parametrize("rows", list(FRAME_POINTS), ids=[name for name, _ in FRAME_POINTS.values()])
-def test_frame_mask_perf(bench, results_file, rows):
+def test_frame_mask_perf(bench, results_file, rows, lofi):
     """Video frame shapes (window 5 and the last frame, kept blocks only) against the dense op."""
     tokens_per_frame = FRAME_POINTS[rows][1]
     allow = window_allow(FRAMES_REAL, FRAMES_PADDED, window=5, add_last_frame=True)
@@ -317,4 +350,6 @@ def test_frame_mask_perf(bench, results_file, rows):
         return frame_block_mask(allow, tokens_per_frame, case.geo, case.S, case.H)
 
     logical_n = FRAMES_REAL * tokens_per_frame
-    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, False, structure="frames", logical_n=logical_n)
+    time_mask(
+        bench, results_file, rows, make, FAMILY_K_CHUNK, False, structure="frames", logical_n=logical_n, lofi=lofi
+    )

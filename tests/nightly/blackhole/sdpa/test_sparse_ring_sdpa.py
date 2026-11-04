@@ -293,12 +293,23 @@ def runtime():
     close_ring_joint_sdpa_runtime(rt)
 
 
-class Case:
-    """Inputs, device buffers and both ops for one geometry on the module's mesh. dtype: of Q, K, V and the pooled
-    K / V (bf16, or block float)."""
+def round_significand(x, bits):
+    """x rounded to `bits` significant bits, to nearest even, on its fp32 pattern: the LoFi recipe's input rounding
+    (ttnn.transformer.prepare_sdpa_input), so LoFi's narrower matmul operands lose nothing further."""
+    shift = 24 - bits
+    raw = x.float().contiguous().view(torch.int32)
+    raw = (raw + ((1 << (shift - 1)) - 1) + ((raw >> shift) & 1)) & ~((1 << shift) - 1)
+    return raw.view(torch.float32)
 
-    def __init__(self, rt, geo, dtype=ttnn.bfloat16):
-        self.rt, self.geo, self.dtype = rt, geo, dtype
+
+class Case:
+    """Inputs, device buffers and both ops for one geometry on the module's mesh. dtype: of K, V and the pooled K / V
+    (bf16, or block float), and of Q unless lofi. lofi: LoFi matmuls, on Q rounded to 7 significant bits (bf16) and
+    K / V to 5."""
+
+    def __init__(self, rt, geo, dtype=ttnn.bfloat16, lofi=False):
+        self.rt, self.geo, self.dtype, self.lofi = rt, geo, dtype, lofi
+        self.q_dtype = ttnn.bfloat16 if lofi else dtype
         self.S, self.TP = MESH_CONFIG.sp_size, MESH_CONFIG.tp_size
         self.H = HEADS_PER_DEVICE * self.TP  # heads in total; HEADS_PER_DEVICE per device
         self.scale = 1.0 / math.sqrt(D)
@@ -328,7 +339,11 @@ class Case:
         )
         grid = rt.sdpa_compute_grid
         self.sparse_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=BLOCK, k_chunk_size=geo.k_chunk, exp_approx_mode=False
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=BLOCK,
+            k_chunk_size=geo.k_chunk,
+            exp_approx_mode=False,
+            matmul_math_fidelity=ttnn.MathFidelity.LoFi if lofi else None,
         )
         self.dense_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
@@ -341,16 +356,30 @@ class Case:
     def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(x, dtype=dtype, layout=layout, device=self.rt.mesh_device, mesh_mapper=self.mapper(d))
 
-    def quantize(self, x):
-        """x rounded to the case's dtype on the host, so the reference sees exactly what the device reads."""
-        if self.dtype == ttnn.bfloat16:
+    def quantize(self, x, dtype=None, bits=None):
+        """x as the device reads it: rounded to `bits` significant bits (LoFi inputs), then stored in `dtype` (default
+        the K / V dtype), so the reference sees exactly the device's values."""
+        x = x if bits is None else round_significand(x, bits)
+        dtype = self.dtype if dtype is None else dtype
+        if dtype == ttnn.bfloat16:
             return x.bfloat16().float()
-        return ttnn.to_torch(ttnn.from_torch(x, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)).float()
+        return ttnn.to_torch(ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)).float()
 
-    def inputs(self, seed):
+    def kv_bits(self):
+        return 5 if self.lofi else None
+
+    def prepare(self, q, k, v):
+        """Q, K, V as the op's inputs (see quantize)."""
+        q = self.quantize(q, self.q_dtype, 7 if self.lofi else None)
+        return (q, *(self.quantize(x, bits=self.kv_bits()) for x in (k, v)))
+
+    def raw_inputs(self, seed):
         g = torch.Generator().manual_seed(seed)
         shape = (1, self.H, self.S * self.geo.rows, D)
-        return tuple(self.quantize(torch.randn(shape, generator=g)) for _ in range(3))
+        return tuple(torch.randn(shape, generator=g) for _ in range(3))
+
+    def inputs(self, seed):
+        return self.prepare(*self.raw_inputs(seed))
 
     def blocks_per_core(self):
         """(most, fewest) Q blocks a working core holds: the op splits the flat (head, Q block) units evenly."""
@@ -409,8 +438,9 @@ class Case:
         the exact dense reference on the slice. counts: the block_counts input ([S * nb_pad]), also used by the
         pooling and the reference."""
         rt, geo = self.rt, self.geo
-        tq, tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (q, k, v))
-        pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts)) for x in (k, v))
+        tq = self._upload(q, self.seq_dims, dtype=self.q_dtype)
+        tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (k, v))
+        pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts), bits=self.kv_bits()) for x in (k, v))
         t_mask = self._upload(mask, self.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         t_pk, t_pv = (
             (self._upload(x, self.dims(None, 1), dtype=self.dtype) for x in (pooled_k, pooled_v))
@@ -729,6 +759,42 @@ def test_block_float_inputs(runtime, dtype, pooled):
     _check(f"{dtype} {_mode(pooled)}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
+# LoFi matmuls on inputs rounded as the LoFi recipe rounds them (Case(lofi=True)): exact against the reference on the
+# rounded inputs (LoFi drops no bits of pre-rounded operands), and within the recipe's relative L2 bounds of
+# attention on the unrounded inputs (tech_reports/FlashAttention/SDPAPrecisionRecipes.md, FAST).
+LOFI_REL_L2_MAX = {ttnn.bfloat16: 0.042, ttnn.bfloat8_b: 0.044}
+
+
+def _rel_l2(ref, out):
+    keep = ~torch.isnan(ref)
+    return ((out[keep].double() - ref[keep].double()).norm() / ref[keep].double().norm()).item()
+
+
+def _check_lofi(tag, case, raw, mask, r, pooled, **ref_slice):
+    """The recipe's bound against fp64 attention on the unrounded inputs `raw` (same reference slice as r)."""
+    geo = case.geo
+    pk, pv = (pool(x, geo, case.S) for x in raw[1:])
+    exact = sparse_reference(*raw, mask, pk, pv, geo, case.S, case.scale, pooled=pooled, **ref_slice)
+    err = _rel_l2(exact[:, :, : geo.logical_n], r["sparse"])
+    logger.info(f"[{tag}] relative L2 vs the unrounded inputs {err:.4f}")
+    assert err < LOFI_REL_L2_MAX[case.dtype], f"{tag}: relative L2 {err:.4f}"
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("dtype", list(LOFI_REL_L2_MAX), ids=["bf16", "bf8"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k512"])
+def test_lofi(runtime, geom, dtype, pooled):
+    """LoFi with K / V in `dtype` and bf16 Q."""
+    geo = GEOMETRIES[geom]
+    case = Case(runtime, geo, dtype=dtype, lofi=True)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=28)
+    raw = case.raw_inputs(28)
+    r = case.run(*case.prepare(*raw), mask, want_dense=False, pooled=pooled)
+    tag = f"lofi {dtype} {_mode(pooled)} {geom}"
+    _check(tag, r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    _check_lofi(tag, case, raw, mask, r, pooled, heads=sorted({0, 1, case.H // 2, case.H - 1}))
+
+
 # Frame-sparse attention as a block mask (frame_block_mask), kept blocks only, one padding frame. 2048-token frames
 # straddle shards.
 @pytest.mark.parametrize("allow_all", [False, True], ids=["window", "allow_all"])
@@ -856,6 +922,21 @@ def test_production_15s(runtime, density):
     _check_vs_dense_floor(f"15s d{density}", r, _density(mask, geo, case.S))
 
 
+@SLOW
+@pytest.mark.parametrize("pooled", [True, False], ids=["pooled", "kept_only"])
+@pytest.mark.parametrize("rows, density", [(4736, 0.15), (9184, 0.15), (13664, 0.17)], ids=["5s", "10s", "15s"])
+def test_production_lofi(runtime, rows, density, pooled):
+    """LoFi with bf8 K / V and bf16 Q at the MiniMax-H3 lengths, on the sliced references."""
+    geo = Geometry(rows, rows * MESH_CONFIG.sp_size, 256)
+    case = Case(runtime, geo, dtype=ttnn.bfloat8_b, lofi=True)
+    mask = make_mask(geo, case.S, case.H, density=density, seed=29)
+    raw = case.raw_inputs(29)
+    r = case.run(*case.prepare(*raw), mask, want_dense=False, want_ref="slice", pooled=pooled)
+    tag = f"lofi bf8 {_mode(pooled)} {rows} rows d{density}"
+    _check(tag, r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    _check_lofi(tag, case, raw, mask, r, pooled, heads=[0, case.H - 1], shards=[0, case.S - 1])
+
+
 # Kept blocks only (no pooled K / V): only keep-all matches dense.
 
 
@@ -923,7 +1004,8 @@ def test_production_vsa_15s(runtime, pooled):
 INVALID = {  # id: (the one invalid argument, the TT_FATAL text it must raise)
     "block_size_32": (dict(block_size=32), "block_size must be"),
     "pooled_k_only": (dict(pooled="k_only"), "pooled_k and pooled_v must be passed together"),
-    "pooled_bf8": (dict(pooled=ttnn.bfloat8_b), "pooled_k / pooled_v must be tile in the dtype of q / k / v"),
+    "pooled_bf8": (dict(pooled=ttnn.bfloat8_b), "pooled_k / pooled_v must be tile in the dtype of k / v"),
+    "q_bf8_kv_bf16": (dict(q_dtype=ttnn.bfloat8_b), "q must be bf16 or the dtype of k / v"),
     "mask_int32": (dict(mask_dtype=(ttnn.int32, torch.int32)), "block_mask must be uint32 row-major"),
     "mask_bf16": (dict(mask_dtype=(ttnn.bfloat16, torch.bfloat16)), "block_mask must be uint32 row-major"),
     "mask_width": (dict(mask_extra=16), "block_mask width"),
@@ -945,7 +1027,7 @@ def test_invalid_args(runtime, expect_error, bad):
     case = Case(runtime, ALIGNED["r512k512"])
     geo, S, H = case.geo, case.S, case.H
     batch, kv_heads, n = spec.pop("batch", 1), spec.pop("kv_heads", H), S * geo.rows
-    q = case._upload(torch.zeros(batch, H, n, D), case.seq_dims)
+    q = case._upload(torch.zeros(batch, H, n, D), case.seq_dims, dtype=spec.pop("q_dtype", ttnn.bfloat16))
     k, v = (case._upload(torch.zeros(batch, kv_heads, n, D), case.seq_dims) for _ in range(2))
     bufs = {
         f"persistent_output_buffer_{x}": case._upload(torch.zeros(batch, kv_heads, n, D), case.dims(None, 1))

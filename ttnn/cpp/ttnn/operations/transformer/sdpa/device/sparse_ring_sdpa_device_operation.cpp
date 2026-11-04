@@ -185,14 +185,17 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
 
+    // K, V and the pooled K / V share one dtype; Q has it too, or is BF16 with block-float K / V (LoFi matmuls take
+    // fewer significand bits from K / V than from Q).
+    const auto dtype = gathered_k.dtype();
+    TT_FATAL(
+        input_tensor_q.dtype() == dtype || input_tensor_q.dtype() == DataType::BFLOAT16,
+        "q must be bf16 or the dtype of k / v ({}), got {}",
+        dtype,
+        input_tensor_q.dtype());
+    TT_FATAL(gathered_v.dtype() == dtype, "k and v must have the same dtype, got {} and {}", dtype, gathered_v.dtype());
     const std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_k, gathered_v};
-    const auto dtype = input_tensor_q.dtype();
     for (const auto& tensor : sdpa_input_tensors) {
-        TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to SparseRingSDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to SparseRingSDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to SparseRingSDPA must be tilized");
@@ -297,7 +300,7 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         for (const auto* t : {&pk, &pv}) {
             TT_FATAL(
                 t->layout() == Layout::TILE && t->dtype() == dtype,
-                "pooled_k / pooled_v must be tile in the dtype of q / k / v ({}), got {} {}",
+                "pooled_k / pooled_v must be tile in the dtype of k / v ({}), got {} {}",
                 dtype,
                 t->layout(),
                 t->dtype());
