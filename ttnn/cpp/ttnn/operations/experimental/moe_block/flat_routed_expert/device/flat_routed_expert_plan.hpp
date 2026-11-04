@@ -30,9 +30,8 @@ inline constexpr uint32_t kSbSlots = 3;     // x relay: tilized super-blocks buf
 
 // The spatial pipeline's layout: role cores, the work split and the per-core L1 arena. A pure function of the
 // device grid and the config (the program factory, the host wrapper's scratch tensors and the weight layout all use
-// the same plan). One subgrid; DRISC-only gate/up weight readers (the DRAM cores send every slot's weights, one Tensix
-// launcher posts the jobs); even gate/up and down splits; x read once by the helper relays and fed along unicast
-// snakes.
+// the same plan). One subgrid; the gate/up cores read their own weight blocks (each weight slot's cores from the
+// slot's bank); even gate/up and down splits; x read once by the helper relays and fed along unicast snakes.
 struct FlatRoutedExpertPlan {
     using Core = tt::tt_metal::CoreCoord;
     // shapes
@@ -64,27 +63,17 @@ struct FlatRoutedExpertPlan {
     // inputs (9), gate/up CB 16 and h_local (3). A caller sizing the arena leaves this much L1 below it (the program
     // factory checks its CBs against it)
     uint32_t static_l1_bytes = 0;
-    // the one Tensix core that posts every slot's DRISC job (the other reader cells are free: the down cores take them)
-    Core launcher{0, 0};
-    // weight slots served by the DRAM cores (one per reader cell; two DRISC tiles per bank in switch mode, or one per
-    // bank serving both of its slots: drisc_tiles)
-    uint32_t drisc_n = 0;
-    FlatDriscTiles drisc_tiles = FlatDriscTiles::both;
-    // DMA reads in flight per DRISC job (se_drisc.hpp SD_DMA_CAP; 0: up to its L1 slots)
-    uint32_t drisc_dma_cap = 2;
-    // blocks per DRISC unit (se_drisc.hpp SD_UB; 0: the sender's choice)
-    uint32_t drisc_ub = 0;
-    uint32_t drisc_mpfe = 0;       // (SD_MPFE: 0 untouched)
-    bool drisc_early_free = true;  // (SD_UB_EARLY_FREE: the senders apply it to units of 2+ blocks)
-    FlatDriscProbe drisc_probe = FlatDriscProbe::none;
-    // who reads the gate/up weights (layout.gu_source) and, for the gate/up cores' own reads, how many in flight
-    FlatGuSource gu_source = FlatGuSource::drisc;
+    // the schedule leader: reads the call's counts / regions / expert ids once, the other cores pull its compact copy
+    // (SE_DYN_PULL; one of the reader cells, the others go to the down cores)
+    Core leader{0, 0};
+    // weight slots (one per reader cell, slot r in bank r % banks)
+    uint32_t n_slots = 0;
+    // who reads which gate/up weight blocks (layout.gu_source) and how many reads in flight a gate/up core
+    FlatGuSource gu_source = FlatGuSource::tensix;
     uint32_t gu_depth = 2;
     uint32_t gu_pieces = 1;
-    // per gate/up core (p.gu order): who delivers its weights (0 its slot's DRISC, FlatGuPlace::tensix_noc0 /
-    // tensix_noc1 its own reads); per weight slot: served by a DRISC
+    // per gate/up core (p.gu order): the NoC its weight reads take (FlatGuPlace::tensix_noc0 / tensix_noc1)
     std::vector<uint32_t> gu_how;
-    std::vector<bool> slot_drisc;
     // the expected rows per expert the plan was made for (layout.rows_hint; -1 unknown): the placement's x weight
     int32_t rows_hint = -1;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
@@ -108,7 +97,7 @@ struct FlatRoutedExpertPlan {
     std::map<uint32_t, uint32_t> d_pred, d_succ;
     std::vector<uint32_t> d_heads;
 
-    std::vector<Core> arena_cores() const;  // gu + down + relays + gu_idle + launcher
+    std::vector<Core> arena_cores() const;  // gu + down + relays + gu_idle + leader
     uint32_t rect_of(const Core& c) const;
     static uint32_t kd_of(uint32_t pcd, uint32_t it);
 };
@@ -118,10 +107,10 @@ struct FlatGuAssign;
 struct FlatGuTraffic;
 // the link-load placement search's iterations (plan time, per distinct chip geometry)
 inline constexpr uint32_t kFlatGuIters = 20000;
-// Sets the plan's gate/up cores (slot order), their delivery and the DRISC slots from FlatLayoutOptions.gu_place
-// words (one per gate/up cell)
+// Sets the plan's gate/up cores (slot order) and their reads' NoC from FlatLayoutOptions.gu_place words (one per
+// gate/up cell)
 void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words);
-// The auto sources' placement for one chip's geometry, and the traffic the search weighs
+// The auto_tensix placement for one chip's geometry, and the traffic the search weighs
 FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g);
 FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p);
 
@@ -134,10 +123,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
 
-// Chip `coord`'s plan: the mesh plan, with the gate/up placement of that chip's own geometry for the auto sources
-// (gu_source auto_tensix / auto_hybrid; harvesting differs per chip); else the mesh plan itself. Cached per distinct
-// geometry. Only the gate/up cores' order, delivery and DRISC slots differ from the mesh plan (same cells, same
-// weight layout).
+// Chip `coord`'s plan: the mesh plan, with the gate/up placement of that chip's own geometry for gu_source
+// auto_tensix (harvesting differs per chip); else the mesh plan itself. Cached per distinct geometry. Only the
+// gate/up cores' order and their reads' NoC differ from the mesh plan (same cells, same weight layout).
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FlatRoutedExpertConfig& cfg,

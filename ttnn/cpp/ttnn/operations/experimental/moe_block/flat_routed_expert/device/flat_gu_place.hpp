@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Gate/up weight placement by NoC link load (FlatGuSource auto_tensix / auto_hybrid): which bank holds each gate/up
-// core's share and how it arrives (a Tensix read on NOC0 / NOC1, or the bank's free-DRAM_TILE DRISC), chosen per chip
-// from that chip's own geometry (harvested worker columns move the cores' physical NoC positions; the DRAM tiles'
-// positions come from its soc descriptor). A static model: every flow (weights; the x relays' NOC1 reads and the down
+// Gate/up weight placement by NoC link load (FlatGuSource auto_tensix): which bank holds each gate/up core's share and
+// on which NoC the core reads it (NOC0 / NOC1), chosen per chip from that chip's own geometry (harvested worker columns
+// move the cores' physical NoC positions; the DRAM tiles' positions come from its soc descriptor). A static model: every flow (weights; the x relays' NOC1 reads and the down
 // cores' NOC0 reads as background) adds its bytes to each NoC link on its dimension-order route (NOC0 east then south,
 // NOC1 north then west, both on the 17 x 12 torus); the search minimises the busiest link (then the sum of squares).
 // Each bank keeps 2 x RG cores (its two weight slots): the weight layout is the same for every placement, so chips
@@ -31,7 +30,7 @@ struct FlatRoutedExpertPlan;
 // One chip's geometry as the placement sees it (NOC0 grid positions)
 struct FlatGuGeom {
     std::vector<tt::tt_metal::CoreCoord> cells;                   // the gate/up cells, in flat_gu_cells order
-    std::vector<std::array<tt::tt_metal::CoreCoord, 3>> banks;    // per bank: NOC0 endpoint, NOC1 endpoint, free tile
+    std::vector<std::array<tt::tt_metal::CoreCoord, 2>> banks;    // per bank: NOC0 endpoint, NOC1 endpoint
     std::vector<tt::tt_metal::CoreCoord> helpers, down;           // the x helper relays, the down cores
     // every position, for deduplication: chips with equal keys get the same placement
     std::vector<uint32_t> key() const;
@@ -63,15 +62,13 @@ struct FlatGuLoad {
 FlatGuLoad flat_gu_load(const FlatGuGeom& g, const FlatGuAssign& a, const FlatGuTraffic& t);
 
 // The search: minimises the worst chip's busiest link over `geoms` (one geometry: a per-chip placement; several: one
-// compromise placement for all of them). hybrid: each bank's first RG cores' share from its free DRAM_TILE (DRISC,
-// one slot's NoC a bank), the rest Tensix reads; else every core reads its own. Deterministic (fixed seed).
+// compromise placement for all of them). Every core reads its own share. Deterministic (fixed seed).
 // restarts of the local search (seeds): per chip, and for the mesh's compromise placement
 inline constexpr uint32_t kFlatGuRestarts = 6, kFlatGuCompromiseRestarts = 2;
 FlatGuAssign flat_gu_search(
     const std::vector<const FlatGuGeom*>& geoms,
     const FlatGuTraffic& t,
     uint32_t rg,
-    bool hybrid,
     uint32_t iters,
     uint32_t restarts = kFlatGuRestarts);
 

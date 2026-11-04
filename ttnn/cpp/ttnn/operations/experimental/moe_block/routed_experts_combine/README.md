@@ -53,7 +53,7 @@ program's static CBs and the dispatch's), so the rings and the device time shoul
 `routed_experts_combine/lut` (per-chip roles), `routed_experts_combine/out` (y_own, persistent),
 `routed_experts_combine/y` (the flat expert's DRAM y: never written with the L1 hand-off),
 `routed_experts_combine/dispatch_sems` (the dispatch phase's semaphore words); the flat expert's via
-`ensure_flat_routed_expert_resources` (plan, done / relay words, the DRISC senders). The program hash holds
+`ensure_flat_routed_expert_resources` (plan, done / relay words). The program hash holds
 the config, the cells / writers, the resources' `plan_key()` and the tensor specs, never an address; buffer addresses
 are patched on a hit (BufferBinding).
 

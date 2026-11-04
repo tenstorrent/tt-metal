@@ -104,7 +104,6 @@ ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor& gate_up_weights,
     const ttnn::Tensor& down_weights,
     const ttnn::Tensor& done_words,
-    const FlatDriscSenders& drisc_senders,
     uint32_t intermediate,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
@@ -121,9 +120,6 @@ ttnn::Tensor flat_routed_expert(
     using namespace tt::tt_metal;
     TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
     auto* device = x.device();
-    TT_FATAL(
-        drisc_senders.running() && drisc_senders.mesh_device() == device,
-        "flat_routed_expert: the DRISC senders must be running on this mesh device");
     FlatRoutedExpertConfig cfg = make_flat_routed_expert_config(
         x.logical_shape()[-1] * x_pages_per_row,
         intermediate,
@@ -140,14 +136,6 @@ ttnn::Tensor flat_routed_expert(
     cfg.y_bf16 = y_bf16;
     cfg.math_fidelity = math_fidelity;
     const auto plan = flat_routed_expert_plan(*device, cfg);
-    TT_FATAL(
-        drisc_senders.n_slots() == plan->drisc_n && drisc_senders.tiles() == plan->drisc_tiles &&
-            drisc_senders.probe() == plan->drisc_probe,
-        "flat_routed_expert: DRISC senders of {} slots ({}), the plan has {} ({})",
-        drisc_senders.n_slots(),
-        to_string(drisc_senders.tiles()),
-        plan->drisc_n,
-        to_string(plan->drisc_tiles));
     // (output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
     const ttnn::Tensor output =
         output_tensor
@@ -199,27 +187,6 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
         "flat_routed_expert: {} gate/up cores' freed words overrun the x-ready word at {}",
         r.plan->gu.size(),
         X_READY_OFF);
-    // (no slot from a DRISC - gu_source tensix / tensix_split / tensix_noc1 / auto_tensix: the gate/up cores read every
-    // weight block themselves, so no DRISC sender is launched on the DRAM cores at all)
-    if (std::none_of(r.plan->slot_drisc.begin(), r.plan->slot_drisc.end(), [](bool d) { return d; })) {
-        static std::once_flag logged;
-        std::call_once(logged, [&] {
-            log_info(
-                tt::LogOp,
-                "flat_routed_expert: gu_source {} - no DRISC senders launched (gate/up cores read their own weights)",
-                to_string(r.plan->gu_source));
-        });
-        return r;
-    }
-    // (one attachment per tile choice: a request for another choice relaunches the mesh's senders,
-    // FlatDriscSenders::get)
-    const std::string drisc_name = r.plan->drisc_tiles == FlatDriscTiles::both
-                                       ? std::string("flat_routed_expert/drisc")
-                                       : std::string("flat_routed_expert/drisc/") + to_string(r.plan->drisc_tiles);
-    r.drisc_senders = FlatDriscSenders::get(mesh_device, r.plan->drisc_n, r.plan->drisc_tiles, r.plan->drisc_probe);
-    if (!resources.has(drisc_name)) {
-        resources.attach(drisc_name, r.drisc_senders);
-    }
     return r;
 }
 

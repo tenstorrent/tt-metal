@@ -15,7 +15,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "device/flat_drisc.hpp"
 #include "device/flat_routed_expert_device_operation_types.hpp"
 #include "device/flat_routed_expert_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -48,8 +47,7 @@ ttnn::Tensor create_flat_routed_expert_done_words(
 
 // Flat spatially pipelined routed experts. Token counts and regions are read on device, so one cached program serves
 // every routing. Weights come in the plan's per-core bank layout (flat_routed_expert_weights.py); done_words from
-// create_flat_routed_expert_done_words; the DRISC senders (FlatDriscSenders::get(mesh, plan.drisc_n)) must be
-// running. Returns y [rows, H] (bfp8 TILE; bf16 TILE with y_bf16; bf16 ROW_MAJOR with y_row_major), written at the
+// create_flat_routed_expert_done_words. Returns y [rows, H] (bfp8 TILE; bf16 TILE with y_bf16; bf16 ROW_MAJOR with y_row_major), written at the
 // active experts' rows only.
 ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor& dispatched_buffer,
@@ -59,7 +57,6 @@ ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor& gate_up_weights,
     const ttnn::Tensor& down_weights,
     const ttnn::Tensor& done_words,
-    const FlatDriscSenders& drisc_senders,
     uint32_t intermediate,
     uint32_t max_tokens_per_expert,
     uint32_t activation = 0,
@@ -75,16 +72,14 @@ ttnn::Tensor flat_routed_expert(
     const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 // What a caller composing the flat expert into its own program (flat_program.hpp) takes from the MoE block's
-// resources: the plan, the persistent done words and relay words (holding the x-ready word), and the running DRISC
-// senders (attached to the resources: they stop when the resources are released).
+// resources: the plan and the persistent done words and relay words (holding the x-ready word).
 struct FlatRoutedExpertResources {
     std::shared_ptr<const FlatRoutedExpertPlan> plan;
     ttnn::Tensor done_words;
     ttnn::Tensor relay_words;
-    std::shared_ptr<FlatDriscSenders> drisc_senders;
 };
-// Get-or-create the flat expert's slots in `resources` ("flat_routed_expert/done", "flat_routed_expert/relay_words",
-// "flat_routed_expert/drisc") for `config`.
+// Get-or-create the flat expert's slots in `resources` ("flat_routed_expert/done", "flat_routed_expert/relay_words")
+// for `config`.
 FlatRoutedExpertResources ensure_flat_routed_expert_resources(
     MoEBlockResources& resources, const FlatRoutedExpertConfig& config);
 

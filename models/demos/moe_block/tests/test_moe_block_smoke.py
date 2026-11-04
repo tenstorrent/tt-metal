@@ -6,8 +6,7 @@ combine -> tail with the shared arena, on zero / uninitialized weights. Checks t
 together (the arena spec accepted by the head and the combine, the output's shape) and reports the block's host time a
 forward on program-cache hits. No numerics (the ops' own tests check those bit-exact).
 
-Needs an 8x4 Galaxy (the routed experts' DRISC weight senders); on the mock Galaxy, which has no programmable DRAM
-cores, it skips:
+Needs an 8x4 Galaxy, or the mock Galaxy (plan, build and launch only):
 
     TT_METAL_MOCK_CLUSTER_DESC_PATH=$TT_METAL_HOME/tt_metal/third_party/umd/tests/cluster_descriptor_examples/\
 blackhole_galaxy.yaml pytest models/demos/moe_block/tests/test_moe_block_smoke.py
@@ -26,7 +25,7 @@ from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 R, C = 8, 4
 CHUNK = 5120
-ACCUMULATORS = 12
+ACCUMULATORS = 11  # (the combine planner's count for GLM-5.3 at 8x4, chunk 5120)
 CALLS = 20
 REPO = Path(__file__).resolve().parents[4]
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
@@ -59,7 +58,12 @@ def _glm53():
 def mesh():
     if not MOCK and ttnn.get_num_devices() < R * C:
         pytest.skip(f"needs a {R}x{C} Galaxy or the mock Galaxy")
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
+    # (the combine sends one row of H bf16 + its 32 B trailer a fabric packet)
+    rc = ttnn._ttnn.fabric.FabricRouterConfig()
+    rc.max_packet_payload_size_bytes = max(7232, (2 * _glm53().emb_dim + 32 + 63) // 64 * 64)
+    ttnn.set_fabric_config(
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricReliabilityMode.RELAXED_INIT, router_config=rc
+    )
     m = ttnn.open_mesh_device(ttnn.MeshShape(R, C), l1_small_size=5888)  # (the block's words and semaphores)
     yield m
     ttnn.close_mesh_device(m)
@@ -68,8 +72,6 @@ def mesh():
 
 def test_moe_block_smoke(mesh):
     mb = ttnn.experimental.moe_block
-    if not mb.FlatDriscSenders.supported(mesh):  # (the mock Galaxy has no programmable DRAM cores)
-        pytest.skip("the routed experts need programmable DRAM cores (DRISC weight senders)")
     fw = _flat_weights_module()
     dims = _glm53()
     E, H, I, Is, N = dims.num_experts, dims.emb_dim, dims.routed_expert_hidden_dim, 2048, R * C

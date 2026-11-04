@@ -440,7 +440,7 @@ void MoEBlockResources::release() {
     if (mesh_device_ == nullptr) {
         return;
     }
-    attachments_.clear();  // (first: e.g. DRISC senders stop before their buffers go)
+    attachments_.clear();  // (first: an attachment may still use the buffers)
     plans_.clear();
     packed_slots_.clear();
     packed_pool_.reset();

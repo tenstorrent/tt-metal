@@ -8,7 +8,7 @@
   prep's packed pages, value for value.
 * test_flat_gather_device: the device gather from bfp4 sources equals bank_sharded of the same weights, bit for bit.
 
-The plan needs the 8x4 Galaxy (programmable DRAM cores); both skip elsewhere."""
+The plan needs the 8x4 Galaxy (or the mock Galaxy for the layout test); both skip elsewhere."""
 
 import os
 
@@ -35,9 +35,6 @@ def mesh():
     if not MOCK and ttnn.get_num_devices() < R * C:
         pytest.skip(f"needs a {R}x{C} Galaxy or the mock Galaxy")
     m = ttnn.open_mesh_device(ttnn.MeshShape(R, C))
-    if not ttnn.experimental.moe_block.FlatDriscSenders.supported(m):  # (the plan needs programmable DRAM cores)
-        ttnn.close_mesh_device(m)
-        pytest.skip("the flat plan needs programmable DRAM cores (the mock Galaxy has none)")
     yield m
     ttnn.close_mesh_device(m)
 

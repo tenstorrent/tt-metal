@@ -5,7 +5,7 @@ wrapper that owns what a set of local experts needs across calls.
 
     op = FlatRoutedExpert(mesh_device, weights, m=capacity, H=H, I=I, gids=per_device_global_ids, n_global=E)
     y = op(dispatch_buffer_rm_bf16, counts, regions)   # y: [rows, H] bfp8 TILE, expert e's rows at its region
-    op.close()                                         # stops the DRISC senders once no FlatRoutedExpert needs them
+    op.close()                                         # (nothing to release: kept for callers)
 
 The plan comes from C++ (ttnn.experimental.moe_block.flat_routed_expert_plan); flat_weight_regions packs each
 device's experts into the plan's per-core regions and bank_sharded puts them in DRAM, one region list per bank. The
@@ -177,12 +177,6 @@ FLAT_LAYOUT_FIELDS = (
     "pin_ratio",
     "rows_hint",
     "x_ready",
-    "drisc_tiles",
-    "drisc_ub",
-    "drisc_dma_cap",
-    "drisc_mpfe",
-    "drisc_early_free",
-    "drisc_probe",
     "gu_source",
     "gu_read_depth",
     "gu_place",
@@ -200,7 +194,7 @@ def flat_layout(layout=None, **kw):
 
 class FlatRoutedExpert:
     """ttnn.experimental.moe_block.flat_routed_expert for one set of local experts per device: the plan, the weights in
-    its bank layout, the expert id table, the done words and the DRISC senders, kept across calls.
+    its bank layout, the expert id table and the done words, kept across calls.
 
     ``weights``: per device (row-major device order), per local expert (Wg [H, I], Wu [H, I], Wd [I, H]); a callable
     returning that; or ``"uninitialized"`` (perf runs: weight tensors of the right spec, no packing / upload, garbage
@@ -258,9 +252,6 @@ class FlatRoutedExpert:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0) if n_dev > 1 else None,
         )
         self.done = mb.create_flat_routed_expert_done_words(mesh_device, self.plan, done_buffer_type)
-        self.drisc = mb.FlatDriscSenders.get(
-            mesh_device, self.plan.drisc_n, self.plan.drisc_tiles, self.plan.drisc_probe
-        )
 
     def __call__(
         self,
@@ -286,7 +277,6 @@ class FlatRoutedExpert:
             self.w_gu,
             self.w_d,
             self.done,
-            self.drisc,
             self.I,
             self.m,
             activation=self.act,
@@ -303,5 +293,4 @@ class FlatRoutedExpert:
         )
 
     def close(self):
-        """Drops this op's hold on the DRISC senders (they stop once nothing holds them)."""
-        self.drisc = None
+        """Nothing to release (the tensors go with the object); kept for callers."""

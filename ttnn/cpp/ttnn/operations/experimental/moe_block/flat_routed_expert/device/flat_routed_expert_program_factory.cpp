@@ -4,7 +4,7 @@
 
 #include "flat_routed_expert_program_factory.hpp"
 
-#include "flat_drisc.hpp"
+#include "flat_geometry.hpp"
 #include "flat_routed_expert_plan.hpp"
 
 #include <algorithm>
@@ -30,7 +30,8 @@ constexpr uint32_t XRD_BATCH = 2, DW_BATCH = 2;
 // semaphore ids (16 created in order on every role core)
 constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFREE = 10, HFREE = 11, HSFREE = 12,
                    WORD = 13, GATH1 = 14, GATH2 = 15;
-// the gate/up cores' grant counter (polled by their DRISC sender; id 1 is otherwise unused on them)
+// the gate/up cores' grant counter: the receiver counts the landing slots it frees, the weight reads
+// (se_gu_read.hpp) fill granted slots only (id 1 is otherwise unused on them)
 constexpr uint32_t GRANT = 1;
 constexpr const char* KDIR = "ttnn/cpp/ttnn/operations/experimental/moe_block/flat_routed_expert/device/kernels/";
 
@@ -116,8 +117,8 @@ FlatProgramHandles add_flat_routed_expert_program(
         rect_cores[p.rect_of(p.gu[ci])].push_back(ci);
     }
     // x delivery: x read once by the helpers (the plan's two full rectangles, one helper each) and unicast snakes, no
-    // multicast: the NOC0 wedge of a relay's multicast into the gate/up rectangle beside the DRISC weight writes and
-    // DRAM traffic. Each primary unicasts its blocks into its rectangle's snake head; the gate/up cores forward them
+    // multicast: the NOC0 wedge of a relay's multicast into the gate/up rectangle beside the weight and DRAM
+    // traffic. Each primary unicasts its blocks into its rectangle's snake head; the gate/up cores forward them
     // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
@@ -187,13 +188,13 @@ FlatProgramHandles add_flat_routed_expert_program(
         dyn_def[k] = v;
     }
     // The schedule's inputs (counts, regions, expert ids: one DRAM page each, all in bank 0) read once per call (the
-    // plain op): the launcher's BRISC (se_drisc_go.cpp) reads them, compacts this chip's per-expert count / region
+    // plain op): the schedule leader's BRISC (se_dyn_lead.cpp) reads them, compacts this chip's per-expert count / region
     // into its CB 9 and sets its semaphore SE_DYN_LSEM (reset every launch); every other se_dyn_load polls that
     // semaphore over the NoC and pulls the compact copy (instead of ~150 tiny DRAM reads of bank 0 behind the startup
     // weight streams: 5-16 us each). Inside a combine overlap (cmb_rt) every kernel reads DRAM.
     const bool dyn_pull = cfg.cmb_rt == 0;
     if (dyn_pull) {
-        const CoreCoord lv = phys(p.launcher), l0 = flat_worker_noc0(mesh_device, p.launcher);
+        const CoreCoord lv = phys(p.leader), l0 = flat_worker_noc0(mesh_device, p.leader);
         dyn_def["SE_DYN_PULL"] = "1";
         dyn_def["SE_DYN_LX"] = std::to_string(lv.x);
         dyn_def["SE_DYN_LY"] = std::to_string(lv.y);
@@ -314,69 +315,11 @@ FlatProgramHandles add_flat_routed_expert_program(
         }
         return d;
     };
-    // the DRAM cores' persistent senders read and forward the gate/up weights (flat_drisc.hpp); the launcher only posts
-    // each call's jobs (se_drisc_go.cpp). gu_source tensix*: the gate/up cores read their own blocks (se_gu_read.hpp)
-    // from the same bank layout; the senders stay up (idle) and the launcher posts nothing
-    const bool gu_tensix = std::any_of(p.gu_how.begin(), p.gu_how.end(), [](uint32_t h) { return h != 0; });
-    // (hybrid plans: some slots DRISC, the others read by their cores; a slot with no DRISC gets a skip each call)
-    const bool any_drisc = std::any_of(p.slot_drisc.begin(), p.slot_drisc.end(), [](bool d) { return d; });
-    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, p.drisc_tiles);
-    const uint32_t drisc_base = drisc.base;
-    auto drisc_xy = [&](uint32_t r) { return drisc.virtual_xy(drisc.logical(r)); };
+    // the schedule leader (se_dyn_lead.cpp): builds the call's schedule from the DRAM rows; with the schedule pull its
+    // compact copy is what every other core pulls
     {
-        TT_FATAL(p.r_ <= 8, "flat DRISC: <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
-        TT_FATAL(
-            !any_drisc || FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles, p.drisc_probe),
-            "flat_routed_expert: the DRISC senders of {} slots ({}) are not running on this mesh device "
-            "(FlatDriscSenders::get)",
-            p.drisc_n,
-            to_string(p.drisc_tiles));
-        // the job posting args (se_drisc_post.hpp); the GDDR arbitration weights (SD_MPFE: layout.drisc_mpfe, 0
-        // untouched)
-        Args post;
-        post.lit(drisc_base)
-            .a(FlatAddr::GateUp)
-            .a(FlatAddr::Arena)
-            .lit(p.drisc_n)
-            .lit(p.r_)
-            .lit(p.drisc_mpfe)
-            .lits(
-                {p.drisc_dma_cap,
-                 p.slot * w_tile,
-                 p.drisc_ub | (p.drisc_early_free ? 1u << 8 : 0u),  // (se_drisc.hpp SD_UB_EARLY_FREE)
-                 G,
-                 p.nk_gu,
-                 GRANT,
-                 DATA});
-        // per slot (se_drisc_post.hpp): its DRISC / alternate, region, and its chunk / blocks / receivers
-        for (uint32_t r = 0; r < p.drisc_n; ++r) {
-            const auto [ac, aj] = drisc.alt(r);
-            const uint32_t axy = aj != ~0u ? drisc.virtual_xy(ac) : 0;
-            post.lit(drisc_xy(r))
-                .lit(FlatDriscTopology::job(r, banks))
-                .lit((r / banks) * p.region_bytes)
-                .lit(axy)
-                .lit(aj == ~0u ? 0 : aj)
-                .lit(p.rg * p.slot * w_tile)
-                .lit(p.rg)
-                .lit(p.slot_drisc[r] ? p.r_ : 0u);  // (0 receivers: the slot's cores read it; a skip)
-        }
-        for (uint32_t r = 0; r < p.drisc_n; ++r) {
-            for (uint32_t j = 0; j < p.r_; ++j) {
-                post.lit(pk(p.gu[p.gu_at(r, j)]));
-            }
-        }
-        // (gate/up cores reading their own weights: the launcher only leads the schedule pull, it posts nothing)
-        const auto k =
-            dm("se_drisc_go.cpp",
-               {p.launcher},
-               DataMovementProcessor::RISCV_0,
-               NOC::NOC_0,
-               {E},
-               !any_drisc ? with(dyn_def, {{"SE_GU_TENSIX", "1"}}) : dyn_def);
-        Args a;
-        a.cat(post).cat(dyn);
-        add_rt(k, p.launcher, a);
+        const auto k = dm("se_dyn_lead.cpp", {p.leader}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, dyn_def);
+        add_rt(k, p.leader, dyn);
     }
 
     // x relays: primaries (feed their snake) + helpers (read / tilize half of x each, into both primaries' rings)
@@ -506,28 +449,24 @@ FlatProgramHandles add_flat_routed_expert_program(
         // the receiver (BRISC) on NOC1: on NOC0 the gate/up cores' h writes, the DRAM weight reads and x deliveries
         // into these same cores wedged the NoC (a relay stuck in noc_cmd_buf_ready or in its write barrier; ~1 in
         // 1e4..2e5 launches, any chip), a hardware hang the NoC probe test reproduces from the traffic alone
-        // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton). The receivers count their DRISC grants
+        // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton). The receivers count their grants
         // locally; the x forwarder (NCRISC) on NOC0 reads their consumed count / end marker in semaphores 2 / 3 (free
         // on gate/up cores), one successor, X_FWD_DEPTH pieces in flight
         Defines recv_def = with(
             dyn_def,
             {{"SE_X_FWD_NC_CONS", "2"}, {"SE_X_FWD_NC_END", "3"}, {"SE_X_FWD_DEPTH", std::to_string(X_FWD_DEPTH)}});
-        // gate/up weights read by the gate/up cores (se_gu_read.hpp): the receiver's grant counter and DATA count as
-        // the DRISC protocol, semaphore 0 the loads-list mailbox to the NCRISC reader
-        Defines gu_def;
-        if (gu_tensix) {
-            gu_def = {
-                {"SE_GU_TENSIX", "1"},
-                {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
-                {"SE_GU_PER_E", std::to_string(p.nk_gu)},
-                {"SE_GU_DEPTH", std::to_string(p.gu_depth)},
-                {"SE_GU_PIECES", std::to_string(p.gu_pieces)},
-                {"SE_GU_MBOX_SEM", "0"},
-                {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
-                {"SE_GU_DATA_SEM", std::to_string(DATA)},
-                {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
-            recv_def.insert(gu_def.begin(), gu_def.end());
-        }
+        // gate/up weights read by the gate/up cores (se_gu_read.hpp): the receiver's grant counter (GRANT) and its
+        // landed-blocks count (DATA), semaphore 0 the loads-list mailbox to the NCRISC reader
+        const Defines gu_def = {
+            {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
+            {"SE_GU_PER_E", std::to_string(p.nk_gu)},
+            {"SE_GU_DEPTH", std::to_string(p.gu_depth)},
+            {"SE_GU_PIECES", std::to_string(p.gu_pieces)},
+            {"SE_GU_MBOX_SEM", "0"},
+            {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
+            {"SE_GU_DATA_SEM", std::to_string(DATA)},
+            {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
+        recv_def.insert(gu_def.begin(), gu_def.end());
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             recv_def["SE_HG_NU"] = std::to_string(p.nu);
             recv_def["SE_HPC"] = std::to_string(p.hpc);
@@ -585,8 +524,8 @@ FlatProgramHandles add_flat_routed_expert_program(
                 const CoreCoord gc = p.gu[ci];
                 const uint32_t cg_ = r * p.rg + j / G;  // (the core's column group)
                 Args a;
-                // the forwarder and its credit word: the DRISC's L1 word, the grant counter
-                a.lit(drisc_xy(r))
+                // (RT 0 unused) the grant counter's semaphore id
+                a.lit(0)
                     .lit(GRANT)
                     .lit(cg_)
                     .lit(head_xy.size())
@@ -606,7 +545,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 // the gate/up weight reads (se_gu_read.hpp): mode (1 NCRISC, 2 BRISC), weights, bank, this core's
                 // first block (slot region + block j / G), chunk bytes, landing ring (the arena's start)
                 const uint32_t how = p.gu_how.at(ci);
-                const uint32_t gmode = how == FlatGuPlace::tensix_noc0 ? 1u : (how == FlatGuPlace::tensix_noc1 ? 2u : 0u);
+                const uint32_t gmode = how == FlatGuPlace::tensix_noc1 ? 2u : 1u;
                 Args gw;
                 gw.lit(gmode)
                     .a(FlatAddr::GateUp)
@@ -614,9 +553,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit((r / banks) * p.region_bytes + (j / G) * p.slot * w_tile)
                     .lit(p.rg * p.slot * w_tile)
                     .a(FlatAddr::Arena, 0);
-                if (gu_tensix) {
-                    a.cat(gw);
-                }
+                a.cat(gw);
                 add_rt(kr, gc, a);
                 // x ring, predecessor (+ its free word's sem), successor, relay + this core's word there
                 Args f;
@@ -626,9 +563,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(xlink[ci].succ0)
                     .lit(pk(p.relays[p.rect_of(gc)]))
                     .a(FlatAddr::Words, 0);
-                if (gu_tensix) {
-                    f.cat(gw);
-                }
+                f.cat(gw);
                 add_rt(kxf, gc, f);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G, (cg_ * p.nu) & 1u});
             }

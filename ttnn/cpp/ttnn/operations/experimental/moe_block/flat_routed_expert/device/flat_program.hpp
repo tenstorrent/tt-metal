@@ -9,14 +9,11 @@
 //
 // Contract (what the caller provides and may rely on):
 //  * Cores: the flat expert occupies FlatRoutedExpertPlan::arena_cores() (gate/up, down, relays, idle gate/up cells,
-//    the DRISC job launcher). The caller's kernels go on other cores. The flat expert creates 16 semaphores (ids
+//    the schedule leader). The caller's kernels go on other cores. The flat expert creates 16 semaphores (ids
 //    0..15) on its cores only, and its CBs on its cores only (ids 0, 1, 2, 3, 6, 7, 9, 16).
 //  * L1: every arena-backed CB lies inside `tensors.arena` (>= plan.arena_tiles x 32 rows a core, sharded over at
 //    least the plan's arena cores). The flat expert's static CBs take at most plan.static_l1_bytes a core below it.
 //    The caller may lay its own buffers in the same arena on its own cells (e.g. a persistent arena the caller owns).
-//  * DRISC: the gate/up weights come from the persistent DRISC senders (FlatDriscSenders, flat_drisc.hpp); they must
-//    be running on the mesh with plan.drisc_n slots (ensure_flat_routed_expert_resources does that), and stay running
-//    while the program can launch.
 //  * Combine overlap (config.cmb_rt > 0, see with_combine_overlap): every y writer (y_writers, in program order) has 4
 //    report args at config.cmb_rt (collector x, y, counts address, go address) and, with config.y_l1, kFlatYL1Args
 //    L1 hand-off args after them (se_yrm.hpp SE_Y_L1); set_flat_combine_report fills them. Each writer then adds 1

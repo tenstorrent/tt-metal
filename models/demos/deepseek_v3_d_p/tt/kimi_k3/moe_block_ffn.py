@@ -240,12 +240,9 @@ class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
     def _default_gu_read_pieces(self) -> str:
-        """The gate/up reads' pieces (FlatLayoutOptions.gu_read_pieces) with the default Tensix reads: the fastest
-        DRISC-free choice a model - Kimi-K3 2 (L1-L4 golden, traced, full block: +3.0% over the DRISC senders, 1 piece
-        +6.0%), GLM-5.3 1 (L78 chunked prefill, traced: 302.4 ms a chunk, +1.7%; 2 / 4 pieces 305.1 / 304.9, DRISC
-        297.3). -1 (the op's default) for the DRISC senders."""
-        if os.environ.get("MOE_GU_SOURCE", "tensix") == "drisc":
-            return "-1"
+        """The gate/up reads' pieces (FlatLayoutOptions.gu_read_pieces): the fastest choice a model - Kimi-K3 2 (L1-L4
+        golden, traced, full block: 1 piece +3.0%), GLM-5.3 1 (L78 chunked prefill, traced: 302.4 ms a chunk; 2 / 4
+        pieces 305.1 / 304.9)."""
         return "2" if self.model_name == "KimiK3Config" else "1"
 
     def __init__(self, mesh_device, model_cfg, layer_idx: int, hf_config=None, cache_path=None, state_dict=None):
@@ -294,14 +291,9 @@ class TtK3MoEBlockFfn:
                 layout=mb.FlatLayoutOptions(
                     rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts),
                     x_helpers=1,
-                    # (which DRISC tiles of each DRAM bank send the gate/up weights: both / free_only /
-                    # noc1_endpoint_only - FlatLayoutOptions.drisc_tiles; MOE_DRISC_TILES overrides "both")
-                    drisc_tiles=getattr(mb.FlatDriscTiles, os.environ.get("MOE_DRISC_TILES", "both")),
-                    # (who reads the gate/up weights - FlatLayoutOptions.gu_source drisc | tensix | tensix_split |
-                    # tensix_noc1 | placed | auto_tensix | auto_hybrid; MOE_GU_PLACE: a JSON file of gu_place words for
-                    # placed). Default: the gate/up cores read their own weights on NOC0 (K3: each block as 2 reads) - no
-                    # DRISC sender is launched on the DRAM cores (K3 L1-4 golden, traced: +3.0% over the DRISC senders,
-                    # the fastest DRISC-free choice; MOE_GU_SOURCE=drisc restores the senders)
+                    # (which gate/up core reads which weight blocks, on which NoC - FlatLayoutOptions.gu_source tensix |
+                    # tensix_split | tensix_noc1 | placed | auto_tensix; MOE_GU_PLACE: a JSON file of gu_place words for
+                    # placed). Default: every gate/up core reads its own weights on NOC0 (K3: each block as 2 reads)
                     gu_source=getattr(mb.FlatGuSource, os.environ.get("MOE_GU_SOURCE", "tensix")),
                     gu_read_depth=int(os.environ.get("MOE_GU_READ_DEPTH", "-1")),
                     gu_read_pieces=int(os.environ.get("MOE_GU_READ_PIECES", self._default_gu_read_pieces())),
@@ -310,7 +302,7 @@ class TtK3MoEBlockFfn:
             )
             _lo = block.expert_kw["layout"]
             logger.info(
-                f"MoE block: flat layout drisc_tiles {_lo.drisc_tiles} gu_source {_lo.gu_source} "
+                f"MoE block: flat layout gu_source {_lo.gu_source} "
                 f"gu_read_depth {_lo.gu_read_depth} gu_read_pieces {_lo.gu_read_pieces} gu_place {len(_lo.gu_place)}"
             )
             logger.info(

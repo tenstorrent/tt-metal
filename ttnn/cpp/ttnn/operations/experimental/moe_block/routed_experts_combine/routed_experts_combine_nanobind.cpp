@@ -90,7 +90,7 @@ void bind_routed_experts_combine(nb::module_& mod) {
                 rows, the flat rows' token index, the L1 hand-off table, the combine's per-call plan).
             global_expert_ids, gate_up_weights, down_weights: the layer's flat expert, laid out for the flat plan of
                 routed_experts_combine_flat_config(resources, ...).
-            resources: the block's MoEBlockResources (config, placement, persistent words, the DRISC senders).
+            resources: the block's MoEBlockResources (config, placement, persistent words).
             max_tokens_per_expert: the flat expert's capacity m.
             activation: the experts' activation (se3_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
             route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32 (the
@@ -161,7 +161,7 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("max_tokens_per_expert"),
         nb::arg("activation"),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
-        "The flat expert config routed_experts_combine builds (ensures its resources: plan, words, DRISC senders).");
+        "The flat expert config routed_experts_combine builds (ensures its resources: plan, words).");
 
     // ---- host math (no device): parity with the reference, plans and reports
     mod.def(

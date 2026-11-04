@@ -4,7 +4,7 @@
 
 #include "flat_gu_place.hpp"
 
-#include "flat_drisc.hpp"
+#include "flat_geometry.hpp"
 #include "flat_routed_expert_plan.hpp"
 
 #include <algorithm>
@@ -55,20 +55,13 @@ uint32_t hops(const Core& s, const Core& d, uint32_t noc) {
     return r.size();
 }
 
-// how -> (source tile: 0 NOC0 endpoint, 1 NOC1 endpoint, 2 free; noc)
-std::pair<uint32_t, uint32_t> src_of(uint32_t how) {
-    switch (how) {
-        case FlatGuPlace::tensix_noc0: return {0, 0};
-        case FlatGuPlace::tensix_noc1: return {1, 1};
-        case FlatGuPlace::drisc_noc1: return {2, 1};
-        default: return {2, 0};
-    }
-}
+// how -> the NoC a core's reads take (their responses leave the bank from its endpoint tile of that NoC: banks[b][noc])
+uint32_t noc_of(uint32_t how) { return how == FlatGuPlace::tensix_noc1 ? 1u : 0u; }
 
 struct Model {
     const FlatGuGeom* g;
     std::vector<double> bg;
-    // routes[(cell * banks + bank) * 5 + how]
+    // routes[(cell * banks + bank) * 3 + how]
     std::vector<std::vector<uint32_t>> routes;
     uint32_t nb = 0;
 
@@ -92,17 +85,17 @@ struct Model {
                 }
             }
         }
-        routes.resize(geom.cells.size() * nb * 5);
+        routes.resize(geom.cells.size() * nb * 3);
         for (uint32_t c = 0; c < geom.cells.size(); ++c) {
             for (uint32_t b = 0; b < nb; ++b) {
-                for (uint32_t how = 1; how <= 4; ++how) {
-                    const auto [tile, noc] = src_of(how);
-                    route(geom.banks[b][tile], geom.cells[c], noc, routes[(c * nb + b) * 5 + how]);
+                for (const uint32_t how : {FlatGuPlace::tensix_noc0, FlatGuPlace::tensix_noc1}) {
+                    const uint32_t noc = noc_of(how);
+                    route(geom.banks[b][noc], geom.cells[c], noc, routes[(c * nb + b) * 3 + how]);
                 }
             }
         }
     }
-    const std::vector<uint32_t>& of(uint32_t c, uint32_t b, uint32_t how) const { return routes[(c * nb + b) * 5 + how]; }
+    const std::vector<uint32_t>& of(uint32_t c, uint32_t b, uint32_t how) const { return routes[(c * nb + b) * 3 + how]; }
 };
 
 struct State {
@@ -179,19 +172,9 @@ FlatGuGeom flat_gu_geom(
     for (const auto& c : flat_gu_cells(p)) {
         g.cells.push_back(flat_worker_noc0(mesh_device, c, coord));
     }
-    const FlatDriscTopology t = FlatDriscTopology::geometry(mesh_device, p.drisc_tiles, coord);
-    for (uint32_t b = 0; b < t.banks; ++b) {
-        std::array<Core, 3> tiles{};
-        std::array<bool, 3> seen{};
-        for (const auto& c : t.cores.at(b)) {
-            const uint32_t i = (c.endpoint_noc_mask & 1) ? 0 : ((c.endpoint_noc_mask & 2) ? 1 : 2);
-            if (!seen[i]) {
-                tiles[i] = c.noc0_core;
-                seen[i] = true;
-            }
-        }
-        TT_FATAL(seen[0] && seen[1] && seen[2], "flat gate/up placement: bank {} lacks a NOC0 / NOC1 endpoint or free tile", b);
-        g.banks.push_back(tiles);
+    const FlatDramGeometry dram = FlatDramGeometry::of(mesh_device, coord);
+    for (uint32_t b = 0; b < dram.banks; ++b) {
+        g.banks.push_back({dram.endpoint(b, 0), dram.endpoint(b, 1)});
     }
     for (size_t i = 2; i < p.relays.size(); ++i) {  // (relays: 2 primaries, then the helpers that read x)
         g.helpers.push_back(flat_worker_noc0(mesh_device, p.relays[i], coord));
@@ -219,7 +202,6 @@ FlatGuAssign search_once(
     const std::vector<const FlatGuGeom*>& geoms,
     const FlatGuTraffic& t,
     uint32_t rg,
-    bool hybrid,
     uint32_t iters,
     uint64_t seed,
     std::pair<double, double>& out_score);
@@ -229,7 +211,6 @@ FlatGuAssign flat_gu_search(
     const std::vector<const FlatGuGeom*>& geoms,
     const FlatGuTraffic& t,
     uint32_t rg,
-    bool hybrid,
     uint32_t iters,
     uint32_t restarts) {
     // (restarts: the same greedy start, different move sequences; the local search stops in different minima)
@@ -237,7 +218,7 @@ FlatGuAssign flat_gu_search(
     std::pair<double, double> bs{1e300, 1e300};
     for (uint32_t r = 0; r < restarts; ++r) {
         std::pair<double, double> sc;
-        FlatGuAssign a = search_once(geoms, t, rg, hybrid, iters, 0x9E3779B97F4A7C15ull + 0x1234567ull * r, sc);
+        FlatGuAssign a = search_once(geoms, t, rg, iters, 0x9E3779B97F4A7C15ull + 0x1234567ull * r, sc);
         if (sc < bs) {
             bs = sc;
             best = std::move(a);
@@ -250,7 +231,6 @@ FlatGuAssign gu_place_detail::search_once(
     const std::vector<const FlatGuGeom*>& geoms,
     const FlatGuTraffic& t,
     uint32_t rg,
-    bool hybrid,
     uint32_t iters,
     uint64_t seed,
     std::pair<double, double>& out_score) {
@@ -261,8 +241,7 @@ FlatGuAssign gu_place_detail::search_once(
     for (const auto* g : geoms) {
         TT_FATAL(g->cells.size() == nc && g->banks.size() == nb, "flat gate/up placement: geometries differ in shape");
     }
-    // start: greedy by hops on the first geometry (Tensix: either NoC, 2 RG a bank; hybrid: RG Tensix NOC0 reads a
-    // bank on the nearest cores, then RG DRISC cores a bank from its free tile on NOC1)
+    // start: greedy by hops on the first geometry (either NoC, 2 RG cores a bank)
     FlatGuAssign a{std::vector<uint32_t>(nc, 0), std::vector<uint32_t>(nc, 0)};
     std::vector<bool> taken(nc, false);
     auto fill = [&](const std::vector<uint32_t>& hows, uint32_t cap) {
@@ -274,8 +253,8 @@ FlatGuAssign gu_place_detail::search_once(
                 }
                 uint32_t best = ~0u, bh = 0;
                 for (uint32_t how : hows) {
-                    const auto [tile, noc] = src_of(how);
-                    const uint32_t h = hops(g0.banks[b][tile], g0.cells[c], noc);
+                    const uint32_t noc = noc_of(how);
+                    const uint32_t h = hops(g0.banks[b][noc], g0.cells[c], noc);
                     if (h < best) {
                         best = h;
                         bh = how;
@@ -295,14 +274,9 @@ FlatGuAssign gu_place_detail::search_once(
             }
         }
     };
-    if (hybrid) {
-        fill({FlatGuPlace::tensix_noc0}, rg);
-        fill({FlatGuPlace::drisc_noc1}, rg);
-    } else {
-        fill({FlatGuPlace::tensix_noc0, FlatGuPlace::tensix_noc1}, 2 * rg);
-    }
-    // local search: swap two cells' (bank, how), flip a Tensix cell's NoC, flip a bank's DRISC slot NoC; keep a move
-    // that does not worsen (the worst chip's busiest link, the summed squares)
+    fill({FlatGuPlace::tensix_noc0, FlatGuPlace::tensix_noc1}, 2 * rg);
+    // local search: swap two cells' (bank, how), flip a cell's NoC; keep a move that does not worsen (the worst chip's
+    // busiest link, the summed squares)
     std::vector<Model> models;
     std::vector<State> st;
     for (const auto* g : geoms) {
@@ -355,19 +329,9 @@ FlatGuAssign gu_place_detail::search_once(
             const uint32_t bi = a.bank[i], hi = a.how[i], bj = a.bank[j], hj = a.how[j];
             set(i, bj, hj);
             set(j, bi, hi);
-        } else if (u < 85 || !hybrid) {
-            const uint32_t i = xorshift(seed) % nc;
-            if (a.how[i] >= FlatGuPlace::drisc_noc1) {
-                continue;
-            }
-            set(i, a.bank[i], a.how[i] == FlatGuPlace::tensix_noc0 ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0);
         } else {
-            const uint32_t b = xorshift(seed) % nb;
-            for (uint32_t c = 0; c < nc; ++c) {
-                if (a.bank[c] == b && a.how[c] >= FlatGuPlace::drisc_noc1) {
-                    set(c, b, a.how[c] == FlatGuPlace::drisc_noc1 ? FlatGuPlace::drisc_noc0 : FlatGuPlace::drisc_noc1);
-                }
-            }
+            const uint32_t i = xorshift(seed) % nc;
+            set(i, a.bank[i], a.how[i] == FlatGuPlace::tensix_noc0 ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0);
         }
         const double mx = worst();
         if (mx < best.first) {

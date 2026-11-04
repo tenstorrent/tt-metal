@@ -11,36 +11,34 @@ device, so one cached program serves every routing.
 | | Use |
 |---|---|
 | `ttnn.experimental.moe_block.flat_routed_expert` | The plain op: y as bfp8 / bf16 tiles or row-major bf16 in DRAM. |
-| `flat_routed_expert_chip_plan` (C++) | One chip's plan: the mesh plan with that chip's gate/up placement (auto sources). The plain op and routed_experts_combine build one program per chip from it. |
-| `device/flat_program.hpp` (C++) | The program-building form: `add_flat_routed_expert_program` adds the flat expert's kernels, CBs and semaphores to a caller's per-chip `Program` (routed_experts_combine composes flat + combine in one program); `override_flat_routed_expert_addresses` patches its buffer addresses on cache hits; `with_combine_overlap` / `set_flat_combine_report` wire the y writers' reports to the combine. The header documents the contract (cores, semaphores, CB ids, arena, DRISC, hash). |
-| `ensure_flat_routed_expert_resources(MoEBlockResources&, config)` (C++) | The plan, persistent done / relay words and the DRISC senders, owned by the MoE block's resources. |
-| `flat_routed_expert_plan`, `create_flat_routed_expert_done_words`, `FlatDriscSenders`, `FlatLayoutOptions` | The plan's layout facts (`as_dict()`), the done words, the persistent DRISC senders, the layout choices. |
+| `flat_routed_expert_chip_plan` (C++) | One chip's plan: the mesh plan with that chip's gate/up placement (`auto_tensix`). The plain op and routed_experts_combine build one program per chip from it. |
+| `device/flat_program.hpp` (C++) | The program-building form: `add_flat_routed_expert_program` adds the flat expert's kernels, CBs and semaphores to a caller's per-chip `Program` (routed_experts_combine composes flat + combine in one program); `override_flat_routed_expert_addresses` patches its buffer addresses on cache hits; `with_combine_overlap` / `set_flat_combine_report` wire the y writers' reports to the combine. The header documents the contract (cores, semaphores, CB ids, arena, hash). |
+| `ensure_flat_routed_expert_resources(MoEBlockResources&, config)` (C++) | The plan and persistent done / relay words, owned by the MoE block's resources. |
+| `flat_routed_expert_plan`, `create_flat_routed_expert_done_words`, `FlatLayoutOptions` | The plan's layout facts (`as_dict()`), the done words, the layout choices. |
 
 `flat_routed_expert_weights.py` (Python, here until it moves under `ttnn/ttnn/_experimental`): `FlatRoutedExpert`
 (plan, weights packed into the plan's bank layout by `flat_weight_regions` + `bank_sharded`, expert id table, done
-words, DRISC senders), `act_ref`. The packing is host torch work done once per weight set, so it stays in Python.
+words), `act_ref`. The packing is host torch work done once per weight set, so it stays in Python.
 
 The program hash is the attributes (`FlatRoutedExpertParams`, including `FlatLayoutOptions`) and the tensors' specs:
 no buffer address. Every address (x, y, counts, regions, ids, weights, done words, the per-call arena and relay
 words) is re-applied on a cache hit by `override_runtime_arguments`; plans are cached per mesh device and shape.
 
-## DRISC senders
+## Gate/up weight reads
 
-The gate/up weights are read and forwarded by persistent kernels on the DRAM cores (`se_drisc_gu.cpp`), launched once
-per mesh device through the experimental tt-metal API `tt-metalium/experimental/dram_core_kernels.hpp` (slow dispatch
-beside fast dispatch) and kept running across calls. `FlatDriscSenders::get(mesh, plan.drisc_n)` launches or shares
-them; they stop when the last holder drops them, on `stop()` (after finishing the command queue), or at mesh close
-(the API runs the senders' stop protocol there). Every slot comes from the DRAM cores: a bank's free tile sends its
-first slot, the bank's NOC1-endpoint tile its second (switch mode). The program checks the senders run.
+Every gate/up core reads its own weight blocks from its weight slot's bank (`se_gu_read.hpp`): the receiver loop
+(`se5_recv.cpp`) grants free landing slots by count, the reads fill granted slots in order and publish a landed-blocks
+count the receiver and the compute consume. Slot r lives in bank r % banks (two slots a bank). Which core reads on
+which NoC (the NCRISC on NOC0 beside the x forwarder, or the receiver BRISC on NOC1) and which cells serve which slot
+is `FlatLayoutOptions.gu_source`; every source gives the same weight layout, schedule and bit-identical y.
 
 ## Roles and kernels (`device/kernels`)
 
 | Role | Cores | Kernels |
 |---|---|---|
-| DRISC weight senders | 2 DRAM tiles a bank (persistent) | `se_drisc_gu.cpp`, `se_drisc.hpp` |
-| Launcher | reader cell 0 | `se_drisc_go.cpp` (posts every slot's job, `se_drisc_post.hpp`) |
+| Schedule leader | reader cell 0 | `se_dyn_lead.cpp` (reads the call's counts / regions once; the other cores pull its compact copy) |
 | x relays: 2 primaries + 2 helpers | next to the DRAM reader columns | `se11_xrd.cpp`, `se11_tz.cpp`, `se13_xhelp.cpp`, `se11_xmc.cpp` |
-| gate/up | two full rectangles (64 cores, 48 on DSv4.1-Flash) | `se5_recv.cpp`, `se5_xfwd.cpp`, `se3_compute.cpp` (+ `se_glu_faces.hpp`) |
+| gate/up | two full rectangles (64 cores, 48 on DSv4.1-Flash) | `se5_recv.cpp`, `se5_xfwd.cpp` (+ `se_gu_read.hpp`), `se3_compute.cpp` (+ `se_glu_faces.hpp`) |
 | down | <= 32 cores, chains of 7 (4 with units) | `se6_drecv.cpp`, `se6_dw.cpp`, `se6_dcompute.cpp` (+ `se_yrm.hpp`, `se_cmb_done.hpp`) |
 
 `se_dyn.hpp` builds the per-call schedule (active experts, sub-blocks, pinning of a dominant expert) identically on
@@ -48,7 +46,7 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 
 ## The plan (fixed)
 
-* DRISC only; even splits (gate/up: the 2 It weight tiles of a K row over <= 64 cores, pairs where possible, else
+* The gate/up cores read their own weights; even splits (gate/up: the 2 It weight tiles of a K row over <= 64 cores, pairs where possible, else
   16-column units; down: the H tile columns over <= 32 cores). An intermediate size without an even split fails.
 * x read once by the helper relays, fed along one unicast snake per gate/up rectangle (both rectangles full).
 * Sub-blocks up to 128 rows; 64 with `rows_hint <= 320` on plans with gate/up row passes.
@@ -66,17 +64,11 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `x_helpers` | -1 (1) | x helper relays per rectangle; only 1 |
 | `x_ready` | -1 | > 0: the relays wait for the dispatch ports' count in their x-ready word (dispatch in the same program) |
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
-| `drisc_tiles` | `both` | DRISC tiles a bank sends its gate/up slots from: `both` (free + NOC1 endpoint, every call), `free_only`, `noc1_endpoint_only` (one tile serves both of the bank's slots; the latter leaves the free tiles to another resident kernel) |
-| `drisc_ub` | -1 | DRISC blocks per DMA unit (-1: pairs when two jobs share a tile and each keeps two in flight, else singles) |
-| `drisc_dma_cap` | -1 (2) | DRISC DMA reads in flight a job, 1..3 (4+ sent wrong weights with two jobs on one tile) |
-| `drisc_early_free` | -1 (on) | a DRISC L1 slot refills once its writes have left L1, not once acked (units of 2+ blocks) |
-| `drisc_mpfe` | 0 | the GDDR MPFE arbitration word for the call (0: untouched) |
-| `drisc_probe` | `none` | measurement probes of the DRISC senders (`timing`, `call_time`, `dma_only`, `write_only`, `loop_only`; garbage y except `timing` / `call_time`); counters via `FlatDriscSenders.read_prof()` |
-| `gu_source` | `drisc` | who reads the gate/up weights: `drisc` (the DRISC senders), `tensix` (each gate/up core's NCRISC reads its own blocks on NOC0, `se_gu_read.hpp`), `tensix_split` (a bank's first slot's cores read on NOC1 from the receiver BRISC, the second slot's on NOC0); same layout, schedule and bit-identical y. Tensix-read plans place each slot's gate/up cores by hops from the bank's NoC endpoint the reads go through. Galaxy per-chip loads, best Tensix vs `drisc`: flat alone +4% (K3) to +13% (GLM-5.3-Flash), experts + combine in the MoE block +4% (GLM-5.3-Flash) / +7% (K3) |
-| `gu_read_depth` | -1 (2) | `gu_source` tensix*: weight reads in flight a gate/up core, 1..6 |
-| `gu_read_pieces` | -1 (1) | `gu_source` tensix* / placed: each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op) |
-| `gu_place` | [] | `gu_source` `placed` (also `tensix_noc1`: all reads on NOC1): per gate/up cell `x << 24 \| y << 16 \| bank << 8 \| how` (1 Tensix NOC0, 2 Tensix NOC1, 3 / 4 the bank's free DRAM_TILE DRISC on NOC1 / NOC0, `drisc_tiles` free_only: hybrid); 2 x RG cores a bank, a slot all DRISC or all Tensix. A NoC-link-load placement (K3 Galaxy 4x4 load): experts + combine 2254 us vs 2279 with `drisc` |
-| `gu_source` `auto_tensix` / `auto_hybrid` | | the gate/up placement chosen per chip at plan time by a NoC link-load search (`device/flat_gu_place.hpp`) over that chip's own geometry (harvested columns, DRAM tiles): `flat_routed_expert_chip_plan`; chips of one geometry share it, and a chip takes the mesh's compromise placement when that loads its busiest link less. Same weight layout on every chip. `auto_hybrid` needs `drisc_tiles` free_only. `flat_gu_placement_report` (host only, also on a mock cluster) shows the per-chip / reference / compromise model |
+| `gu_source` | `tensix` | which gate/up core reads which weight blocks, on which NoC: `tensix` (each gate/up core's NCRISC reads its own blocks on NOC0), `tensix_split` (a bank's first slot's cores read on NOC1 from the receiver BRISC, the second slot's on NOC0), `tensix_noc1` (all on NOC1), `placed` (`gu_place`), `auto_tensix` (below); same layout, schedule and bit-identical y. Without per-core words each slot's gate/up cores are placed by hops from the bank's NoC endpoint the reads go through |
+| `gu_read_depth` | -1 (2) | weight reads in flight a gate/up core, 1..6 |
+| `gu_read_pieces` | -1 (1) | each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op on GLM shapes; K3 in the MoE block takes 2) |
+| `gu_place` | [] | `gu_source` `placed`: per gate/up cell `x << 24 \| y << 16 \| bank << 8 \| how` (1 NOC0, 2 NOC1); 2 x RG cores a bank |
+| `gu_source` `auto_tensix` | | the gate/up placement chosen per chip at plan time by a NoC link-load search (`device/flat_gu_place.hpp`) over that chip's own geometry (harvested columns, DRAM tiles: `tt-metalium/experimental/dram_geometry.hpp`): `flat_routed_expert_chip_plan`; chips of one geometry share it, and a chip takes the mesh's compromise placement when that loads its busiest link less. Same weight layout on every chip. `flat_gu_placement_report` (host only, also on a mock cluster) shows the per-chip / reference / compromise model |
 
 ## Tests
 

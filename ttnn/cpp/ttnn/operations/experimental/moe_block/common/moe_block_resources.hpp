@@ -11,7 +11,7 @@
 //    mesh is open and the fabric configured, and BEFORE any per-call allocation (persistent L1 then sits at the top
 //    of the allocator and never fragments a bank under a per-call buffer). Held by std::shared_ptr; Python holds it.
 //  * The resources keep a reference to the mesh device; the caller must drop them (or call release()) before the
-//    mesh is closed. release() frees every buffer, semaphore and attachment (e.g. persistent DRISC senders).
+//    mesh is closed. release() frees every buffer, semaphore and attachment.
 //  * Ops receive `MoEBlockResources&` in their host entry point (the ttnn-facing function), get-or-create what they
 //    need there, and pass it to the device operation as ordinary tensor args (persistent tensors) and
 //    hash-excluded attributes (GlobalSemaphores / addresses), patched in override_runtime_arguments. The device op's
@@ -33,7 +33,7 @@
 //     XGather3 3 + 2L semaphores, RouterStream 2, RoutingStream semaphores; DRAM outputs y/se, rows, xbuf, route,
 //     latent; routing plan tensors counts / regions / token_index / table / plan, slots, fslots; head plan.
 //   TODO(sparse_dispatch_2d): 4 port semaphores (on the port cells), manifest sizing; placement via ports().
-//   TODO(flat_routed_expert): gidx, done; the persistent DRISC senders as an attachment (RAII stop); flat plan.
+//   TODO(flat_routed_expert): gidx, done; flat plan.
 //   TODO(routed_experts_combine): bar (every core), relay_words, dispatch semaphores (4), hcache (DRAM headers),
 //     lut (DRAM per-chip accumulator LUT), out; the combine layout / cells plan.
 //   TODO(fused_tail): ready semaphore, words, port_epoch (TailEngine); zrw, z (TailA2A); tail schedule.
@@ -161,7 +161,7 @@ public:
         }
         return std::any_cast<std::shared_ptr<const T>>(it->second);
     }
-    // Keep `owner` alive until release() (e.g. persistent DRISC senders: their destructor stops them).
+    // Keep `owner` alive until release() (e.g. a resident helper whose destructor stops it).
     void attach(const std::string& name, std::shared_ptr<void> owner);
 
     bool has(const std::string& name) const;

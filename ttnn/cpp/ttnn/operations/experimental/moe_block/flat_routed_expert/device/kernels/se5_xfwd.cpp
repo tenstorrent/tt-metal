@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // x snake forwarder (NCRISC) on a gate/up core: x travels the gate/up cores by unicast (no multicast: the NOC0 wedge
-// of a multicast into the gate/up rectangle beside the DRISC weight writes and DRAM traffic). The receiver
+// of a multicast into the gate/up rectangle beside the weight and DRAM traffic). The receiver
 // (se5_recv.cpp, BRISC, SE_X_FWD_NC) only consumes x; this kernel forwards each piece as soon as it has arrived (XARR
 // here, in pieces) into the successor's x ring, once the successor has freed the block's slot (SFREE here), then bumps
 // the successor's XARR after the write is acknowledged; and reports min(consumed (XCONS, published by se5_recv),
@@ -11,12 +11,11 @@
 // published its last count (XEND = blocks + 1) and every block is forwarded and reported. CT: 0 X_SLOTS, 1 X_BYTES, 2
 // X_PIECES, 3 XARR_SEM, 4 SFREE_SEM, 5 XCONS_SEM, 6 XEND_SEM, 7 DEPTH (pieces in flight) RT: 0 x ring address, 1
 // predecessor xy (0: chain head), 2 sem id of this core's free word on the predecessor,
-//     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head)
+//     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
+//     se_gu_read.hpp args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#ifdef SE_GU_TENSIX
 #include "se_gu_read.hpp"
-#endif
 
 void kernel_main() {
     constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
@@ -38,7 +37,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
     volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
     uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
-#ifdef SE_GU_TENSIX
     // gate/up weights read from here (se_gu_read.hpp, RT 6..: mode 1), into the landing slots the receiver (BRISC)
     // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
     SeGuRead gr;
@@ -53,16 +51,11 @@ void kernel_main() {
         gr.init(6, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, mb[0], mb + 1, sem(SE_GU_GRANT_SEM), sem(SE_GU_DATA_SEM));
         g_done = gr.total == 0;
     }
-#else
-    constexpr bool g_done = true;
-#endif
     while (true) {
         invalidate_l1_cache();
-#ifdef SE_GU_TENSIX
         if (!g_done) {
             g_done = gr.step();
         }
-#endif
         if (sxy) {
             const uint32_t arrived = *xarr;
             while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
@@ -94,9 +87,7 @@ void kernel_main() {
             break;
         }
     }
-#ifdef SE_GU_TENSIX
     gr.finish();
-#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     noc_async_write_set_trid(0);

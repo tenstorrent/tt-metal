@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_plan.hpp"
-#include "flat_drisc.hpp"
+#include "flat_geometry.hpp"
 #include "flat_gu_place.hpp"
 
 #include <algorithm>
@@ -122,7 +122,7 @@ std::vector<Core> FlatRoutedExpertPlan::arena_cores() const {
     for (const auto* l : {&down, &relays, &gu_idle}) {
         out.insert(out.end(), l->begin(), l->end());
     }
-    out.push_back(launcher);  // (the other reader cells are down cores, relays or idle)
+    out.push_back(leader);  // (the other reader cells are down cores, relays or idle)
     return out;
 }
 
@@ -167,7 +167,7 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
 
 void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words) {
     const auto cells = flat_gu_cells(p);
-    const uint32_t n_rd = p.drisc_n;
+    const uint32_t n_rd = p.n_slots;
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> cell;
     for (uint32_t ci = 0; ci < cells.size(); ++ci) {
         cell[{cells[ci].x, cells[ci].y}] = ci;
@@ -180,31 +180,23 @@ void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& w
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
     std::vector<uint32_t> how_of(cells.size(), 0);
     std::vector<bool> placed(cells.size(), false);
-    std::vector<bool> slot_drisc(n_rd, false);
-    // per bank: its slot b and slot b + banks; DRISC words pin their slot, Tensix words fill the rest
-    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how) Tensix
+    // per bank: its cores fill slot b, then slot b + banks
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how)
     for (const uint32_t w : words) {
         const uint32_t x = w >> 24, y = (w >> 16) & 0xFF, b = (w >> 8) & 0xFF, how = w & 0xFF;
         TT_FATAL(cell.contains({x, y}), "flat layout gu_place: ({}, {}) is no gate/up cell", x, y);
-        TT_FATAL(b < p.banks && how >= 1 && how <= 4, "flat layout gu_place word {:#x}", w);
+        TT_FATAL(
+            b < p.banks && (how == FlatGuPlace::tensix_noc0 || how == FlatGuPlace::tensix_noc1),
+            "flat layout gu_place word {:#x}",
+            w);
         const uint32_t ci = cell.at({x, y});
         TT_FATAL(!placed[ci], "flat layout gu_place: ({}, {}) twice", x, y);
         placed[ci] = true;
-        if (how >= FlatGuPlace::drisc_noc1) {
-            TT_FATAL(
-                p.drisc_tiles == FlatDriscTiles::free_only,
-                "flat layout gu_place: DRISC words need drisc_tiles free_only");
-            const uint32_t r = b + (how == FlatGuPlace::drisc_noc0 ? p.banks : 0);
-            per_reader[r].push_back(ci);
-            slot_drisc[r] = true;
-        } else {
-            tw[b].emplace_back(ci, how);
-        }
+        tw[b].emplace_back(ci, how);
     }
     for (uint32_t b = 0; b < p.banks; ++b) {
         for (const auto& [ci, how] : tw[b]) {
-            const uint32_t r = !slot_drisc[b] && per_reader[b].size() < p.r_ ? b : b + p.banks;
-            TT_FATAL(!slot_drisc[r], "flat layout gu_place: bank {} mixes DRISC and Tensix cores in a slot", b);
+            const uint32_t r = per_reader[b].size() < p.r_ ? b : b + p.banks;
             per_reader[r].push_back(ci);
             how_of[ci] = how;
         }
@@ -227,11 +219,10 @@ void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& w
             p.gu_how.push_back(how_of[ci]);
         }
     }
-    p.slot_drisc = slot_drisc;
 }
 
 FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g) {
-    return flat_gu_search({&g}, flat_gu_traffic(p), p.rg, p.gu_source == FlatGuSource::auto_hybrid, kFlatGuIters);
+    return flat_gu_search({&g}, flat_gu_traffic(p), p.rg, kFlatGuIters);
 }
 
 FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p) {
@@ -380,24 +371,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst((p.gwt + 1) / 2, p.Ht, p.x_slots, p.nu != 0);
     const uint32_t mt_cap = std::min(p.dst_tiles / p.gwt, MT_MAX);
     p.mt = std::min(mt_cap, std::max(1u, p.m / 32));
-    // the DRAM tiles' geometry (host only: also on a mock cluster); the senders' L1 region is the program factory's
-    const FlatDriscTopology drisc = FlatDriscTopology::geometry(mesh_device, lo.drisc_tiles);
-    p.drisc_tiles = lo.drisc_tiles;
-    TT_FATAL(
-        lo.drisc_dma_cap < 0 || (lo.drisc_dma_cap >= 1 && lo.drisc_dma_cap <= 3),
-        "flat layout drisc_dma_cap {}: 1..3 (4 or more DMA reads in flight a job sent wrong weights)",
-        lo.drisc_dma_cap);
-    if (lo.drisc_dma_cap > 0) {
-        p.drisc_dma_cap = lo.drisc_dma_cap;
-    }
-    if (lo.drisc_ub > 0) {
-        p.drisc_ub = lo.drisc_ub;
-    }
-    p.drisc_mpfe = lo.drisc_mpfe;
-    if (lo.drisc_early_free >= 0) {
-        p.drisc_early_free = lo.drisc_early_free != 0;
-    }
-    p.drisc_probe = lo.drisc_probe;
     p.gu_source = lo.gu_source;
     TT_FATAL(
         lo.gu_read_depth < 0 || (lo.gu_read_depth >= 1 && lo.gu_read_depth <= 6),
@@ -483,12 +456,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             taken.insert({c.x, c.y});
         }
     }
-    // one weight slot per reader cell, every one on the DRAM cores; the reader cells but the launcher's go to the
-    // relays / down cores
-    p.drisc_n = p.readers.size();
-    TT_FATAL(p.drisc_n <= 16, "flat DRISC: {} weight slots > 16", p.drisc_n);
-    p.launcher = p.readers[0];
-    for (uint32_t r = 1; r < p.drisc_n; ++r) {
+    // one weight slot per reader cell (two a bank); the reader cells but the schedule leader's go to the relays /
+    // down cores
+    p.n_slots = p.readers.size();
+    TT_FATAL(p.n_slots <= 2 * p.banks, "flat_routed_expert: {} weight slots > two a bank", p.n_slots);
+    p.leader = p.readers[0];
+    for (uint32_t r = 1; r < p.n_slots; ++r) {
         taken.erase({p.readers[r].x, p.readers[r].y});
     }
     auto first_free = [&](uint32_t x, std::initializer_list<uint32_t> ys) {
@@ -606,45 +579,30 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.h_tiles = p.It * p.mt;  // one down h buffer: a sub-block
     const uint32_t out_tiles = p.mt * pcd;
 
-    // gate/up cores per weight slot: each slot's cores by the hops from the DRAM tile that actually sends it (switch
-    // mode: a bank's second slot from its NOC1-endpoint tile, on NOC0; one-tile choices: both from the bank's tile),
-    // all pairs (slot, core) taken nearest first rather than round-robin nearest (which left the last slots 15-21
-    // hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 / 1216 / 808 us.
-    const bool by_words = p.gu_source == FlatGuSource::placed || p.gu_source == FlatGuSource::auto_tensix ||
-                          p.gu_source == FlatGuSource::auto_hybrid;
+    // gate/up cores per weight slot: each slot's cores by the hops from the bank's NoC endpoint tile its reads go
+    // through (their responses' injection point), on that NoC; all pairs (slot, core) taken nearest first rather than
+    // round-robin nearest (which left the last slots 15-21 hops)
+    const bool by_words = p.gu_source == FlatGuSource::placed || p.gu_source == FlatGuSource::auto_tensix;
+    // the NoC slot r's cores read on (sources without per-core words)
+    const auto slot_noc = [&](uint32_t r) -> uint32_t {
+        return p.gu_source == FlatGuSource::tensix_noc1 || (p.gu_source == FlatGuSource::tensix_split && r < p.banks)
+                   ? 1u
+                   : 0u;
+    };
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
     std::vector<bool> placed(gu_all.size(), by_words);
-    // per gate/up cell: who delivers its share (0 DRISC, FlatGuPlace::tensix_noc0 / tensix_noc1)
-    std::vector<uint32_t> how_of(gu_all.size(), 0);
-    p.slot_drisc.assign(n_rd, p.gu_source == FlatGuSource::drisc);
     if (!by_words) {
+        const FlatDramGeometry dram = FlatDramGeometry::of(mesh_device);
         std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         std::vector<Core> worker_noc0;
         for (const auto& c : gu_all) {
             worker_noc0.push_back(flat_worker_noc0(mesh_device, c));
         }
-        // gate/up cores reading their own weights: hops from the bank's NoC endpoint DRAM_TILE the reads go through
-        // (their responses' injection point), on that NoC
-        auto reader_src = [&](uint32_t r) -> std::pair<Core, uint32_t> {
-            if (p.gu_source == FlatGuSource::drisc) {
-                const auto [sp, snoc] = drisc.sender(r);
-                return {Core(sp), snoc};
-            }
-            const uint32_t nsel =
-                p.gu_source == FlatGuSource::tensix_noc1 || (p.gu_source == FlatGuSource::tensix_split && r < p.banks)
-                    ? 1u
-                    : 0u;
-            for (const auto& c : drisc.cores.at(r % p.banks)) {
-                if (c.endpoint_noc_mask & (1u << nsel)) {
-                    return {Core(c.noc0_core), nsel};
-                }
-            }
-            TT_THROW("flat_routed_expert: bank {} has no NOC{} endpoint DRAM_TILE", r % p.banks, nsel);
-        };
         for (uint32_t r = 0; r < n_rd; ++r) {
-            const auto [sp, snoc] = reader_src(r);
+            const uint32_t noc = slot_noc(r);
+            const Core src = dram.endpoint(r % p.banks, noc);
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                pairs.emplace_back(noc_hops(Core(sp), worker_noc0[ci], int(snoc)), r, ci);
+                pairs.emplace_back(noc_hops(src, worker_noc0[ci], int(noc)), r, ci);
             }
         }
         std::sort(pairs.begin(), pairs.end());
@@ -658,13 +616,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     for (uint32_t r = 0; r < n_rd; ++r) {
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
-            uint32_t how = how_of[ci];
-            if (p.gu_source != FlatGuSource::placed && p.gu_source != FlatGuSource::drisc) {
-                const bool n1 = p.gu_source == FlatGuSource::tensix_noc1 ||
-                                (p.gu_source == FlatGuSource::tensix_split && r < p.banks);
-                how = n1 ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0;
-            }
-            p.gu_how.push_back(how);
+            p.gu_how.push_back(slot_noc(r) ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0);
         }
     }
     for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
@@ -675,10 +627,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     if (by_words) {  // the caller's placement, or the link-load search's on this (the reference) chip
         TT_FATAL(
             p.gu_source == FlatGuSource::placed || lo.gu_place.empty(),
-            "flat layout: gu_place is for gu_source placed (auto sources search their own)");
-        TT_FATAL(
-            p.gu_source != FlatGuSource::auto_hybrid || lo.drisc_tiles == FlatDriscTiles::free_only,
-            "flat layout: gu_source auto_hybrid needs drisc_tiles free_only (its DRISC slots: the banks' free tiles)");
+            "flat layout: gu_place is for gu_source placed (auto_tensix searches its own)");
         flat_apply_gu_place(
             p,
             p.gu_source == FlatGuSource::placed
@@ -818,7 +767,7 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
     const FlatRoutedExpertConfig& c,
     const tt::tt_metal::distributed::MeshCoordinate& coord) {
     auto base = flat_routed_expert_plan(mesh_device, c);
-    if (base->gu_source != FlatGuSource::auto_tensix && base->gu_source != FlatGuSource::auto_hybrid) {
+    if (base->gu_source != FlatGuSource::auto_tensix) {
         return base;
     }
     // (chips of one geometry share the placement: the key is the mesh plan and the geometry's positions)
@@ -848,13 +797,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
                 for (const auto& gg : geoms) {
                     gp.push_back(&gg);
                 }
-                comp = flat_gu_search(
-                    gp,
-                    flat_gu_traffic(*base),
-                    base->rg,
-                    base->gu_source == FlatGuSource::auto_hybrid,
-                    kFlatGuIters,
-                    kFlatGuCompromiseRestarts);
+                comp =
+                    flat_gu_search(gp, flat_gu_traffic(*base), base->rg, kFlatGuIters, kFlatGuCompromiseRestarts);
             }
             cit = compromise.emplace(base.get(), std::move(comp)).first;
         }

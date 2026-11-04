@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Gate/up weights read by the gate/up core itself (FlatGuSource tensix / tensix_split): the DRISC sender's protocol
-// (se_drisc_gu.cpp) run on the receiving core. Chunk c of the call (load l = c / PER_E, chunk ce = c % PER_E) is read
-// from this core's slot bank once the receiver has granted it (the receiver's grant counter >= c + 1) into landing
-// slot (region of l) x PER_E + ce, DEPTH reads in flight (transaction ids TRID0 ..), and the receiver's DATA count is
-// set as chunks land, in order: the receiver loop (se5_recv.cpp) and the compute see exactly what the DRISC delivers.
+// Gate/up weights read by the gate/up core itself (on NOC0 from its NCRISC, or on NOC1 from the receiver loop on its
+// BRISC: FlatGuSource), through a grant / landing-slot protocol with the receiver. Chunk c of the call (load
+// l = c / PER_E, chunk ce = c % PER_E) is read from this core's slot bank once the receiver has granted it (the
+// receiver's grant counter >= c + 1) into landing slot (region of l) x PER_E + ce, DEPTH reads in flight (transaction
+// ids TRID0 ..), and the receiver's DATA count is set as chunks land, in order: the receiver loop (se5_recv.cpp) and
+// the compute publish blocks by that count.
 //
 // Runtime args (SE_GU_RT_ARGS from A0): 0 mode (0: none on this RISC, 1: NCRISC reads, 2: BRISC reads), 1 gate/up
 // weights address (bank-local), 2 bank id, 3 this core's first block in the bank (slot region + block j / G), 4 chunk

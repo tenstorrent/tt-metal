@@ -288,7 +288,7 @@ UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = (
     {
-        # C++ MoE block (ttnn.experimental.moe_block), DRISC-free gate/up reads (gu_source tensix), main 573f4b35e8
+        # C++ MoE block (ttnn.experimental.moe_block), gate/up weights read by the gate/up cores, main 573f4b35e8
         # merged: CI run 41746309144 / job 126306365928 (bh_sc1_high_power).
         (78, 11, 10): [0.270, 0.267, 0.275, 0.272, 0.277, 0.277, 0.275, 0.276, 0.283, 0.285, 0.290],
     }

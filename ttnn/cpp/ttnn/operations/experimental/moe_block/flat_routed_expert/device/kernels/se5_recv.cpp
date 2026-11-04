@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Gate/up receiver data movement (BRISC, NOC1) on a gate/up core of M-group G. A non-blocking event loop that
-//   * runs the in1 (weight) ring: grants each free landing slot to its DRISC sender (this core's grant counter, which
-//     the DRAM core polls; no NoC traffic from here) and publishes blocks as the sender's DATA count moves; the ring
-//     holds the weight slices of the schedule's loads, compute frees blocks after their last use,
+//   * runs the in1 (weight) ring: grants each free landing slot (this core's grant counter) to the weight reads
+//     (se_gu_read.hpp: this core's NCRISC on NOC0, or this loop on NOC1) and publishes blocks as their DATA count
+//     moves; the ring holds the weight slices of the schedule's loads, compute frees blocks after their last use,
 //   * publishes x blocks to compute as their pieces arrive along the snake (XARR, incremented by the predecessor or
 //     the relay after each piece's write is acknowledged) and posts the consumed count (SE_X_FWD_NC_CONS) for the
 //     NCRISC forwarder (se5_xfwd.cpp), which forwards x and reports freed slots upstream,
@@ -19,20 +19,18 @@
 //     28 HSFREE_SEM, 29 H_PIECES, 30 X_PER_V (x blocks per virtual expert), 31-32 GATH
 //     ids of h buffers 1, 2, 33 X_PIECES (x blocks travel the chain cut-through in this many pieces; XARR counts
 //     pieces), 34 G (M-groups sharing the down cores' h_all)
-// RT: 0 forwarder xy (the DRISC), 1 the grant counter's sem id here, 2 column group CG, 3 NH (chain heads of the
+// RT: 0 unused, 1 the grant counter's sem id here, 2 column group CG, 3 NH (chain heads of the
 // group), 4 unused,
 //     5 coordinator xy, 6 group's GATH sem id, 7 x ring address, 8 is coordinator, 9 predecessor xy (0: chain
 //     head), 10 successor xy (0: chain tail), 11 h predecessor xy (0: chain head), 12 sem id of this core's h-free word
 //     on the h predecessor, 13 h_all address, 14 M-group, 15 partner xy, 16 AVAIL sem id (on B), 17 BCOPY
 //     sem id (on A), 18 second x successor xy (0: none; x travels down a tree), 19 sem id of this core's x-free word
 //     on its predecessor (SFREE or SFREE2 there), 20 sem id of the second successor's free word here, 21.. NH head xy,
-//     then NCC compute-core xy
+//     then NCC compute-core xy, then the se_dyn.hpp args, then the se_gu_read.hpp args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "se_dyn.hpp"
-#ifdef SE_GU_TENSIX
 #include "se_gu_read.hpp"
-#endif
 #define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
@@ -85,7 +83,6 @@ void kernel_main() {
     constexpr uint32_t h_piece_bytes = half_bytes / h_pieces;
     static_assert(hbuf >= 1 && hbuf <= 4);
 
-    const uint32_t fxy = get_arg_val<uint32_t>(0);
     const uint32_t credit_sem_id = get_arg_val<uint32_t>(1);
     const uint32_t cg = get_arg_val<uint32_t>(2);
     const uint32_t nh = get_arg_val<uint32_t>(3);
@@ -95,9 +92,8 @@ void kernel_main() {
     const uint32_t pxy = get_arg_val<uint32_t>(9), sxy = get_arg_val<uint32_t>(10);
     const bool is_coord = get_arg_val<uint32_t>(8) != 0;
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
-    // DRISC mode (se_drisc.hpp): the forwarder is a DRAM core that polls this core's grants (RT 1: the semaphore
-    // counting them, zero at launch) - no NoC traffic from here (a write on the x multicast's NOC from its
-    // destinations is the wedge pattern above)
+    // the landing slots granted so far (RT 1: the semaphore counting them, zero at launch): the weight reads
+    // (se_gu_read.hpp) read into granted slots only
     volatile tt_l1_ptr uint32_t* granted_word = sem(credit_sem_id);
     auto grant = [&](uint32_t n) { *granted_word = *granted_word + n; };
     const uint64_t done_noc = get_noc_addr(cxy >> 16, cxy & 0xFFFF, get_semaphore(done_sem_id));
@@ -151,7 +147,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
     volatile tt_l1_ptr uint32_t* harr_sem[2] = {sem(harr_sem_id), sem(harr1_sem_id)};
 
-#ifdef SE_GU_TENSIX
     // the gate/up weights read by this core (se_gu_read.hpp; RT after the se_dyn.hpp args): the loads list handed to
     // the NCRISC (mode 1) in its half of CB 7, or read from here (mode 2, NOC1)
     const uint32_t ga = peer0 + SE_DYN_NARGS;
@@ -172,7 +167,6 @@ void kernel_main() {
             *sem(SE_GU_MBOX_SEM) = 1;
         }
     }
-#endif
     if (!is_b) {
         grant(w_slots);  // every landing slot starts free
     }
@@ -193,11 +187,9 @@ void kernel_main() {
             grant(1);
             ++granted;
         }
-#ifdef SE_GU_TENSIX
         if (!g_done) {
             g_done = gr.step();
         }
-#endif
         while (!is_b && *data_sem > pushed) {
             cb_push_back(in1_cb, slot);
             ++pushed;
@@ -322,11 +314,9 @@ void kernel_main() {
     }
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_CONS)) = x_cons;
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_END)) = x_cons + 1;
-#ifdef SE_GU_TENSIX
     if (gmode == 2) {
         gr.finish();
     }
-#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     // the write command buffer's packet tag back to transaction ID 0: the next program's plain writes (implicit ID

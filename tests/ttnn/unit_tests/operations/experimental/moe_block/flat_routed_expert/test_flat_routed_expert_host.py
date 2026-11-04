@@ -90,4 +90,5 @@ def test_flat_layout_options():
     assert (a.x_helpers, a.pin_ratio, a.rows_hint, a.x_ready) == (-1, 8, 40, -1)
     assert a == weights_py.flat_layout(dict(rows_hint=40))
     assert a != weights_py.flat_layout(a, x_ready=2)
-    assert list(a.key()) == [2**32 - 1, 8, 40, 2**32 - 1]
+    # (x_helpers, pin_ratio, rows_hint, x_ready, gu_source tensix, gu_read_depth, gu_read_pieces, no gu_place words)
+    assert list(a.key()) == [2**32 - 1, 8, 40, 2**32 - 1, 0, 2**32 - 1, 2**32 - 1, 0]

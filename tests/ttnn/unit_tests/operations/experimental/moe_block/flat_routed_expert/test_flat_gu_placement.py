@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The flat routed expert's per-chip gate/up placement (FlatGuSource auto_tensix / auto_hybrid) on the whole system
-mesh: the host-only link-load report (also on a mock cluster: distinct chip geometries, per-chip / reference-chip /
-compromise busiest link), and, with programmable DRAM cores, every chip's y bit-identical to the DRISC senders'."""
+"""The flat routed expert's per-chip gate/up placement (FlatGuSource auto_tensix) on the whole system mesh: the
+host-only link-load report (also on a mock cluster: distinct chip geometries, per-chip / reference-chip / compromise
+busiest link), and on hardware every chip's y bit-identical to the fixed placements' (tensix, tensix_split)."""
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -40,19 +41,14 @@ def mesh():
 
 
 @pytest.mark.parametrize("model", ["k3", "glm53_flash"])
-@pytest.mark.parametrize("source", ["auto_tensix", "auto_hybrid"])
-def test_gu_placement_report(mesh, model, source):
+def test_gu_placement_report(mesh, model):
     mb = ttnn._ttnn.operations.experimental.moe_block
     md, pc = cases.MODELS[model], cases.per_chip(model, "8x4", 5120)
-    lo = mb.FlatLayoutOptions(
-        rows_hint=round(pc["M"]),
-        gu_source=getattr(mb.FlatGuSource, source),
-        drisc_tiles=mb.FlatDriscTiles.free_only if source == "auto_hybrid" else mb.FlatDriscTiles.both,
-    )
+    lo = mb.FlatLayoutOptions(rows_hint=round(pc["M"]), gu_source=mb.FlatGuSource.auto_tensix)
     r = mb.flat_gu_placement_report(mesh, md["H"], md["I"], pc["epc"], md["E"], 5120, layout=lo)
     chips = r["chips"]
     print(
-        f"{model} {source}: {len(chips)} chips, {r['topologies']} distinct geometries; busiest link us (worst chip) "
+        f"{model} auto_tensix: {len(chips)} chips, {r['topologies']} distinct geometries; busiest link us (worst chip) "
         f"own {max(c['own_us'] for c in chips):.1f} reference {max(c['reference_us'] for c in chips):.1f} "
         f"compromise {max(c['compromise_us'] for c in chips):.1f} chosen {max(c['chosen_us'] for c in chips):.1f}; "
         f"bank floor {r['bank_floor_us']:.1f}; search {r['search_ms_max']:.0f} ms a geometry, compromise "
@@ -66,8 +62,8 @@ def test_gu_placement_report(mesh, model, source):
 @pytest.mark.parametrize("model", ["k3"])
 def test_gu_placement_bit_identical(mesh, model):
     mb = ttnn._ttnn.operations.experimental.moe_block
-    if not mb.FlatDriscSenders.supported(mesh):
-        pytest.skip("needs programmable DRAM cores (the DRISC reference)")
+    if "TT_METAL_MOCK_CLUSTER_DESC_PATH" in os.environ:
+        pytest.skip("needs hardware (outputs)")
     md, pc = cases.MODELS[model], cases.per_chip(model, "8x4", 5120)
     E, H, I, NG, M = pc["epc"], md["H"], md["I"], md["E"], round(pc["M"])
     N = mesh.get_num_devices()
@@ -93,11 +89,8 @@ def test_gu_placement_bit_identical(mesh, model):
     for o, c in zip(offs, counts):
         real[o : o + c] = True
     ref = None
-    for source, tiles in (("drisc", "both"), ("auto_tensix", "both"), ("auto_hybrid", "free_only")):
-        lay = dict(
-            rows_hint=M, drisc_tiles=getattr(mb.FlatDriscTiles, tiles), gu_source=getattr(mb.FlatGuSource, source),
-            gu_read_depth=1 if source != "drisc" else -1,
-        )  # fmt: skip
+    for source in ("tensix", "auto_tensix", "tensix_split"):
+        lay = dict(rows_hint=M, gu_source=getattr(mb.FlatGuSource, source), gu_read_depth=1)
         op = fw.FlatRoutedExpert(
             mesh, [local] * N, m=5120, H=H, I=I, gids=[list(range(E))] * N, n_global=NG, wdtype="bf4",
             act=md["act"], pin=1, layout=lay,
@@ -108,4 +101,4 @@ def test_gu_placement_bit_identical(mesh, model):
         op.close()
         ref = ref or ys
         for chip, (a, b) in enumerate(zip(ys, ref)):
-            assert not (a != b).reshape(-1, rows, H).any(0)[real].any(), f"{source}: chip {chip} y differs from drisc"
+            assert not (a != b).reshape(-1, rows, H).any(0)[real].any(), f"{source}: chip {chip} y differs from tensix"
