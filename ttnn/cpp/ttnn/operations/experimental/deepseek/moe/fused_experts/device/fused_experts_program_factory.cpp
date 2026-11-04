@@ -65,6 +65,23 @@ uint32_t swiglu_tiles_per_shard_for(uint32_t i_tiles, uint32_t num_weight_shards
 }
 
 uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
+
+// Everything the all-reduce epilogue adds to one chip's program; built per mesh coordinate by
+// MultiCoreAllReduce::create_workload_descriptor.
+struct AllReduceEpilogue {
+    uint32_t device_index;  // this chip's position on the ring (its scratch slot)
+    uint32_t ring_size;
+    uint32_t num_links;
+    tt::tt_metal::Buffer* scratch;  // [ring_size * 1, H/16] per output core, L1 / L1_SMALL
+    uint32_t out_ready_sem_addr;    // GlobalSemaphore on the output cores + senders
+    ttnn::MeshCoordinate coord;
+    std::optional<ttnn::MeshCoordinate> forward_coord;
+    std::optional<ttnn::MeshCoordinate> backward_coord;
+    uint32_t num_targets_forward;
+    uint32_t num_targets_backward;
+    std::vector<uint32_t> forward_mcast_args;  // get_forward_backward_line_mcast_configuration
+    std::vector<uint32_t> backward_mcast_args;
+};
 }  // namespace
 
 // The B (<= 32) token rows of a batch share a single tile row, so every tile count, matmul and NoC
@@ -116,10 +133,13 @@ uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 //     expert's slice by the tokens' routing weights for it (a per-token weight tile) and
 //     accumulates across all blocks, so the writer writes a single [1, B, H] DRAM output
 //     tile row (the weighted sum).
-ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
+namespace {
+ProgramDescriptor build_program_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const AllReduceEpilogue* all_reduce) {
+    (void)all_reduce;
     // Selection arrives in one of three forms (exactly one is set, see validation): the router's own
     // selected ids, an E-wide score row the leader kernel top-k's itself, or the router weight, which
     // the router cores run and the leader merges the candidates of. Only the {0,0} sender kernel turns
@@ -1797,6 +1817,14 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     }
 
     return desc;
+}
+}  // namespace
+
+ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    return build_program_descriptor(operation_attributes, tensor_args, tensor_return_value, nullptr);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
