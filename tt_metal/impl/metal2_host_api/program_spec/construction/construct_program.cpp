@@ -4,22 +4,8 @@
 
 #include "impl/metal2_host_api/program_spec/construction/construct_program.hpp"
 
-#include <algorithm>
-#include <bitset>
-#include <cstdint>
-#include <limits>
-#include <map>
 #include <memory>
-#include <numeric>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
-#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -55,7 +41,7 @@ Program BuildProgram(
     // Arch and the Emule check come from the mesh device's env, not the default context.
     MetalEnvImpl& metal_env = mesh_device.impl().metal_env();
     const Hal& hal = metal_env.get_hal();
-    auto program_impl = std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device));
+    auto program_impl = std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id());
     program_impl->mark_created_from_spec();  // mark as Metal 2.0 ProgramSpec-created (for legality checks)
 
     // Step 1: Processor assignment

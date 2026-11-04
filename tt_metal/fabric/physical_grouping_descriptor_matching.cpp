@@ -2879,44 +2879,52 @@ bool build_sat_placement_constraints(
         if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
             return false;
         }
-        // HARD host-count cap: force the placement into the minimum number of hosts. Chip disjointness
-        // (add_resource_constraint above) already caps a host at floor(host_chips / mesh_chips) meshes, so
-        // capping the number of occupied hosts at ceil(meshes / capacity) forces every used host to be
-        // packed full. Unlike per-host fill-all, this is a GLOBAL constraint the solver cannot dodge by
-        // spreading across more locally-"full" hosts. If the cap is infeasible at the current candidate
-        // seats, next() grows pools and only drops the cap after growth is exhausted.
-        std::size_t asics_per_mesh = 0;
-        for (const auto& [seat, asics] : seat_to_asics) {
-            (void)seat;
-            asics_per_mesh = std::max(asics_per_mesh, asics.size());
+        // HARD host-count cap = sum the single-host meshes' chip footprints / largest host, so small meshes pack
+        // toward the fewest hosts. A lower bound (ignores per-mesh fragmentation); an infeasible cap is retried then
+        // dropped. A mesh counts as single-host when ANY of its candidates fits on one host.
+        std::size_t total_single_host_asics = 0;
+        for (const auto& [mesh_id, pool] : pools) {
+            (void)mesh_id;
+            for (const Candidate& cand : pool->candidates()) {
+                std::string host;
+                bool single_host = true;
+                for (std::size_t i = 0; i < cand.asic_count(); ++i) {
+                    const auto asic_id = physical_system_descriptor.find_asic_id(cand.asic(i));
+                    const std::string name = asic_id.has_value()
+                                                 ? physical_system_descriptor.get_host_name_for_asic(*asic_id)
+                                                 : std::string{};
+                    if (host.empty()) {
+                        host = name;
+                    } else if (name != host) {
+                        single_host = false;
+                        break;
+                    }
+                }
+                if (single_host && !host.empty()) {
+                    total_single_host_asics += cand.asic_count();
+                    break;  // count each mesh once
+                }
+            }
         }
+        // Largest host's chip capacity, in one pass: the running max of per-host counts is the max total.
         std::map<std::string, std::size_t> host_asic_counts;
+        std::size_t max_host_asics = 0;
         for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
             (void)asic_id;
-            ++host_asic_counts[desc.host_name];
+            max_host_asics = std::max(max_host_asics, ++host_asic_counts[desc.host_name]);
         }
-        std::size_t max_host_asics = 0;
-        for (const auto& [host, count] : host_asic_counts) {
-            (void)host;
-            max_host_asics = std::max(max_host_asics, count);
-        }
-        const std::size_t capacity = (asics_per_mesh > 0) ? (max_host_asics / asics_per_mesh) : 0;
-        if (capacity > 0) {
-            const std::size_t k = (pools.size() + capacity - 1) / capacity;
-            // Only cap when it can actually reduce the host count. If the meshes need every available host
-            // anyway (k >= host groups -- e.g. a superpod that fully packs all its hosts), the cap constrains
-            // nothing but bolts an expensive at-most-k CNF onto an already-large solve, so the grow loop stalls.
-            // Skip it: the unconstrained solve already yields the only (all-hosts-full) packing.
+        if (max_host_asics > 0 && total_single_host_asics > 0) {
+            const std::size_t k = (total_single_host_asics + max_host_asics - 1) / max_host_asics;
+            // Only cap when it can reduce the host count; otherwise it adds an expensive at-most-k CNF for nothing.
             if (k < host_seat_groups.size()) {
                 constraints.set_max_same_rank_groups_used(k);
                 log_info(
                     tt::LogFabric,
-                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es), "
-                    "capacity {}/host); seats spanning hosts are unusable while the cap holds",
+                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es)); "
+                    "seats spanning hosts are unusable while the cap holds",
                     k,
                     host_seat_groups.size(),
-                    pools.size(),
-                    capacity);
+                    pools.size());
             }
         }
     }

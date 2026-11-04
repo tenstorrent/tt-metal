@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -11,6 +12,10 @@
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental {
+
+// Whether a dedicated-NOC data movement kernel may share its NOC with the other data movement kernel on
+// its nodes. See DataMovementHardwareConfig::DataMovement1XXConfig::dedicated_noc_sharing.
+enum class DedicatedNocSharing : uint8_t { EXCLUSIVE, SHARED_DISJOINT_TRAFFIC };
 
 // ============================================================================
 //  DataMovementHardwareConfig
@@ -47,7 +52,35 @@ struct DataMovementHardwareConfig {
         // need both DM cores to share a single NOC (e.g. to keep the other NOC
         // free for fabric/CCL traffic). Dynamic mode adds cross-core coordination
         // overhead and must be set identically on both DM kernels on a node.
+        // Two dedicated-NOC kernels whose traffic is disjoint can also share a NOC
+        // (dedicated_noc_sharing, below).
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+
+        // DM_DEDICATED_NOC only; ignored in DM_DYNAMIC_NOC mode. By default each dedicated-NOC kernel on a
+        // node needs a NOC of its own. When both DM kernels on a node set SHARED_DISJOINT_TRAFFIC, they may
+        // name the same noc, which keeps the other NOC free without dynamic mode's per-transaction overhead.
+        //
+        // CAUTION: The caller guarantees that no kind of NoC transaction (reads, writes, atomics) is issued
+        //          by both kernels, e.g. one only reads and the other only writes and issues atomics. A kind
+        //          issued by both can let a barrier return before its transactions complete. Posted and
+        //          non-posted writes, inline writes included, are one kind: in dedicated mode both kernels
+        //          issue them from the same command buffers, so one kernel's write can redirect the other's
+        //          stateful (set_state / with_state) writes. Only the command buffers are checked: under the
+        //          watcher's NoC sanitizer the kernels record the command buffers they program on the shared
+        //          NOC, and a command buffer used by both is reported as a watcher error. The
+        //          transaction-kind condition itself goes unchecked.
+        //
+        // The NOC's hardware transaction counters count both kernels' traffic, but noc_async_full_barrier
+        // and the end-of-kernel checks (built with watcher or lightweight kernel asserts) compare each RISC's
+        // own counts against them. So neither kernel calls a full barrier, and each re-syncs its counters
+        // (ncrisc_noc_counters_init) before it returns, once the other kernel has nothing in flight on the
+        // NOC. Two other sources of NoC traffic also count against the condition:
+        //   - The device profiler pushes a full buffer to DRAM mid-kernel as posted writes on the kernel's
+        //     NOC.
+        //   - On Blackhole, BRISC firmware sets up remote circular buffers with atomics on BRISC's NOC and
+        //     then waits for its own count of them, after it has started the NCRISC kernel. In a program
+        //     with remote circular buffers, the NCRISC kernel must not issue atomics on the shared NOC.
+        DedicatedNocSharing dedicated_noc_sharing = DedicatedNocSharing::EXCLUSIVE;
     };
     // NOTE: If this kernel is built for a 1st-gen (1xx) architecture, config_1xx
     //       cannot be default-constructed; processor and noc fields have no default.

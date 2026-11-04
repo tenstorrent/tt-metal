@@ -61,8 +61,8 @@ struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16
     Tensor v;        // [BH, NC, C, V] bf16  (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1] fp32 (column)
-    Tensor beta;     // [BH, NC, C, 1] fp32 (column)
+    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == BH)
+    Tensor beta;     // [B, T, HV] fp32 or bf16, as g
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
