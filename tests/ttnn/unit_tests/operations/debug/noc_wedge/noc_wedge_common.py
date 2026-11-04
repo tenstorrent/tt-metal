@@ -199,11 +199,12 @@ def run_launches(mesh, tensors, desc, launches, sync, tag, exit_on_hang=False):
     timeout (TT_METAL_OPERATION_TIMEOUT_SECONDS, set by scripts/run_safe_pytest.sh) raising out of a synchronize;
     `exit_on_hang` then leaves the process at once, without closing (touching) the hung mesh."""
     chips = mesh.get_num_devices()
-    ttnn.generic_op(tensors, desc)  # (compile + first launch)
-    ttnn.synchronize_device(mesh)
-    t0 = t_last = time.perf_counter()
-    done, synced = 1, 1
+    done, synced = 1, 0
     try:
+        ttnn.generic_op(tensors, desc)  # (compile + first launch)
+        ttnn.synchronize_device(mesh)
+        t0 = t_last = time.perf_counter()
+        synced = 1
         for i in range(launches - 1):
             ttnn.generic_op(tensors, desc)
             done = i + 2
