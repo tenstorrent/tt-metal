@@ -8,7 +8,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
-#include "context/context_types.hpp"
 #include "device/device_impl.hpp"
 #include "impl/context/context_descriptor.hpp"
 
@@ -46,7 +45,7 @@ void ProfilerInitializer::init(
                 continue;
             }
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
-            detail::InitDeviceProfiler(dev);
+            detail::InitDeviceProfiler(descriptor_->metal_context(), dev);
             log_info(tt::LogMetal, "Profiler started on device {}", dev->id());
             if (!skip_remote_devices_) {
                 for (const auto& tunnel : tunnels_from_mmio) {
@@ -57,7 +56,7 @@ void ProfilerInitializer::init(
                             return d->id() == mmio_controlled_device_id;
                         });
                         if (it != devices_.end()) {
-                            detail::InitDeviceProfiler(*it);
+                            detail::InitDeviceProfiler(descriptor_->metal_context(), *it);
                             log_info(tt::LogMetal, "Profiler started on remote device {}", (*it)->id());
                         }
                     }
