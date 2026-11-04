@@ -460,6 +460,25 @@ def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_p
         grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
 
 
+@pytest.mark.requires_device
+def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path):
+    """Rows past the tokenizer decode to nothing, so the logits mask covers them. Here every such row outscores
+    the real ones, so one left unmasked gets sampled."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128256 + 8, tie_word_embeddings=False)
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    num_tokens = len(tokenizer)
+    assert model.config.vocab_size > num_tokens, "premise: the checkpoint has rows past the tokenizer"
+
+    lm_head = np.zeros((model.padded_vocab_size, model.config.hidden_size), np.float32)
+    lm_head[num_tokens:] = np.random.default_rng(0).normal(0.0, 4.0, lm_head[num_tokens:].shape)
+    ttml.autograd.assign_numpy(model.fc.weight.tensor, lm_head)
+
+    batch = TTMLRolloutSampler(model, tokenizer, 8, 1.0, 1).generate([[1, 2, 3, 4]] * 4)
+
+    assert all(token < num_tokens for completion in batch.completions for token in completion), batch.completions
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
 def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_path):
     headers = []
     monkeypatch.setattr(ttml.checkpointing, "save_checkpoint", lambda path, header, **_: headers.append(header))

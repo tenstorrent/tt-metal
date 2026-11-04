@@ -13,6 +13,7 @@ import ttnn
 import ttml
 from ttml.common.utils import (
     build_causal_mask,
+    build_logits_mask,
     deallocate_tensors,
     no_grad,
     repeat_interleave,
@@ -361,6 +362,7 @@ class TTMLRolloutSampler(RolloutSampler):
         pending_hosts: List[Any] = []
         pending_event: Any = None
         done = np.zeros(B, dtype=bool)
+        logits_mask: Any = None
 
         try:
             with run_mode(self._model, RunMode.EVAL), no_grad():
@@ -375,9 +377,13 @@ class TTMLRolloutSampler(RolloutSampler):
                 # Qwen3's prefill uses the fused SDPA, which treats None as causal.
                 prefill_mask = build_causal_mask(prefill_width, device=True) if self._kind == "llama" else None
                 logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=cache_advance)
+                # Checkpoint rows past the tokenizer decode to nothing; keep the sampler off them.
+                num_tokens, width = len(self._tokenizer), logits.shape()[-1]
+                if self._kind == "llama" and num_tokens < width:
+                    logits_mask = build_logits_mask(num_tokens, width, logits.get_value().dtype)
 
                 prefill_seed = int(np.random.randint(low=1, high=int(1e7)))
-                sampled_full = ttml.ops.sample.sample_op(logits, temperature, prefill_seed, None, seed_axes)
+                sampled_full = ttml.ops.sample.sample_op(logits, temperature, prefill_seed, logits_mask, seed_axes)
                 nlog_full = nlog_probs(logits, sampled_full)
 
                 sampled_host = gather_to_host(sampled_full.get_value(), (B, prefill_width), torch.int32)
@@ -423,7 +429,7 @@ class TTMLRolloutSampler(RolloutSampler):
                     logits = self._forward(token_input, decode_mask, kv, new_tokens=1)
 
                     step_seed = int(np.random.randint(low=1, high=int(1e7)))
-                    sampled = ttml.ops.sample.sample_op(logits, temperature, step_seed, None, seed_axes)
+                    sampled = ttml.ops.sample.sample_op(logits, temperature, step_seed, logits_mask, seed_axes)
                     nlog_2d = nlog_probs(logits, sampled)
 
                     # The real predicted-next-token is at query row 0 for both
@@ -470,6 +476,7 @@ class TTMLRolloutSampler(RolloutSampler):
             if pending_event is not None:
                 ttnn.event_synchronize(mesh_event=pending_event)
             self._cache_release(kv)
+            deallocate_tensors([logits_mask])
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
         # -------- Assemble RolloutBatch on host --------
