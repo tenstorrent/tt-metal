@@ -22,16 +22,16 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_pad(nb::module_& mod) {
     const auto* doc = R"doc(
-        Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
-        Any rank of tensor is supported. For rank > 4, leading dimensions are padded via a reshape path before the 4D device kernel; tile layout still does not support front padding on device.
+        Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device. Padding on host needs ROW_MAJOR layout.
+        Any rank of tensor is supported. For rank > 4, leading dimensions are padded via a reshape path before the 4D device kernel; on host, a tensor of rank > 4 can be padded only in its last 3 dimensions.
 
         A second overload pads to an explicit shape instead: ``ttnn.pad(input_tensor, output_padded_shape, input_tensor_start, value)``,
-        where ``output_padded_shape`` is the 4D output shape and ``input_tensor_start`` is the 4D position of the input inside it.
+        where ``output_padded_shape`` is the 4D output shape and ``input_tensor_start`` is the 4D position of the input inside it. The input must have rank 4.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             padding (List[Tuple[int, int]]): padding to apply. Each element is a tuple of 2 integers: the number of values to add before and after the tensor in that dimension. A list shorter than the tensor's rank applies to the trailing dimensions.
-            value (float): value to pad with. Integer values are converted to float32, so ``INT32`` and ``UINT32`` values above 2^24 are not exact.
+            value (float): value to pad with. Integer values are converted to float32, so ``INT32`` and ``UINT32`` values with a magnitude above 2^24 may be rounded.
 
         Keyword Args:
             use_multicore (bool, optional): switch to use the multicore implementation. Defaults to `True`.
@@ -54,12 +54,12 @@ void bind_pad(nb::module_& mod) {
                * - BFLOAT8_B
                  - TILE
 
-            TILE layout does not support front padding: every "before" value must be 0. ``BFLOAT8_B`` input is padded
-            through a ``BFLOAT16`` typecast.
+            TILE layout does not support front padding: every "before" value must be 0. Depending on the execution
+            path, ``BFLOAT8_B`` input may be padded through a ``BFLOAT16`` typecast.
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED inputs are also accepted in DRAM
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; ROW_MAJOR HEIGHT_SHARDED and WIDTH_SHARDED inputs are also accepted in DRAM
             - ND sharded: L1
             - ``sub_core_grids`` requires interleaved input and output, and ``use_multicore=True``
     )doc";
