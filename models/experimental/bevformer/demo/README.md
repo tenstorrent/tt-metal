@@ -51,14 +51,15 @@ on Blackhole only.
 
 ## Recorded smoke results
 
-These runs were performed on a BH P100 with tt-metal commit
-`db2aaa185fd74cfc81676ce1fc829b6bcf894b68`, with the commands above:
+These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS |
-| --- | ---: | ---: | ---: |
-| tiny | 50 | 3 | 52.44 |
-| small | 150 | 3 | 13.93 |
-| base | 200 | 6 | 5.21 |
+| Variant | BEV size | Encoder layers | BH P100 Device FPS | BH P150 Device FPS |
+| --- | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 52.44 | 52.47 |
+| small | 150 | 3 | 13.93 | 14.15 |
+| base | 200 | 6 | 5.21 | 5.30 |
+
+*Commits: BH P100 — `db2aaa185fd74cfc81676ce1fc829b6bcf894b68`; BH P150 — `a96dcdcef8a3d77d1ea1b44f5be75f7e9442f53a`.*
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
 with random weights and validate end-to-end execution only; they are not statistically characterized
