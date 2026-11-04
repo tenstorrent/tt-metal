@@ -27,7 +27,7 @@ struct CombineFabric2dParams {
     uint32_t num_links = 2;
     // Pages one forwarding channel holds. Any depth is correct -- the channel split makes the movement
     // graph acyclic, see combine_fabric2d_assignments.hpp -- so this trades DRAM against throughput.
-    uint32_t fwd_vc_pages = 64;
+    uint32_t fwd_vc_pages;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Set only when combine runs overlapped inside the routed expert.
     uint32_t hybrid_token_threshold = 0;

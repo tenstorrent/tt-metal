@@ -325,8 +325,9 @@ struct HybridRoutedExpertFfnParams {
     uint32_t combine_num_links = 2;
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
-    // Pages one of combine's forwarding channels holds, the model's MOE_FWD_VC_PAGES.
-    uint32_t combine_fwd_vc_pages = 64;
+    // Pages one of combine's forwarding channels holds, the model's MOE_FWD_VC_PAGES. Set exactly when
+    // overlap_combine is.
+    std::optional<uint32_t> combine_fwd_vc_pages;
 
     // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
     // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it

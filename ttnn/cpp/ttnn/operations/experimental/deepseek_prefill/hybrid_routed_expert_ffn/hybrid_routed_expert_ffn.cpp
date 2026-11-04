@@ -60,7 +60,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<ttnn::Tensor>& forwarding_buffer,
     const std::vector<GlobalSemaphore>& channel_semaphores,
     const std::optional<ttnn::Tensor>& weight_address_table,
-    uint32_t combine_fwd_vc_pages) {
+    const std::optional<uint32_t>& combine_fwd_vc_pages) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -120,6 +120,13 @@ ttnn::Tensor hybrid_routed_expert_moe(
         "overlapped with combine, dispatched_buffer must be ROW_MAJOR (got {} {})",
         dispatched_buffer.dtype(),
         dispatched_buffer.layout());
+    // Combine's forwarding depth is the model's to choose; there is no depth that is right for every model.
+    TT_FATAL(
+        combine_fwd_vc_pages.has_value() == overlap_combine,
+        "combine_fwd_vc_pages is combine's and must be passed exactly when overlapping with combine "
+        "(dispatched_metadata {}, combine_fwd_vc_pages {})",
+        overlap_combine ? "passed" : "omitted",
+        combine_fwd_vc_pages.has_value() ? "passed" : "omitted");
     if (x_is_row_major) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
@@ -264,9 +271,9 @@ ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
+    uint32_t combine_fwd_vc_pages,
     uint32_t combine_axis,
-    uint32_t combine_num_links,
-    uint32_t combine_fwd_vc_pages) {
+    uint32_t combine_num_links) {
     // The same fields combine_attributes hands combine, so the spec matches what validate_overlap expects.
     const combine::CombineFabric2dParams params{
         .device = mesh_device,
