@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// calculate_unary_power_iterative over one tile, with the exponent either read from the runtime
-// parameter block (POWER_EXPONENT, opaque to the compiler: the rolled, runtime-exponent loop that moreh's
-// power_tile_to_cb reaches) or emitted as a compile-time constant (POWER_CONST_EXPONENT: the unrolled loop
-// that ttnn's power_iterative_tile(i, Nu) reaches). POWER_EXPONENT_IS_CONSTANT picks the source. Init and
-// call mirror power_iterative_tile_init() / power_iterative_tile().
+// calculate_unary_power_iterative over one tile; POWER_EXPONENT_IS_CONSTANT picks a compile-time exponent
+// (ttnn's power_iterative_tile(i, Nu)) or the runtime POWER_EXPONENT (moreh's power_tile_to_cb).
 
 #include <cstdint>
 
@@ -74,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     _llk_math_wait_for_dest_available_<dest_sync>();
 

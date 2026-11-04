@@ -1,26 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""calculate_unary_power_iterative (``power_iterative_tile``) on Wormhole, bit-exact.
-
-The kernel walks the exponent's bits once per pair of Dest rows. With a runtime exponent (moreh's
-``power_tile_to_cb`` passes one) the row loop stays rolled and the walk is a runtime branch sequence; with a
-compile-time exponent (ttnn's ``power_iterative_tile(i, Nu)``) the walk folds and the rows are unrolled.
-``test_sfpu_power_iterative_runtime_exponent`` reads the exponent from the runtime parameter block, so every
-exponent shares one ELF and reaches the runtime branch; ``test_sfpu_power_iterative_constant_exponent`` bakes
-it in.
-
-Every Dest row gets distinct random bases, so a row-pair addressing slip (a row skipped, written twice or
-taking its neighbour's value) changes the output. Bases are +-[0.5, 2), so x**31 stays within [2**-31, 2**31]:
-no overflow and no denormals, and the SFPU's fp32 multiplies match the host's IEEE ones. The golden repeats
-the kernel's multiply order (binary exponentiation of x**(e - 1) times x); a 16-bit Dest store truncates the
-fp32 result to bf16.
-"""
+"""calculate_unary_power_iterative (``power_iterative_tile``), runtime and compile-time exponents, bit-exact
+against a golden that repeats the kernel's multiply order."""
 
 from dataclasses import dataclass
 
 import torch
-from conftest import wormhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import ApproximationMode, DestAccumulation, format_dict
@@ -34,10 +20,6 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
-
-# The Wormhole kernel only: the Blackhole twin keeps the single-row walk, and the golden's truncating 16-bit
-# store is measured on Wormhole silicon only.
-pytestmark = wormhole_only
 
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
@@ -78,6 +60,7 @@ class POWER_CONST_EXPONENT(TemplateParameter):
         )
 
 
+# Distinct per-row bases in +-[0.5, 2): x**31 stays normal, so SFPU and host fp32 multiplies agree.
 def _bases(torch_format: torch.dtype) -> torch.Tensor:
     generator = torch.Generator().manual_seed(62801)
     magnitude = 0.5 + 1.5 * torch.rand(ELEMENTS_PER_TILE, generator=generator)
@@ -141,6 +124,7 @@ def _run(data_format, exponent, const_exponent):
     )
 
     golden = _golden(src_A, exponent).view(torch.int32)
+    # A 16-bit Dest store truncates the fp32 result to bf16.
     if not data_format.is_32_bit():
         golden = golden & BF16_HIGH_HALF_MASK
 
