@@ -1,0 +1,8 @@
+{
+    "arch": "blackhole",
+    "group": 3,
+    "groups": 4,
+    "nodes": [
+        "perf_fast_untilize.py::test_perf_fast_untilize"
+    ]
+}

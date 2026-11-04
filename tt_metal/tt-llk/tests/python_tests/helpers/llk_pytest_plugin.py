@@ -424,6 +424,8 @@ def pytest_addoption(parser):
 
 
 _RECORD_TEST_ORDER: bool = False
+# A perf leg lists what it must run (plan.json) and what it ran (ran.txt); gate.py complete compares them.
+_RECORD_RAN: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
@@ -508,6 +510,13 @@ def pytest_configure(config):
 
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
+
+    global _RECORD_RAN
+    _RECORD_RAN = (
+        config.getoption("--perf-group", default=None) is not None
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+        and not _IS_XDIST_WORKER
+    )
 
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
@@ -855,8 +864,30 @@ def pytest_collection_modifyitems(config, items):
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(config, items)
+    _write_plan(config, items)
 
     return result
+
+
+def _write_plan(config, items):
+    """The node ids this perf leg must run, for gate.py complete. One xdist worker writes it."""
+    group = config.getoption("--perf-group")
+    if (
+        group is None
+        or TestConfig.BUILD_MODE == BuildMode.PRODUCE
+        or config.option.collectonly
+        or os.environ.get("PYTEST_XDIST_WORKER", "gw0") != "gw0"
+    ):
+        return
+    run_dir = TestConfig.perf_run_dir()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    plan = {
+        "arch": TestConfig.CHIP_ARCH.value,
+        "group": group,
+        "groups": config.getoption("--perf-splits"),
+        "nodes": [item.nodeid for item in items],
+    }
+    (run_dir / "plan.json").write_text(json.dumps(plan, indent=0) + "\n")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -892,6 +923,11 @@ def _stringify_params(params):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
+    if _RECORD_RAN and (report.skipped or (report.passed and report.when == "call")):
+        run_dir = TestConfig.perf_run_dir()
+        run_dir.mkdir(parents=True, exist_ok=True)
+        with open(run_dir / "ran.txt", "a") as fh:
+            fh.write(report.nodeid + "\n")
     # pytest-forked appends a crashed child's captured streams to report.sections
     # using lowercase headers ("captured stdout"/"captured stderr"), but pytest's
     # TestReport.capstdout/capstderr properties only match headers that start with

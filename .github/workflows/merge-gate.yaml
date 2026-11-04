@@ -686,7 +686,6 @@ jobs:
       # No wait, so the queue never waits for the warehouse: a missing baseline
       # falls back to the newest older one in the base's history, marked stale.
       baseline_wait_minutes: "0"
-      measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
       # gate_policy.yaml decides whether a regression blocks. A measurement that did not complete,

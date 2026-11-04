@@ -207,11 +207,23 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
+    # In the baseline, not in the current run: a test that stopped running, or a removed one.
+    missing = [
+        {
+            "marker": k[0],
+            "run_type": _run_type_of(c),
+            "config": k[1],
+            MODULE_COL: dict(k[1]).get(MODULE_COL, ""),
+        }
+        for k, c in base
+        if (k, c) not in cur
+    ]
     return {
         "records": records,
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "missing_points": missing,
         "noise_filtered": noise_filtered,
     }
 

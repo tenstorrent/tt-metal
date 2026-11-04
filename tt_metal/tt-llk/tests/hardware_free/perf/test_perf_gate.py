@@ -16,6 +16,17 @@ import gate  # noqa: E402
 ARCHES = ("blackhole", "wormhole")
 
 
+def _plan(directory, arch="blackhole", group=1, groups=1, ran=None):
+    """The plan.json and ran.txt a measuring leg leaves."""
+    directory.mkdir(parents=True, exist_ok=True)
+    nodes = ["perf_x.py::test_x[a]", "perf_x.py::test_x[b c]"]
+    plan = {"arch": arch, "group": group, "groups": groups, "nodes": nodes}
+    (directory / "plan.json").write_text(json.dumps(plan))
+    (directory / "ran.txt").write_text(
+        "".join(f"{n}\n" for n in (nodes if ran is None else ran))
+    )
+
+
 def _csv(path, cycles, sol="False", run_type="L1_TO_L1"):
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = ["marker,math_fidelity,speed_of_light,mean(%s)" % run_type]
@@ -32,6 +43,7 @@ def _run(
     **kw,
 ):
     """One compare in tmp_path; returns the verdict it wrote."""
+    _plan(tmp_path / "cur", arch=arch)
     if current is not None:
         _csv(tmp_path / "cur" / "perf_x.csv", current, sol=kw.pop("sol", "False"))
     if baseline is not None:
@@ -46,16 +58,16 @@ def _run(
         "--arch",
         arch,
         "--current",
-        str(tmp_path / "cur/**/*.csv"),
+        str(tmp_path / "cur"),
         "--baseline",
-        str(tmp_path / "base/**/*.csv"),
+        str(tmp_path / "base"),
         "--baseline-meta",
         str(meta),
         "--out-dir",
         str(tmp_path),
-        "--incomplete",
-        kw.pop("incomplete", ""),
     ]
+    if kw.pop("incomplete", False):
+        (tmp_path / "cur" / "ran.txt").write_text("perf_x.py::test_x[a]\n")
     assert gate.main(argv) == 0
     return json.loads((tmp_path / f"verdict-{arch}.json").read_text())
 
@@ -102,7 +114,7 @@ def test_the_module_threshold_of_the_policy_applies(tmp_path):
 @pytest.mark.parametrize(
     "kw, status",
     [
-        ({"incomplete": "A blackhole leg was cancelled."}, "incomplete"),
+        ({"incomplete": True}, "incomplete"),
         ({"baseline": None}, "no-baseline"),
         ({"meta": False}, "no-compare"),
         ({"current": None}, "no-compare"),
@@ -162,8 +174,8 @@ REPLAY = pathlib.Path(__file__).parent / "replay_merge_blackhole"
 def _replay(tmp_path, *extra, current=None):
     """Merge gate run 41816768387, Blackhole, cut to six modules over its four legs."""
     argv = ["compare", "--gate", "merge", "--arch", "blackhole"]
-    argv += ["--current", f"{current or REPLAY / 'current'}/**/*.csv"]
-    argv += ["--baseline", f"{REPLAY}/baseline/*.csv"]
+    argv += ["--current", str(current or REPLAY / "current")]
+    argv += ["--baseline", str(REPLAY / "baseline")]
     argv += ["--baseline-meta", str(REPLAY / "baseline_metadata.json")]
     argv += ["--stage2", f"{REPLAY}/stage2/**/stage2.json", "--out-dir", str(tmp_path)]
     assert gate.main(argv + list(extra)) == 0
@@ -174,7 +186,13 @@ def test_replay_of_a_real_merge_gate_run_passes(tmp_path):
     """The gate of that run passed; the old regression_compare.py gives the same 348 points."""
     v = _replay(tmp_path)
     assert v["status"] == "pass" and not v["fails"]
-    assert v["counts"] == {"points": 348, "regressions": 0, "improvements": 0, "new": 0}
+    assert v["counts"] == {
+        "points": 348,
+        "regressions": 0,
+        "improvements": 0,
+        "new": 0,
+        "missing": 0,
+    }
     assert v["baseline"]["commit_sha"].startswith("9406a58a8a9")
     assert v["stage2"] == {"legs": 4, "notes": [], "outcomes": {}}
 
@@ -204,9 +222,9 @@ def test_replay_without_a_baseline_fails(tmp_path):
     argv = ["compare", "--gate", "merge", "--arch", "blackhole"]
     argv += [
         "--current",
-        f"{REPLAY / 'current'}/**/*.csv",
+        str(REPLAY / "current"),
         "--baseline",
-        f"{tmp_path}/none/*.csv",
+        str(tmp_path / "none"),
     ]
     argv += [
         "--baseline-meta",
@@ -242,3 +260,77 @@ def test_replay_with_a_leg_that_left_no_stage2_says_so(tmp_path):
     shutil.rmtree(next(stage2.iterdir()))
     v = _replay(tmp_path, "--stage2", f"{stage2}/**/stage2.json")
     assert v["stage2"]["notes"] == ["3 of 4 leg(s) left a stage-2 result."]
+
+
+def _replay_copy(tmp_path, part):
+    import shutil
+
+    copy = tmp_path / part
+    shutil.copytree(REPLAY / part, copy)
+    return copy
+
+
+def test_replay_with_one_leg_missing_is_incomplete(tmp_path):
+    import shutil
+
+    current = _replay_copy(tmp_path, "current")
+    shutil.rmtree(current / "41816768387-blackhole-5")
+    v = _replay(tmp_path, current=current)
+    assert v["status"] == "incomplete" and v["fails"]
+    assert "leg 3/4 left no data" in v["reason"]
+
+
+def test_replay_with_a_leg_cut_short_is_incomplete(tmp_path):
+    current = _replay_copy(tmp_path, "current")
+    ran = current / "41816768387-blackhole-6" / "ran.txt"
+    ran.write_text(ran.read_text().splitlines()[0] + "\n")
+    v = _replay(tmp_path, current=current)
+    assert v["status"] == "incomplete"
+    assert (
+        "leg 4/4 ran 1 of 2 tests (first not run: perf_sfpu_ema.py::test_perf_sfpu_ema)"
+        in v["reason"]
+    )
+
+
+def test_replay_with_a_short_baseline_fails(tmp_path):
+    """2 Nov: a partial upload left a third of a run in the warehouse, and it read as a baseline."""
+    import pandas as pd
+
+    base = tmp_path / "baseline"
+    base.mkdir()
+    frame = pd.read_csv(REPLAY / "baseline" / "baseline.csv", low_memory=False)
+    frame[frame.test_module.isin(["perf_bcast", "perf_fast_untilize"])].to_csv(
+        base / "b.csv", index=False
+    )
+    argv = [
+        "compare",
+        "--gate",
+        "merge",
+        "--arch",
+        "blackhole",
+        "--current",
+        str(REPLAY / "current"),
+    ]
+    argv += [
+        "--baseline",
+        str(base),
+        "--baseline-meta",
+        str(REPLAY / "baseline_metadata.json"),
+    ]
+    gate.main(argv + ["--out-dir", str(tmp_path)])
+    v = json.loads((tmp_path / "verdict-blackhole.json").read_text())
+    assert v["status"] == "no-compare" and v["fails"]
+    assert v["reason"].startswith("The baseline holds 2 of the 6 test modules")
+
+
+def test_replay_names_the_points_that_stopped_running(tmp_path):
+    current = _replay_copy(tmp_path, "current")
+    (
+        current / "41816768387-blackhole-6" / "perf_sfpu_ema" / "perf_sfpu_ema.csv"
+    ).unlink()
+    v = _replay(tmp_path, current=current)
+    assert v["counts"]["missing"] > 0
+    assert (
+        "were not measured now, in perf_sfpu_ema"
+        in (tmp_path / "perf_gate_report.md").read_text()
+    )

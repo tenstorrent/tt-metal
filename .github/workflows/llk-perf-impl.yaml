@@ -410,7 +410,6 @@ jobs:
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
-          mkdir -p perf_data/runs && touch perf_data/runs/leg-complete
 
       # One retry: a reset on FinalizeArtifact must not cost the architecture its verdict.
       - name: Upload performance data
@@ -551,18 +550,11 @@ jobs:
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
       - name: Drop an architecture with an incomplete leg
-        env:
-          MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
         run: |
           for f in "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet; do
             arch=$(basename "$f" .parquet); arch=${arch##*-}
-            case "$arch" in wormhole) label=N150 ;; blackhole) label=P150 ;; *) label=none ;; esac
-            want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
-            got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
-            if (( want == 0 || got < want )); then
-              echo "::warning::$arch: $got of $want legs completed; not published."
-              rm "$f"
-            fi
+            python3 ${{ env.LLK_PATH }}/perf/gate.py complete --dir "$GITHUB_WORKSPACE/perf-data" --arch "$arch" \
+              || { echo "::warning::$arch is not published."; rm "$f"; }
           done
           ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet || { echo "::error::No complete architecture to publish."; exit 1; }
       # The LLK test image has the python env but no ssh client, and the

@@ -156,8 +156,6 @@ jobs:
     with:
       gate: ${{ inputs.gate || 'pr' }}
       arch: ${{ matrix.arch }}
-      measure_result: >-
-        ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
       current_artifact_pattern: >-
         ${{ github.event_name == 'pull_request'
             && format('perf-data-{0}-*-head', matrix.arch) || '' }}
@@ -441,5 +439,4 @@ jobs:
       gate: nightly
       arch: ${{ matrix.arch }}
       perf_run_id: ${{ inputs.perf_run_id || '' }}
-      measure_result: ${{ needs.nightly-measure.result }}
     secrets: inherit
