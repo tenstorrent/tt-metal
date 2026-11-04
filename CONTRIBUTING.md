@@ -182,6 +182,12 @@ For changes to the Metalium host API, follow the
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
+- Once you are ready for review, batch your changes locally and push as a
+  single, complete commit rather than pushing after every edit. Pushing to
+  the same PR more than once within a 5-minute window is treated as spam: it
+  burns PR Gate runner capacity for no review benefit, and is grounds for the
+  PR being closed and a cooldown before you may open another one. This
+  applies to AI coding agents as well as humans.
 
 ### New feature and design specifications
 
