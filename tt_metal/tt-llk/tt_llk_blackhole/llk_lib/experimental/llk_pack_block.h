@@ -103,7 +103,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             0);
 
         // Enter recording mode: capture next replay_len instructions
-        lltt::record<lltt::NoExec>(0, replay_len);
+        ckernel::record_replay<lltt::NoExec>(0, replay_len);
 
         // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
         for (std::uint32_t face = 0; face < num_faces; face++)

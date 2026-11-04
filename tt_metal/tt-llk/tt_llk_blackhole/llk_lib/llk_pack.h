@@ -858,6 +858,11 @@ template <bool zero_output = false>
 inline void _llk_pack_block_fast_init_()
 {
     TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    // The default pack init does not touch the replay buffer: a re-init before every block records the tile once, until another recording clears the flag.
+    if (pack_fast_replay_valid)
+    {
+        return;
+    }
     load_replay_buf(
         0,
         17,
@@ -876,6 +881,7 @@ inline void _llk_pack_block_fast_init_()
             pack_block_fast_pacr_<zero_output, ADDR_MOD_1, 1>();
             TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
         });
+    pack_fast_replay_valid = true;
 }
 
 /**

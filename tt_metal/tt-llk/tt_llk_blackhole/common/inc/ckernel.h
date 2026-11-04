@@ -676,6 +676,19 @@ enum ExecBool : bool
     Exec
 };
 
+// The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ recorded for as long as no other code on this thread records into it: every
+// recording on the pack thread goes through this function, ckernel::record_replay or one of the raw TTI_REPLAY sites, which clear the flag.
+// Internal linkage: a thread whose code never reads the flag drops the stores.
+[[maybe_unused]] static bool pack_fast_replay_valid = false;
+#define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false)
+
+template <lltt::ExecBool Exec>
+[[gnu::always_inline]] inline void record_replay(std::uint32_t start, std::uint32_t len)
+{
+    LLK_PACK_REPLAY_WRITTEN();
+    lltt::record<Exec>(start, len);
+}
+
 template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 [[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)
 {
@@ -686,6 +699,7 @@ template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 #endif
 
     // Issue instruction to load replay buffer
+    LLK_PACK_REPLAY_WRITTEN();
     lltt::record<lltt::ExecBool(Exec)>(start, len);
 
     // Send in the user's desired instructions
