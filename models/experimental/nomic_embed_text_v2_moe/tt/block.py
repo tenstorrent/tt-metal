@@ -26,6 +26,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     LayerNormParameters,
     activation_memory_config,
     layer_norm,
+    nd_norm_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
@@ -97,6 +98,7 @@ class TtNomicBertBlock(LightweightModule):
             # The sub-block output has no other reader.
             consume_input=True,
             in_place=in_place,
+            nd_layout=nd_norm_layout(x.shape, self.tt_config),
         )
 
     def forward(

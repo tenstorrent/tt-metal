@@ -408,6 +408,9 @@ class LayerNormParameters:
         self.tiled = tuple(to_device(tensor, device, dtype=dtype) for tensor in (weight, bias))
         corrected = round_to_tf32(weight.float() * sharded_norm_statistics_scale(weight.numel()) ** 0.5)
         self.sharded = (to_device(corrected, device, dtype=ttnn.float32), self.tiled[1])
+        # The generated norm (nd_norm_layout) computes exact statistics, so it reads the plain gamma, float32 at the
+        # mantissa the FPU reads, and the tiled bias.
+        self.plain = (to_device(round_to_tf32(weight.float()), device, dtype=ttnn.float32), self.tiled[1])
         self.row_major = tuple(
             to_device(
                 tensor.reshape(1, 1, -1, ttnn.TILE_SIZE),
@@ -470,6 +473,90 @@ def sharded_norm_layout(
     return sharded_norm_configs(*split, width_tiles)[0], *split, SHARDED_NORM_COLUMNS
 
 
+# The generated layer norm (ttnn/ttnn/operations/nomic_residual_layer_norm) covers 32 to 128 tile rows of M on the
+# 11x10 grid, in its own ND-sharded layout: 2 or 3 cores a row group, 1 to 4 tile rows a core, picked per shape.
+# Every op on the residual stream then reads and writes that layout (tt.attention, tt.mlp, tt.moe), and a
+# forward either runs entirely on it or not at all.
+ND_NORM_MIN_TILES, ND_NORM_MAX_TILES = 32, 128
+
+
+class _GridOnly:
+    """What the generated ops' layout functions read of a device: its compute grid."""
+
+    def __init__(self, x: int, y: int):
+        self._grid = ttnn.CoreCoord(x, y)
+
+    def compute_with_storage_grid_size(self) -> ttnn.CoreCoord:
+        return self._grid
+
+
+@cache
+def _nd_norm_layout(shape: tuple[int, ...], grid_x: int, grid_y: int) -> ttnn.MemoryConfig | None:
+    from ttnn.operations._op_contract import SupportRefusal
+    from ttnn.operations.nomic_residual_layer_norm import input_memory_config
+
+    try:
+        return input_memory_config(shape, _GridOnly(grid_x, grid_y))
+    except SupportRefusal:
+        return None
+
+
+def nd_norm_layout(shape: ttnn.Shape | tuple[int, ...], tt_config) -> ttnn.MemoryConfig | None:
+    """The generated norm's ND-sharded layout for an activation of `shape`, (B, 1, S, H), or None where the
+    residual stream keeps the split layout: tt_config.nd_residual off, M outside 32 to 128 tile rows, or a batch of
+    sequences off the tile grid, whose MoE flatten would copy an ND tensor (tt.moe)."""
+    if not tt_config.nd_residual:
+        return None
+    batch, seqlen = shape[0], shape[-2]
+    if not ND_NORM_MIN_TILES <= m_tiles(shape) <= ND_NORM_MAX_TILES or (batch > 1 and seqlen % ttnn.TILE_SIZE):
+        return None
+    grid = tt_config.core_grid
+    return _nd_norm_layout((shape[0], shape[1], shape[2], shape[3]), grid.x, grid.y)
+
+
+def _nd_layer_norm(
+    x: ttnn.Tensor,
+    parameters: LayerNormParameters,
+    nd_layout: ttnn.MemoryConfig,
+    *,
+    epsilon: float,
+    memory_config: ttnn.MemoryConfig,
+    residual: ttnn.Tensor | None,
+    keep_sharded: bool,
+    consume_input: bool,
+    in_place: bool,
+) -> ttnn.Tensor | tuple[ttnn.Tensor, None]:
+    """layer_norm on the generated norm, x and the residual in (or converted to) nd_layout, the output in nd_layout
+    unless memory_config is DRAM, where it is copied (the encoder's last output). keep_sharded returns (out, None):
+    the output is already every reader's layout."""
+    from ttnn.operations.nomic_residual_layer_norm import nomic_residual_layer_norm
+
+    x_nd = x if x.memory_config() == nd_layout else ttnn.to_memory_config(x, nd_layout)
+    converted = x_nd is not x
+    residual_nd = residual
+    if residual is not None and residual.memory_config() != nd_layout:
+        residual_nd = ttnn.to_memory_config(residual, nd_layout)
+    gamma, beta = parameters.plain
+    # In place on a converted x, or on a consumed one unless in_place is False: the output takes x's slot, which
+    # decides the L1 plans after it (tt/block.py).
+    overwrite = converted or (consume_input and in_place)
+    out = nomic_residual_layer_norm(
+        x_nd, gamma, beta, residual=residual_nd, epsilon=epsilon, output_tensor=x_nd if overwrite else None
+    )
+    if consume_input:
+        if converted:
+            ttnn.deallocate(x)
+        elif not overwrite:
+            ttnn.deallocate(x_nd)
+    if residual_nd is not residual:
+        ttnn.deallocate(residual_nd)
+    if memory_config.buffer_type == ttnn.BufferType.DRAM:
+        moved = ttnn.to_memory_config(out, memory_config)
+        ttnn.deallocate(out)
+        out = moved
+    return (out, None) if keep_sharded else out
+
+
 def layer_norm(
     x: ttnn.Tensor,
     parameters: LayerNormParameters,
@@ -481,8 +568,12 @@ def layer_norm(
     keep_sharded: bool = False,
     consume_input: bool = False,
     in_place: bool = True,
+    nd_layout: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
     """layer_norm(x + residual) over the last axis of x, (B, 1, S, W), written where memory_config says.
+
+    With nd_layout (nd_norm_layout's, for x's shape) it runs on the generated norm in that layout instead
+    (_nd_layer_norm), and the rest of this docstring is the split layout's.
 
     Up to SHARDED_NORM_DIRECT_MAX_TILES tile rows of M it runs block-sharded with the corrected gamma,
     converting x and the residual to that layout and the output back. An x or residual already in it,
@@ -499,6 +590,18 @@ def layer_norm(
         The output; with keep_sharded=True, (output, its block-sharded form, or None where there is
         none or the output is already in that layout).
     """
+    if nd_layout is not None:
+        return _nd_layer_norm(
+            x,
+            parameters,
+            nd_layout,
+            epsilon=epsilon,
+            memory_config=memory_config,
+            residual=residual,
+            keep_sharded=keep_sharded,
+            consume_input=consume_input,
+            in_place=in_place,
+        )
     width_tiles = x.shape[-1] // ttnn.TILE_SIZE
     rows = m_tiles(x.shape)
     split = sharded_norm_split(rows, width_tiles, x.device().compute_with_storage_grid_size())

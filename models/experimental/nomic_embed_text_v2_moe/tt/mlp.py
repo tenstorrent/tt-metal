@@ -9,6 +9,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    nd_norm_layout,
     sharded_norm_layout,
     to_device,
     transpose_linear_weight,
@@ -89,13 +90,23 @@ class TtNomicBertMLP(LightweightModule):
             activated = dense_linear(
                 x, self.fc1_weight, self.fc1_bias, OpGroup.FC1, self.tt_config, gelu=self.tt_config.dense_gelu
             )
-        # Above SMALL_M_TILES fc2 (pirotski_matmul) writes norm2's split layout, bit for bit its interleaved output;
-        # at or below it the small-M norm-layout program would change fc2's accumulation order, so the norm converts.
+        # Above SMALL_M_TILES fc2 (pirotski_matmul) writes norm2's layout, bit for bit its interleaved output: the
+        # generated norm's ND layout where the forward runs on it (nd_norm_layout), the split layout otherwise. At or
+        # below SMALL_M_TILES the small-M norm-layout program would change fc2's accumulation order, so the norm
+        # converts.
+        nd_layout = nd_norm_layout(x.shape, self.tt_config)
         norm_layout = None
-        if m_tiles > SMALL_M_TILES:
+        if m_tiles > SMALL_M_TILES and nd_layout is None:
             norm_layout = sharded_norm_layout(x.shape, self.tt_config.core_grid)
         out = dense_linear(
-            activated, self.fc2_weight, self.fc2_bias, OpGroup.FC2, self.tt_config, live=(x,), norm_layout=norm_layout
+            activated,
+            self.fc2_weight,
+            self.fc2_bias,
+            OpGroup.FC2,
+            self.tt_config,
+            live=(x,),
+            norm_layout=norm_layout,
+            nd_layout=nd_layout,
         )
         ttnn.deallocate(activated)
         return out

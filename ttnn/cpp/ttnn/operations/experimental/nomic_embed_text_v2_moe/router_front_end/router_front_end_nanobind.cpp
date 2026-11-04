@@ -30,8 +30,9 @@ void bind_router_front_end(nb::module_& mod) {
         and multicasts it to the others. Nothing is read back to the host, so the call is trace-safe.
 
         Args:
-            input (ttnn.Tensor): (1, 1, tokens, hidden) BFLOAT16, TILE, interleaved or sharded, DRAM or
-                L1: the reader addresses tiles by page id. hidden is whole tiles.
+            input (ttnn.Tensor): (1, 1, tokens, hidden), or (batch, 1, seqlen, hidden) with seqlen a multiple
+                of 32 (tokens = batch * seqlen, page for page the same), BFLOAT16, TILE, interleaved or
+                sharded (ND included), DRAM or L1: the reader addresses tiles by page id. hidden is whole tiles.
             weight (ttnn.Tensor): (hidden, experts) FLOAT32, TILE, interleaved, leading dimensions 1;
                 experts is 1 to 32.
 

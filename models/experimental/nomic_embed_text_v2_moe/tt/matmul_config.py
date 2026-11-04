@@ -594,6 +594,13 @@ def l1_bank_bytes(tiles: int, tt_config, dtype: ttnn.DataType | None = None) -> 
     return ttnn.core.divup(tiles, tt_config.l1_banks) * ttnn.tile_size(dtype or tt_config.activation_dtype)
 
 
+def nd_layout_bank_bytes(memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType) -> int:
+    """Bytes one core's shard of an ND-sharded tensor takes (tt.common.nd_norm_layout): what a producer writing it
+    plans its buffers around, sharded tensors taking the same address range on every core of their grid."""
+    shard = memory_config.nd_shard_spec.shard_shape
+    return (shard[-2] // ttnn.TILE_SIZE) * (shard[-1] // ttnn.TILE_SIZE) * ttnn.tile_size(dtype)
+
+
 # grouped_matmul_w1 reads a dense weight as a chunked weight in runs of this many bfloat16 tiles (30 KB): 15 was
 # faster than 30 for fc1 at 2x512 (30.3 against 32.0 us) and even at 8x512.
 GROUPED_CHUNK_TILES = 15
@@ -665,6 +672,7 @@ def dense_linear(
     live: Sequence[ttnn.Tensor] = (),
     norm_layout: tuple[ttnn.MemoryConfig, int, int, int] | None = None,
     grouped: ttnn.Tensor | None = None,
+    nd_layout: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """gelu(x @ weight + bias) for a (B, 1, S, K) activation, or the bare projection if gelu is None.
 
@@ -688,6 +696,11 @@ def dense_linear(
     the bare projection (tt.common.sharded_norm_layout), has the output written in that layout: from
     _NORM_LAYOUT_MIN_ROWS tile rows a core up to SMALL_M_TILES, and above it wherever it fits L1. minimal_matmul
     writes it at no cost, 47.7 against 48.0 us for out_proj and 107.5 against 107.8 for fc2 at 128 tile rows.
+
+    nd_layout, the generated norm's ND-sharded layout (tt.common.nd_norm_layout), has a bare projection above
+    SMALL_M_TILES written in that layout first, wherever it fits L1: pirotski_matmul and minimal_matmul write it
+    tile by tile through TensorAccessor (pirotski's direct pack needs the split layout), about 0.35 us more a call
+    for out_proj and 0.7 for fc2 at 128 tile rows than direct-packed (docs/PIROTSKI_MATMUL.md section 3.4).
     """
     # Indexed: unpacking a ttnn.Shape iterates it, 1.06 us of host time against 0.09 for four
     # index reads, and the model reads one about 110 times a forward.
@@ -748,6 +761,8 @@ def dense_linear(
     dtypes = (x.dtype, weight.dtype, output_dtype)
     # (memory config, bytes a core, the norm layout's shards) of each placement, in order of preference.
     placements = []
+    if nd_layout is not None and gelu is None:
+        placements.append((nd_layout, nd_layout_bank_bytes(nd_layout, output_dtype), None))
     if norm_layout is not None and gelu is None:
         layout, core_columns, block_h, core_rows = norm_layout
         bank = block_h * (n_tiles // core_rows) * ttnn.tile_size(output_dtype)

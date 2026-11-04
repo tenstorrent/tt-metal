@@ -84,6 +84,12 @@ RoutedCombineLayout RoutedCombineDeviceOperation::compute_layout(
         "routed_combine: num_tokens {} does not match combine_index's {} padded tokens",
         attributes.num_tokens,
         padded_tokens);
+    TT_FATAL(
+        attributes.batch >= 1 && attributes.num_tokens % attributes.batch == 0 &&
+            (attributes.batch == 1 || (attributes.num_tokens / attributes.batch) % kTileSize == 0),
+        "routed_combine: batch {} must split num_tokens {} into sequences of whole tiles",
+        attributes.batch,
+        attributes.num_tokens);
     if (combine) {
         // routing_metadata gives every slot a row, so fewer rows cannot be its layout. The index values
         // themselves stay on the device. A gather has no such bound: it reads fewer rows than it writes.
@@ -156,7 +162,7 @@ RoutedCombineDeviceOperation::spec_return_value_t RoutedCombineDeviceOperation::
     compute_layout(attributes, tensor_args);
     const uint32_t hidden = tensor_args.expert_rows.logical_shape()[3];
     return tt::tt_metal::TensorSpec(
-        ttnn::Shape({1, 1, attributes.num_tokens, hidden}),
+        ttnn::Shape({attributes.batch, 1, attributes.num_tokens / attributes.batch, hidden}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attributes.memory_config));
 }
 
@@ -176,11 +182,15 @@ Tensor routed_combine(
     const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t batch) {
     using Operation = ttnn::experimental::nomic_embed_text_v2_moe::RoutedCombineDeviceOperation;
     return ttnn::device_operation::launch<Operation>(
         Operation::operation_attributes_t{
-            .num_tokens = num_tokens, .memory_config = memory_config, .compute_kernel_config = compute_kernel_config},
+            .num_tokens = num_tokens,
+            .batch = batch,
+            .memory_config = memory_config,
+            .compute_kernel_config = compute_kernel_config},
         Operation::tensor_args_t{
             .expert_rows = expert_rows,
             .combine_index = combine_index,

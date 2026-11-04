@@ -30,6 +30,9 @@ struct RoutedCombineLayout {
 struct RoutedCombineDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_tokens = 0;
+        // The output is batch x 1 x (num_tokens / batch) x hidden: the flat token axis page for page when each
+        // sequence is whole tiles.
+        uint32_t batch = 1;
         tt::tt_metal::MemoryConfig memory_config;
         DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -69,6 +72,7 @@ Tensor routed_combine(
     const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t batch = 1);
 
 }  // namespace ttnn::prim

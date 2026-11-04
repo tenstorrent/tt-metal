@@ -257,7 +257,7 @@ class TtNomicExperts(LightweightModule):
     def dispatch_table_config(self, x: ttnn.Tensor, live: Sequence[ttnn.Tensor] = ()) -> ttnn.MemoryConfig:
         """Where dispatch_table puts x's rows. They live through all the layer's passes, so they take L1
         only when the layer is one pass."""
-        tokens, hidden = x.shape[-2], x.shape[-1]
+        tokens, hidden = x.shape[0] * x.shape[-2], x.shape[-1]
         if len(self._windows(tokens)) > 1:
             return ttnn.DRAM_MEMORY_CONFIG
         return self.routed_memory_config(tokens, hidden * BFLOAT16_BYTES, (*live, x), _GATHER_CB_BYTES)
@@ -441,8 +441,11 @@ class TtNomicExperts(LightweightModule):
         combine_weights: ttnn.Tensor,
         tokens: int,
         memory_config: ttnn.MemoryConfig | None = None,
+        batch: int = 1,
     ) -> ttnn.Tensor:
         """grouped_w2's (1, 1, R, H) rows -> (1, 1, t, H): each token's top-k rows weighted and summed, plus the bias.
+
+        batch > 1 writes (batch, 1, t / batch, H), page for page the same (each sequence whole tiles).
 
         A padding token reads row 0, always a real slot's row, at weight 0, so the tile padding of
         the result holds the bias: it stays finite into the next attention, which non-finite padded
@@ -457,6 +460,7 @@ class TtNomicExperts(LightweightModule):
             # The module's output, placed as the blocks place their activations unless the caller says.
             memory_config=memory_config or activation_memory_config((1, 1, tokens, expert_rows.shape[-1])),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
+            batch=batch,
         )
 
     def forward(
@@ -465,8 +469,12 @@ class TtNomicExperts(LightweightModule):
         routing: Routing,
         memory_config: ttnn.MemoryConfig | None = None,
         x_rows: ttnn.Tensor | None = None,
+        batch: int = 1,
     ) -> ttnn.Tensor:
         """(1, 1, T, H) -> (1, 1, T, H): each token through its top-k experts only, the bias included.
+
+        x may also be (B, 1, S, H) with S on the tile grid (T = B * S), read as the flat token axis; with batch = B
+        a one-pass layer then writes (B, 1, S, H).
 
         Each intermediate is freed as soon as its consumer has run, which the L1 budget of
         ROUTED_L1_MAX_BANK_BYTES relies on, and is placed knowing which tensors are live beside it
@@ -483,7 +491,7 @@ class TtNomicExperts(LightweightModule):
         """
         if x.dtype != ttnn.bfloat16:
             raise ValueError(f"the routed pass takes bfloat16 activations, got {x.dtype}")
-        windows = self._windows(x.shape[-2])
+        windows = self._windows(x.shape[0] * x.shape[-2])
         if x_rows is None:
             x_rows = self.dispatch_table(x, routing)
         results = []
@@ -535,6 +543,7 @@ class TtNomicExperts(LightweightModule):
                     combine_weights,
                     num_tokens,
                     memory_config if len(windows) == 1 else None,
+                    batch if len(windows) == 1 else 1,
                 )
             )
             for tensor in (combine_index, combine_weights, expert_counts, expert_rows):

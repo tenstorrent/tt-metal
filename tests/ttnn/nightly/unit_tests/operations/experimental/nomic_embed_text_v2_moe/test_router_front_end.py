@@ -116,6 +116,26 @@ def test_matches_the_stock_ops(device, tokens, experts):
     assert_same_bits(ttnn.to_torch(rows), x)
 
 
+@pytest.mark.parametrize("batch, seqlen", [(2, 512), (4, 64), (8, 512)])
+def test_a_batch_of_whole_tile_sequences_is_the_flat_token_axis(device, batch, seqlen):
+    """(B, 1, S, H) with S a multiple of 32 gives, bit for bit, the scores and rows of the flat (1, 1, B * S, H) call:
+    the same pages in the same order. The model's MoE layers hand the residual stream over unflattened this way."""
+    generator = torch.Generator().manual_seed(batch * seqlen)
+    x, flat_tt = make_input(batch * seqlen, generator, device)
+    weight, weight_tt = make_weight(8, generator, device)
+    batched_tt = ttnn.from_torch(
+        x.reshape(batch, 1, seqlen, HIDDEN),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    flat_scores, flat_rows = router_front_end(flat_tt, weight_tt)
+    scores, rows = router_front_end(batched_tt, weight_tt)
+    assert list(scores.shape) == [1, 1, batch * seqlen, 8] and list(rows.shape) == [1, 1, batch * seqlen, HIDDEN]
+    assert_same_bits(ttnn.to_torch(scores), ttnn.to_torch(flat_scores))
+    assert_same_bits(ttnn.to_torch(rows), ttnn.to_torch(flat_rows))
+
+
 def split_layout(tokens: int, columns: int, block_rows: int) -> ttnn.MemoryConfig:
     """Block-sharded over columns x 8 cores, as the model's split layer norm leaves its output."""
     assert columns * block_rows * TILE >= tokens
@@ -270,8 +290,9 @@ INVALID_CALLS = {
         {},
         "input must be TILE layout",
     ),
-    "input_batch": (
-        dict(input=_tensor((2, 1, TOKENS, HIDDEN))),
+    # A batch is read as the flat token axis only when each sequence is whole tiles.
+    "input_batch_off_the_tile_grid": (
+        dict(input=_tensor((2, 1, TOKENS - 4, HIDDEN))),
         {},
         "input must be 1 x 1 x tokens x hidden",
     ),

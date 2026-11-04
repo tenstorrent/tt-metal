@@ -47,11 +47,15 @@ RouterFrontEndLayout RouterFrontEndDeviceOperation::compute_layout(
     check_interleaved(attributes.rows_memory_config, "rows_memory_config");
 
     const auto& shape = input.logical_shape();
+    // A batch of sequences that are whole tiles is the flat token axis page for page (token b * seqlen + s),
+    // so batch x 1 x seqlen x hidden is read as it stands rather than reshaped to 1 x 1 x tokens x hidden.
     TT_FATAL(
-        shape.rank() == 4 && shape[0] == 1 && shape[1] == 1,
-        "router_front_end: input must be 1 x 1 x tokens x hidden, got {}",
+        shape.rank() == 4 && shape[1] == 1 && (shape[0] == 1 || shape[2] % kTileSize == 0),
+        "router_front_end: input must be 1 x 1 x tokens x hidden, or batch x 1 x seqlen x hidden with seqlen a "
+        "multiple of {}, got {}",
+        kTileSize,
         shape);
-    const uint32_t num_tokens = shape[2];
+    const uint32_t num_tokens = shape[0] * shape[2];
     const uint32_t hidden = shape[3];
     TT_FATAL(num_tokens >= 1, "router_front_end: input has no tokens");
     TT_FATAL(hidden % kTileSize == 0, "router_front_end: hidden must be whole tiles, got {}", hidden);

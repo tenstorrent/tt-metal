@@ -280,6 +280,10 @@ class TtModelConfig:
     # takes x as it comes: 32 to 128 tile rows of M in the split norms' layout (tt/attention.py). Off: the four-op
     # chain (QKV, nlp_create_qkv_heads, two rotary_embedding_llama).
     fused_attention_front: bool = True
+    # The residual stream in the generated layer norm's own ND-sharded layout, from 32 to 128 tile rows of M with every
+    # sequence whole tiles (tt/common.py: nd_norm_layout): the norms run nomic_residual_layer_norm, out_proj and fc2
+    # write that layout, the MoE reads and writes it unflattened. Off: the split layout and ttnn.layer_norm.
+    nd_residual: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     layout: ttnn.Layout = LAYOUT
 

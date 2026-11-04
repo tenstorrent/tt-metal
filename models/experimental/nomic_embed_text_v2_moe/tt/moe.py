@@ -15,7 +15,12 @@ from __future__ import annotations
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, sharded_norm_layout, unflatten_tokens
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    flatten_tokens,
+    nd_norm_layout,
+    sharded_norm_layout,
+    unflatten_tokens,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.experts import TtNomicExperts
 from models.experimental.nomic_embed_text_v2_moe.tt.router import TtNomicRouter
 
@@ -44,6 +49,15 @@ class TtNomicMoELayer(LightweightModule):
             ttnn.Tensor: (B, 1, S, H).
         """
         batch, seqlen = x.shape[0], x.shape[-2]
+        nd_layout = nd_norm_layout(x.shape, self.experts.tt_config)
+        if nd_layout is not None:
+            # On the generated norm's ND layout nothing is reshaped, since a reshape of an ND tensor copies it:
+            # each sequence is whole tiles there (nd_norm_layout), so (B, 1, S, H) is the flat token axis page for
+            # page. router_front_end reads it as it stands, and the combine writes (B, 1, S, H) in that layout.
+            routing, x_rows = self.router(x, self.experts.dispatch_table_config(x))
+            out = self.experts(x, routing, nd_layout, x_rows, batch=batch)
+            routing.deallocate()
+            return out
         flat = flatten_tokens(x)
         routing, x_rows = self.router(flat, self.experts.dispatch_table_config(flat))
         # The combine writes norm2's split layout where unflattening it is a view, not a copy.

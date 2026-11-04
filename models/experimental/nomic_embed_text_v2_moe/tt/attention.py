@@ -28,6 +28,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MAX_TILES,
     FUSED_ATTENTION_MIN_TILES,
     m_tiles,
+    nd_norm_layout,
     rotary_pair_permutation,
     rotary_rotation_matrix,
     sharded_norm_layout,
@@ -438,12 +439,15 @@ class TtNomicBertAttention(LightweightModule):
         return ttnn.reshape(rotated, (batch, heads, seqlen, head_dim)) if folded else rotated
 
     def _takes_fused(self, x: ttnn.Tensor) -> bool:
-        """Whether the generated front reads x as it comes: 32 to 128 tile rows of M in the split norms' layout, the
-        block input's layout there (tt.common.layer_norm keeps it above SMALL_M_TILES)."""
+        """Whether the generated front reads x as it comes: 32 to 128 tile rows of M in the generated norm's ND
+        layout (tt.common.nd_norm_layout) or the split norms' layout, the block input's layout there."""
         if self.qkv_fused is None:
             return False
         if not FUSED_ATTENTION_MIN_TILES <= m_tiles(x.shape) <= FUSED_ATTENTION_MAX_TILES:
             return False
+        nd_layout = nd_norm_layout(x.shape, self.tt_config)
+        if nd_layout is not None:
+            return x.memory_config() == nd_layout
         layout = sharded_norm_layout(x.shape, self.tt_config.core_grid)
         return layout is not None and x.memory_config() == layout[0]
 
@@ -663,9 +667,10 @@ class TtNomicBertAttention(LightweightModule):
 
         # SDPA's output can sit below v (attention_placement); dense_linear plans below it wherever it
         # is (l1_floor). Up to the split limit the output is written in the layout of norm1, its only
-        # reader (tt/block.py).
+        # reader (tt/block.py): the generated norm's ND layout where the forward runs on it.
         out_shape = (context.shape[0], 1, context.shape[-2], self.out_weight.shape[-1])
-        norm_layout = sharded_norm_layout(out_shape, self.tt_config.core_grid)
+        nd_layout = nd_norm_layout(out_shape, self.tt_config)
+        norm_layout = None if nd_layout is not None else sharded_norm_layout(out_shape, self.tt_config.core_grid)
         out = dense_linear(
             context,
             self.out_weight,
@@ -674,6 +679,7 @@ class TtNomicBertAttention(LightweightModule):
             self.tt_config,
             live=(x, *live),
             norm_layout=norm_layout,
+            nd_layout=nd_layout,
         )
         ttnn.deallocate(context)
         return out

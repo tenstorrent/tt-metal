@@ -15,7 +15,8 @@ Tensor routed_combine(
     const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t batch) {
     // Without a config: HiFi4, so the weights' products are exact in the fp32 DST.
     const auto kernel_config = init_device_compute_kernel_config(
         expert_rows.device()->arch(),
@@ -30,7 +31,8 @@ Tensor routed_combine(
         bias,
         num_tokens,
         memory_config.value_or(expert_rows.memory_config()),
-        kernel_config);
+        kernel_config,
+        batch);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

@@ -47,9 +47,11 @@ void bind_routed_combine(nb::module_& mod) {
                 addresses tiles by page id. Defaults to expert_rows'.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): fp32_dest_acc_en
                 must be on. Defaults to HiFi4 with fp32 accumulation.
+            batch (int, optional): write the output as (batch, 1, num_tokens / batch, hidden), page for page
+                the flat one; num_tokens / batch must be a multiple of 32 when batch > 1. Defaults to 1.
 
         Returns:
-            ttnn.Tensor: (1, 1, num_tokens, hidden) BFLOAT16, TILE, its tile padding the bias, or a
+            ttnn.Tensor: (batch, 1, num_tokens / batch, hidden) BFLOAT16, TILE, its tile padding the bias, or a
             gather's rows.
         )doc",
         &ttnn::experimental::nomic_embed_text_v2_moe::routed_combine,
@@ -60,7 +62,8 @@ void bind_routed_combine(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_tokens"),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("batch") = 1);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

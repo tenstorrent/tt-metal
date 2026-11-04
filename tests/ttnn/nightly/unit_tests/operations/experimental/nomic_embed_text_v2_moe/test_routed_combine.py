@@ -178,6 +178,28 @@ def test_router_weights_are_no_less_precise_than_the_stock_combine(device, token
     assert combined_error.mean() <= stock_error.mean()
 
 
+@pytest.mark.parametrize("batch, seqlen", [(2, 512), (8, 512)])
+def test_batch_output_is_the_flat_output_page_for_page(device, batch, seqlen):
+    """batch=B writes (B, 1, S, H), page for page the flat (1, 1, B * S, H) output when each sequence is whole tiles,
+    in any layout, here an ND-sharded one like the generated layer norm's: the model's MoE layers hand their output
+    to norm2 unflattened this way."""
+    tokens = batch * seqlen
+    generator = torch.Generator().manual_seed(tokens)
+    values = torch.rand(tokens, TOP_K, generator=generator).sort(-1, descending=True).values * 0.5
+    rows, combine_index, combine_weights = selection(tokens, values, generator, device)
+    expert_rows = device_rows(torch.randn(rows, HIDDEN, generator=generator).bfloat16(), device)
+    _, bias = make_bias(generator, device)
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.num_cores_to_corerangeset(3 * tokens // 128, grid, True)
+    nd = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape([1, 1, 128, HIDDEN // 3]), cores))
+    flat = routed_combine(expert_rows, combine_index, combine_weights, bias, num_tokens=tokens)
+    batched = routed_combine(
+        expert_rows, combine_index, combine_weights, bias, num_tokens=tokens, memory_config=nd, batch=batch
+    )
+    assert list(batched.shape) == [batch, 1, seqlen, HIDDEN] and batched.memory_config() == nd
+    assert torch.equal(ttnn.to_torch(batched).reshape(1, 1, tokens, HIDDEN), ttnn.to_torch(flat))
+
+
 @pytest.mark.parametrize("tokens, columns, block_rows", [(4096, 11, 12), (1000, 11, 3)])
 def test_sharded_output_matches_the_interleaved_call(device, tokens, columns, block_rows):
     """The writer addresses the output by page id, so a block-sharded output, laid out as the model's

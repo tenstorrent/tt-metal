@@ -80,7 +80,7 @@ class TtNomicRouter(LightweightModule):
         place of a copy of x for the router, the router matmul, the softmax and the dispatch table's untilize.
 
         Args:
-            x: (1, 1, T, H) flat token activations.
+            x: (1, 1, T, H) flat token activations, or (B, 1, S, H) with S on the tile grid, T = B * S.
             rows_memory_config: where the rows go (TtNomicExperts.dispatch_table_config).
 
         Returns:
@@ -89,7 +89,7 @@ class TtNomicRouter(LightweightModule):
         scores, rows = ttnn.experimental.nomic_embed_text_v2_moe.router_front_end(
             x,
             self.weight,
-            scores_memory_config=_scores_memory(x.shape[-2]),
+            scores_memory_config=_scores_memory(x.shape[0] * x.shape[-2]),
             rows_memory_config=rows_memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.ROUTER),
         )

@@ -22,6 +22,7 @@ Tensor routed_combine(
     const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    uint32_t batch = 1);
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

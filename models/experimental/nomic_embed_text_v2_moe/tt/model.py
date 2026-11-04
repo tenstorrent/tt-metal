@@ -68,6 +68,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     activation_memory_config,
     additive_attention_mask,
     layer_norm,
+    nd_norm_layout,
     pooling_mask,
     prepare_token_ids,
 )
@@ -188,6 +189,7 @@ class TtNomicBertModel(LightweightModule):
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
             keep_sharded=True,
             consume_input=True,
+            nd_layout=nd_norm_layout(hidden.shape, self.tt_config),
         )
         out = self.encoder(
             normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded, fused_tables=fused_tables
