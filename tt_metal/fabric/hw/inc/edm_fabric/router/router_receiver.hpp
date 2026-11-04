@@ -120,10 +120,11 @@ constexpr size_t receiver_channel_of(size_t vc) {
     return NUM_RECEIVER_CHANNELS;
 }
 
-// Whether this router runs VC's receiver channel: a VC it services, unless channel trimming took the channel out.
-// (From the host's tables, not ReceiverChannel<VC>: an absent channel's traits are never computed.)
+// Whether this router runs VC's receiver channel: a VC it is configured for, unless channel trimming took the channel
+// out (the channel's "serviced" flag). The one per-VC fact to use for "this router runs VC". (From the host's tables,
+// not ReceiverChannel<VC>: an absent channel's traits are never computed.)
 constexpr bool runs_vc(size_t vc) {
-    return vc < MAX_NUM_VCS && receiver_channel_of(vc) < NUM_RECEIVER_CHANNELS && is_vc_serviced[vc] &&
+    return vc < MAX_NUM_VCS && receiver_channel_of(vc) < NUM_RECEIVER_CHANNELS && is_vc_configured[vc] &&
            is_receiver_channel_serviced[receiver_channel_of(vc)];
 }
 

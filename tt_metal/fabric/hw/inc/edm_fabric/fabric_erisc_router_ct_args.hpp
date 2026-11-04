@@ -231,8 +231,11 @@ constexpr bool ENABLE_FIRST_LEVEL_ACK_VC2 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK
 
 // Per-VC features, indexed by VC, as the host sets them (one arg or define per VC: MAX_NUM_VCS entries each).
 static_assert(MAX_NUM_VCS == 3, "the per-VC features below list one host arg per VC");
-// Whether this router services the VC's traffic (FABRIC_2D_VC<n>_SERVICED; VC0 always).
-constexpr std::array<bool, MAX_NUM_VCS> is_vc_serviced = {
+// Whether this router is configured for the VC: VC0 always; VC1 and VC2 where the host's mode gives this router the
+// VC (the host defines FABRIC_2D_VC1_SERVICED / FABRIC_2D_VC2_SERVICED). Configuration only: channel trimming is
+// applied per channel (is_receiver_channel_serviced / is_sender_channel_serviced, "serviced" meaning not trimmed). The
+// one per-VC fact that combines both is the receiver's runs_vc (router_receiver.hpp); this array has no other reader.
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_configured = {
     true,
 #if defined(FABRIC_2D_VC1_SERVICED)
     true,
