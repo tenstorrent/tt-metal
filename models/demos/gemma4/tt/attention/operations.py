@@ -173,7 +173,7 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
     # Prefill matches Hugging Face's FP32 per-head Q/K/V RMSNorm (HiFi4 + fp32 accumulation).
-    # Decode keeps bf16 accumulation: the fp32 config lowered paged-decode attention PCC below the
+    # Decode uses bf16 accumulation: the fp32 config lowered paged-decode attention PCC below the
     # 0.99 gate on both Wormhole and Blackhole (26B / E2B unit tests, 2026-09-11 onwards).
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tensor.device().arch(),

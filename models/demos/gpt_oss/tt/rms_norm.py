@@ -33,7 +33,7 @@ class RMSNorm(nn.Module):
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-        # Previous ttnn.rms_norm default: fp32 accumulation overflows L1 with the row-major weight.
+        # bf16 accumulation: with fp32 accumulation the row-major weight overflows L1.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,

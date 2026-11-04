@@ -51,6 +51,7 @@ def _compute_config(device):
 
 
 def _rms_norm_config(device):
+    # This model's accuracy targets are tuned to bf16 accumulation and the approximate rsqrt.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
