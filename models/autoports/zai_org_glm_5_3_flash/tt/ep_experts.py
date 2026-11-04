@@ -55,6 +55,33 @@ def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, 
     ndev = int(mesh.get_num_devices())
     assert num_experts % ndev == 0, (num_experts, ndev)
     e_loc = num_experts // ndev
+    if not hasattr(source, "_entry"):  # a HOST source (state dict / raw HF): permuted and packed in torch, as
+        # fused_decoder.load_fused_experts does for one chip, then EP-sharded with from_host_shards
+        import torch
+
+        from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import gate_up_column_perm
+        from models.autoports.zai_org_glm_5_3_flash.tt.weights import WEIGHT_DTYPES
+
+        pack = lambda w: ttnn.from_torch(  # noqa: E731
+            w.to(torch.bfloat16), dtype=WEIGHT_DTYPES["routed_expert"], layout=ttnn.TILE_LAYOUT
+        )
+        cols = None
+        gu_slots, dn_slots = [], []
+        for i in range(e_loc):
+            gus, dns = [], []
+            for r in range(ndev):
+                e = e_loc * r + i
+                gu = source.host(layer, f"mlp.experts.{e}.gate_up_proj")  # [H, 2I] = [gate | up]
+                dn = source.host(layer, f"mlp.experts.{e}.down_proj")  # [I, H]
+                if cols is None:
+                    cols = gate_up_column_perm(gu.shape[-1])
+                    gu_cfg = _nd_dram(gu.shape[-2], gu.shape[-1] // FE_CORES)
+                    dn_cfg = _nd_dram(dn.shape[-2], dn.shape[-1] // FE_CORES)
+                gus.append(pack(gu[:, cols]))
+                dns.append(pack(dn))
+            gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
+            dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
+        return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
     gu_cfg = dn_cfg = None
     gu_slots, dn_slots = [], []
     for i in range(e_loc):
