@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Move a perf shard's ELFs from a CPU runner to a board: pack, unpack, verify-tree.
+"""Move a perf shard's ELFs from a CPU runner to a board: pack, unpack.
 
 The ELFs embed their build path, so both runners must build in $RUNNER_TEMP/tt-llk-build.
 """
@@ -221,9 +221,8 @@ def cmd_unpack(args):
         sys.exit(f"{len(mismatched)} files missing or bad, e.g. {mismatched[:5]}")
     t2 = time.monotonic()
 
-    if not args.no_junit:
-        for j in meta.glob("*.xml"):
-            shutil.copy(j, PYTHON_TESTS / j.name)
+    for j in meta.glob("*.xml"):
+        shutil.copy(j, PYTHON_TESTS / j.name)
     size = archive.stat().st_size
     if args.delete_archive:
         archive.unlink()
@@ -235,67 +234,6 @@ def cmd_unpack(args):
             f"- extract: {t1 - t0:.1f} s, verify: {t2 - t1:.1f} s",
         ]
     )
-
-
-def archive_sums(archive: Path) -> dict[str, str]:
-    zstd = subprocess.Popen(["zstd", "-dc", str(archive)], stdout=subprocess.PIPE)
-    tar = subprocess.run(
-        ["tar", "-xOf", "-", f"{META_DIR}/SHA256SUMS"],
-        stdin=zstd.stdout,
-        capture_output=True,
-        text=True,
-    )
-    zstd.stdout.close()
-    if tar.returncode or zstd.wait():
-        sys.exit(f"cannot read {META_DIR}/SHA256SUMS from {archive}: {tar.stderr}")
-    return dict(
-        reversed(line.split("  ", 1)) for line in tar.stdout.splitlines() if line
-    )
-
-
-def cmd_verify_tree(args):
-    tree = build_dir()
-    t0 = time.monotonic()
-    sums = archive_sums(find_archive(args.dir))
-    present = set(shipped_files(tree)) if tree.exists() else set()
-    identical, different, missing = 0, [], []
-    for rel, digest in sums.items():
-        if rel not in present:
-            missing.append(rel)
-        elif sha256(tree / rel) == digest:
-            identical += 1
-        else:
-            different.append(rel)
-    extra = sorted(present - sums.keys())
-    result = {
-        "tree": str(tree),
-        "compared": len(sums),
-        "identical": identical,
-        "different": len(different),
-        "missing_in_tree": len(missing),
-        "extra_in_tree": len(extra),
-        "examples": {
-            "different": different[:20],
-            "missing_in_tree": missing[:20],
-            "extra_in_tree": extra[:20],
-        },
-        "seconds": round(time.monotonic() - t0, 1),
-    }
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
-    ok = not (different or missing or extra)
-    summary(
-        [
-            f"### Build identity: {tree.name} vs the shipped build",
-            f"- {'identical' if ok else 'NOT identical'}: {identical} of {len(sums)} files byte-identical, "
-            f"{len(different)} different, {len(missing)} missing, {len(extra)} extra ({result['seconds']} s)",
-            *[f"  - different: {r}" for r in different[:5]],
-            *[f"  - missing: {r}" for r in missing[:5]],
-            *[f"  - extra: {r}" for r in extra[:5]],
-        ]
-    )
-    if not ok:
-        sys.exit(1)
 
 
 def main():
@@ -312,13 +250,7 @@ def main():
     p.add_argument("--cmd", required=True)
     p.add_argument("--dir", required=True)
     p.add_argument("--delete-archive", action="store_true")
-    p.add_argument("--no-junit", action="store_true")
     p.set_defaults(func=cmd_unpack)
-
-    p = sub.add_parser("verify-tree")
-    p.add_argument("--dir", required=True)
-    p.add_argument("--out", required=True)
-    p.set_defaults(func=cmd_verify_tree)
 
     args = ap.parse_args()
     args.func(args)

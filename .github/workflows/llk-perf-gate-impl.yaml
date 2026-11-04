@@ -93,13 +93,8 @@ on:
         required: false
         default: false
         type: boolean
-      slack:
-        description: "Post the verdict to the LLK regressions channel"
-        required: false
-        default: false
-        type: boolean
       slack_on_pass:
-        description: "With slack, also post when the gate passes. With slack, regressions and skips always post."
+        description: "Mark a pass as worth posting in the Slack part the caller posts"
         required: false
         default: true
         type: boolean
@@ -145,8 +140,6 @@ jobs:
     # Not ubuntu-slim: its 15-minute cap is shorter than a warehouse read plus the download retries.
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -669,35 +662,6 @@ jobs:
           path: slack_part.json
           if-no-files-found: ignore
 
-      - name: Notify Slack
-        if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-        run: |
-          if [ -z "$SLACK_CHANNEL_ID" ]; then
-            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
-            exit 0
-          fi
-          if [ -z "$SLACK_BOT_TOKEN" ]; then
-            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
-            exit 0
-          fi
-
-          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json; charset=utf-8" \
-            --data @slack_payload.json) || true
-
-          case "$RESPONSE" in
-            *'"ok":true'*)
-              echo "Posted the gate verdict to Slack."
-              ;;
-            *)
-              echo "::error::Slack rejected the gate notification: ${RESPONSE}"
-              ;;
-          esac
-
       - name: Gate verdict
         if: always()
         env:
@@ -706,9 +670,6 @@ jobs:
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
         run: |
-          # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
-          KIND=no-compare
-          trap 'echo "$? $KIND" > "gate_verdict-${ARCH}.txt"' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -718,7 +679,6 @@ jobs:
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
-            KIND=incomplete
             echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
             echo "This is not a performance result: a perf test failed, or a runner or board did."
             exit 1
@@ -735,7 +695,6 @@ jobs:
               echo "This is a missing baseline in the warehouse, not a performance result."
               exit 1
             fi
-            KIND=pass
             echo "⚠️  No baseline found; gate skipped (first run or data missing)"
             exit 0
           fi
@@ -748,7 +707,6 @@ jobs:
           fi
 
           if [ "$EXIT_CODE" != "0" ]; then
-            KIND=regression
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
@@ -758,14 +716,5 @@ jobs:
             exit 0
           fi
 
-          KIND=pass
           echo "✅ No regressions detected"
           cat perf_gate_report.md
-
-      - name: Upload the gate verdict
-        if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
-        with:
-          name: llk-perf-gate-verdict-${{ inputs.arch }}
-          path: gate_verdict-${{ inputs.arch }}.txt
-          if-no-files-found: ignore

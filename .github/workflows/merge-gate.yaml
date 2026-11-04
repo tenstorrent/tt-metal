@@ -704,8 +704,7 @@ jobs:
       # a missing baseline or a comparison that did not finish fails the job, and blocks the merge.
       fail_on_regression: false
       fail_without_baseline: true
-      # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
-      slack: false
+      # llk-perf-merge-gate-notify posts one message for both arches.
       slack_on_pass: false
     secrets: inherit
 
