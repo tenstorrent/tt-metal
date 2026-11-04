@@ -17,7 +17,7 @@ extern "C" __attribute__((noinline, used)) void set_sources()
 }
 
 // CHECK-LABEL: <set_sources>:
-// CHECK-NEXT: ttsetrwc 0,0,0,4,4,3
+// CHECK-NEXT: ttsetrwc 0,0,0,4,4,3{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void set_all_and_clear_fidelity()
@@ -27,7 +27,7 @@ extern "C" __attribute__((noinline, used)) void set_all_and_clear_fidelity()
 }
 
 // CHECK-LABEL: <set_all_and_clear_fidelity>:
-// CHECK-NEXT: ttsetrwc 0,0,3,2,1,15
+// CHECK-NEXT: ttsetrwc 0,0,3,2,1,15{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void increment_dest()
@@ -37,7 +37,7 @@ extern "C" __attribute__((noinline, used)) void increment_dest()
 }
 
 // CHECK-LABEL: <increment_dest>:
-// CHECK-NEXT: ttincrwc 0,8,0,0
+// CHECK-NEXT: ttincrwc 0,8,0,0{{$}}
 // CHECK-NEXT: ret
 
 // Without a SETRWC-only field, AdvanceAndReset is encoded in INCRWC.
@@ -48,7 +48,7 @@ extern "C" __attribute__((noinline, used)) void advance_and_reset_dest()
 }
 
 // CHECK-LABEL: <advance_and_reset_dest>:
-// CHECK-NEXT: ttincrwc 4,8,0,0
+// CHECK-NEXT: ttincrwc 4,8,0,0{{$}}
 // CHECK-NEXT: ret
 
 // A zero AdvanceAndReset rewinds the live counter to its carry shadow.
@@ -59,7 +59,7 @@ extern "C" __attribute__((noinline, used)) void rewind_sources()
 }
 
 // CHECK-LABEL: <rewind_sources>:
-// CHECK-NEXT: ttincrwc 3,0,0,0
+// CHECK-NEXT: ttincrwc 3,0,0,0{{$}}
 // CHECK-NEXT: ret
 
 // Set and AdvanceAndReset share one SETRWC; the flip releases both source banks.
@@ -70,7 +70,7 @@ extern "C" __attribute__((noinline, used)) void next_face()
 }
 
 // CHECK-LABEL: <next_face>:
-// CHECK-NEXT: ttsetrwc 3,4,8,0,0,6
+// CHECK-NEXT: ttsetrwc 3,4,8,0,0,6{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void flip_only()
@@ -80,7 +80,7 @@ extern "C" __attribute__((noinline, used)) void flip_only()
 }
 
 // CHECK-LABEL: <flip_only>:
-// CHECK-NEXT: ttsetrwc 2,0,0,0,0,0
+// CHECK-NEXT: ttsetrwc 2,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void increment_and_save_dest()
@@ -90,7 +90,7 @@ extern "C" __attribute__((noinline, used)) void increment_and_save_dest()
 }
 
 // CHECK-LABEL: <increment_and_save_dest>:
-// CHECK-NEXT: ttsetrwc 0,8,7,0,0,4
+// CHECK-NEXT: ttsetrwc 0,8,7,0,0,4{{$}}
 // CHECK-NEXT: ret
 
 // Set and Increment need both instructions; SETRWC is issued first.
@@ -101,8 +101,8 @@ extern "C" __attribute__((noinline, used)) void set_and_increment()
 }
 
 // CHECK-LABEL: <set_and_increment>:
-// CHECK-NEXT: ttsetrwc 0,0,0,0,1,1
-// CHECK-NEXT: ttincrwc 0,2,0,0
+// CHECK-NEXT: ttsetrwc 0,0,0,0,1,1{{$}}
+// CHECK-NEXT: ttincrwc 0,2,0,0{{$}}
 // CHECK-NEXT: ret
 
 // With both instructions issued, AdvanceAndReset is encoded only in SETRWC.
@@ -113,8 +113,8 @@ extern "C" __attribute__((noinline, used)) void set_increment_and_advance()
 }
 
 // CHECK-LABEL: <set_increment_and_advance>:
-// CHECK-NEXT: ttsetrwc 0,4,8,0,1,5
-// CHECK-NEXT: ttincrwc 0,0,2,0
+// CHECK-NEXT: ttsetrwc 0,4,8,0,1,5{{$}}
+// CHECK-NEXT: ttincrwc 0,0,2,0{{$}}
 // CHECK-NEXT: ret
 
 // operation() returns the encoded word; issuing it shows which instruction it encodes.
@@ -128,6 +128,6 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttsetrwc 0,0,0,0,0,7
-// CHECK-NEXT: ttincrwc 0,0,15,0
+// CHECK-NEXT: ttsetrwc 0,0,0,0,0,7{{$}}
+// CHECK-NEXT: ttincrwc 0,0,15,0{{$}}
 // CHECK-NEXT: ret
