@@ -4,7 +4,6 @@
 
 #include "flat_routed_expert_program_factory.hpp"
 
-#include "flat_geometry.hpp"
 #include "flat_routed_expert_plan.hpp"
 
 #include <algorithm>

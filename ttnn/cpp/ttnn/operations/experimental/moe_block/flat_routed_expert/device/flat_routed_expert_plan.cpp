@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_plan.hpp"
-#include "flat_geometry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +16,7 @@
 #include <set>
 #include <tuple>
 
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -37,6 +37,13 @@ constexpr uint32_t D_CHAINS = 7;
 constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
 uint32_t al(uint32_t b) { return (b + 2047) / 2048 * 2048; }
+
+// The first chip this rank drives: the plan is read from it.
+tt::tt_metal::distributed::MeshCoordinate flat_reference_coord(tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto ids = mesh_device.get_device_ids();
+    TT_FATAL(!ids.empty(), "flat_routed_expert: the mesh device has no local chip");
+    return mesh_device.get_view().find_device(ids.front());
+}
 int pmod(int a, int n) { return ((a % n) + n) % n; }
 // Python round(): half to even
 uint32_t pyround(double v) { return static_cast<uint32_t>(std::nearbyint(v)); }
@@ -476,21 +483,22 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     const uint32_t out_tiles = p.mt * pcd;
 
     // gate/up cores per weight slot (every gate/up core reads its own blocks on NOC0): each slot's cores by the NOC0
-    // hops from the bank's NOC0 endpoint tile (its reads' responses' injection point); all pairs (slot, core) taken
-    // nearest first rather than round-robin nearest (which left the last slots 15-21 hops)
+    // hops from its bank's optimal reader core (the anchor next to the bank's endpoint) to the core, the direction its
+    // reads' responses travel (exact on this chip: harvesting- and routing-aware); all pairs (slot, core) taken nearest
+    // first rather than round-robin nearest (which left the last slots 15-21 hops)
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
     std::vector<bool> placed(gu_all.size(), false);
     {
-        const FlatDramGeometry dram = FlatDramGeometry::of(mesh_device);
-        std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
-        std::vector<Core> worker_noc0;
-        for (const auto& c : gu_all) {
-            worker_noc0.push_back(flat_worker_noc0(mesh_device, c));
-        }
+        const auto coord = flat_reference_coord(mesh_device);
+        std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         for (uint32_t r = 0; r < n_rd; ++r) {
-            const Core src = dram.endpoint(r % p.banks, 0);
+            const Core anchor = opt.at(r % p.banks);
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                pairs.emplace_back(noc_hops(src, worker_noc0[ci], 0), r, ci);
+                pairs.emplace_back(
+                    tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        &mesh_device, coord, anchor, gu_all[ci], tt::tt_metal::NOC::NOC_0),
+                    r,
+                    ci);
             }
         }
         std::sort(pairs.begin(), pairs.end());

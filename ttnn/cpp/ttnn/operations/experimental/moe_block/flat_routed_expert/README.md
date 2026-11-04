@@ -29,8 +29,9 @@ Every gate/up core reads its own weight blocks from its weight slot's bank (`se_
 (`se5_recv.cpp`) grants free landing slots by count, the reads fill granted slots in order and publish a landed-blocks
 count the receiver and the compute consume, two reads in flight. Slot r lives in bank r % banks (two slots a bank).
 The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cells fewest NOC0
-hops from the bank's NOC0 endpoint tile (all (slot, core) pairs taken nearest first; the bank tiles from
-`tt-metalium/experimental/dram_geometry.hpp`).
+hops from the bank's optimal reader core (`get_optimal_dram_bank_to_logical_worker_assignment`; hops from
+`experimental::Device::get_worker_noc_hop_distance`, the reads' response direction), all (slot, core) pairs taken
+nearest first.
 
 ## Roles and kernels (`device/kernels`)
 
