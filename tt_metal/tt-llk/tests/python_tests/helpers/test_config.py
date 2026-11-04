@@ -2216,12 +2216,21 @@ class TestConfig:
             if brisc_launch and launch_done is not None:
                 # BRISC puts the cores in reset right after marking the launch done: read that only once it is marked.
                 done = (
-                    read_word_from_device(TestConfig.TENSIX_LOCATION, launch_done)
+                    np.frombuffer(
+                        read_from_device(
+                            TestConfig.TENSIX_LOCATION, launch_done, num_bytes=4
+                        ),
+                        dtype=np.uint32,
+                    )[0]
                     & device_module.HOST_SIGNAL_MASK
                     == KERNEL_COMPLETE
-                    and soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
-                    == brisc_done_mask
                 )
+                # BRISC puts the cores in reset right after marking the launch done.
+                while done and (
+                    soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    != brisc_done_mask
+                ):
+                    pass
             elif brisc_launch:
                 done = (
                     soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
