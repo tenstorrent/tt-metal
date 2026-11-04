@@ -341,3 +341,9 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   32.95 ms = 30.4 tok/s per user (32 users: 37.3 ms = 26.8). Four times fewer users save only 4.4 ms: the step is
   launch / latency bound, not bandwidth bound. The 50 tok/s/u floor (20 ms) needs 13 ms off the 8-user step: the
   persistent layer's whole budget (launches, the exchanges' round trips, the attention half's ~20 small ops per layer).
+- 2026-11-04 06:24 `unit_moe_persistent_r2` PASSED (wt_persist @8afb4a2b941, NOC-1 corner swap): the persistent program
+  is bit-exact against gather + fused experts + reduce on every chip, traced replays with fresh inputs match the
+  golden. Traced wall per replay: persistent 0.646 ms vs three ops 0.605 ms (T = 4, random routing with 8 picks per
+  user, i.e. nearly every expert active per chip). No launch gain at this shape: the program adds ~70 us somewhere
+  (the x_g write + "written" count + release multicast + the down -> reduce signal, or the 120-core launch itself);
+  the layer profile (`tracy_l4_b4_persist_g11d`) and step 2 (resident x: no x_g write / read) decide.
