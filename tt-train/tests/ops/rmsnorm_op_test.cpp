@@ -24,6 +24,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
@@ -608,14 +609,15 @@ xt::xarray<float> as_stored(const xt::xarray<float>& a, const ttnn::DataType dty
     return ttml::core::to_xtensor(to_device(a, dtype));
 }
 
-// Heads get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns cannot pass. The gate reaches into
-// both saturation tails of sigmoid.
+// Heads and tile-rows get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns, or with the sum of x^2
+// of another tile-row, cannot pass. The gate reaches into both saturation tails of sigmoid.
 Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_dtype, const bool gated) {
     auto x = ttml::test_utils::make_uniform_xarray<float>(s.head_major(), -1.0F, 1.0F, seed);
     for (uint32_t b = 0; b < s.batch; ++b) {
         for (uint32_t h = 0; h < s.heads; ++h) {
-            const float scale = std::exp2(static_cast<float>(static_cast<int>(h % 6U) - 2));
             for (uint32_t t = 0; t < s.seq; ++t) {
+                const uint32_t tile_row = t / tt::constants::TILE_HEIGHT;
+                const float scale = std::exp2(static_cast<float>(static_cast<int>((h + tile_row) % 6U) - 2));
                 for (uint32_t c = 0; c < s.head_dim; ++c) {
                     x.data()[s.head_major_index(b, h, t, c)] *= scale;
                 }
@@ -824,18 +826,23 @@ TEST_P(RMSNormOpParamTest, MatchesReference) {
     const auto gamma = to_device(in.gamma);
     const auto dy = to_device(in.dy);
 
-    const auto fw = ttml::metal::rmsnorm_fw(x, gamma, /* return_intermediates */ true, kEps, gate, c.max_row_slices);
-    expect_close(ttml::core::to_xtensor(fw[0].value()), ref.out, "out");
-    expect_close(ttml::core::to_xtensor(fw[1].value()), ref.rms, "rms");
+    // Only the prims take max_row_slices, so dL_dgamma is summed from its components here instead of by rmsnorm_bw.
+    const auto fw =
+        ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, c.max_row_slices);
+    ASSERT_EQ(fw.size(), 2U);
+    expect_close(ttml::core::to_xtensor(fw[0]), ref.out, "out");
+    expect_close(ttml::core::to_xtensor(fw[1]), ref.rms, "rms");
 
     for (const bool compute_dgamma : {true, false}) {
         const std::string suffix = compute_dgamma ? "" : " without dgamma";
-        const auto bw = ttml::metal::rmsnorm_bw(x, gamma, fw[1].value(), dy, compute_dgamma, gate, c.max_row_slices);
+        const auto bw = ttnn::prim::ttml_rmsnorm_bw(x, gamma, fw[1], dy, gate, compute_dgamma, c.max_row_slices);
         ASSERT_EQ(bw.size(), 3U);
         expect_close(ttml::core::to_xtensor(bw[0].value()), ref.dx, "dx" + suffix, kDxTol);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
-            expect_close(ttml::core::to_xtensor(bw[1].value()), ref.dgamma, "dgamma");
+            const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(bw[1].value()));
+            const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
+            expect_close(dgamma, ref.dgamma, "dgamma");
         }
         ASSERT_EQ(bw[2].has_value(), c.gated);
         if (c.gated) {
@@ -1016,15 +1023,15 @@ TEST_F(RMSNormOpTest, RejectsMaxRowSlicesOutOfRange) {
         const std::string label = "max_row_slices = " + std::to_string(max_row_slices);
         EXPECT_THAT(
             ([&] {
-                return ttml::metal::rmsnorm_fw(
-                    x, gamma, /* return_intermediates */ true, kEps, /* gate_tensor */ std::nullopt, max_row_slices);
+                return ttnn::prim::ttml_rmsnorm_fw(
+                    x, gamma, /* gate */ std::nullopt, /* return_intermediates */ true, kEps, max_row_slices);
             }),
             ThrowsMessage<std::runtime_error>(HasSubstr("max_row_slices must be in")))
             << label;
         EXPECT_THAT(
             ([&] {
-                return ttml::metal::rmsnorm_bw(
-                    x, gamma, rms, dy, /* compute_dgamma */ true, /* gate_tensor */ std::nullopt, max_row_slices);
+                return ttnn::prim::ttml_rmsnorm_bw(
+                    x, gamma, rms, dy, /* gate */ std::nullopt, /* compute_dgamma */ true, max_row_slices);
             }),
             ThrowsMessage<std::runtime_error>(HasSubstr("max_row_slices must be in")))
             << label;
@@ -1472,7 +1479,8 @@ TEST_F(RMSNormCacheHitTest, Forward_NoIntermediates_PreallocatedOutputsAcrossOpt
 // leaves most of its rows unwritten, and the launch without rms goes before the one with it, so that a launch
 // reusing the other's program leaves its rms unwritten rather than writing one through the rms slot's address 0.
 // The last launches repeat earlier keys and must hit their programs, the single-core one included. A tile row of 32
-// tiles is split into column slices, and max_row_slices = 1 keeps it whole on one core, so the knob is a key of its own.
+// tiles is split into column slices, and max_row_slices = 1 keeps it whole on one core, so the knob is a key of its
+// own.
 TEST_F(RMSNormCacheHitTest, Forward_DistinctKeysCompileDistinctPrograms_TwoCoreGroups) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
@@ -1508,21 +1516,21 @@ TEST_F(RMSNormCacheHitTest, Forward_DistinctKeysCompileDistinctPrograms_TwoCoreG
         const std::string label = "launch " + std::to_string(launch) + " (" + spec.label + ")";
         const auto in = make_forward_inputs(spec.shape, launch, x_range_of_launch(launch));
         const auto entries_before = device->num_program_cache_entries();
-        const auto result = metal::rmsnorm_fw(
+        const auto result = ttnn::prim::ttml_rmsnorm_fw(
             in.x.tensor,
             in.gamma.tensor,
+            /*gate=*/std::nullopt,
             spec.return_intermediates,
             kCacheTestEps,
-            /*gate_tensor=*/std::nullopt,
             spec.max_row_slices);
         expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
-        ASSERT_TRUE(result[0].has_value()) << label;
-        ASSERT_EQ(result[1].has_value(), spec.return_intermediates) << label;
-        expect_rmsnorm_fw_matches_reference(*result[0], result[1], in, kCacheTestEps, label);
+        ASSERT_EQ(result.size(), spec.return_intermediates ? 2U : 1U) << label;
+        const auto rms = spec.return_intermediates ? std::make_optional(result[1]) : std::nullopt;
+        expect_rmsnorm_fw_matches_reference(result[0], rms, in, kCacheTestEps, label);
         kept.add_inputs(in, label);
-        kept.add(*result[0], label + " output");
-        if (spec.return_intermediates) {
-            kept.add(*result[1], label + " rms");
+        kept.add(result[0], label + " output");
+        if (rms.has_value()) {
+            kept.add(*rms, label + " rms");
         }
     }
 

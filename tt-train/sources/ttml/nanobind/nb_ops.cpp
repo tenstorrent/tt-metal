@@ -760,11 +760,8 @@ void py_module(nb::module_& m) {
             nb::arg("return_intermediates") = true,
             nb::arg("epsilon") = 1e-6F,
             nb::arg("gate") = nb::none(),
-            nb::arg("max_row_slices") = ttml::metal::ops::rmsnorm::kMaxRowSlices,
             "RMSNorm forward -> [output, rms or None]. With `gate`, output = rmsnorm(input) * gamma * silu(gate) for "
-            "a head-major input [B*H,1,T,V] and a head-merged gate [B,1,T,H*V], which the output takes. When whole "
-            "tile-rows would leave cores idle, ungated rows may be split into up to `max_row_slices` (1 to 16) column "
-            "slices on as many cores; 1 keeps whole rows.");
+            "a head-major input [B*H,1,T,V] and a head-merged gate [B,1,T,H*V], which the output takes.");
         py_metal.def(
             "rmsnorm_bw",
             &ttml::metal::rmsnorm_bw,
@@ -774,9 +771,7 @@ void py_module(nb::module_& m) {
             nb::arg("dL_dout"),
             nb::arg("compute_dgamma") = true,
             nb::arg("gate") = nb::none(),
-            nb::arg("max_row_slices") = ttml::metal::ops::rmsnorm::kMaxRowSlices,
-            "Backward of rmsnorm_fw -> [dL/dinput, dL/dgamma [1,1,1,V] or None, dL/dgate or None]. "
-            "`max_row_slices` as in rmsnorm_fw.");
+            "Backward of rmsnorm_fw -> [dL/dinput, dL/dgamma [1,1,1,V] or None, dL/dgate or None].");
     }
 }
 
