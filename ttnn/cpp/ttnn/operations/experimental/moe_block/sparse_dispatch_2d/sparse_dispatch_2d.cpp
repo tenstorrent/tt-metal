@@ -74,7 +74,7 @@ uint32_t sparse_dispatch_2d_arena_bytes(MoEBlockResources& resources, uint32_t w
     const uint32_t S = resources.config().chunk_tokens / N;
     const uint32_t row_bytes = (width * dtype_bytes + 63u) / 64u * 64u;
     const uint32_t plan_bytes = (S * route_words(N) * 4u + 63u) / 64u * 64u;
-    return cb_sizes(topo, S, row_bytes, plan_bytes, default_group(width), 16).arena_bytes();
+    return cb_sizes(topo, S, row_bytes, plan_bytes, dispatch_group(resources), 16).arena_bytes();
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d
