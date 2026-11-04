@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Bit-exact regression for Wormhole's calculate_tiled_prod (metal llk_sfpu): three tiles are copied
-// into Dest, the production init runs once and one RC_custom call runs over each of the first two, and
-// every packed tile is compared word for word with test_sfpu_tiled_prod.py's host model. The calls are
-// unrolled back to back, which is where sfpi's own replay recording can meet the kernel's; the third
-// tile is a guard the kernel must leave untouched.
+// Two back-to-back RC_custom calculate_tiled_prod calls (WH metal llk_sfpu) on Dest tiles 0-1 and an
+// untouched guard tile 2; test_sfpu_tiled_prod.py checks every packed word.
 
 #include <cstdint>
 
@@ -74,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
