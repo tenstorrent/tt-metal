@@ -214,7 +214,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             sparsity.storage_type() == ttnn::StorageType::DEVICE,
         "All sparse matmul inputs must be on device");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr && input_tensor_b.buffer() != nullptr && sparsity.buffer() != nullptr,
+        input_tensor_a.is_allocated() && input_tensor_b.is_allocated() && sparsity.is_allocated(),
         "All sparse matmul inputs must be allocated in buffers");
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
@@ -360,7 +360,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         // a device tensor with a live buffer on that same device -- is_allocated() alone is also true
         // for a host tensor, and says nothing about device affinity.
         TT_FATAL(indices.storage_type() == ttnn::StorageType::DEVICE, "indices tensor must be on device");
-        TT_FATAL(indices.buffer() != nullptr, "indices tensor must be allocated in a buffer");
+        TT_FATAL(indices.is_allocated(), "indices tensor must be allocated in a buffer");
         TT_FATAL(
             indices.device() == input_tensor_a.device(),
             "indices tensor must be on the same device as the other sparse matmul inputs");
@@ -417,7 +417,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             "use_bias is set but no bias tensor was provided");
         const auto& bias = tensor_args.optional_input_tensors.at(1).value();
         TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "bias tensor must be on device");
-        TT_FATAL(bias.buffer() != nullptr, "bias tensor must be allocated in a buffer");
+        TT_FATAL(bias.is_allocated(), "bias tensor must be allocated in a buffer");
         TT_FATAL(
             bias.device() == input_tensor_a.device(),
             "bias tensor must be on the same device as the other sparse matmul inputs");
@@ -525,6 +525,12 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 pc->out_block_w != 0 && pc->out_block_h != 0,
                 "sparse_matmul: out_block_w and out_block_h must be non-zero");
+            TT_FATAL(
+                pc->in0_block_w != 0 && pc->per_core_M != 0 && pc->per_core_N != 0,
+                "sparse_matmul: in0_block_w ({}), per_core_M ({}) and per_core_N ({}) must be non-zero",
+                pc->in0_block_w,
+                pc->per_core_M,
+                pc->per_core_N);
             TT_FATAL(
                 pc->out_block_w % pc->out_subblock_w == 0,
                 "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "

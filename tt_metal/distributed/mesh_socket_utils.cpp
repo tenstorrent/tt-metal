@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -28,7 +29,7 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     }
     uint32_t local_service_core = 0;
     if (mesh_device.is_local(endpoint.device_coord)) {
-        auto* device = mesh_device.get_device(endpoint.device_coord);
+        auto* device = internal::get_device(mesh_device, endpoint.device_coord);
         auto& service = mesh_device.impl().metal_context().get_service_core_manager();
         local_service_core = service.claimed_cores(device->id()).contains(endpoint.core_coord) ? 1 : 0;
     }
