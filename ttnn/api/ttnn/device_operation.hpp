@@ -529,28 +529,6 @@ void prepare_operation_with_adapter(
 }
 
 template <DeviceOperationConcept device_operation_t>
-ttnn::MeshDevice* get_mesh_device(
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    ttnn::MeshDevice* mesh_device;
-    auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    // Try to get the mesh device from the first tensor
-    if (first_tensor.has_value()) [[likely]] {
-        mesh_device = first_tensor.value().device();
-    } else {
-        // If no tensor is found, try to get the mesh device from the operation attributes
-        auto mesh_device_opt = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
-        if (mesh_device_opt.has_value()) [[likely]] {
-            mesh_device = mesh_device_opt.value();
-        } else {
-            TT_THROW("No mesh device found in operation attributes or tensor args");
-        }
-    }
-
-    return mesh_device;
-}
-
-template <DeviceOperationConcept device_operation_t>
 void validate_input_tensors(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) {
@@ -624,7 +602,7 @@ typename device_operation_t::tensor_return_value_t launch(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
-    ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
@@ -661,7 +639,7 @@ void prepare(
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-    auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    auto* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
     TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);

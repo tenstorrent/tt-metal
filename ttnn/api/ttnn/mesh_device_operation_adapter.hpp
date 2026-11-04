@@ -512,29 +512,6 @@ public:
             "DeviceOperation's get_dynamic_runtime_args(): override_runtime_arguments supersedes the "
             "legacy hook. Delete get_dynamic_runtime_args() from this op.");
 
-        // The MeshDevice whose MetalEnv owns the op's Programs. Tensorless ops such as
-        // apply_device_delay carry it in their attributes instead, like the launcher's lookup.
-        static tt::tt_metal::distributed::MeshDevice& descriptor_mesh_device(
-            const operation_attributes_t& attrs,
-            const tensor_args_t& tensor_args,
-            const tensor_return_value_t& tensor_return_value) {
-            auto first_tensor = ttsl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_args);
-            if (!first_tensor.has_value()) {
-                first_tensor = ttsl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_return_value);
-            }
-            ttnn::MeshDevice* mesh_device = nullptr;
-            if (first_tensor.has_value()) {
-                mesh_device = first_tensor.value().device();
-            } else if (auto attr_device = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(attrs)) {
-                mesh_device = attr_device.value();
-            }
-            TT_FATAL(
-                mesh_device != nullptr,
-                "{} has no MeshDevice in its tensors or operation attributes to bind its Programs to",
-                ttsl::get_type_name<DeviceOperation>());
-            return *mesh_device;
-        }
-
         // Build a ProgramDescriptor for one mesh coordinate (the ProgramDescriptor variant).
         // The declarative WorkloadDescriptor path (the WorkloadDescriptor variant) does NOT go through
         // this — it iterates `workload_descriptor.programs` directly.
@@ -562,7 +539,7 @@ public:
             tensor_return_value_t& tensor_return_value) {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-            auto& mesh_device = descriptor_mesh_device(attrs, tensor_args, tensor_return_value);
+            auto& mesh_device = *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args);
 
             if constexpr (has_workload_descriptor) {
                 // WorkloadDescriptor variant — declarative: the factory builds the entire
@@ -720,7 +697,7 @@ public:
                             tensor_return_value,
                             std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
                         tt::tt_metal::Program parity_scratch{
-                            descriptor_mesh_device(attrs, tensor_args, tensor_return_value), parity_desc};
+                            *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args), parity_desc};
                         tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                         tt::tt_metal::assert_fastpath_parity(
                             program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
@@ -775,7 +752,7 @@ public:
                                 tensor_return_value,
                                 std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
                             tt::tt_metal::Program parity_scratch{
-                                descriptor_mesh_device(attrs, tensor_args, tensor_return_value), parity_desc};
+                                *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args), parity_desc};
                             tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                             tt::tt_metal::assert_fastpath_parity(
                                 program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
