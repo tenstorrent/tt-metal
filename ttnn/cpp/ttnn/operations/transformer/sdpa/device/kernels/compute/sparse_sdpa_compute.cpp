@@ -595,10 +595,18 @@ void kernel_main() {
                     sum_prev.reserve_back(Sqt);
                     reconfig_data_format(out_cur.get_cb_id(), cb_corr);
                     pack_reconfig_data_format(out_prev.get_cb_id());
-                    PACK((llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_prev.get_cb_id(), dst_size)));
+                    PACK((llk_pack_init<ckernel::PackMode::Default, false, false, false>(
+                        out_prev.get_cb_id(), dst_size)));
                     pack_reconfig_l1_acc(0);
                     salad_correct_fused<Sqt, vDHt, dst_size>(
-                        out_cur.get_cb_id(), sum_cur.get_cb_id(), cb_corr, out_prev.get_cb_id(), sum_prev.get_cb_id(), 0, 0, 0);
+                        out_cur.get_cb_id(),
+                        sum_cur.get_cb_id(),
+                        cb_corr,
+                        out_prev.get_cb_id(),
+                        sum_prev.get_cb_id(),
+                        0,
+                        0,
+                        0);
                     pack_to_unpack_sync();  // first-term packs land before the L1-accumulated second term
                     pack_reconfig_l1_acc(1);
                     salad_correct_fused<Sqt, vDHt, dst_size>(

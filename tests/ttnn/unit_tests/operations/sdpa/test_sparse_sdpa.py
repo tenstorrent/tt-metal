@@ -785,19 +785,19 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, T
 @run_for_blackhole()
 @pytest.mark.parametrize("small", ["1", "0"], ids=["splitk_small", "token_split"])
 @pytest.mark.parametrize(
-    "H,S,T,TOPK,kc,nv_id,grid_rows",
+    "H,S,T,TOPK,kc,nv_id",
     [
-        (64, 32, 4096, 2048, 128, "all", 2),  # GLM chunk 1024 per chip on the 96-core grid: 64 cores, half a token each
-        (64, 64, 4096, 2048, 128, "all", 2),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
-        (64, 32, 1024, 512, 128, "mixed", 2),  # sentinel tails: empty HEAD segments
-        (64, 64, 1024, 512, 128, "causal", 0),  # full grid, prefill-like valid counts
-        (32, 40, 1024, 256, 64, "mixed", 0),  # 4 chunks/token, odd S
+        (64, 32, 4096, 2048, 128, "all"),  # GLM chunk 1024 per chip: 64 cores, half a token each
+        (64, 64, 4096, 2048, 128, "all"),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
+        (64, 32, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments
+        (64, 64, 1024, 512, 128, "causal"),  # prefill-like valid counts
+        (32, 40, 1024, 256, 64, "mixed"),  # 4 chunks/token, odd S
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S, T, TOPK, kc, nv_id, grid_rows):
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S, T, TOPK, kc, nv_id):
     """Small-S split-K must match the torch golden (PCC) like the whole-token split, incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
-    if S >= grid.x * (grid.y - grid_rows):
+    if S >= grid.x * grid.y:
         pytest.skip("needs S < cores")
     monkeypatch.setenv("SPARSE_SDPA_SPLITK", "1")
     monkeypatch.setenv("SPARSE_SDPA_SPLITK_SMALL", small)
@@ -808,11 +808,6 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S
     }[nv_id]
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=73)
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=74, round_scale=True)
-    kw = {}
-    if grid_rows:
-        kw["sub_core_grids"] = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, grid_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-        )
     out = ttnn.transformer.sparse_sdpa(
         to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
         tt_packed,
@@ -821,7 +816,6 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S
         kv_format=SCALED_FP8_KV,
         scale=K_DIM**-0.5,
         k_chunk_size=kc,
-        **kw,
     )
     expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
     actual = ttnn.to_torch(out)

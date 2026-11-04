@@ -49,10 +49,10 @@ enum SparseCB : uint32_t {
     cb_attention_sink,  // persistent first-column vector: one sink scalar per head
     cb_sink_scratch,    // writer scratch for gathering sink scalars
     // split-K (sparse_sdpa_common.hpp seg_kind): this core's HEAD flash state out, the neighbour's HEAD state in
-    cb_send_out,    // [Sqt, vDHt] unnormalized out (compute -> writer -> core i-1)
-    cb_send_max,    // [Sqt] running max
-    cb_send_sum,    // [Sqt] partial row-sum
-    cb_recv_out,    // core i+1's HEAD state, NoC-written straight into these CBs' base
+    cb_send_out,  // [Sqt, vDHt] unnormalized out (compute -> writer -> core i-1)
+    cb_send_max,  // [Sqt] running max
+    cb_send_sum,  // [Sqt] partial row-sum
+    cb_recv_out,  // core i+1's HEAD state, NoC-written straight into these CBs' base
     cb_recv_max,
     cb_recv_sum,
     cb_merge_ctrl,  // writer -> compute: the neighbour's semaphore value (SPLIT_PARTIAL_*)
@@ -448,13 +448,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             TT_FATAL(
                 S < num_cores ? (c0 == 0 || b1 >= (static_cast<uint64_t>(t0) + 1) * n_chunks) : b1 - b0 >= n_chunks,
                 "sparse_sdpa split-K: a core range lies strictly inside one token (would need a multi-way merge)");
-            head_c0 = c0;                         // HEAD = token t0, chunks [c0, n_chunks)
+            head_c0 = c0;                       // HEAD = token t0, chunks [c0, n_chunks)
             tok_start = c0 != 0 ? t0 + 1 : t0;  // FULL tokens [tok_start, t1)
             tok_count = t1 - tok_start;
             tail_c1 = c1;  // TAIL = token t1, chunks [0, c1)
             if (head_c0 != 0) {
                 TT_FATAL(i > 0, "sparse_sdpa split-K: core 0 cannot have a HEAD segment");
-                const auto prev = device->worker_core_from_logical_core(cores[i - 1]);
+                const auto prev =
+                    device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{(i - 1) % grid.x, (i - 1) / grid.x});
                 prev_x = prev.x;
                 prev_y = prev.y;
             }

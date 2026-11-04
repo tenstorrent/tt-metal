@@ -233,9 +233,13 @@ void kernel_main() {
                         get_noc_addr(prev_noc_x, prev_noc_y, recv_out_l1),
                         sqt * vDHt * state_tile_bytes);
                     noc_async_write(
-                        send_max_cb.get_read_ptr(), get_noc_addr(prev_noc_x, prev_noc_y, recv_max_l1), sqt * state_tile_bytes);
+                        send_max_cb.get_read_ptr(),
+                        get_noc_addr(prev_noc_x, prev_noc_y, recv_max_l1),
+                        sqt * state_tile_bytes);
                     noc_async_write(
-                        send_sum_cb.get_read_ptr(), get_noc_addr(prev_noc_x, prev_noc_y, recv_sum_l1), sqt * state_tile_bytes);
+                        send_sum_cb.get_read_ptr(),
+                        get_noc_addr(prev_noc_x, prev_noc_y, recv_sum_l1),
+                        sqt * state_tile_bytes);
                     noc_async_write_barrier();
                     noc_semaphore_inc(prev_sem, sparse_sdpa::SPLIT_PARTIAL_VALID);
                     send_out_cb.pop_front(sqt * vDHt);
