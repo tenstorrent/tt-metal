@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
@@ -185,39 +186,67 @@ MSDAShapes derive_shapes(
 
     const auto& ls = loc.logical_shape();
     TT_FATAL(
-        ls.rank() == 6 || ls.rank() == 4,
-        "fused_msda: {} rank must be 6 (B, Q, H, L, P, 2) or 4 (B, Q, H, L*P*2), got shape {}",
+        ls.rank() == 6 || ls.rank() == 4 || ls.rank() == 3,
+        "fused_msda: {} rank must be 6 (B, Q, H, L, P, 2), 4 (B, Q, H, L*P*2) or 3 (B, Q, H*L*P*2), got shape {}",
         loc_name,
         ls);
-    TT_FATAL(
-        static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
-            static_cast<uint32_t>(ls[2]) == s.num_heads,
-        "fused_msda: {} leading dims {} do not match (B, Q, H) = ({}, {}, {})",
-        loc_name,
-        ls,
-        s.batch,
-        s.num_queries,
-        s.num_heads);
-    if (ls.rank() == 6) {
-        s.locations_packed = false;
-        TT_FATAL(
-            static_cast<uint32_t>(ls[3]) == s.num_levels && static_cast<uint32_t>(ls[4]) == s.num_points,
-            "fused_msda: {} (L, P) = ({}, {}) does not match attention_weights (L, P) = ({}, {})",
-            loc_name,
-            ls[3],
-            ls[4],
-            s.num_levels,
-            s.num_points);
-        TT_FATAL(ls[5] == 2, "fused_msda: {} last dim must be 2 (x, y), got {}", loc_name, ls[5]);
-    } else {
+    if (ls.rank() == 3) {
+        // The heads of one (b, q) share a row-major page; the reader reads head h's L*P*2 values at
+        // byte offset h * L*P*2 * elem_size inside it, so that offset has to be a legal NoC source
+        // address.
         s.locations_packed = true;
-        const uint32_t expected = s.num_levels * s.num_points * 2;
+        s.locations_heads_packed = true;
+        const uint32_t per_head = s.num_levels * s.num_points * 2;
         TT_FATAL(
-            static_cast<uint32_t>(ls[3]) == expected,
-            "fused_msda: packed {} last dim ({}) must equal L*P*2 = {}",
+            static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
+                static_cast<uint32_t>(ls[2]) == s.num_heads * per_head,
+            "fused_msda: heads-packed {} shape {} does not match (B, Q, H*L*P*2) = ({}, {}, {})",
             loc_name,
-            ls[3],
-            expected);
+            ls,
+            s.batch,
+            s.num_queries,
+            s.num_heads * per_head);
+        const uint32_t alignment = loc.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                       ? tt::tt_metal::hal::get_dram_alignment()
+                                       : tt::tt_metal::hal::get_l1_alignment();
+        TT_FATAL(
+            (per_head * loc.element_size()) % alignment == 0,
+            "fused_msda: heads-packed {} needs each head's L*P*2 values ({} B) to be a multiple of the buffer's "
+            "alignment ({} B); pass (B, Q, H, L*P*2) instead",
+            loc_name,
+            per_head * loc.element_size(),
+            alignment);
+    } else {
+        TT_FATAL(
+            static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
+                static_cast<uint32_t>(ls[2]) == s.num_heads,
+            "fused_msda: {} leading dims {} do not match (B, Q, H) = ({}, {}, {})",
+            loc_name,
+            ls,
+            s.batch,
+            s.num_queries,
+            s.num_heads);
+        if (ls.rank() == 6) {
+            s.locations_packed = false;
+            TT_FATAL(
+                static_cast<uint32_t>(ls[3]) == s.num_levels && static_cast<uint32_t>(ls[4]) == s.num_points,
+                "fused_msda: {} (L, P) = ({}, {}) does not match attention_weights (L, P) = ({}, {})",
+                loc_name,
+                ls[3],
+                ls[4],
+                s.num_levels,
+                s.num_points);
+            TT_FATAL(ls[5] == 2, "fused_msda: {} last dim must be 2 (x, y), got {}", loc_name, ls[5]);
+        } else {
+            s.locations_packed = true;
+            const uint32_t expected = s.num_levels * s.num_points * 2;
+            TT_FATAL(
+                static_cast<uint32_t>(ls[3]) == expected,
+                "fused_msda: packed {} last dim ({}) must equal L*P*2 = {}",
+                loc_name,
+                ls[3],
+                expected);
+        }
     }
 
     // ---- reference_points (V2 only) ----
@@ -288,6 +317,45 @@ void FusedMSDAOperation::validate_on_program_cache_miss(
             total += n;
         }
         TT_FATAL(total > 0, "fused_msda: num_valid_queries leaves no query to compute");
+    }
+    TT_FATAL(
+        attrs.device_valid_counts == args.num_valid_queries_tensor.has_value(),
+        "fused_msda: internal error, device_valid_counts does not match the supplied tensors");
+    if (attrs.device_valid_counts) {
+        TT_FATAL(
+            attrs.num_valid_queries.empty(), "fused_msda: pass num_valid_queries as a list or as a tensor, not both");
+        const Tensor& counts = *args.num_valid_queries_tensor;
+        TT_FATAL(
+            counts.storage_type() == StorageType::DEVICE && counts.is_allocated(),
+            "fused_msda: num_valid_queries tensor must be allocated on device");
+        TT_FATAL(
+            counts.device() == args.value.device(),
+            "fused_msda: num_valid_queries tensor must be on the same device as value");
+        TT_FATAL(
+            counts.dtype() == DataType::UINT32,
+            "fused_msda: num_valid_queries tensor must be UINT32, got {}",
+            counts.dtype());
+        TT_FATAL(
+            counts.layout() == Layout::ROW_MAJOR,
+            "fused_msda: num_valid_queries tensor must be ROW_MAJOR, got {}",
+            counts.layout());
+        TT_FATAL(
+            counts.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_msda: num_valid_queries tensor must be INTERLEAVED");
+        // One page holding all B counts: the kernels read it with a single NoC read.
+        const auto& cs = counts.logical_shape();
+        TT_FATAL(
+            cs.volume() == s.batch && cs[-1] == s.batch,
+            "fused_msda: num_valid_queries tensor needs its B ({}) counts in the last dim, got shape {}",
+            s.batch,
+            cs);
+        TT_FATAL(
+            counts.buffer()->page_size() == s.batch * sizeof(uint32_t),
+            "fused_msda: num_valid_queries tensor must hold its {} counts in one unpadded {}-byte page, got {}-byte "
+            "pages",
+            s.batch,
+            s.batch * sizeof(uint32_t),
+            counts.buffer()->page_size());
     }
 }
 
@@ -390,7 +458,8 @@ ttnn::Tensor fused_msda_from_offsets(
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
+    const std::optional<std::vector<uint32_t>>& num_valid_queries,
+    const std::optional<Tensor>& num_valid_queries_tensor) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -401,6 +470,7 @@ ttnn::Tensor fused_msda_from_offsets(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .device_valid_counts = num_valid_queries_tensor.has_value(),
     };
     if (num_valid_queries.has_value()) {
         // An empty list would read as "every query"; reject it instead of guessing.
@@ -416,6 +486,7 @@ ttnn::Tensor fused_msda_from_offsets(
         .sampling_locations = std::nullopt,
         .reference_points = reference_points,
         .sampling_offsets = sampling_offsets,
+        .num_valid_queries_tensor = num_valid_queries_tensor,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
@@ -427,7 +498,8 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const Tensor& attention_weights,
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
-    bool align_corners) {
+    bool align_corners,
+    bool device_valid_counts) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::Layout;
     using tt::tt_metal::PageConfig;
@@ -443,6 +515,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .device_valid_counts = device_valid_counts,
     };
     auto args = OperationType::tensor_args_t{
         .value = value,

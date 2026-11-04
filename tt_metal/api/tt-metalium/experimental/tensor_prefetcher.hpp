@@ -86,9 +86,9 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 // single core. It must be written before the request is queued (fence the writing queue with
 // WaitForCqOnTensorPrefetcher) and must not change until the consumer that reads it has run;
 // otherwise the prefetcher and the consumer disagree on which groups arrive and the delivery
-// target deadlocks. That fence cannot be captured into a trace while the request can, so a mask
-// written by an op inside the same trace is not fenced on replay: today the mask must be written,
-// and fenced, before execute_trace.
+// target deadlocks. That fence cannot be captured into a trace or a CommandList while the request
+// can, so a mask written by an op inside the same trace or list is not fenced on replay: today the
+// mask must be written, and fenced, before execute_trace or EnqueueCommandList.
 struct TensorPrefetcherGroupSelector {
     std::reference_wrapper<const MeshTensor> mask;
 };
@@ -179,7 +179,8 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
 //     non-capturing queue, or null (the default) — the request is sent immediately,
 //     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
-//     to opt into capture on the calling thread's current queue.
+//     to opt into capture on the calling thread's current queue. To record a request
+//     into a CommandList, use CommandListBuilder::add_tensor_prefetcher_request.
 //
 // Further preconditions, all TT_FATAL with the offending values:
 //   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
