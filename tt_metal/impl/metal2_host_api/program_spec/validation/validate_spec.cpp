@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "llrt/core_descriptor.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"

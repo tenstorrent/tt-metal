@@ -33,8 +33,8 @@ class GLM53Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
-    # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
-    # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
+    # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
+    # True = use them if the mesh allows, False = use older ops
     MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
@@ -45,9 +45,20 @@ class GLM53Config:
     # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 4.3% on hot_expert traffic and
     # nothing on balanced, for 40 -> 20 MB a chip.
     COMBINE_FWD_REDUCTION = 16
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 16..128 pages: this is the shallowest depth inside 5% of the
+    # dense region on BOTH traffic shapes. Balanced is there by 48, hot_expert is the binding one and is
+    # not until here. 27 MB a chip.
+    DISPATCH_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at

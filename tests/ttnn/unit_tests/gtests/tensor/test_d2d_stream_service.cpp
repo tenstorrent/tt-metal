@@ -30,13 +30,17 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <thread>
 #include <tuple>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
@@ -56,6 +60,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/arch.hpp>
@@ -64,6 +69,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -271,7 +277,7 @@ void verify_transfer(
     std::vector<uint32_t> trigger{num_workers};
     for (const auto& coord : coords) {
         tt::tt_metal::detail::WriteToDeviceL1(
-            sender_mesh->get_device(coord),
+            tt::tt_metal::internal::get_device(*sender_mesh, coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_data_ready_counter_addr(coord)),
             trigger);
@@ -346,7 +352,7 @@ public:
         ++num_sent_;
         std::vector<uint32_t> trigger{num_sent_ * num_workers_};
         for (const auto& coord : coords_) {
-            auto* d = sender_mesh_->get_device(coord);
+            auto* d = tt::tt_metal::internal::get_device(*sender_mesh_, coord);
             tt::tt_metal::detail::WriteToDeviceL1(
                 d, sender_->get_service_core(coord), static_cast<uint32_t>(sender_->get_metadata_addr(coord)), md);
             tt::tt_metal::detail::WriteToDeviceL1(
@@ -361,7 +367,7 @@ public:
     uint32_t released(const MeshCoordinate& coord) const {
         std::vector<uint32_t> v;
         tt::tt_metal::detail::ReadFromDeviceL1(
-            receiver_mesh_->get_device(coord),
+            tt::tt_metal::internal::get_device(*receiver_mesh_, coord),
             receiver_->get_worker_cores().start_coord,
             static_cast<uint32_t>(receiver_->get_data_ready_sem_addr()),
             sizeof(uint32_t),
@@ -387,7 +393,7 @@ public:
         std::vector<uint32_t> value{num_consumed_ * num_workers_};
         for (const auto& coord : coords_) {
             tt::tt_metal::detail::WriteToDeviceL1(
-                receiver_mesh_->get_device(coord),
+                tt::tt_metal::internal::get_device(*receiver_mesh_, coord),
                 receiver_->get_service_core(coord),
                 static_cast<uint32_t>(receiver_->get_consumed_counter_addr(coord)),
                 value);
@@ -455,7 +461,8 @@ void verify_stage_gate_descriptor(
         }
         EXPECT_EQ(
             desc.service_core_noc,
-            receiver_mesh->get_device(coord)->worker_core_from_logical_core(receiver->get_service_core(coord)));
+            tt::tt_metal::internal::get_device(*receiver_mesh, coord)
+                ->worker_core_from_logical_core(receiver->get_service_core(coord)));
         EXPECT_EQ(desc.fabric_node_id, receiver_mesh->get_fabric_node_id(coord));
         for (uint32_t g = 0; g < kGateNumGates; ++g) {
             EXPECT_FALSE(receiver->is_stage_gate_open(coord, g)) << "gate " << g << " not CLOSED at " << coord;
@@ -576,7 +583,8 @@ MeshWorkload make_remote_gate_opener_workload(
         *dst_node.mesh_id,
         static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open),
     };
-    tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        *opener_mesh, src_node, dst_node, links.front(), program, opener_core, rt);
     SetRuntimeArgs(program, kernel, opener_core, rt);
 
     MeshWorkload workload;
@@ -667,7 +675,7 @@ MeshWorkload make_sender_worker_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto service_phys = device->worker_core_from_logical_core(sender->get_service_core(coord));
         const uint32_t md_addr = metadata_enabled ? static_cast<uint32_t>(sender->get_metadata_addr(coord)) : 0u;
         for (const auto& wc : worker_cores) {
@@ -708,7 +716,7 @@ MeshWorkload make_receiver_worker_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(receiver->get_consumed_counter_addr(coord)),
@@ -750,7 +758,7 @@ void verify_metadata_sender_write(
     for (const auto& coord : sender->get_backing_tensor().tensor_topology().mesh_coords()) {
         readback.clear();
         tt::tt_metal::detail::ReadFromDeviceL1(
-            sender_mesh->get_device(coord),
+            tt::tt_metal::internal::get_device(*sender_mesh, coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_metadata_addr(coord)),
             md_bytes,
@@ -954,7 +962,7 @@ void verify_fabric_lease_teardown_mid_transfer(
     std::vector<uint32_t> trigger{core_range_volume(sender->get_worker_cores())};
     for (const auto& coord : coords) {
         tt::tt_metal::detail::WriteToDeviceL1(
-            sender_mesh->get_device(coord),
+            tt::tt_metal::internal::get_device(*sender_mesh, coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_data_ready_counter_addr(coord)),
             trigger);
@@ -967,7 +975,7 @@ void verify_fabric_lease_teardown_mid_transfer(
         for (const auto& coord : coords) {
             v.clear();
             tt::tt_metal::detail::ReadFromDeviceL1(
-                receiver_mesh->get_device(coord),
+                tt::tt_metal::internal::get_device(*receiver_mesh, coord),
                 receiver->get_worker_cores().start_coord,
                 static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
                 sizeof(uint32_t),
@@ -1006,7 +1014,7 @@ void expect_metadata_on_receiver_workers(
     const CoreRange recv_workers = receiver->get_worker_cores();
     std::vector<uint32_t> rb;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = receiver_mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*receiver_mesh, coord);
         for (const auto& wc : recv_workers) {
             rb.clear();
             tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, md_bytes, rb);
@@ -1031,7 +1039,7 @@ void expect_metadata_everywhere(
     for (const auto& coord : sender->get_backing_tensor().tensor_topology().mesh_coords()) {
         rb.clear();
         tt::tt_metal::detail::ReadFromDeviceL1(
-            sender_mesh->get_device(coord),
+            tt::tt_metal::internal::get_device(*sender_mesh, coord),
             sender->get_service_core(coord),
             static_cast<uint32_t>(sender->get_metadata_addr(coord)),
             md_bytes,
@@ -1213,7 +1221,8 @@ public:
             tt::tt_metal::distributed::ReplicatedBufferConfig{.size = control_bytes}, local, mesh_.get());
         control_addr_ = static_cast<uint32_t>(control_buffer_->address());
         for (const auto& coord : coords_) {
-            tt::tt_metal::detail::WriteToDeviceL1(mesh_->get_device(coord), worker_, control_addr_, control);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                tt::tt_metal::internal::get_device(*mesh_, coord), worker_, control_addr_, control);
         }
 
         auto workload = make_workload(sender, static_cast<uint32_t>(chunks.size()));
@@ -1224,7 +1233,8 @@ public:
     void allow(uint32_t n) {
         std::vector<uint32_t> go{n};
         for (const auto& coord : coords_) {
-            tt::tt_metal::detail::WriteToDeviceL1(mesh_->get_device(coord), worker_, control_addr_, go);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                tt::tt_metal::internal::get_device(*mesh_, coord), worker_, control_addr_, go);
         }
     }
 
@@ -1236,7 +1246,7 @@ public:
         std::vector<uint32_t> cancel{1u};
         for (const auto& coord : coords_) {
             tt::tt_metal::detail::WriteToDeviceL1(
-                mesh_->get_device(coord), worker_, control_addr_ + sizeof(uint32_t), cancel);
+                tt::tt_metal::internal::get_device(*mesh_, coord), worker_, control_addr_ + sizeof(uint32_t), cancel);
         }
         Finish(mesh_->mesh_command_queue());
     }
@@ -1281,8 +1291,8 @@ private:
                 CoreRange{worker_, worker_},
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
-            const auto service =
-                mesh_->get_device(coord)->worker_core_from_logical_core(sender->get_service_core(coord));
+            const auto service = tt::tt_metal::internal::get_device(*mesh_, coord)
+                                     ->worker_core_from_logical_core(sender->get_service_core(coord));
             SetRuntimeArgs(
                 program,
                 kernel,
@@ -1548,7 +1558,7 @@ MeshWorkload make_receiver_consumer_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
         for (const auto& wc : worker_cores) {
             const auto [start_page, end_page] =
@@ -1656,7 +1666,7 @@ MeshWorkload make_bridge_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto h2d_service_phys = device->worker_core_from_logical_core(upstream.get_service_core(coord));
         const auto d2d_service_phys = device->worker_core_from_logical_core(d2d_sender->get_service_core(coord));
         const uint32_t d2d_md_addr =
@@ -2839,6 +2849,170 @@ TEST_F(D2DStreamServiceTest, StageGateWorkerKeepOpenSingleChipPair) {
 TEST_F(D2DStreamServiceTest, StageGateWorkerKeepOpenRowPair) {
     D2D_ROW_PAIR_GUARD();
     verify_stage_gate_worker_keep_open(sender_mesh, receiver_mesh);
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline descriptor
+// ---------------------------------------------------------------------------
+
+TEST(D2DPipelineDescriptorTest, RoundTrip) {
+    using tt::tt_metal::distributed::MeshCoreCoord;
+    using ttnn::PCIeCoreLocation;
+    ttnn::D2DPipelineDescriptor desc;
+    // With `with_extras`, the receiver has metadata and stage gates; without, it has neither.
+    const auto receiver = [](int sender_rank, uint32_t pcie_device_id, uint32_t mesh_id, bool with_extras) {
+        const PCIeCoreLocation metadata_core{
+            .pcie_device_id = pcie_device_id,
+            .core = MeshCoreCoord(MeshCoordinate(0, 1), CoreCoord(0, 0)),
+            .virtual_core = CoreCoord(1, 2)};
+        return ttnn::D2DReceiverDescriptor{
+            .sender_rank = sender_rank,
+            .metadata_size_bytes = with_extras ? 20u : 0u,
+            .metadata_addr = with_extras ? 0x3000u : 0u,
+            .stage_gate =
+                with_extras
+                    ? ttnn::D2DStageGateConfig{.num_gates = 4, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 16}
+                    : ttnn::D2DStageGateConfig{},
+            .stage_gate_stride_bytes = with_extras ? 16u : 0u,
+            .coords = {ttnn::D2DReceiverCoordDescriptor{
+                .service_core =
+                    PCIeCoreLocation{
+                        .pcie_device_id = pcie_device_id,
+                        .core = MeshCoreCoord(MeshCoordinate(0, 1), CoreCoord(2, 3)),
+                        .virtual_core = CoreCoord(18, 19)},
+                .fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id}, 3),
+                .sender_fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id - 1}, 3),
+                .backing_tensor_addr = 0x1'0000'0040ull,
+                .stage_gate_base_addr = with_extras ? 0x2000u : 0u,
+                .metadata_core = with_extras ? std::optional(metadata_core) : std::nullopt}}};
+    };
+    // Rank 0 receives nothing. Rank 1 receives from rank 0 over two channels, so its one boundary
+    // has two receivers. Rank 2 hosts two stages, so it has two boundaries.
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{
+        .rank = 1,
+        .host_name = "host1",
+        .boundaries = {{.receivers = {receiver(0, 7, 1, true), receiver(0, 7, 1, false)}}}});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{
+        .rank = 2,
+        .host_name = "host2",
+        .boundaries = {{.receivers = {receiver(1, 2, 2, true)}}, {.receivers = {receiver(2, 3, 3, false)}}}});
+    EXPECT_EQ(ttnn::D2DPipelineDescriptor::deserialize(desc.serialize()), desc);
+
+    const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_round_trip_" + std::to_string(getpid()));
+    desc.write_to_file(path);
+    EXPECT_EQ(ttnn::D2DPipelineDescriptor::wait_and_read(path), desc);
+    std::filesystem::remove(path);
+    EXPECT_ANY_THROW((void)ttnn::D2DPipelineDescriptor::wait_and_read(path, /*timeout_ms=*/10));
+}
+
+// describe() reports the receiver's own addresses, and a single-rank export round-trips through the file.
+// A second pair on the same chips is a second channel across the same boundary. With
+// `second_sender_mesh`/`second_receiver_mesh` set, a pair on those chips stands in for a second
+// pipeline stage on this rank.
+void verify_pipeline_descriptor_export(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const std::shared_ptr<MeshDevice>& second_sender_mesh = nullptr,
+    const std::shared_ptr<MeshDevice>& second_receiver_mesh = nullptr) {
+    // Both pairs on these chips share the fabric routers in one lease group, like the prefill
+    // runner's streams across one boundary. Without the group, the second sender finds every
+    // router held by the first.
+    const std::string link_group = "export-test";
+    auto gated_cfg = make_stage_gate_config(sender_mesh);
+    gated_cfg.share_fabric_links = true;
+    gated_cfg.fabric_link_group = link_group;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(gated_cfg));
+    const auto rd = receiver->describe();
+    EXPECT_EQ(rd.metadata_size_bytes, kGateMetadataBytes);
+    EXPECT_EQ(
+        rd.stage_gate,
+        (ttnn::D2DStageGateConfig{
+            .num_gates = kGateNumGates,
+            .slot_id_offset_bytes = kGateSlotOffsetBytes,
+            .gate_mode_offset_bytes = kGateModeOffsetBytes}));
+    EXPECT_EQ(rd.metadata_addr, receiver->get_metadata_addr());
+    EXPECT_EQ(rd.stage_gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
+    ASSERT_FALSE(rd.coords.empty());
+    for (const auto& rc : rd.coords) {
+        const auto& coord = rc.service_core.core.device_coord;
+        ASSERT_TRUE(rc.metadata_core.has_value());
+        EXPECT_EQ(rc.metadata_core->core, tt::tt_metal::distributed::MeshCoreCoord(coord, kWorkerCores.start_coord));
+        EXPECT_EQ(
+            rc.metadata_core->virtual_core, receiver_mesh->worker_core_from_logical_core(kWorkerCores.start_coord));
+        EXPECT_EQ(rc.fabric_node_id, receiver_mesh->get_fabric_node_id(coord));
+        EXPECT_EQ(rc.sender_fabric_node_id, sender_mesh->get_fabric_node_id(coord));
+        const auto gate = receiver->get_stage_gate_descriptor(coord);
+        EXPECT_EQ(rc.stage_gate_base_addr, gate.gate_base_addr);
+        EXPECT_EQ(rc.service_core.virtual_core, gate.service_core_noc);
+        EXPECT_EQ(
+            rc.service_core.virtual_core,
+            receiver_mesh->worker_core_from_logical_core(rc.service_core.core.core_coord));
+        EXPECT_EQ(
+            rc.backing_tensor_addr, receiver->get_backing_tensor().mesh_buffer().get_device_buffer(coord)->address());
+    }
+
+    // No metadata and no gates, so their fields come out empty.
+    const auto expect_plain = [](const ttnn::D2DReceiverDescriptor& d) {
+        EXPECT_EQ(d.metadata_addr, 0u);
+        EXPECT_EQ(d.stage_gate, ttnn::D2DStageGateConfig{});
+        EXPECT_EQ(d.stage_gate_stride_bytes, 0u);
+        for (const auto& rc : d.coords) {
+            EXPECT_FALSE(rc.metadata_core.has_value());
+            EXPECT_EQ(rc.stage_gate_base_addr, 0u);
+        }
+    };
+    auto side_cfg = make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512}), /*share_fabric_links=*/true);
+    side_cfg.fabric_link_group = link_group;
+    auto [side_sender, side_receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(side_cfg));
+    const auto side = side_receiver->describe();
+    expect_plain(side);
+    EXPECT_NE(side.coords.at(0).service_core, rd.coords.at(0).service_core);
+
+    std::vector<std::vector<const D2DStreamServiceReceiver*>> boundaries = {{receiver.get(), side_receiver.get()}};
+    std::vector<ttnn::D2DBoundaryDescriptor> expected = {{.receivers = {rd, side}}};
+    std::unique_ptr<D2DStreamServiceSender> second_sender;
+    std::unique_ptr<D2DStreamServiceReceiver> second_receiver;
+    if (second_sender_mesh) {
+        std::tie(second_sender, second_receiver) = D2DStreamService::create_pair(
+            second_sender_mesh, second_receiver_mesh, make_config(second_sender_mesh, ttnn::Shape({1, 1, 32, 512})));
+        const auto second = second_receiver->describe();
+        expect_plain(second);
+        boundaries.push_back({second_receiver.get()});
+        expected.push_back({.receivers = {second}});
+    }
+
+    // A file left by an earlier run is replaced, and the export's handle removes the file.
+    const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_export_" + std::to_string(getpid()));
+    ttnn::D2DPipelineDescriptor{}.write_to_file(path);
+    auto file = D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), boundaries);
+    ASSERT_NE(file, nullptr);
+    EXPECT_EQ(file->path(), path);
+    const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(path);
+    ASSERT_EQ(desc.ranks.size(), 1u);
+    EXPECT_FALSE(desc.ranks[0].host_name.empty());
+    EXPECT_EQ(desc.ranks[0].boundaries, expected);
+    file.reset();
+    EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST_F(D2DStreamServiceTest, PipelineDescriptorExportSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    if (shape[0] < 2 || shape[1] < 2) {
+        verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
+        return;
+    }
+    // The other row of the mesh carries a second stage.
+    verify_pipeline_descriptor_export(
+        sender_mesh,
+        receiver_mesh,
+        this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+        this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)));
+}
+
+TEST_F(D2DStreamServiceTest, PipelineDescriptorExportRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
 }
 
 }  // namespace
