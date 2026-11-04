@@ -25,7 +25,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>

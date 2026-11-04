@@ -28,7 +28,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"

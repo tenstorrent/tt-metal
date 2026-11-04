@@ -23,7 +23,6 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/io_window/io_window.hpp>
 #include <tt-umd/pcie/tlb_handle.hpp>
 #include <tt-umd/pcie/tlb_window.hpp>

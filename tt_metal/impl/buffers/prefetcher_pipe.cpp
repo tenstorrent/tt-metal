@@ -40,7 +40,6 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_page_mapping.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>

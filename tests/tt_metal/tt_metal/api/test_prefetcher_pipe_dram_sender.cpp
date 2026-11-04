@@ -39,7 +39,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"

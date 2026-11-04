@@ -18,8 +18,6 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"

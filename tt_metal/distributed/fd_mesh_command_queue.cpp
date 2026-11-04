@@ -12,8 +12,6 @@
 #include <mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -41,7 +39,6 @@
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
