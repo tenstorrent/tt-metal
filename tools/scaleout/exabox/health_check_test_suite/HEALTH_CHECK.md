@@ -387,13 +387,14 @@ Per tray, in-band with `ipmitool raw 0x06 0x52` on the tray's bus (tray 1
 | **PASS** | Both HSCs clean (CML alone is not a fault) and the CPLD shows both 12 V rails good. |
 | **FAIL** | A latched HSC fault or a CPLD 12 V loss. `details` names the tray, its BDF range, the HSC address and the bits, with the hint "bus bar / tray 12 V feed". |
 | **WARN** | Some reads got no reply or were cut by the phase's time limit ("not read"), the CPLD reading is unexpected, or the tray is powered off (CPLD power enable low: its OFF latch is not judged, and no bus bar hint is given). |
-| **SKIP** | No route at all (no ipmitool, no sudo, no BMC reply on the first tray), dry run, or `--skip-tray-power`. |
+| **SKIP** | No route at all (no ipmitool, no sudo, no successful read on any tray), dry run, or `--skip-tray-power`. |
 
 The phase is bounded at 120 s in all, and each ipmitool call at 15 s (less
 when the phase has less left). Once the limit is spent it sends nothing more,
-and the reads still missing are WARN "not read". Two timeouts before any
-read succeeded count as no route, so an unresponsive BMC costs about 30 s and
-one SKIP.
+and the reads still missing are WARN "not read". Every tray is tried: a tray
+whose reads all fail (a dead tray) is WARN "not read" and the other trays are
+still judged. Two timeouts before any read succeeded count as no route, so an
+unresponsive BMC costs about 30 s and one SKIP.
 
 Reads only. Every transaction is checked against a fixed list before ipmitool
 runs; nothing is written to an HSC (no CLEAR_FAULTS, no limits, no peak

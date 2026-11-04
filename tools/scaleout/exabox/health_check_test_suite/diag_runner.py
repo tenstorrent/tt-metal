@@ -2880,7 +2880,8 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
     """Read and judge every tray's 12 V feed latches into `phase`.
 
     Bounded by TRAY_POWER_PHASE_S: trays left when it is spent are WARN 'not
-    read'. No successful read on the first tray means no route: one SKIP.
+    read'. Every tray is tried, so a dead tray does not hide the others.
+    No successful read on any tray means no route: one SKIP.
     """
     if not TIER_TRAY_POWER.get(tier, False):
         phase.add(Check(name="tray_12v_feed", status=SKIP, details=f"not run at tier {tier}", ip="board"))
@@ -2892,9 +2893,9 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
     checks = []
     for tray, bus in sorted(TRAY_POWER_BUS.items()):
         hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
+        # No early exit on a tray with no reply: a dead tray NACKs fast and
+        # must not hide the next ones; hangs are bounded by the reader.
         checks.append(tray_power_check(tray, hscs, reader.cpld(bus), why=reader.stopped))
-        if reader.reads_ok == 0:
-            break
     if reader.stopped:
         log(f"tray_power: stopped reading: {reader.stopped}")
     if reader.reads_ok == 0:

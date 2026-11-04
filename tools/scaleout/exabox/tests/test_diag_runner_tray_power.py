@@ -247,6 +247,28 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertEqual([(c.name, c.status) for c in phase.checks], [("tray_12v_feed", SKIP)])
         self.assertIn("Unable to send RAW command", phase.checks[0].details)
 
+    def test_dead_tray_1_does_not_hide_trays_2_to_4(self):
+        # Tray 1's HSCs and CPLD NACK at once (a dead tray); trays 2-4 answer.
+        bmc = FakeBmc(
+            hsc={(3, 0x40): {"word": 0x2002, "input": 0x20, "iout": 0x00}},
+            fail={(1, a) for a in (0x40, 0x42, 0x80)},
+        )
+        checks = by_tray(run_phase(bmc))
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [WARN, PASS, FAIL, PASS])
+        self.assertIn("not read: HSC 0x40, HSC 0x42, CPLD", checks[1].details)
+        for s in ("tray 3", "HSC 0x40", "VIN_UV_WARN", "bus bar / tray 12 V feed"):
+            self.assertIn(s, checks[3].details)
+        self.assert_read_only(bmc)
+
+    def test_dead_trays_1_to_3_do_not_hide_tray_4(self):
+        bmc = FakeBmc(
+            hsc={(4, 0x42): {"word": 0x2002, "input": 0x20, "iout": 0x00}},
+            fail={(t, a) for t in (1, 2, 3) for a in (0x40, 0x42, 0x80)},
+        )
+        checks = by_tray(run_phase(bmc))
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [WARN, WARN, WARN, FAIL])
+        self.assertIn("bus bar / tray 12 V feed", checks[4].details)
+
     def test_missing_ipmitool_is_one_skip(self):
         def runner(argv):
             raise FileNotFoundError("ipmitool")
