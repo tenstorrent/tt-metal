@@ -41,6 +41,7 @@ void bind_head_plan(nb::module_& mod) {
         .def_ro("GX", &HeadLayout::GX)
         .def_ro("compact", &HeadLayout::compact)
         .def_ro("xdram", &HeadLayout::xdram)
+        .def_ro("NIT", &HeadLayout::NIT)
         .def(nb::self == nb::self)
         .def("__repr__", [](const HeadLayout& l) { return describe_layout(l); });
 

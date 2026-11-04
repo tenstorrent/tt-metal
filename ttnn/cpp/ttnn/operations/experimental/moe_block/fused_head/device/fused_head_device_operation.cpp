@@ -44,6 +44,7 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.lay.GX,
         c.lay.compact,
         c.lay.xdram,
+        c.lay.NIT,
         c.shape.rows,
         c.shape.A,
         c.fidelity,

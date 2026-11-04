@@ -1169,7 +1169,10 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
         {  // the router logits on the engine
             const auto [ET, KTO] = a.router;
             ETC = ceil_div(ET, GX);
-            const uint32_t MTR = MT * NCH;
+            if (a.router_iters == 0 || NCH % a.router_iters) {
+                fail("router iterations " + std::to_string(a.router_iters) + " do not divide the row chunks");
+            }
+            const uint32_t MTR = MT * NCH / a.router_iters;  // (a core's rows of one router iteration)
             RG = ETC * MTR <= DT ? MTR : (ETC * MT <= DT ? MT : 1);
             if (ETC * RG > DT) {
                 fail("the router logits on the engine: ETC x its row group in DEST");
@@ -1237,7 +1240,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
         sizes.emplace_back(k_, v < o ? *ends.upper_bound(v) - v : 0);
     }
     {  // (the router's buffers over a region another chip writes: those writes wait for "router done")
-        const int64_t lo = at("rx"), hi = at("ro") + int64_t(ETC) * MT * NCH * 4096;
+        const int64_t lo = at("rx"), hi = at("ro") + int64_t(ETC) * MT * NCH / a.router_iters * 4096;
         auto over = [&](const std::string& k, int64_t v) { return v > 0 && at(k) < hi && lo < at(k) + v; };
         rtr_zones = over("arrf", region(rs_sizes, "arrf")) || over("arrb", region(rs_sizes, "arrb"));
         if (a.latent) {
