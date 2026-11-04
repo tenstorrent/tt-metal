@@ -35,9 +35,41 @@ MESH_PARAMS = [
 ]
 
 
+def _mapper(mesh, h: torch.Tensor):
+    """The mesh placement of a host tensor shaped [ROWS, 1, 32, W] (row shards, replicated over the columns) or
+    [ROWS, COLS, 32, W] (one shard per chip): the GLMMesh upload's own mappers."""
+    return mesh.shard_2d(0, 1 if (h.shape[1] == COLS and COLS > 1) else None)
+
+
 def _chips(t: ttnn.Tensor) -> list[torch.Tensor]:
     """Per chip, the logical rows of ``t`` (the ops allocate T or rows * T logical rows, tile-padded)."""
     return [ttnn.to_torch(d).float().reshape(t.shape[-2], -1) for d in ttnn.get_device_tensors(t)]
+
+
+def _replay_with_new_inputs(mesh, op, inputs, outputs, hosts, expect, rounds: int = 3) -> None:
+    """A stale-staging race is invisible when every replay carries the same data: capture one call, then for a few
+    rounds write fresh host data into the input buffers, replay, and check the outputs against ``expect(hosts)``
+    (``hosts``: the per-input host tensors in the mesh placement the inputs were uploaded with; ``expect``: host
+    tensors -> the per-chip expected outputs, one list per output)."""
+    mesh_device = mesh.device
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(inputs, outputs)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    g = torch.Generator().manual_seed(7)
+    for rnd in range(rounds):
+        fresh = [(torch.randn(h.shape, generator=g) * (h != 0)).bfloat16().float() for h in hosts]
+        for dev, h in zip(inputs, fresh):
+            host = ttnn.from_torch(h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_mapper(mesh, h))
+            ttnn.copy_host_to_device_tensor(host, dev)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        for out, exp_chips in zip(outputs, expect(fresh)):
+            for i, (got, exp) in enumerate(zip(_chips(out), exp_chips)):
+                err = (got - exp).abs()
+                tol = exp.abs() * (1 / 128) + 1e-3
+                assert bool(
+                    (err <= tol).all()
+                ), f"round {rnd} chip {i}: max err {err.max().item():.4f} (stale staging?)"
+    ttnn.release_trace(mesh_device, tid)
 
 
 def _timed(mesh_device, op, inputs, outputs) -> tuple[float, float]:
@@ -83,6 +115,17 @@ def test_gather(mesh_device):
     for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
         assert torch.equal(cx, exp_x), f"chip {i}: x gather differs ({(cx != exp_x).sum().item()} elements)"
         assert torch.equal(cw, exp_w), f"chip {i}: routing gather differs ({(cw != exp_w).sum().item()} elements)"
+    _replay_with_new_inputs(
+        mesh,
+        op,
+        [xd, wd],
+        [xg, wg],
+        [x, w],
+        lambda hs: [
+            [hs[0][:, 0, :T].reshape(ROWS * T, H)] * (ROWS * COLS),
+            [hs[1][:, 0, :T].reshape(ROWS * T, E)] * (ROWS * COLS),
+        ],
+    )
     eager, traced = _timed(mesh_device, op, [xd, wd], [xg, wg])
     for i, (cx, cw) in enumerate(zip(_chips(xg), _chips(wg))):
         assert torch.equal(cx, exp_x) and torch.equal(cw, exp_w), f"chip {i}: differs after the trace replays"
@@ -108,6 +151,16 @@ def test_reduce(mesh_device):
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3  # one bf16 ulp: the device's fp32 order may differ from torch's
             assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
+    _replay_with_new_inputs(
+        mesh,
+        op,
+        [yd],
+        [out],
+        [y],
+        lambda hs: [
+            [hs[0][:, 0, r * T : (r + 1) * T].sum(dim=0).bfloat16().float() for r in range(ROWS) for _ in range(COLS)]
+        ],
+    )
     eager, traced = _timed(mesh_device, op, [yd], [out])
     chips2 = _chips(out)
     for i, (a, b) in enumerate(zip(chips, chips2)):
@@ -140,6 +193,14 @@ def test_allreduce(mesh_device):
             err = (got - exp).abs()
             tol = exp.abs() * (1 / 128) + 1e-3
             assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
+    _replay_with_new_inputs(
+        mesh,
+        op,
+        [yd],
+        [out],
+        [y],
+        lambda hs: [[hs[0][r, :, :T].sum(dim=0).bfloat16().float() for r in range(ROWS) for _ in range(COLS)]],
+    )
     eager, traced = _timed(mesh_device, op, [yd], [out])
     chips2 = _chips(out)
     for i, (a, b) in enumerate(zip(chips, chips2)):
