@@ -23,9 +23,10 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    COMPRESSED_META,
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
     CUSTOM_MM_LAYOUT,
@@ -385,6 +386,13 @@ def run_compressed(
     calls=CUSTOM_MM_CALLS(),
     dest_layout=CustomMmDestLayout.Dense,
     dest_sync=DestSync.Half,
+    compression_case=None,
+    golden_multiplier=1,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -446,7 +454,7 @@ def run_compressed(
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, N), dtype=torch.bfloat16)
-    b_dequant = torch.zeros((K, N), dtype=torch.bfloat16)
+    b_dequant = None if is_perf else torch.zeros((K, N), dtype=torch.bfloat16)
     tiles = []  # (code, packed_bytes) per assignment unit, in row-major order
     for i, code in enumerate(assignment):
         r, c = divmod(i, cu)
@@ -455,10 +463,11 @@ def run_compressed(
             c * granularity : (c + 1) * granularity,
         ]
         full = pack_bfp_tile(blk, code, tile_dim=granularity)
-        b_dequant[
-            r * granularity : (r + 1) * granularity,
-            c * granularity : (c + 1) * granularity,
-        ] = unpack_bfp_tile(full, code, tile_dim=granularity)
+        if not is_perf:
+            b_dequant[
+                r * granularity : (r + 1) * granularity,
+                c * granularity : (c + 1) * granularity,
+            ] = unpack_bfp_tile(full, code, tile_dim=granularity)
         tiles.append((code, full))
 
     packed_a = b""
@@ -467,46 +476,54 @@ def run_compressed(
     packed_b, aux = pack_b(tiles)
     meta = make_meta(assignment, cu, ku, aux)
 
-    # Golden via the standard MatmulGolden path (LoFi). Feed the already-bfp-quantized
-    # b_dequant as Float16_b so MatmulGolden does NOT re-quantize it, and keep
-    # tilize=False — tile layout is handled device-side (pack_bfp_tile / the result
-    # reorder below), so the golden stays row-major. Instantiate MatmulGolden directly
-    # rather than via get_golden_generator: the harness swaps in a DummyGoldenGenerator
-    # (zeros(1024)) during compile-producer, which would break the reshape for narrow-M.
-    golden = MatmulGolden()(
-        torch_a,
-        b_dequant,
-        DataFormat.Float16_b,
-        MathFidelity.LoFi,
-        input_A_dimensions=[M, K],
-        input_B_dimensions=[K, N],
-        tilize=False,
-        input_A_format=DataFormat.Float16_b,
-        input_B_format=DataFormat.Float16_b,
-    ).reshape(M, N)
+    golden = None
+    if not is_perf:
+        # Keep the golden row-major; packing and result reordering are device-side.
+        golden = (
+            MatmulGolden()(
+                torch_a,
+                b_dequant,
+                DataFormat.Float16_b,
+                MathFidelity.LoFi,
+                input_A_dimensions=[M, K],
+                input_B_dimensions=[K, N],
+                tilize=False,
+                input_A_format=DataFormat.Float16_b,
+                input_B_format=DataFormat.Float16_b,
+            ).reshape(M, N)
+            * golden_multiplier
+        )
 
-    configuration = TestConfig(
-        kernel,
-        InputOutputFormat(
-            input_format=DataFormat.Float16_b,
-            output_format=DataFormat.Float16_b,
-            input_format_B=DataFormat.Bfp8_b,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=kernel,
+            formats=InputOutputFormat(
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
+                input_format_B=DataFormat.Bfp8_b,
+            ),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                calls,
+                CUSTOM_MM_LAYOUT(dest_layout),
+                DEST_SYNC(dest_sync),
+            ]
+            + ([COMPRESSED_META(compression_case, meta)] if is_perf else []),
+            runtimes=[
+                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+            ],
+            variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
+            dest_acc=DestAccumulation.No,
         ),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
-            CUSTOM_MM_LAYOUT(dest_layout),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
-        dest_acc=DestAccumulation.No,
     )
-
-    res = configuration.run().result
+    if is_perf:
+        return
+    res = outcome.result
     # Device packs the result as ct = N//32 tiles; within a tile the two 16-col faces
     # (M x FACE_C_DIM, row-major) sit contiguously, then padding out to a full 32-row tile.
     # Drop the per-tile padding (span = len // ct) and reorder to row-major (M, N).
