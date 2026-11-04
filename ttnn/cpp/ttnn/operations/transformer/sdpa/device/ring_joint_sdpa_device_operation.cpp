@@ -898,6 +898,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             N_local_kv / tt::constants::TILE_HEIGHT};
         TT_FATAL(geometry.valid(), "Split KV requires tile-aligned whole KV regions and non-overflowing capacity");
         TT_FATAL(
+            tensor_args.has_k_expand(),
+            "Split KV (kv_stripe_split={}) requires MLA expanded K and V (k_expand_weight, v_expand_weight)",
+            args.kv_stripe_split);
+        TT_FATAL(
             args.is_causal && !args.is_balanced && !args.is_cross && !args.has_sliding_window() &&
                 !args.circular_kv_cache && !has_joint_tensors,
             "Split KV supports only unbalanced dense causal chunked attention without joint, sliding or circular "

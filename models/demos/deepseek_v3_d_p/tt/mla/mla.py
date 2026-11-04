@@ -1190,7 +1190,7 @@ class ttMLA:
             meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
         if self.tp_shard_kv:
             # The TP-deduped cache holds each chip's stripe of its SP row: gather over the whole mesh, every stripe a
-            # source (kv_stripe_split = tp), as ring_mla does. The route decides whether the ring closes.
+            # source (kv_stripe_split = tp). The route decides whether the ring closes.
             self._declare_q_sequence_topology(tt_q, seq_len_local)
             meta_slot_kwargs.update(cluster_axis=None, topology=ttnn.Topology.Ring)
         return self._expanded_k_attn(
@@ -1214,8 +1214,8 @@ class ttMLA:
         metadata,
     ):
         """ring_mla over the latent kvpe cache: K and V (its first kv_lora_rank columns, materialized in-op) both come
-        from it, so wkv_b2 is applied to the compact (kv_lora_rank-wide) attention output afterwards. With a TP-sharded
-        cache ring_mla gathers over the full mesh."""
+        from it, so wkv_b2 is applied to the compact (kv_lora_rank-wide) attention output afterwards. TP-replicated
+        cache only: a TP-deduped cache runs expanded K and V (set_tp_shard_kv)."""
         if metadata is not None:
             meta_slot_kwargs = {
                 "slot_id": metadata[0],
@@ -1227,8 +1227,6 @@ class ttMLA:
                 meta_slot_kwargs["kv_valid_end_tensor"] = metadata[2]
         else:
             meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
-        if self.tp_shard_kv:
-            self._declare_q_sequence_topology(tt_q, seq_len_local)
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
             kvpe_cache.storage,
@@ -1241,10 +1239,9 @@ class ttMLA:
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
             num_links=self.ccl_num_links,
-            cluster_axis=None if self.tp_shard_kv else self.sp_axis,
+            cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            # Full mesh asks for a ring; the route decides whether it closes.
-            topology=ttnn.Topology.Ring if self.tp_shard_kv else self.sp_ccl_topology,
+            topology=self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -2467,8 +2464,8 @@ class ttMLA:
         )
 
     def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]) -> None:
-        """Sparse always dedups (its gather has no other mode); dense opts in. ring_mla and expanded K then gather the
-        split cache over the full mesh (split KV). Weights and buffers do not depend on it, so a built model can switch
+        """Sparse always dedups (its gather has no other mode); dense opts in, with expanded K and V gathering the split
+        cache over the full mesh (split KV). Weights and buffers do not depend on it, so a built model can switch
         layout between runs."""
         if tp_shard_kv is None:
             self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
@@ -2484,6 +2481,11 @@ class ttMLA:
             ), "dense tp_shard_kv is the chunked split-KV path; single-shot prefill has no striped write"
         # Checked here, not on the first chunk after a long weight load.
         if self.tp_shard_kv and not self._has_indexer:
+            # The op's split KV (the TP-deduped cache gathered over the full mesh) runs expanded K and V only.
+            assert self._expanded_k, (
+                f"dense tp_shard_kv needs expanded K and V, which do not apply to MLA layer {self.layer_idx} "
+                "(see _expanded_k_supported); use a TP-replicated cache"
+            )
             assert self.sp_axis == 0 and self.tp_axis == 1, (
                 f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (the split-KV cache layout), got "
                 f"sp_axis={self.sp_axis} tp_axis={self.tp_axis}"

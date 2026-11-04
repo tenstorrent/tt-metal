@@ -6,7 +6,6 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
-#include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
@@ -1377,13 +1376,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // In-place latent-V optimization: when the Q chunk is a single tile (Sq_chunk_t==1) the
-    // second matmul (softmax@V) is data-movement bound, so instead of materializing V from K^T
-    // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
-    // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
-    // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
-    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
-
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt_qk * q_buffer_factor;
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
@@ -1932,27 +1924,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         kexp_latent_tiles};
 
     std::map<std::string, std::string> defines;
-    // Both latent-V representations consume the same packed K^T entry. The
-    // materialized path transposes its V prefix into a second fixed-size FIFO
-    // entry; grouping does not depend on the Q32 in-place compute specialization.
     // Validation already limits split KV to unbalanced attention without sliding window or joint tensors.
     TT_ASSERT(args.kv_stripe_split == 1 || (!args.is_balanced && !has_sliding_window && L == 0));
-    const uint32_t grouped_sources = args.kv_stripe_split > 1 && v_shares_k_buffer && runtime_plan.kernel_chunked &&
-                                             Sk_chunk_t <= ring_joint::kMaxPackedKVChunkTiles
-                                         ? args.kv_stripe_split
-                                         : 1;
-    defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(grouped_sources);
-    // Host group is exact for scalar prefixes; metadata dispatches recompute it on device.
-    log_debug(
-        tt::LogOp,
-        "RingMLA packing: tensor_rank={} host_group={} configured_group={} active_mask={:#x} q_chunk={} v_path={}",
-        tensor_rank,
-        ring_joint::packed_kv_source_group_size(
-            grouped_sources, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask),
-        grouped_sources,
-        active_ring_iter_mask,
-        Sq_chunk_t * tt::constants::TILE_HEIGHT,
-        kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
@@ -2323,18 +2296,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     // Slot donation (ring_joint_donation.hpp): the cores without a unit take one ring iteration of every home head
     // pair. Needs the K split's dense layout, one batch and head pairs.
-    const ring_joint::DonationPlan donation_plan =
-        k_expand && ksplit_count > 1 && B == 1 && num_q_chunks == 2 && grouped_sources == 1
-            ? ring_joint::make_donation_plan(
-                  grid_size.x,
-                  grid_size.y,
-                  ksplit_rows_per_split,
-                  ksplit_count,
-                  total_q_chunks,
-                  num_q_chunks,
-                  ring_size,
-                  args.kv_stripe_split)
-            : ring_joint::DonationPlan{};
+    const ring_joint::DonationPlan donation_plan = k_expand && ksplit_count > 1 && B == 1 && num_q_chunks == 2
+                                                       ? ring_joint::make_donation_plan(
+                                                             grid_size.x,
+                                                             grid_size.y,
+                                                             ksplit_rows_per_split,
+                                                             ksplit_count,
+                                                             total_q_chunks,
+                                                             num_q_chunks,
+                                                             ring_size,
+                                                             args.kv_stripe_split)
+                                                       : ring_joint::DonationPlan{};
     const bool donation = donation_plan.enabled;
     auto is_spare = [&](uint32_t core_idx) { return donation && !donation_plan.visits[core_idx].empty(); };
     for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
@@ -2770,9 +2742,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool use_rotated_q_split =
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
-        // Split KV grouping executes a prefix of the ring_size ordinals scheduled here: grouping
-        // requires every source active, so ordinal == ring_iter and the last executed ordinal
-        // normalizes. The group size is chosen per dispatch, so the schedule stays ring_size long.
         remainder_changes_owner && build_kv_chains && ksplit_count == 1 &&
         // Segmented accumulation keeps one Q chunk's state per core across ring iterations.
         !seg_accum &&
@@ -2867,12 +2836,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
     // Skip dense chunked K chunks past each device's causal end (reader and compute). Only the streaming path mirrors
     // it, and only single-Q cores, where the writer does not order saves by a per-iteration K chunk count. Split KV
-    // with one source per ring iteration (expanded K on a full-mesh ring) takes the Q end from the device's Q-sequence
-    // slice (ring_index / kv_stripe_split) and the KV map from kv_region_Nt; grouped sources (ring_mla's packed
-    // streams) mask their own.
-    const bool dense_causal_skip = use_streaming_compute && kernel_chunked && !has_sliding_window &&
-                                   max_q_per_core == 1 && !use_rotated_q_split &&
-                                   (args.kv_stripe_split == 1 || grouped_sources == 1);
+    // (one source per ring iteration on a full-mesh ring) takes the Q end from the device's Q-sequence slice
+    // (ring_index / kv_stripe_split) and the KV map from kv_region_Nt.
+    const bool dense_causal_skip =
+        use_streaming_compute && kernel_chunked && !has_sliding_window && max_q_per_core == 1 && !use_rotated_q_split;
     // Each core's rank in its head pair and its peer: head_segments[band * NH + head] lists the pair's cores.
     std::vector<uint32_t> kexp_rank(num_cores, 0);
     std::vector<uint32_t> kexp_peer(num_cores, 0);

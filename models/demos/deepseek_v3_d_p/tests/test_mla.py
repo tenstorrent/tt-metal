@@ -1484,6 +1484,8 @@ def test_mla_chunked_prefill(
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():
         pytest.skip("mistral_small_4 is validated on Blackhole only")
+    if tp_shard_kv and variant.name == "mistral_small_4":
+        pytest.skip("a TP-deduped cache runs expanded K/V only, which mistral_small_4 has no schedule for")
     # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
     # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
     # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
@@ -1626,11 +1628,11 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
 _TP_SHARDED_MIN_PCC = 0.999
 
 
-def _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, expanded_k, what):
+def _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, what):
     """TP-sharded output agrees with the TP-replicated (sp_only) output to PCC >= _TP_SHARDED_MIN_PCC (see above)."""
     assert torch.isfinite(tp_sharded).all(), f"{what}: non-finite tp_sharded output"
     _, pcc = comp_pcc(sp_only.float(), tp_sharded.float(), _TP_SHARDED_MIN_PCC)
-    logger.info(f"{what}: {'expanded K/V' if expanded_k else 'ring_mla'} tp_sharded vs sp_only PCC {pcc:.6f}")
+    logger.info(f"{what}: expanded K/V tp_sharded vs sp_only PCC {pcc:.6f}")
     assert pcc >= _TP_SHARDED_MIN_PCC, f"{what}: tp_sharded vs sp_only PCC {pcc}"
 
 
@@ -1652,10 +1654,9 @@ def _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, expanded_k, what):
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
-@pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
-    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor, expanded_k
+    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor
 ):
     """The TP-sharded cache gives the TP-replicated (sp_only) run's output on the same inputs. With a TP-sharded cache
     the SDPA gathers the cache over the full mesh (32 sources) instead of the SP-axis ring (8), which merges the KV
@@ -1674,13 +1675,13 @@ def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
             use_metadata_tensor=use_metadata_tensor,
             tp_shard_kv=tp_shard_kv,
             return_outputs=True,
-            mla_kwargs=dict(expanded_k=expanded_k),
+            mla_kwargs=dict(expanded_k=True),
             **kwargs,
         )
     assert len(outs[False]) == len(outs[True]), "the two layouts returned different user counts"
     for u, (sp_only, tp_sharded) in enumerate(zip(outs[False], outs[True])):
-        _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, expanded_k, f"user {u}")
-    logger.success(f"✓ tp_sharded output matches sp_only ({len(outs[True])} user(s), expanded_k={expanded_k})")
+        _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, f"user {u}")
+    logger.success(f"✓ tp_sharded output matches sp_only ({len(outs[True])} user(s))")
 
 
 # Per-chip DRAM saving of the TP-deduped cache, scaled to the model's MLA layers.
@@ -1756,10 +1757,9 @@ _REPLAY_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
-@pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.parametrize("chunk", [5120, 2048], ids=["c5k", "c2k"])
 @pytest.mark.timeout(0)
-def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant, expanded_k, chunk):
+def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant, chunk):
     # Expanded K/V: every layer passes its own wkv_b1 and W_UV^T as the in-kernel K and V weights.
     config, weights = request.getfixturevalue("random_weights")
     sp_axis, tp_axis = 0, 1
@@ -1793,11 +1793,11 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
             slot_num=num_users,
             layer_num=num_layers,
             tp_shard_kv=True,
-            expanded_k=expanded_k,
+            expanded_k=True,
         )
         for layer in range(num_layers)
     ]
-    assert all(mla_layer._expanded_k == expanded_k for mla_layer in layers), "expanded K mode not applied"
+    assert all(mla_layer._expanded_k for mla_layer in layers), "expanded K mode not applied"
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
     scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
@@ -1921,7 +1921,6 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
                 _assert_tp_sharded_matches_sp_only(
                     ttnn.to_torch(outs[layer], mesh_composer=composer),
                     eager[step][layer],
-                    expanded_k,
                     f"step {step} (user {user}, start {start}) layer {layer}",
                 )
             # Allocated while the trace is alive: free before any replay (allocation tracking rejects live ones).
@@ -2066,7 +2065,8 @@ def test_mla_expanded_k_matches_absorbed(
 ):
     """Expanded K/V vs ring_mla (absorbed) on CPU-reference inputs: per user, the expanded output's PCC against the
     reference is at most _expanded_kv_max_pcc_loss below ring_mla's, and the two outputs agree to
-    _EXPANDED_KV_MIN_PCC_VS_ABSORBED."""
+    _EXPANDED_KV_MIN_PCC_VS_ABSORBED. tp_shard_kv picks expanded K/V's cache layout; ring_mla runs on the TP-replicated
+    cache, the only one it supports."""
     _check_expanded_k_vs_absorbed(
         request, mesh_device, device_params, variant, kwargs, use_metadata_tensor, tp_shard_kv, monkeypatch
     )
@@ -2095,7 +2095,7 @@ def _check_expanded_k_vs_absorbed(
             reference="cpu",
             topology=topology,
             use_metadata_tensor=use_metadata_tensor,
-            tp_shard_kv=tp_shard_kv,
+            tp_shard_kv=tp_shard_kv and expanded,
             return_outputs=True,
             return_pccs=True,
             mla_kwargs=dict(expanded_k=expanded),
@@ -2209,8 +2209,9 @@ def test_mla_attention_selection(request, mesh_device, device_params, variant, e
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
 @pytest.mark.timeout(0)
 def test_mla_attention_overrides(request, mesh_device, device_params, variant, monkeypatch, expect_error):
-    """expanded_k=False puts Kimi on ring_mla; expanded_k=True at a shape without a measured head-pair schedule (2.5k
-    chunks: 320 rows per chip) is refused, where the model default would run ring_mla."""
+    """expanded_k=False puts Kimi on ring_mla, which a TP-deduped cache refuses (it runs expanded K/V only);
+    expanded_k=True at a shape without a measured head-pair schedule (2.5k chunks: 320 rows per chip) is refused, where
+    the model default would run ring_mla."""
     ring_mla_calls = _record_ring_mla(monkeypatch)
     recorder = _SdpaRecorder(monkeypatch)
     run = functools.partial(
@@ -2222,6 +2223,8 @@ def test_mla_attention_overrides(request, mesh_device, device_params, variant, m
     )
     run(iters_isl=[5120], mla_kwargs=dict(expanded_k=False))
     assert ring_mla_calls and not recorder.calls, "expanded_k=False did not run ring_mla"
+    with expect_error(AssertionError, "dense tp_shard_kv needs expanded K and V"):
+        run(iters_isl=[5120], tp_shard_kv=True, mla_kwargs=dict(expanded_k=False))
     with expect_error(ValueError, "expanded K does not apply"):
         run(chunk_size_global=2560, iters_isl=[2560], mla_kwargs=dict(expanded_k=True))
 

@@ -17,7 +17,6 @@
 #include "api/tile_constants.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
@@ -470,25 +469,8 @@ void kernel_main() {
         acc_state.cur = {cb_sum_B, cb_max_B, cb_out_im_B};
         seen_active_iter = false;
     };
-    auto arrival_preview = fused_op_indexer.seq;
-    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
-    // binary so it carries none of the packed-source path.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
-        ring_size,
-        kv_local_padded_Nt,
-        logical_nt,
-        active_ring_iter_mask,
-        kv_region_Nt,
-        Sk_chunk_t,
-        has_sliding_window,
-        [&] {
-            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-        });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
-    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    // Sliding folds every source into one synthetic local iteration.
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1u : ring_size;
     // A spare visits ring iterations out of order, so every iteration's ID is kept; only an iteration's first use
     // advances the sequencer.
     uint32_t iter_ring_ids[ring_joint::kMaxRingIterations];
@@ -525,7 +507,6 @@ void kernel_main() {
             }
         }
         const uint32_t ring_iter = step;
-        const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         // Read this iteration's remainder ID and derive its count from the fixed base range.
         // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
         // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
@@ -543,8 +524,6 @@ void kernel_main() {
         // Padded multicast slots the reader runs after this core's own Q chunks.
         uint32_t padded_q_slots = static_mcast_q_count - q_per_core;
         if constexpr (rotated_q_split_enabled) {
-            // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
-            ASSERT(!packed_sources || active_ring_iter_mask == (ring_joint::all_sources_mask(ring_size)));
             const uint32_t rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
             const uint32_t rotated_iter_base =
                 ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
@@ -555,20 +534,10 @@ void kernel_main() {
             padded_q_slots = group_q_count - rotated_my_count;
         }
         ASSERT(padded_q_slots_enabled || padded_q_slots == 0);
-        uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
-        if (packed_sources) {
-            for (uint32_t source = 0; source < source_group_size; ++source) {
-                packed_source_ids[source] =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            }
-        }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
         uint32_t ring_id;
-        if (packed_sources) {
-            ring_id = packed_source_ids[0];
-        } else if (has_sliding_window) {
+        if (has_sliding_window) {
             ring_id = ring_index;
         } else {
             while (known_ring_iters <= ring_iter) {
@@ -580,15 +549,13 @@ void kernel_main() {
         }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
         // Replicated joint: All data already present process joint when ring_id == ring_size-1
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        const uint32_t num_kv_chunks =
-            packed_sources ? packed_kv.chunk_count()
-                           : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
+        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
         if constexpr (ksplit_enabled) {
             // Idle cores drain their row's padded multicast slots, so they skip the row's K chunks too.
@@ -711,8 +678,7 @@ void kernel_main() {
         // K-split and segmented cores normalize after the merge, not in the ring loop.
         const bool is_last_ring_iter =
             !ksplit_active && !seg_active &&
-            (has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                                   : is_last_active_ring_iter(active_ring_iter_mask, ring_iter)));
+            (has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -788,7 +754,6 @@ void kernel_main() {
                 rotated_q_split_enabled,
                 dense_causal_skip,
                 kv_region_Nt,
-                (GROUPED_KV_SOURCE_COUNT > 1),
                 DHt_qk,
                 k_expand ? cb_wuk : INVALID_CB,
                 k_expand ? kexp_latent_tiles : 0,
@@ -830,9 +795,6 @@ void kernel_main() {
                 ksplit_k_range.end,
                 ksplit_active ? step_band : 0,
                 ksplit_active ? ksplit_count : 1,
-                packed_sources ? packed_source_ids : nullptr,
-                packed_sources ? source_group_size : 0,
-                packed_schedule.rows(ring_iter),
                 padded_q_slots,
                 k_expand_rank);
             if constexpr (has_sliding_window && ksplit_enabled) {

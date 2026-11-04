@@ -14,7 +14,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
@@ -856,53 +855,22 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    auto arrival_preview = fused_op_receiver.seq;
-    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
-    // binary so it carries none of the packed-source path.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
-        ring_size,
-        kv_local_padded_Nt,
-        logical_nt,
-        active_ring_iter_mask,
-        kv_region_Nt,
-        Sk_chunk_t,
-        has_sliding_window,
-        [&] {
-            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-        });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
-    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    // Sliding folds every source into one synthetic local iteration.
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1u : ring_size;
     // With slot donation (single-Q K-split cores only) no core has per-iteration work here, so the writer goes straight
     // to the hand-offs below, where a home serves its spare as soon as a partial is staged.
     const uint32_t writer_ring_iterations = donation ? 0 : sdpa_ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < writer_ring_iterations; ++ring_iter) {
-        const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
-        // A packed pass consumes every member's sequencer step; only the first member's ID is used.
-        uint32_t first_packed_source_id = 0;
-        if (packed_sources) {
-            for (uint32_t source = 0; source < source_group_size; ++source) {
-                const uint32_t source_id =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-                if (source == 0) {
-                    first_packed_source_id = source_id;
-                }
-            }
-        }
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
         const uint32_t ring_id =
-            packed_sources ? first_packed_source_id
-            : has_sliding_window
+            has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
-        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         const bool is_first_active_iter = !seen_active_iter;
@@ -918,8 +886,7 @@ void kernel_main() {
         // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
         // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
-        const bool single_valid_kv_chunk =
-            packed_sources ? packed_kv.chunk_count() == 1 : ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
+        const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         if constexpr (has_sliding_window) {
             // Sliding compute consumes every local/halo source for a Q in one pass. There is
@@ -963,9 +930,7 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter =
-                (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             // Rotated: rotated_max_slots >= 2, so accumulators always round-trip through DRAM.
             // Deriving it from the static range would disagree with compute's per-iteration count.
             // A single_q program's cores hold at most one chunk (an idle one runs no Q loop): fold the multi-Q paths.
@@ -980,8 +945,6 @@ void kernel_main() {
             uint32_t rotated_has_mig_in_float = 0;
             uint32_t rotated_float_dest = kRotatedNoDest;
             if constexpr (rotated_q_split_enabled) {
-                // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
-                ASSERT(!packed_sources || active_ring_iter_mask == (ring_joint::all_sources_mask(ring_size)));
                 rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
                 const uint32_t rotated_iter_base =
                     ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);

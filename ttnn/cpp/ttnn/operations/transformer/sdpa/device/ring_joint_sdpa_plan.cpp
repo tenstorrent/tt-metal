@@ -166,13 +166,6 @@ KSplitShape derive_ksplit(const RingJointSDPAParams& args, const RingJointSDPAIn
             "with a separate V on chains. Set k_splits=1.",
             ksplit_requested,
             NHK);
-        // Split KV with grouped sources slices packed source streams, not one source's local K chunks; with a separate
-        // V every ring iteration is one source.
-        TT_FATAL(
-            args.kv_stripe_split == 1 || tensor_args.has_k_expand(),
-            "k_splits={} cannot be applied: kv_stripe_split is {} without expanded K. Set k_splits=1.",
-            ksplit_requested,
-            args.kv_stripe_split);
         shape.rows_per_split = tt::div_up(all_heads_num_q_chunks, static_cast<uint32_t>(shape.grid.x));
         uint32_t max_ksplit =
             std::min(static_cast<uint32_t>(shape.grid.y) / shape.rows_per_split, ring_joint::kKSplitMaxCount);
