@@ -10,6 +10,7 @@
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
@@ -19,6 +20,29 @@
  * Call compute_kernel_hw_startup() exactly once at kernel start. With input reconfiguration enabled (the
  * default), reduce() configures every operand it reads; their tile/face geometry must match the startup
  * operands. The auxiliary CB must hold the tiles the selected algorithm reads before reduce() is called.
+ *
+ * Host-planned usage: let the host planner (kernel_lib/host/reduce_host.hpp) choose every parameter and issue
+ * reduce<Call>(), where Call is one ttnn::kernel_lib::ReduceCallArgs decoded from the suffix the host appends after
+ * the kernel's own compile-time arguments, [call_count][call_0]...[call_(call_count - 1)]. Include
+ * reduce_plan_args.hpp for the device views:
+ *
+ *   constexpr uint32_t call_count = get_compile_time_arg_val(KERNEL_OWNED_CTA_COUNT);
+ *   template <uint32_t I>
+ *   using CallAt = ttnn::kernel_lib::ReduceCallAtT<KERNEL_OWNED_CTA_COUNT, I>;
+ *
+ *   template <uint32_t I = 0>
+ *   ALWI void issue_calls() {
+ *       if constexpr (I < call_count) {
+ *           compute_kernel_lib::reduce<CallAt<I>>();  // caller work may run between calls
+ *           issue_calls<I + 1>();
+ *       }
+ *   }
+ *
+ * call_count only bounds the walk: Call carries accumulation, final-call and partial-tile behavior explicitly, and
+ * calls may repeat an input CB. A tail-capable Call selects full ([0, 0, 0]) or planned tail
+ * ([height, width, batches]) work at runtime, including its auxiliary slice and AVG normalization; output lanes past
+ * the valid non-reduced extent are unspecified. The writer materializes the unit's auxiliary recipe with
+ * dataflow_kernel_lib::prepare_reduce_auxiliary_tiles(); compute never decodes it.
  */
 
 namespace compute_kernel_lib {
@@ -192,6 +216,24 @@ ALWI void reduce(
     ReducePartialMode partial_mode = ReducePartialMode::None,
     std::uint32_t output_group = 0,
     std::uint32_t auxiliary_tile_offset = 0);
+
+/**
+ * @brief Issue one host-planned tiled reduce call.
+ *
+ * Lowers every planner-selected field of `Call` into the explicit reduce() above, including
+ * accumulation, scaling, partial handling, the output group and the shared auxiliary-CB slice.
+ *
+ * It does not perform compute-kernel startup or any surrounding CB preparation. The kernel owns when
+ * this call runs and may perform arbitrary work, including refilling a reused input CB, between
+ * planned calls.
+ *
+ * An optional caller post operation runs on each completed output tile after the plan's
+ * scaling. Intermediate accumulation calls do not run it.
+ *
+ * @tparam Call A constexpr call descriptor such as ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
+ */
+template <typename Call, typename PostReduceOp = NoOp>
+ALWI void reduce(PostReduceOp post_reduce_op = PostReduceOp{});
 
 }  // namespace compute_kernel_lib
 

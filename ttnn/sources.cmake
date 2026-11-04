@@ -48,6 +48,7 @@ set(TTNN_CORE_SRCS
     core/services/layer_ack_service.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
+    cpp/ttnn/kernel_lib/host/reduce_host.cpp
     core/tensor/tensor_utils.cpp
     core/tensor/unit_mesh/unit_mesh_utils.cpp
     core/tensor/xtensor/partition.cpp
@@ -133,6 +134,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/tensor.cpp
     cpp/ttnn-nanobind/types.cpp
     cpp/ttnn-nanobind/bfp_utils.cpp
+    cpp/ttnn-nanobind/reduce_planner.cpp
     cpp/ttnn-nanobind/operations/copy.cpp
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp

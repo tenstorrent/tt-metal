@@ -20,6 +20,15 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_executable(example_reduce_helpers)
+target_sources(example_reduce_helpers PRIVATE reduce_helpers/reduce_helpers.cpp)
+target_link_libraries(
+    example_reduce_helpers
+    PRIVATE
+        TT::Metalium
+        TTNN::CPP
+)
+
 install(
     DIRECTORY
         add
