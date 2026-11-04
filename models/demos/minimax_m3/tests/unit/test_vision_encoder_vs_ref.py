@@ -41,7 +41,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
-from models.demos.minimax_m3.tt.vision.preprocess import BLOCK, PATCH_SIZE, patch_rows
+from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, PATCH_SIZE, patch_rows
 from models.demos.minimax_m3.vision import format as media_format
 from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 from models.demos.minimax_m3.vision.media import MiniMaxM3Media
@@ -104,7 +104,7 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
     reference = vision_reference(NUM_LAYERS)
     pixels = _noise_pixels(height, width)
     ref = _reference_tokens(reference, pixels)
-    n_tokens = (height // BLOCK) * (width // BLOCK)
+    n_tokens = (height // FACTOR) * (width // FACTOR)
     assert ref.shape == (n_tokens, HIDDEN)
 
     encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.hf_state_dict(), reference.config)
@@ -138,12 +138,12 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     assert cache_entries > 0, "the program cache holds no programs after the warm-up"
 
     images = [_noise_pixels(112, 448), _noise_pixels(448, 112)]
-    sizes = [HEADER_BYTES + (p.shape[0] // BLOCK) * (p.shape[1] // BLOCK) * HIDDEN * 2 for p in images]
+    sizes = [HEADER_BYTES + (p.shape[0] // FACTOR) * (p.shape[1] // FACTOR) * HIDDEN * 2 for p in images]
     buffer = np.full(GUARD_BYTES + sum(size + GUARD_BYTES for size in sizes), GUARD, dtype=np.uint8)
     guard = buffer.copy()
     starts = np.cumsum([GUARD_BYTES] + [size + GUARD_BYTES for size in sizes])[:-1]
     for i, (pixels, start) in enumerate(zip(images, starts)):  # encode(): one item at a time
-        grid_h, grid_w = pixels.shape[0] // BLOCK, pixels.shape[1] // BLOCK
+        grid_h, grid_w = pixels.shape[0] // FACTOR, pixels.shape[1] // FACTOR
         n_tokens = grid_h * grid_w
         header = np.array([grid_h, grid_w, n_tokens, 0], dtype=np.int32).view(np.uint8)
         buffer[start : start + HEADER_BYTES] = header
