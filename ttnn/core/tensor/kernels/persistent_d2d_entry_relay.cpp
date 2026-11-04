@@ -25,7 +25,7 @@ constexpr uint32_t z_lanes = get_named_compile_time_arg_val("z_lanes");  // arri
 constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
 constexpr uint32_t own_slot = get_named_compile_time_arg_val("own_slot");  // num_slots = none
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-// Largest page of any segment: each lane's ring takes Depth of them.
+// Bytes of one ring slot (relay_slot_bytes): a page, or a group of pages packed into one packet.
 constexpr uint32_t max_page_size = get_named_compile_time_arg_val("max_page_size");
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 constexpr uint32_t max_payload = get_named_compile_time_arg_val("max_payload");
@@ -112,11 +112,11 @@ FORCE_INLINE void copy_to_target(
     bool with_metadata,
     uint32_t md_l1_addr) {
     d2d_relay::set_route(data_header, t.chip, t.mesh);
-    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, kRingDepth, kTridBase>(
+    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, max_page_size, kRingDepth, kTridBase>(
         noc, conn, cb_l1_addr, t.extra_arg, is_master, t.lanes > 1, data_header);
     auto in_acc = TensorAccessor(tensor_args, t.src_addr);
     auto out_acc = TensorAccessor(tensor_args, t.dst_addr);
-    d2d_relay::stream_pages_then_inc<page_size, max_payload, kRingDepth, kTridBase>(
+    d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
         noc,
         conn,
         in_acc,

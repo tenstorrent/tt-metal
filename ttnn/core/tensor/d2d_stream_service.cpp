@@ -1574,6 +1574,27 @@ constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 // two lanes consume 2*kSenderReadRingSlots trids, which must fit the 0..15 id space.
 constexpr uint32_t kSenderReadRingSlots = 4;
 
+// A fabric scatter write carries at most this many chunks (NOC_SCATTER_WRITE_MAX_CHUNKS).
+constexpr uint32_t kMaxPagesPerPacket = 4;
+
+// Bytes of one read-ring slot: the largest page, or the largest group of pages packed into one
+// fabric packet (up to the scatter chunk limit, power of 2, 16 B multiples). Must match
+// d2d_relay::pages_per_packet, which caps the group at this size.
+uint32_t packed_slot_bytes(uint32_t max_payload, const std::vector<uint32_t>& page_sizes) {
+    uint32_t m = 0;
+    for (const uint32_t page_size : page_sizes) {
+        uint32_t pack = 1;
+        if (page_size > 0 && page_size % 16 == 0) {
+            const uint32_t fit = std::min<uint32_t>(max_payload / page_size, kMaxPagesPerPacket);
+            while (pack * 2 <= fit) {
+                pack *= 2;
+            }
+        }
+        m = std::max(m, pack * page_size);
+    }
+    return m;
+}
+
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
     const distributed::MeshDevice& mesh_device,
@@ -1713,10 +1734,11 @@ Program build_sender_program(
     const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
     const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     auto accessor_ct = TensorAccessorArgs(input_buffer).get_compile_time_args();
-    uint32_t max_page_size = tensor_page_size;
+    std::vector<uint32_t> page_sizes = {tensor_page_size};
     for (const auto& seg : extra_segments) {
-        max_page_size = std::max(max_page_size, seg.page_size);
+        page_sizes.push_back(seg.page_size);
     }
+    const uint32_t slot_bytes = packed_slot_bytes(fabric_max_payload_size, page_sizes);
 
     // Per-lane CB indices, RISC, and NoC.
     const tt::CBIndex scratch_cbs[2] = {tt::CBIndex::c_0, tt::CBIndex::c_2};
@@ -1729,9 +1751,9 @@ Program build_sender_program(
         const tt::CBIndex header_cb = header_cbs[lane];
 
         // This lane's scratch CB: the trid-ring staging buffer, sized to the ring
-        // (kSenderReadRingSlots of the largest segment page) — NOT the socket page. The
-        // kernel indexes it manually by slot, so the whole CB is one allocation page.
-        const uint32_t scratch_cb_bytes = kSenderReadRingSlots * max_page_size;
+        // (kSenderReadRingSlots slots of the largest packed page group) — NOT the socket page.
+        // The kernel indexes it manually by slot, so the whole CB is one allocation page.
+        const uint32_t scratch_cb_bytes = kSenderReadRingSlots * slot_bytes;
         auto scratch_cfg =
             CircularBufferConfig(scratch_cb_bytes, {{scratch_cb, datatype_to_dataformat_converter(dtype)}})
                 .set_page_size(scratch_cb, scratch_cb_bytes);
@@ -1800,7 +1822,8 @@ Program build_sender_program(
                 .compile_args = ct_args,
                 .named_compile_args =
                     {{"terminate_value", kTerminateValue},
-                     {"num_extra_segments", static_cast<uint32_t>(extra_segments.size())}},
+                     {"num_extra_segments", static_cast<uint32_t>(extra_segments.size())},
+                     {"slot_bytes", slot_bytes}},
             });
 
         // The sender writes bulk data downstream, so its fabric connection runs
@@ -2590,12 +2613,12 @@ struct RelayCoordWords {
     uint32_t metadata_addr = 0;  // exit: own sender md buffer; entry: worker md buffer
 };
 
-uint32_t max_segment_page_size(const CommonPlan& common) {
-    uint32_t m = 0;
+uint32_t relay_slot_bytes(const CommonPlan& common) {
+    std::vector<uint32_t> page_sizes;
     for (const auto& seg : common.segments) {
-        m = std::max(m, seg.page_size);
+        page_sizes.push_back(seg.page_size);
     }
-    return m;
+    return packed_slot_bytes(common.fabric_max_payload_size, page_sizes);
 }
 
 // Both relays' compile args: the primary accessor, [page_size, half_pages, total_pages] per extra
@@ -2664,7 +2687,7 @@ Program build_exit_relay_program(
     }
 
     auto program = CreateProgram();
-    const uint32_t max_page_size = max_segment_page_size(common);
+    const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
     create_relay_cbs(program, core, max_page_size, backing.dtype());
     const auto compile_args = relay_compile_args(common, backings, e);
@@ -2837,7 +2860,7 @@ Program build_entry_relay_program(
         e);
 
     auto program = CreateProgram();
-    const uint32_t max_page_size = max_segment_page_size(common);
+    const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
     create_relay_cbs(program, core, max_page_size, backing.dtype());
     const auto compile_args = relay_compile_args(common, backings, e);
