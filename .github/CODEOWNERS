@@ -175,8 +175,8 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
-tt_metal/hw/inc/api/tensor/ @tenstorrent/metalium-developers-ttnn-core @abhullar-tt @akerteszTT @riverwuTT
+tt_metal/hw/inc/**/tensor/ @abhullar-tt @akerteszTT @riverwuTT
+tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
 tt_metal/hw/inc/api/compute/compute_kernel_api.h @davorchap @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
@@ -348,7 +348,7 @@ tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
 
 # TTNN
-ttnn/ @tenstorrent/metalium-developers-ttnn-core
+/ttnn/ @tenstorrent/metalium-developers-ttnn-core
 # nanobind
 ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
@@ -361,11 +361,11 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorre
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce
-ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT
+ttnn/tutorials/ @tenstorrent/metalium-developers-external-experience
 ttnn/**/kernels/ @tenstorrent/metalium-developers-ops-leads # Removes the owners above from owning kernels unless specified afterwards
 ttnn/**/kernel/ @tenstorrent/metalium-developers-ops-leads # Same, for the singular kernel/ dir the pattern above misses
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core
-ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
+ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 
 ttnn/examples/**/kernels/ @tenstorrent/metalium-developers-mmfusedreduce
 
@@ -390,7 +390,6 @@ ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-d
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT
-ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
@@ -414,7 +413,7 @@ ttnn/cpp/ttnn/operations/sliding_window/**/CMakeLists.txt @tenstorrent/metalium-
 # it's the status-quo fallback owner for several ops here that have no
 # team-specific CODEOWNERS rule of their own — not a deliberate, active
 # owner, just what already resolves today.
-ttnn/CMakeLists.txt @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
+ttnn/CMakeLists.txt @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-infra
 ttnn/api/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 ttnn/cpp/ttnn/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
 ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @tenstorrent/metalium-developers-eltwise @tenstorrent/metalium-developers-infra
@@ -493,7 +492,7 @@ ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @tenstorrent/metalium-devel
 ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/ @tenstorrent/cse-developer-ttnn @iwroszTT
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metalium-developers-sdpa
-ttnn/sources.cmake @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ttnn-core
+ttnn/sources.cmake @mbezuljTT @ppetrovicTT @pavlepopovic
 ttnn/ttnn/operations/binary* @tenstorrent/metalium-developers-eltwise
 ttnn/ttnn/operations/complex* @tenstorrent/metalium-developers-eltwise
 ttnn/ttnn/operations/ternary* @tenstorrent/metalium-developers-eltwise
@@ -517,7 +516,7 @@ tests/tt_eager/python_api_testing/unit_testing/misc/test_untilize_test.py @tenst
 tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tenstorrent/metallium-maintainers-llama-models
 
 
-tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/ @tenstorrent/metalium-developers-ops-leads @razorback3 @dongjin-na @bbradelTT
 # op tests follow op ownership, mirroring ttnn/cpp/ttnn/operations/
 tests/nightly/blackhole/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement
@@ -549,9 +548,9 @@ tests/sweep_framework/sweeps/pool2d/  @tenstorrent/metalium-developers-convoluti
 tests/sweep_framework/sweeps/reduction/  @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/**/operations/ @tenstorrent/metalium-developers-ops-leads
 tests/ttnn/python_api_testing/ @tenstorrent/metalium-developers-ops-leads
-tests/ttnn/**/*realtime_profiler* @tenstorrent/metalium-developers-ttnn-core @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/tracy/ @tenstorrent/metalium-developers-ttnn-core @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
+tests/ttnn/**/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/tracy/ @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/nightly/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/stress_tests/test_ccl.py @tenstorrent/metalium-developers-ops-data-movement
@@ -616,15 +615,152 @@ tests/ttnn/docs_examples/test_normalization_examples.py @tenstorrent/metalium-de
 tests/ttnn/docs_examples/test_pointwise_*_examples.py @tenstorrent/metalium-developers-eltwise
 tests/ttnn/docs_examples/test_pooling_examples.py @tenstorrent/metalium-developers-convolutions
 tests/ttnn/docs_examples/test_reduction_examples.py @tenstorrent/metalium-developers-mmfusedreduce
-tests/ttnn/docs_examples/test_tensor_creation_examples.py @tenstorrent/metalium-developers-ttnn-core
+tests/ttnn/docs_examples/test_tensor_creation_examples.py @tenstorrent/metalium-developers-ops-leads
 
 # TTNN Distributed
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # TTNN Graph Report
-tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
-ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
+tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software
+ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software
+# TTNN framework tests stay with ttnn-core (and the existing tests/ttnn/ co-owners).
+tests/ttnn/unit_tests/base_functionality/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/tensor/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/tensor/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_generic_op*.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_graph_*.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_levelized_graph.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_query_op_constraints_mock_device.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_launch_operation.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_async_runtime.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_reflect.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_to_and_from_json.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_stale_program_hash.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_program_cache_l1.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_multi_cq_multi_dev.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_multiprod_queue.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_command_list_tensor_prefetcher.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/common_test_utils.* @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/tests_main.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/conftest.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/profiling/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/test_trace_allocation_tracker_config.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/benchmark/**/*trace_allocation* @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/benchmark/cpp/benchmark_host_* @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/benchmark/cpp/host_tilizer_untilizer/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/benchmark/python/benchmark_*_torch.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/benchmark/python/benchmark_device_copies.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+# Op tests that sit in the framework test folders go to the op owners.
+tests/ttnn/unit_tests/base_functionality/test_to_layout.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_to_dtype.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_copy*.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_reshape*.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_*tilize*.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_roll.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_*squeeze.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_chunk.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_expand.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_narrow.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_view.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_concat_issue.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/base_functionality/test_zero_shard_shape.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/unit_tests/gtests/multi_thread/ @tenstorrent/metalium-developers-ops-data-movement
+tests/ttnn/distributed/test_matmul_send_recv_pipeline.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/distributed/test_distributed_layernorm_TG.py @tenstorrent/metalium-developers-ops-leads
+tests/ttnn/integration_tests/ @tenstorrent/metalium-models-maintainers
+# Op infrastructure stays with ttnn-core: the shared pieces every op builds on.
+# Until now these only fell back to ops-leads through ttnn/cpp/ttnn/operations/.
+ttnn/cpp/ttnn/operations/*.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/*.cpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/core/core.* @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/core/compute_kernel/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/core/data_movement_kernel/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/core/work_split/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/cpp/ttnn/operations/generic/ @tenstorrent/metalium-developers-ttnn-core
+tests/ttnn/unit_tests/gtests/test_codegen_gates_unallocated.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_work_split_tilize.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/sources.cmake @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/smoke_test_utils.hpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/utils_for_testing.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/ttnn_utility_fuction.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_test_runner.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/test_comparison_funcs.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/test_comp_pcc_fix.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+# Op code that lives outside the op folders.
+ttnn/cpp/ttnn-nanobind/operations/copy.* @tenstorrent/metalium-developers-ops-leads
+ttnn/cpp/ttnn-nanobind/activation.* @tenstorrent/metalium-developers-eltwise
+ttnn/tt_lib/fused_ops/ @tenstorrent/metalium-developers-ops-leads
+ttnn/tt_lib/fallback_ops/ @tenstorrent/metalium-developers-ops-leads
+ttnn/ttnn/experimental_loader/golden_functions.py @tenstorrent/metalium-developers-ops-leads
+# Op PRs register new ops here, so op owners can approve those edits too.
+ttnn/ttnn/__init__.py @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-ops-leads
+# Device and host streaming: D2D/H2D/D2H stream services, sockets and layer services.
+ttnn/core/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/core/tensor/flatbuffer/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/core/tensor/kernels/ @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/core/tensor/stream_service_common.hpp @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/api/ttnn/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/core/services/ @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/api/ttnn/services/ @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/*_stream_service.* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/hd_socket.* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/layer_ack_service.* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/layer_completion.* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+ttnn/ttnn/_experimental/layer_completion.py @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/gtests/multiprocess/ @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/gtests/tensor/kernels/ @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/gtests/tensor/test_d2d_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/base_functionality/*stream_service* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/unit_tests/base_functionality/test_layer_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/benchmark/**/*stream_service* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+tests/ttnn/benchmark/cpp/kernels/persistent_* @SeanNijjar @nmilicevicTT @sjameelTT @bzhangTT @yeongyunTT
+# Prefetcher and global circular buffers.
+ttnn/core/global_circular_buffer.cpp @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/api/ttnn/global_circular_buffer.hpp @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/core/prefetcher_pipe.cpp @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/api/ttnn/prefetcher_pipe.hpp @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/ttnn/_experimental/tensor_prefetcher_matmul.py @jbaumanTT @tenstorrent/metalium-runtime-performance
+ttnn/ttnn/_experimental/reload.py @jbaumanTT @tenstorrent/metalium-runtime-performance
+tests/ttnn/unit_tests/base_functionality/*prefetcher* @jbaumanTT @tenstorrent/metalium-runtime-performance
+tests/ttnn/unit_tests/base_functionality/test_global_circular_buffer.py @jbaumanTT @tenstorrent/metalium-runtime-performance
+tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @jbaumanTT @tenstorrent/metalium-runtime-performance
+# Fabric, mesh sockets and disaggregation.
+ttnn/cpp/ttnn-nanobind/fabric.* @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/cpp/ttnn-nanobind/mesh_socket.* @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/core/distributed/*socket* @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/api/ttnn/distributed/*socket* @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/ttnn/_experimental/fabric_mux.py @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tests/ttnn/unit_tests/base_functionality/*fabric* @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tests/ttnn/distributed/test_socket_perf.py @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/cpp/ttnn-nanobind/disaggregation.* @SeanNijjar @ubcheema
+ttnn/cpp/ttnn/experimental/disaggregation/ @SeanNijjar @ubcheema
+tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @SeanNijjar @ubcheema
+# Bindings and tests for code other teams own.
+ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
+ttnn/cpp/ttnn-nanobind/mcast_host.* @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
+tests/ttnn/unit_tests/gtests/*mcast* @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
+tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
+ttnn/cpp/ttnn-nanobind/profiler.* @mo-tenstorrent @akerteszTT @yusufbashiTT
+ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
+tests/ttnn/unit_tests/gtests/accessor/ @abhullar-tt @akerteszTT @riverwuTT
+tests/ttnn/benchmark/python/test_accessor_benchmarks.py @abhullar-tt @akerteszTT @riverwuTT
+tests/ttnn/unit_tests/per_core_allocation/ @abhullar-tt @tt-aho
+tests/ttnn/unit_tests/range_lockstep_allocation/ @abhullar-tt @tt-aho
+# Examples.
+ttnn/ttnn/examples/ @tenstorrent/metalium-developers-external-experience
+ttnn/examples/add/ @tenstorrent/metalium-developers-external-experience
+ttnn/examples/lab_*/lab_*.cpp @tenstorrent/metalium-developers-external-experience
+tests/ttnn/lab_examples/ @tenstorrent/metalium-developers-external-experience
 
 # models
 /**/functional_*/ @esmalTT @tenstorrent/metalium-models-maintainers
@@ -712,7 +848,8 @@ docs/realtime_profiler_architecture.md @mo-tenstorrent @akerteszTT @yusufbashiTT
 docs/source/tt-metalium/* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar
 docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
-docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/ttnn/ @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/ttnn/ttnn/tensor.rst @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT
 
 # misc
 dockerfile/** @tenstorrent/metalium-developers-infra
