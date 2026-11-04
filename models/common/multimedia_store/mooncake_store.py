@@ -45,7 +45,9 @@ _REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
 
 def _check_key(media_key: str) -> str:
-    # A str, since Mooncake returns lookups keyed by str: a bytes key would never match and always read as Missing.
+    # Mooncake's batched lookup (batch_get_replica_desc) returns its results keyed by str, decoding each stored key
+    # as UTF-8: a key that isn't text makes it raise UnicodeDecodeError, and a bytes key would never match a str
+    # result and so read as Missing. An ASCII str is stored and returned as the same bytes.
     if not isinstance(media_key, str) or not media_key.isascii():
         raise ValueError(f"media key {media_key!r} is not an ASCII str")
     return media_key
