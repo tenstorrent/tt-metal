@@ -69,13 +69,6 @@ void kernel_main() {
             scratch_offsets[i] = i * scratch_cb_page_size;
         }
 
-        // Local NoC coordinates for the scratch->dest reads.
-        UnicastEndpoint self_ep;
-        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
-        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch region.
-        const uint32_t scratch_l1_base = scratch.get_base_address();
-
         uint32_t dest_off = 0;        // running offset into cb_in0
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
         uint32_t rows_completed = 0;  // Number of scratch->dest transfers completed
@@ -86,14 +79,13 @@ void kernel_main() {
 
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
                     // Start new src->scratch transfer (TRID-tagged). Destination is the raw L1
-                    // scratchpad slot, addressed directly (no DFB offset semantics).
-                    CoreLocalMem<uint32_t> scratch_dst(scratch_l1_base + scratch_offsets[slot]);
+                    // scratchpad slot, addressed by its byte offset (no DFB offset semantics).
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        scratch_dst,
+                        scratch,
                         aligned_block_width_bytes,
                         {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
-                        {.offset_bytes = 0},
+                        {.offset_bytes = scratch_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;
                     slot_states[slot] = SlotState::SRC_PENDING;
@@ -109,14 +101,13 @@ void kernel_main() {
                     }
                 }
                 if (slot_states[slot] == SlotState::SCRATCH_READY) {
-                    // Start scratch->dest transfer: local L1 loopback read tagged with the same trid.
+                    // Start scratch->dest transfer: local L1 loopback read (the scratchpad as the NoC-side
+                    // source) tagged with the same trid.
                     noc.async_read<NocOptions::TXN_ID>(
-                        self_ep,
+                        scratch,
                         cb_in0,
                         block_width_bytes,
-                        {.noc_x = my_noc_x,
-                         .noc_y = my_noc_y,
-                         .addr = scratch_l1_base + scratch_offsets[slot] + aligned_offset},
+                        {.offset_bytes = scratch_offsets[slot] + aligned_offset},
                         {.offset_bytes = dest_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
 

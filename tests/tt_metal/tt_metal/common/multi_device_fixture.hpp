@@ -5,7 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include <boost/algorithm/string.hpp>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -16,8 +15,8 @@
 
 #include "mesh_dispatch_fixture.hpp"
 #include "system_mesh.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal {
