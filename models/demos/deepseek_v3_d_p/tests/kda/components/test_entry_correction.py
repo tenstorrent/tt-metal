@@ -205,7 +205,7 @@ _PERF_MARGIN = 0.05
 _PERF_START = _ROWS + 320
 # Device-time references in us, at the model's HiFi2. The op runs on each chip alone: the same per-chip workload on
 # every SKU.
-_PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 29.5, "quietbox-SP4xTP1": 29.5}
+_PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 24.5, "quietbox-SP4xTP1": 29.5}
 
 
 @pytest.mark.parametrize(
