@@ -31,6 +31,7 @@ driver that lives outside ``tests/sources/``.
 import atexit
 import collections
 import datetime
+import gc
 import json
 import logging
 import os
@@ -1081,6 +1082,10 @@ def pytest_runtest_setup(item):
     host was never started or has died.
     """
     global _reset_simulator_pending
+
+    if item.config.getoption("forked", default=False):
+        # A forked test shares the worker's heap copy on write: a full collection would walk and copy all of it
+        gc.freeze()
 
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)

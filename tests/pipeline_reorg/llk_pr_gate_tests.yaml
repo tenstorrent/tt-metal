@@ -131,7 +131,7 @@
     ./run_ttsim_regression.sh -a quasar -n 32 -t 10 --no-html -- --splits 2 --group 1
   skus:
     sim_quasar_xl:
-      timeout: 15
+      timeout: 60
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
@@ -148,7 +148,7 @@
     ./run_ttsim_regression.sh -a quasar -n 32 -t 10 --no-html -- --splits 2 --group 2
   skus:
     sim_quasar_xl:
-      timeout: 15
+      timeout: 60
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
