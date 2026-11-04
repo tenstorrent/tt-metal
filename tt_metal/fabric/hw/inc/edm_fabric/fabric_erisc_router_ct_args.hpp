@@ -649,7 +649,11 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
         sender_channel_is_traffic_injection_channel_all_);
-constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
+// Bubble flow control (deadlock avoidance on a ring or torus): the free slots an injection channel needs in the far
+// router's VC0 receiver channel before it sends. The host's, from that receiver's depth; it passes it only with
+// deadlock avoidance, where it is at least 2 (the bubble) and at most the receiver's slots (router_sender.hpp).
+constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS =
+    enable_deadlock_avoidance ? NAMED_CT_ARG("BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS") : 0;
 
 static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_NOC_ID")),

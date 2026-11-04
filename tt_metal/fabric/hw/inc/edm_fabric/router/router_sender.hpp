@@ -73,12 +73,14 @@ struct SenderChannel {
         sender_channel_counter_addr(to_sender_remote_ack_counters_base_address, CH);
     static constexpr bool first_level_ack = is_vc_first_level_ack_enabled[vc];
     // Bubble flow control: on a deadlock-avoiding ring or torus an injection channel (the worker channel; on a torus a
-    // channel fed from the other axis, a turn) sends only with two free remote slots. (The untrimmed array: GCC rejects
-    // the trimmed std::array<bool, N>'s operator[] in a constant expression here as "used before its definition".)
+    // channel fed from the other axis, a turn) sends only with the host's count of free remote slots, at least two
+    // (BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS); any other channel with one. (The untrimmed array:
+    // GCC rejects the trimmed std::array<bool, N>'s operator[] in a constant expression here as "used before its
+    // definition".)
+    static constexpr bool bubble_flow_control_injection =
+        enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[CH];
     static constexpr uint32_t remote_free_slots_to_send =
-        enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[CH]
-            ? BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS
-            : 1;
+        bubble_flow_control_injection ? BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS : 1;
     // The NoC of its producer's credits and connection handshake (the library's, from SENDER_CH_<i>_ACK_NOC_ID).
     static constexpr uint8_t producer_noc = tt::tt_fabric::worker_handshake_noc;
 
@@ -549,6 +551,13 @@ FORCE_INLINE bool send(
     uint32_t& acks,
     bool& send_yielded) {
     constexpr size_t VC = SenderChannel<CH>::vc;
+    // An injection channel's free remote slots to send with: the bubble's two at least, and no more than the remote
+    // receiver channel has (or it could never send).
+    static_assert(
+        !SenderChannel<CH>::bubble_flow_control_injection ||
+            (SenderChannel<CH>::remote_free_slots_to_send >= 2 &&
+             SenderChannel<CH>::remote_free_slots_to_send <= RemoteReceiverChannel<VC>::num_slots),
+        "an injection channel sends with at least two and at most all of the remote receiver channel's slots free");
     const uint32_t slot_addr = next_slot_addr;
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot_addr);
 

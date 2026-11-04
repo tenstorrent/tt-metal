@@ -105,10 +105,26 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // in builder/router_wiring_rules.* (boundary_vc0/vc1_sender_count) from this direction count, not
 // stated here.
 
-// Bubble injection requires at least two downstream slots. Must match
-// BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS and fabric_router_mux_extension.cpp;
-// the host cannot include the device constant.
+// Bubble injection requires at least two downstream slots: the fewest free far-receiver slots an
+// injection channel sends with (bubble_flow_control_injection_min_free_slots), and the mux kernels'
+// BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS (fabric_router_mux_extension.cpp; the
+// host cannot include the device constant).
 static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
+
+// The most packets the far router's VC0 receiver may hold when an injection channel sends into it.
+// A cap, not a fraction of the receiver: on Blackhole rings, full-ring multicast ran equally fast
+// with 16-, 32- and 64-slot receivers under a cap of 14-16 packets, up to 1.5x slower without one,
+// and a cap of 8 slowed other ring traffic by up to 9%.
+static constexpr uint32_t bubble_flow_control_injection_max_far_receiver_occupancy = 16;
+
+// The free slots an injection channel needs in a far VC0 receiver of `far_receiver_slots` slots before
+// it sends: the bubble's two, or more where the receiver is deeper than the occupancy cap allows.
+constexpr uint32_t bubble_flow_control_injection_min_free_slots(uint32_t far_receiver_slots) {
+    const uint32_t beyond_cap = far_receiver_slots > bubble_flow_control_injection_max_far_receiver_occupancy
+                                    ? far_receiver_slots - bubble_flow_control_injection_max_far_receiver_occupancy
+                                    : 0;
+    return std::max(bubble_flow_control_protected_receiver_min_slots, beyond_cap);
+}
 
 // Only VC0 uses bubble flow control. VC1's intermesh dependency graph has no bubble proof for
 // arbitrary cross-mesh patterns, so its senders remain unguarded. Injection flags and protected-slot

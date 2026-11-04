@@ -1096,6 +1096,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // channel only sends when it sees that many free, so a single-slot receiver stalls it forever.
     // Nothing in the allocator guarantees this -- its smallest buffer-slot option gives one slot -- so
     // check it per VC, and only where bubble flow control is actually enabled.
+    // The same far receiver's depth sets the free slots this router's injection channels send with.
+    uint32_t bubble_flow_control_injection_min_free_slots = 0;
     if (final_enable_deadlock_avoidance) {
         constexpr uint32_t k_bfc_protected_receiver_min_slots =
             builder_config::bubble_flow_control_protected_receiver_min_slots;
@@ -1115,6 +1117,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             k_bfc_vc,
             remote_slots,
             k_bfc_protected_receiver_min_slots);
+        bubble_flow_control_injection_min_free_slots =
+            builder_config::bubble_flow_control_injection_min_free_slots(static_cast<uint32_t>(remote_slots));
+        log_debug(
+            tt::LogFabric,
+            "Fabric node {}, Ethernet channel {}: bubble flow control injection sends with {} of {} far VC{} "
+            "receiver slots free",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            bubble_flow_control_injection_min_free_slots,
+            remote_slots,
+            k_bfc_vc);
     }
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
@@ -1180,6 +1193,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    if (final_enable_deadlock_avoidance) {
+        named_args["BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS"] =
+            bubble_flow_control_injection_min_free_slots;
+    }
     // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them. A lone receiver
     // channel without bubble flow control takes 16, one per completion group of its slots.
     const uint32_t num_transaction_ids = (!final_enable_deadlock_avoidance && num_receiver_channels == 1)
