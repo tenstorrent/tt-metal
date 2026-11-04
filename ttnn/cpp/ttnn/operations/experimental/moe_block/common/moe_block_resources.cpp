@@ -23,9 +23,6 @@ namespace ttnn::operations::experimental::moe_block {
 
 namespace resources_detail {
 
-constexpr uint32_t SEM_BYTES = 16;  // a semaphore a 16 B word (the NoC's write granule)
-constexpr uint32_t SEM_SLOTS = 48;  // packed pool slots (persist_l1.SEM_SLOTS)
-
 bool torus_x_of(tt::tt_fabric::FabricConfig cfg) {
     return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
            cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
@@ -33,28 +30,6 @@ bool torus_x_of(tt::tt_fabric::FabricConfig cfg) {
 bool torus_y_of(tt::tt_fabric::FabricConfig cfg) {
     return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
            cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
-}
-
-uint8_t dir_mask(const std::vector<Dir>& dirs) {
-    uint8_t m = 0;
-    for (Dir d : dirs) {
-        m |= static_cast<uint8_t>(1u << static_cast<uint32_t>(d));
-    }
-    return m;
-}
-constexpr uint8_t ALL_DIRS = 0xF;
-
-// The plan with the ports of the directions outside `mask` removed.
-MeshPlan restrict_dirs(const MeshPlan& plan, uint8_t mask) {
-    MeshPlan out = plan;
-    for (auto& [chip, ports] : out.chips) {
-        for (Dir d : kDirs) {
-            if ((mask & (1u << static_cast<uint32_t>(d))) == 0) {
-                ports[static_cast<size_t>(d)].reset();
-            }
-        }
-    }
-    return out;
 }
 
 // The planners route a torus tie (a destination half a ring away) by the source's parity (mesh_routing.hpp route); the
@@ -218,18 +193,8 @@ tt::tt_metal::BufferType MoEBlockResources::persistent_buffer_type() const {
     return config_.persist_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
 }
 
-const PortCores& MoEBlockResources::ports(
-    std::optional<PortPlacement> mode, const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed) {
-    return ports(std::vector<Dir>(kDirs.begin(), kDirs.end()), mode, allowed);
-}
-
-const PortCores& MoEBlockResources::ports(
-    const std::vector<Dir>& dirs,
-    std::optional<PortPlacement> mode,
-    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed) {
+const PortCores& MoEBlockResources::ports(const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed) {
     check_alive();
-    const uint8_t mask = resources_detail::dir_mask(dirs);
-    const auto m = mode.value_or(config_.combine_tuning.place);
     std::vector<std::pair<size_t, size_t>> cells;
     if (allowed) {
         for (const auto& c : *allowed) {
@@ -238,13 +203,9 @@ const PortCores& MoEBlockResources::ports(
         std::sort(cells.begin(), cells.end());
         cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
     }
-    auto key = std::make_tuple(mask, m, std::move(cells));
-    auto it = ports_.find(key);
+    auto it = ports_.find(cells);
     if (it == ports_.end()) {
-        const auto placed = mask == resources_detail::ALL_DIRS
-                                ? place_ports(*mesh_device_, plan_, m, allowed)
-                                : place_ports(*mesh_device_, resources_detail::restrict_dirs(plan_, mask), m, allowed);
-        it = ports_.emplace(std::move(key), placed).first;
+        it = ports_.emplace(std::move(cells), place_ports(*mesh_device_, plan_, allowed)).first;
     }
     return it->second;
 }
@@ -327,16 +288,7 @@ const Tensor& MoEBlockResources::persistent_words(const std::string& name, const
         }
     }
     if (!off) {
-        const Tensor& t = persistent_tensor(name, spec);
-        words_.emplace(
-            name,
-            WordsSlot{
-                .name = name,
-                .cores = cores,
-                .bytes = bytes,
-                .address = static_cast<uint32_t>(t.buffer()->address()),
-                .packed = false});
-        return t;
+        return persistent_tensor(name, spec);
     }
     // (a view at the slot; zeroed on its own cores only - the slab's other slots are live)
     const uint32_t address = static_cast<uint32_t>(words_slab_->buffer()->address()) + *off;
@@ -344,113 +296,20 @@ const Tensor& MoEBlockResources::persistent_words(const std::string& name, const
     const Tensor zeros = ttnn::zeros(spec.logical_shape(), spec.data_type(), spec.layout());
     ttnn::copy_to_device(zeros, view);
     TT_FATAL(view.buffer()->address() == address, "moe_block: persistent words '{}' moved off their slot", name);
-    words_.emplace(name, WordsSlot{.name = name, .cores = cores, .bytes = bytes, .address = address, .packed = true});
     tensor_specs_.emplace(name, spec);
     return tensors_.emplace(name, std::move(view)).first->second;
-}
-
-std::vector<MoEBlockResources::WordsSlot> MoEBlockResources::words_layout() const {
-    std::vector<WordsSlot> out;
-    for (const auto& [name, slot] : words_) {
-        out.push_back(slot);
-    }
-    return out;
-}
-
-std::optional<MoEBlockResources::WordsSlab> MoEBlockResources::words_slab() const {
-    if (!words_slab_) {
-        return std::nullopt;
-    }
-    return WordsSlab{
-        .address = static_cast<uint32_t>(words_slab_->buffer()->address()),
-        .capacity = words_slab_capacity_,
-        .used = words_slab_used_};
-}
-
-const GlobalSemaphore& MoEBlockResources::global_semaphore(
-    const std::string& name, const CoreRangeSet& cores, uint32_t initial_value) {
-    check_alive();
-    if (auto it = semaphores_.find(name); it != semaphores_.end()) {
-        return it->second;
-    }
-    check_not_frozen(name);
-    auto sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device_, cores, initial_value, persistent_buffer_type());
-    return semaphores_.emplace(name, std::move(sem)).first->second;
-}
-
-uint32_t MoEBlockResources::semaphore_address(const std::string& name) {
-    check_alive();
-    if (!config_.persist_l1_small) {
-        const auto grid = mesh_device_->compute_with_storage_grid_size();
-        const CoreRangeSet all(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-        return static_cast<uint32_t>(
-            ttnn::global_semaphore::get_global_semaphore_address(global_semaphore("sem/" + name, all, 0)));
-    }
-    if (auto it = packed_slots_.find(name); it != packed_slots_.end()) {
-        return static_cast<uint32_t>(packed_pool_->buffer()->address()) + resources_detail::SEM_BYTES * it->second;
-    }
-    check_not_frozen(name);
-    if (!packed_pool_) {
-        const auto grid = mesh_device_->compute_with_storage_grid_size();
-        const CoreRangeSet all(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-        packed_pool_ =
-            persistent_words("sem/packed_pool", all, resources_detail::SEM_SLOTS * resources_detail::SEM_BYTES / 4);
-    }
-    const uint32_t slot = packed_slots_.size();
-    TT_FATAL(
-        slot < resources_detail::SEM_SLOTS, "moe_block: all {} packed semaphores taken", resources_detail::SEM_SLOTS);
-    packed_slots_.emplace(name, slot);
-    return static_cast<uint32_t>(packed_pool_->buffer()->address()) + resources_detail::SEM_BYTES * slot;
-}
-
-void MoEBlockResources::attach(const std::string& name, std::shared_ptr<void> owner) {
-    check_alive();
-    TT_FATAL(!attachments_.contains(name), "moe_block: attachment '{}' already exists", name);
-    attachments_.emplace(name, std::move(owner));
-}
-
-bool MoEBlockResources::has(const std::string& name) const {
-    return tensors_.contains(name) || semaphores_.contains(name) || packed_slots_.contains(name) ||
-           plans_.contains(name) || attachments_.contains(name);
-}
-
-std::vector<std::string> MoEBlockResources::names() const {
-    std::vector<std::string> out;
-    for (const auto& [k, v] : tensors_) {
-        out.push_back(k);
-    }
-    for (const auto& [k, v] : semaphores_) {
-        out.push_back(k);
-    }
-    for (const auto& [k, v] : packed_slots_) {
-        out.push_back(k);
-    }
-    for (const auto& [k, v] : plans_) {
-        out.push_back(k);
-    }
-    for (const auto& [k, v] : attachments_) {
-        out.push_back(k);
-    }
-    std::sort(out.begin(), out.end());
-    return out;
 }
 
 void MoEBlockResources::release() {
     if (mesh_device_ == nullptr) {
         return;
     }
-    attachments_.clear();  // (first: an attachment may still use the buffers)
     plans_.clear();
-    packed_slots_.clear();
-    packed_pool_.reset();
-    semaphores_.clear();
     for (auto& [name, t] : tensors_) {
         t.deallocate(true);  // (a packed words slot: a view - marks it released, frees nothing)
     }
     tensors_.clear();
     tensor_specs_.clear();
-    words_.clear();
     if (words_slab_) {
         words_slab_->deallocate(true);  // (after every view on it)
         words_slab_.reset();

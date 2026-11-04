@@ -75,7 +75,6 @@ uint32_t MoEBlockConfig::snap_bits() const { return moe_block::snap_bits(combine
 
 void MoEBlockConfig::validate() const {
     TT_FATAL(num_links >= 1 && num_links <= 2, "moe_block: num_links {} (1 or 2)", num_links);
-    TT_FATAL(combine_tuning.snoc <= 1, "moe_block: combine_tuning.snoc {} (0 or 1)", combine_tuning.snoc);
     (void)snap_bits();
 }
 

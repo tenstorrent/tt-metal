@@ -100,23 +100,6 @@ std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& t
     return hops.front().dir;
 }
 
-uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo) {
-    const int64_t R = topo.R, C = topo.C;
-    const int64_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
-    if (sr != dr) {
-        if (topo.wrap_y) {
-            const int64_t f2 = 2 * routing_detail::pmod(dr - sr, R);
-            return (f2 < R || (f2 == R && (sr % 2))) ? 2 : 3;
-        }
-        return dr > sr ? 2 : 3;
-    }
-    if (topo.wrap_x) {
-        const int64_t g2 = 2 * routing_detail::pmod(dc - sc, C);
-        return (g2 < C || (g2 == C && !(sc % 2))) ? 0 : 1;
-    }
-    return dc > sc ? 0 : 1;
-}
-
 uint8_t span_entry(uint32_t n, bool wrap, uint32_t pos, uint32_t tmask, uint32_t tie) {
     std::vector<int64_t> offs;
     for (uint32_t x = 0; x < n; ++x) {

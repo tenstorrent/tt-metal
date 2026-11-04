@@ -4,9 +4,6 @@
 
 // Host math shared by the MoE block's ops: mesh / torus coordinates, dimension-ordered routes (Y first, then X) with
 // the fabric's tie rule, the dispatch's route-word and span tables, the manifest ring layout, the port LUTs.
-// Faithful ports of ttnn/ttnn/bringup/combine_rf/{sparse_combine_l1,sparse_combine_rf,sparse_all_gather_2d,
-// combine_plan}.py on mstaletovic/moe-trim; tests/ttnn/unit_tests/operations/experimental/moe_block/
-// test_common_host_math.py compares every function here against the Python on a table of inputs.
 
 #pragma once
 
@@ -68,15 +65,11 @@ struct MeshTopology {
 // a ring away) goes as the fabric's routing tables send it: by the parity of the source's position on that axis, even
 // Y- / X+, odd Y+ / X- (sparse_combine_l1.route, tie_mode 2; its `link` argument is unused there).
 std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo);
-// sparse_combine_rf.first_hop: the first hop's direction, nullopt for src == dst.
+// The first hop's direction, nullopt for src == dst.
 std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& topo);
-// combine_plan.first_hop_idx / routing_a2a _FIRST_HOP on linear chip indices (src != dst): the DIRS index.
-uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo);
-// combine_plan.link_of: the link of every row from chip src to accumulator acc of chip home.
+// The link of every row from chip src to accumulator acc of chip home.
 inline uint32_t link_of(uint32_t acc, uint32_t src, uint32_t home, uint32_t L) { return (acc + src + home) % L; }
 
-// sparse_all_gather_2d: the stateless tie bit of row t, ((t * 2654435761) mod 2^32) >> k & 1.
-inline uint32_t hbit(uint32_t t, uint32_t k) { return (static_cast<uint32_t>(t * 2654435761u) >> k) & 1u; }
 // Route words per own row: 1 up to 16 chips (mask | order << 16 | link << 17), 2 beyond (mask, order | link << 1).
 inline uint32_t route_words(uint32_t N) { return N <= 16 ? 1 : 2; }
 // (a, b) packed a | b << 4: hops forward / backward from pos on an n-line / n-ring covering tmask's set bits.
@@ -122,7 +115,7 @@ MeshPlan mesh_plan(
 // Host-only: every neighbour connected by links 0..num_links-1 (tests, planners without a device).
 MeshPlan mesh_plan_uniform(const MeshTopology& topo, uint32_t num_links);
 
-// combine_plan.port_luts: per chip lut[direction * 2 + link] = port id (the chip's ports in DIRS / link order), 0xFF
+// Port LUTs: per chip lut[direction * 2 + link] = port id (the chip's ports in DIRS / link order), 0xFF
 // for none; and the chip's port count.
 struct PortLuts {
     std::map<ChipCoord, std::array<uint8_t, 8>> lut;

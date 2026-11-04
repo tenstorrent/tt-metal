@@ -1,6 +1,6 @@
 # The MoE block's ops (ttnn.experimental.moe_block): one library. common/ and every op directory own a sources.cmake
 # that appends to the three lists below; an op adds its files there, never here. Kernels under <op>/device/kernels/
-# (and common/kernels/) are globbed.
+# are globbed.
 set(TTNN_OP_EXPERIMENTAL_MOE_BLOCK_API_HEADERS)
 set(TTNN_OP_EXPERIMENTAL_MOE_BLOCK_SRCS)
 set(TTNN_OP_EXPERIMENTAL_MOE_BLOCK_NANOBIND_SRCS)
@@ -33,8 +33,6 @@ file(
     */device/kernels/*.cpp
     */device/kernels/*.hpp
     */device/kernels/*.h
-    common/kernels/*.hpp
-    common/kernels/*.h
 )
 target_sources(
     ttnn_op_experimental_moe_block
