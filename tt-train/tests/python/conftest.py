@@ -30,6 +30,10 @@ def pytest_configure(config):
         "markers",
         "requires_device: mark test as requiring a Tenstorrent device to run",
     )
+    config.addinivalue_line(
+        "markers",
+        "galaxy: mark test as requiring a full 32-device galaxy; the galaxy CI job selects these with -m galaxy",
+    )
 
 
 def pytest_collection_modifyitems(config, items):

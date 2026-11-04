@@ -88,6 +88,7 @@ def _is_blackhole() -> bool:
 # exercising an untuned path.
 pytestmark = [
     pytest.mark.requires_device,
+    pytest.mark.galaxy,
     pytest.mark.skipif(
         not _is_blackhole(),
         reason="sparse_ep MoE is supported/validated on Blackhole only",
