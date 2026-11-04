@@ -17,7 +17,6 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     device_config,
     row_grid,
     ROW_GRIDS,
-    NOT_WRITTEN,
     MeshRows,
     P150_AND_RING,
 )
@@ -26,7 +25,6 @@ from models.experimental.kimi_k3_moonvit_v2.tt.patch_merger import TT_Patch_Merg
 
 @P150_AND_RING
 @ROW_GRIDS
-@NOT_WRITTEN
 def test_patch_merger(mesh_device, sp_axis, num_links, config, size):
     tt = TT_Patch_Merger(device_config(config, sp_axis))
 
@@ -41,4 +39,7 @@ def test_patch_merger(mesh_device, sp_axis, num_links, config, size):
     rows = MeshRows(h * w, config.max_patches, sp_axis)
     merged = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
     out = tt(rows.shard(host_prep.to_window_order(x, h, w, config.merge_kernel_size), mesh_device))
-    assert_quality(merged.take(golden), merged.gather(out, mesh_device))
+    # A pure copy: the result must match exactly.
+    golden, actual = merged.take(golden), merged.gather(out, mesh_device)
+    assert_quality(golden, actual)
+    assert torch.equal(golden, actual)
