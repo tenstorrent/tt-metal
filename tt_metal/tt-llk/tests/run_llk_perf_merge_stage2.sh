@@ -43,27 +43,28 @@ fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
   --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt"
 
-# measure <side> <tree> <deadline> <part>: the part's tests at the 5 positions, kept as perf_data/runs/p<shift>-<part>.
+# measure <side> <tree> <stop at> <node list>: the listed tests at the 5 positions, kept as perf_data/runs/p<shift>-1.
+# No test starts after <stop at>; the session then ends and writes what it measured.
 measure() {
   local left=$(( $3 - $(date +%s) ))
   if (( left < 30 )); then
-    echo "::warning::No time left to measure part $4 on the $1 side."
+    echo "::warning::No time left to measure on the $1 side."
     return
   fi
-  LLK_PERF_NODE_LIST="$OUT/nodes.$4" RUNNER_TEMP="$OUT/tmp-$1-$4" timeout -k 20 "$(( left - 20 ))" "$2/tests/run_llk_perf_placement.sh" \
-    || echo "::warning::Stage 2 part $4 on the $1 side did not finish; what it missed is reported as not re-measured."
+  LLK_PERF_NODE_LIST="$4" LLK_STOP_AT="$3" RUNNER_TEMP="$OUT/tmp-$1" \
+    timeout -k 5 "$(( $3 + 15 - $(date +%s) ))" "$2/tests/run_llk_perf_placement.sh" \
+    || echo "::warning::Stage 2 on the $1 side did not finish; what it missed is reported as not re-measured."
+  for x in "$2"/tests/python_tests/pytest-report-placement-*.xml; do
+    [[ -f $x ]] && mv "$x" "$OUT/stage2.junit-$1-$(basename "$x")"
+  done
   for d in "$2"/perf_data/runs/p{0,4,20,36,52}; do
-    [[ -d $d ]] && mv "$d" "$d-$4"
+    [[ -d $d ]] && mv "$d" "$d-1"
   done
   # Both sides run the PR's node ids; a test the base does not have (renamed, new) is skipped there.
-  local listed found
-  listed=$(wc -l < "$OUT/nodes.$4")
-  found=$(python3 -c 'import csv, glob, sys
-print(len({r["nodeid"] for f in glob.glob(sys.argv[1] + "/**/*.windowhash", recursive=True) for r in csv.DictReader(open(f))}))' \
-    "$2/perf_data/runs/p0-$4" 2>/dev/null || echo 0)
-  if [[ $1 == base ]] && (( found < listed )); then
-    echo "::warning::The base ran ${found} of ${listed} listed tests in part $4 (renamed or new tests?); the rest show as not measured on the base."
-  fi
+  python3 -c 'import csv, glob, sys
+print("\n".join(sorted({r["nodeid"] for f in glob.glob(sys.argv[1] + "/**/*.windowhash", recursive=True) for r in csv.DictReader(open(f))})))' \
+    "$2/perf_data/runs/p0-1" > "$OUT/measured.$1" 2>/dev/null || true
+  echo "stage2-time: $1 measured $(grep -c . "$OUT/measured.$1" || true) of $(wc -l < "$4") listed tests by $(date +%s)"
 }
 
 BASE="$OUT/base"
@@ -85,16 +86,17 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
 # No test limit: stage 2 measures until the deadline, and the report lists what it did not measure on both sides.
-# The largest slowdowns go first, as a part of their own on both sides, so a leg that runs out of time
-# still has results for them. Within a part, each side gets half of the time left.
-FIRST="${LLK_STAGE2_FIRST:-10}"
-head -n "$FIRST" "$OUT/nodes.txt" > "$OUT/nodes.1"
-tail -n +"$(( FIRST + 1 ))" "$OUT/nodes.txt" > "$OUT/nodes.2"
-for part in 1 2; do
-  [[ -s "$OUT/nodes.$part" ]] || continue
-  measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 )) "$part"
-  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE" "$part"
-done
+# The head measures the largest slowdowns first, until halfway to the deadline. The base then measures the tests
+# the head measured, until the deadline.
+measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 )) "$OUT/nodes.txt"
+grep -Fx -f "$OUT/measured.head" "$OUT/nodes.txt" > "$OUT/nodes.base" || true
+if [[ -s "$OUT/nodes.base" ]]; then
+  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE" "$OUT/nodes.base"
+  missing=$(( $(wc -l < "$OUT/nodes.base") - $(grep -c . "$OUT/measured.base" || true) ))
+  if (( missing > 0 )); then
+    echo "::warning::The base did not measure ${missing} of the tests the head measured (renamed or new tests, or out of time); they show as not measured on the base."
+  fi
+fi
 
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \

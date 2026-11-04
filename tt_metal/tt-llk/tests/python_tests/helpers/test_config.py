@@ -125,12 +125,16 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
+# Bytes to move all TRISC code by (stage 2 of the perf gate). LLK_CODE_SHIFTS runs several in one session:
+# PerfConfig.run sets TestConfig.CODE_SHIFT to each in turn.
 LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
 # The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
 CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 
 class TestConfig:
+
+    CODE_SHIFT: ClassVar[int] = LLK_CODE_SHIFT
 
     # === STATIC VARIABLES ===
 
@@ -1327,6 +1331,7 @@ class TestConfig:
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "variant_id",
+            "unshifted_variant_id",
             "runtime_arguments_struct",
             "runtime_format",
             "passed_templates",
@@ -1412,11 +1417,19 @@ class TestConfig:
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
-        self.variant_id = sha256(
-            str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
-            ).encode()
-        ).hexdigest()
+        parts = temp_str + ["<<search-dirs>>"] + search_dirs + counters
+        # Each code position links its own ELFs; position 0 keeps the id it always had. The object cache keys on
+        # the position-0 id, so all positions share the objects.
+        self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
+        self.variant_id = (
+            sha256(
+                str(
+                    " | ".join(parts + [f"<<code-shift>>{TestConfig.CODE_SHIFT}"])
+                ).encode()
+            ).hexdigest()
+            if TestConfig.CODE_SHIFT
+            else self.unshifted_variant_id
+        )
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1780,7 +1793,9 @@ class TestConfig:
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
         key = [
-            token.replace(root, "<artefacts>")
+            token.replace(root, "<artefacts>").replace(
+                self.variant_id, self.unshifted_variant_id
+            )
             for token in head
             if not token.startswith(CODE_SHIFT_FLAG)
         ]
@@ -1926,7 +1941,11 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
+                    (
+                        [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]
+                        if TestConfig.CODE_SHIFT
+                        else []
+                    ),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
