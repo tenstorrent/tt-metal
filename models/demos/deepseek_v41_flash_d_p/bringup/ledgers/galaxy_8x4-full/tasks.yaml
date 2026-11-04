@@ -2270,7 +2270,8 @@ tasks:
       pcc_producer_kv_*: '>= limit'
       smoke_runner_ok: == 1
 - id: P.26
-  title: 'WINDOW_KV_BF16: a 16-bit window KV switch (bf16_tiles) next to bfp8_tiles; contract window-KV checks also report relative error'
+  title: 'WINDOW_KV_BF16: a 16-bit window KV switch (bf16_tiles) next to bfp8_tiles; contract window-KV checks also report
+    relative error'
   step: perf
   role: perf
   device: true
@@ -2282,20 +2283,20 @@ tasks:
   - ttnn/ttnn/bringup
   brief:
     details: 'OWNER 2026-11-01: a switch between 8-bit and 16-bit window KV, to see what 16 bits buy and to have it ready
-      should it be needed; the default stays bfp8_tiles. (1) A setting value WINDOW_KV_FORMAT=bf16_tiles: the window
-      KV that sparse_sdpa reads exactly as P.18''s bfp8_tiles path (per-chip 288-row region of tiles, one neighbour send of
-      the last 128 rows, dense band read in the sparse_sdpa fork, non-chunk-aligned starts as today) but kept in bfloat16
-      tiles, with no rounding step. The old WINDOW_KV_FORMAT=bf16 (the row layout from before P.18) stays as it is. If
-      the sparse_sdpa fork''s band read needs a bf16 key option, add it behind an option with a test. Report the window
-      region''s memory per chip in both formats (bytes, from the buffers you allocate). (2) Diagnostics in the contract
-      tests (owner approves changing them for this): next to every window-KV PCC check in test_adapter_acks and
-      test_runner_contract (layer 20 per position, the layers 35 / 38 last block, nope and pe), also record the relative
-      L2 error (||device - ref|| / ||ref||) and, where the check compares with the golden, the official reference''s
-      relative error on the same rows (official window_kv.safetensors from FIX.19), as metrics err_* / err_*_official.
-      They are recorded, never gated; no limit changes, no fixed numbers (F138); the PCC checks and the waivers stay as
-      they are. Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp8_tiles vs
-      bf16_tiles at 51200 / 512000 and runs the contract tests on both sides). Agent rules 18 / 19; device jobs over a
-      few minutes through devjob (start / wait), never killed. No fork regression suites; add tests only for what you add.'
+      should it be needed; the default stays bfp8_tiles. (1) A setting value WINDOW_KV_FORMAT=bf16_tiles: the window KV that
+      sparse_sdpa reads exactly as P.18''s bfp8_tiles path (per-chip 288-row region of tiles, one neighbour send of the last
+      128 rows, dense band read in the sparse_sdpa fork, non-chunk-aligned starts as today) but kept in bfloat16 tiles, with
+      no rounding step. The old WINDOW_KV_FORMAT=bf16 (the row layout from before P.18) stays as it is. If the sparse_sdpa
+      fork''s band read needs a bf16 key option, add it behind an option with a test. Report the window region''s memory per
+      chip in both formats (bytes, from the buffers you allocate). (2) Diagnostics in the contract tests (owner approves changing
+      them for this): next to every window-KV PCC check in test_adapter_acks and test_runner_contract (layer 20 per position,
+      the layers 35 / 38 last block, nope and pe), also record the relative L2 error (||device - ref|| / ||ref||) and, where
+      the check compares with the golden, the official reference''s relative error on the same rows (official window_kv.safetensors
+      from FIX.19), as metrics err_* / err_*_official. They are recorded, never gated; no limit changes, no fixed numbers
+      (F138); the PCC checks and the waivers stay as they are. Do not profile the model and do not run the A/B yourself (the
+      orchestrator measures bfp8_tiles vs bf16_tiles at 51200 / 512000 and runs the contract tests on both sides). Agent rules
+      18 / 19; device jobs over a few minutes through devjob (start / wait), never killed. No fork regression suites; add
+      tests only for what you add.'
   ab:
     env:
       WINDOW_KV_FORMAT: bfp8_tiles
@@ -2418,7 +2419,8 @@ tasks:
       emu_match_worst: '> 0'
       sites: '>= 6'
 - id: P.27
-  title: 'EXPERTS_BFP8: routed experts in bfloat8_b under MOE_IMPL=block, plus the bfp4_mse and bfp8_down4 switch values (P.28 / P.29 A/B them); A/B bfp4 vs bfp8 at 50k, DRAM per chip at 1M'
+  title: 'EXPERTS_BFP8: routed experts in bfloat8_b under MOE_IMPL=block, plus the bfp4_mse and bfp8_down4 switch values (P.28
+    / P.29 A/B them); A/B bfp4 vs bfp8 at 50k, DRAM per chip at 1M'
   step: perf
   role: perf
   device: true
@@ -2431,26 +2433,34 @@ tasks:
   - models/demos/moe_block
   brief:
     details: 'OWNER 2026-11-02: FIX.21 attributed most of the device''s extra error over DeepSeek''s reference to the bfloat4_b
-      routed-expert weights (DS41-196: 16.5 % of the e2m1 values move, 0.5 -> 0 and 1.5 -> 2 in every 16-value face row
-      holding a 4 or 6; bfloat8_b holds every e2m1 x ue8m0 value exactly in the [N, K] / weights_nk layout). (1) Make
-      EXPERTS_IMPL=bfp8 work with MOE_IMPL=block (two asserts refuse it today: tt/moe_block_adapter.py and
-      models/demos/moe_block/moe_block.py RoutedExperts (dtypes.routed_weights == bfloat4_b; MoEDtypes defaults to it); the
-      flat op already takes wdtype bf8 and TtExperts already builds it; check the block''s layout (layout_of, L1 slots sized
-      for 576-B tiles) holds 1088-B bfp8 tiles; the shared block is used by other models: keep their behaviour unchanged; the block MoE and the
-      flat expert op must take bfloat8_b weights in the same weights_nk layout; add a fork option with a test only if the op
-      needs one). The default stays bfp4 (a switch-only pick, F241); the owner decides after the A/B. (2) DRAM per chip,
-      measured, not estimated: write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py that loads the model
-      for ONE slot at the deployment context (1,048,576 tokens; every served cache and table allocated as serving allocates
-      it) and records, from the allocator (ttnn.get_memory_view(device, ttnn.BufferType.DRAM) per chip of the mesh), the
-      DRAM allocated after load (dram_load_gib_max / _min over chips) and the peak while one chunk runs at start 1,039,360
-      (the last whole chunk before 1M; sample the allocator after every layer and inside the MoE and attention, report the
-      max over chips and samples as dram_peak_gib_max), plus the bytes per group (routed experts, other weights, served
-      caches, tables) from the buffers the model allocates, and the allocator''s DRAM capacity per chip (dram_capacity_gib).
-      Recorded, never gated by a fixed number. It runs on both sides of the A/B. (3) Agent rules 18 / 19; device jobs over a
-      few minutes through devjob (start / wait), never killed. Do not profile the model and do not run the A/B yourself
-      (the orchestrator measures bfp4 vs bfp8 at 51200 / 512000 / 1039360 and runs the ladder and contract tests on both
-      sides). No fork regression suites; add tests only for what you add. Report: memory per group on both sides, and
-      whether bfp8 fits 1M within the 27.2 GiB budget and within the physical capacity. (4) OWNER 2026-11-02 (after reviewing GPT-OSS PR #63374, models/demos/gpt_oss/tt/bfp4_quant.py on that branch): two more EXPERTS_IMPL values, made here, A/B-ed by P.28 / P.29 (no new agent work there): bfp4_mse = bfloat4_b with the shared exponent of each 16-value group (along K in weights_nk, i.e. inside one ue8m0 block) chosen by least squared error between the group''s largest exponent and one below it (the large values then saturate at 7; ties: the largest), rounded on the host at load and handed to ttnn as bfloat4_b, which must pack it losslessly (add a test that ttnn''s packing of the rounded tensor is bit-exact); bfp8_down4 = w1 / w3 in bfloat8_b, w2 (down) in bfloat4_b with the bfp4_mse rounding. Each value gets its own expert cache names; the CPU emulation of the device formats (FIX.21, _bfp4_round) follows the switch. Log the per-layer changed fraction and worst ||dW|| / ||W|| at load for bfp4_mse as for bfp4.'
+      routed-expert weights (DS41-196: 16.5 % of the e2m1 values move, 0.5 -> 0 and 1.5 -> 2 in every 16-value face row holding
+      a 4 or 6; bfloat8_b holds every e2m1 x ue8m0 value exactly in the [N, K] / weights_nk layout). (1) Make EXPERTS_IMPL=bfp8
+      work with MOE_IMPL=block (two asserts refuse it today: tt/moe_block_adapter.py and models/demos/moe_block/moe_block.py
+      RoutedExperts (dtypes.routed_weights == bfloat4_b; MoEDtypes defaults to it); the flat op already takes wdtype bf8 and
+      TtExperts already builds it; check the block''s layout (layout_of, L1 slots sized for 576-B tiles) holds 1088-B bfp8
+      tiles; the shared block is used by other models: keep their behaviour unchanged; the block MoE and the flat expert op
+      must take bfloat8_b weights in the same weights_nk layout; add a fork option with a test only if the op needs one).
+      The default stays bfp4 (a switch-only pick, F241); the owner decides after the A/B. (2) DRAM per chip, measured, not
+      estimated: write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py that loads the model for ONE slot at
+      the deployment context (1,048,576 tokens; every served cache and table allocated as serving allocates it) and records,
+      from the allocator (ttnn.get_memory_view(device, ttnn.BufferType.DRAM) per chip of the mesh), the DRAM allocated after
+      load (dram_load_gib_max / _min over chips) and the peak while one chunk runs at start 1,039,360 (the last whole chunk
+      before 1M; sample the allocator after every layer and inside the MoE and attention, report the max over chips and samples
+      as dram_peak_gib_max), plus the bytes per group (routed experts, other weights, served caches, tables) from the buffers
+      the model allocates, and the allocator''s DRAM capacity per chip (dram_capacity_gib). Recorded, never gated by a fixed
+      number. It runs on both sides of the A/B. (3) Agent rules 18 / 19; device jobs over a few minutes through devjob (start
+      / wait), never killed. Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp8
+      at 51200 / 512000 / 1039360 and runs the ladder and contract tests on both sides). No fork regression suites; add tests
+      only for what you add. Report: memory per group on both sides, and whether bfp8 fits 1M within the 27.2 GiB budget and
+      within the physical capacity. (4) OWNER 2026-11-02 (after reviewing GPT-OSS PR #63374, models/demos/gpt_oss/tt/bfp4_quant.py
+      on that branch): two more EXPERTS_IMPL values, made here, A/B-ed by P.28 / P.29 (no new agent work there): bfp4_mse
+      = bfloat4_b with the shared exponent of each 16-value group (along K in weights_nk, i.e. inside one ue8m0 block) chosen
+      by least squared error between the group''s largest exponent and one below it (the large values then saturate at 7;
+      ties: the largest), rounded on the host at load and handed to ttnn as bfloat4_b, which must pack it losslessly (add
+      a test that ttnn''s packing of the rounded tensor is bit-exact); bfp8_down4 = w1 / w3 in bfloat8_b, w2 (down) in bfloat4_b
+      with the bfp4_mse rounding. Each value gets its own expert cache names; the CPU emulation of the device formats (FIX.21,
+      _bfp4_round) follows the switch. Log the per-layer changed fraction and worst ||dW|| / ||W|| at load for bfp4_mse as
+      for bfp4.'
   ab:
     env:
       EXPERTS_IMPL: bfp4
@@ -2490,7 +2500,12 @@ tasks:
   - ttnn/ttnn/bringup
   - models/demos/moe_block
   brief:
-    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats, especially bfp4_mse (same bytes and speed as bfp4, less rounding error). P.27 built this value; do not re-implement it. Check that it is wired (cache names, load log, the CPU emulation follows it) and fix only what is broken; the default stays bfp4 (F241, switch-only). Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp4_mse at 51200, ladder rung last). Agent rules 18 / 19; device jobs over a few minutes through devjob (start / wait). No fork regression suites. Report the load log''s changed fraction and worst ||dW|| / ||W|| per layer.'
+    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats, especially bfp4_mse (same bytes and speed as bfp4,
+      less rounding error). P.27 built this value; do not re-implement it. Check that it is wired (cache names, load log,
+      the CPU emulation follows it) and fix only what is broken; the default stays bfp4 (F241, switch-only). Do not profile
+      the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp4_mse at 51200, ladder rung last). Agent
+      rules 18 / 19; device jobs over a few minutes through devjob (start / wait). No fork regression suites. Report the load
+      log''s changed fraction and worst ||dW|| / ||W|| per layer.'
   ab:
     keep_default: true
     env:
@@ -2505,8 +2520,8 @@ tasks:
   ab_positions:
   - 51200
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2525,7 +2540,13 @@ tasks:
   - ttnn/ttnn/bringup
   - models/demos/moe_block
   brief:
-    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats: the memory fallback should bfp8 everywhere not fit 1M (GPT-OSS #63374 keeps bfp8 gate/up and bfp4 down for long contexts). P.27 built this value; do not re-implement it. Check that it is wired (cache names, load log, the CPU emulation follows it) and fix only what is broken; the default stays bfp4 (F241, switch-only). Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp4 vs bfp8_down4 at 51200, ladder rung last). Agent rules 18 / 19; device jobs over a few minutes through devjob (start / wait). No fork regression suites. Report the load log''s changed fraction and worst ||dW|| / ||W|| per layer. test_dram.py runs on both sides.'
+    details: 'OWNER 2026-11-02: the ablation of the routed-expert formats: the memory fallback should bfp8 everywhere not
+      fit 1M (GPT-OSS #63374 keeps bfp8 gate/up and bfp4 down for long contexts). P.27 built this value; do not re-implement
+      it. Check that it is wired (cache names, load log, the CPU emulation follows it) and fix only what is broken; the default
+      stays bfp4 (F241, switch-only). Do not profile the model and do not run the A/B yourself (the orchestrator measures
+      bfp4 vs bfp8_down4 at 51200, ladder rung last). Agent rules 18 / 19; device jobs over a few minutes through devjob (start
+      / wait). No fork regression suites. Report the load log''s changed fraction and worst ||dW|| / ||W|| per layer. test_dram.py
+      runs on both sides.'
   ab:
     keep_default: true
     env:
@@ -2540,8 +2561,9 @@ tasks:
   ab_positions:
   - 51200
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2555,7 +2577,9 @@ tasks:
   step: perf
   role: perf
   device: true
-  hold: 'owner 2026-11-03: queued after P.29; released 2026-11-03 21:00 (--until P.30). The gate rung last loads the golden prefix into every layer and runs only the last chunk, so its checks compare computed rows as they are; the skip itself is checked by test_decoder_skip.py below.'
+  hold: 'owner 2026-11-03: queued after P.29; released 2026-11-03 21:00 (--until P.30). The gate rung last loads the golden
+    prefix into every layer and runs only the last chunk, so its checks compare computed rows as they are; the skip itself
+    is checked by test_decoder_skip.py below.'
   deps:
   - P.29
   paths:
@@ -2564,7 +2588,32 @@ tasks:
   - ttnn/ttnn/bringup
   - models/demos/moe_block
   brief:
-    details: 'OWNER 2026-11-03: the decoder skip of DeepSeek-V4.1-Flash''s Causal Encoder-Decoder (arXiv 2609.19969), EXACT version first. A new switch DECODER_SKIP (off | exact; default off until the owner decides). exact: on every chunk except the request''s last, run layers 0-19 in full and only layer 20''s KV projection (its compressor rows, index keys and candidate pool inputs: what layers 21-39 read), skipping layer 20''s attention / MoE and layers 21-39. On the last chunk run all 40 layers; the decoder layers'' window rows before that chunk do not exist, so mask them (never read stale rows): the last token''s logits and the final 128 window rows of every layer depend on at most ~(20 x 127 + 128) earlier positions, which lie inside the last chunk when it is at least ~2.7k tokens long. When the last chunk is shorter (or a follow-up request appends to a cached prefix), pull its start back so it covers >= 2688 tokens (the contract''s pulled-back last chunk; the encoder layers recompute those positions exactly from their complete caches). The served window caches of layers 21-39 then hold only the last chunk''s rows: decode reads only the last 128. Measure: chunk device / wall time at 51200 and 512000 (a non-last chunk), and the last chunk; accuracy on the computed rows equal to the off path within the limits. Model-level checks only; no fork regression suites on the 8x4. Every Python-built op stays prepared (prepare_program / run_prepared). Later (not this pick): an approximate value (DeepSeek''s 128-token Bounded Replay) behind the same switch. INTERFACE (overseer 2026-11-03): tt-d-gen''s chunk header is {slot_id, actual_start, actual_end} only; nothing says a chunk is the request''s last (a prompt that is a multiple of the chunk ends on a full chunk), and the server chooses where a chunk starts (prefill has no token ids before actual_start). So the model takes an explicit per-chunk argument (last: bool, default True = run every layer, today''s behaviour) that the bring-up harness and runner pass; it does not infer it and does not pull back on its own: the caller starts a short last chunk >= 2688 tokens before its end. The serving side (a last-chunk flag in the header, the writer''s pull-back generalised to >= 2688 tokens, the KV manager not shipping or validating decoder-layer window rows outside the tail) is a tt-d-gen change the overseer requests; the runner contract test is not in this gate. TEST (overseer): add tests/bringup/test_decoder_skip.py, a two-chunk run (rung s10240: chunk 1 not last, so layers 20-39 are skipped, chunk 2 last) checking what the skip must keep exact: the final hidden and top-5 of the last positions and every layer''s final 128 window KV rows of chunk 2 against the golden, each with its limit from the framework''s end-to-end limits (testing/e2e_limits.py, the rung''s drift), recorded as skip_err_final_hidden / skip_err_window_kv_L* / skip_top5_overlap with their _limit; the same values on the off path are recorded beside them (diagnostic). Run it with DS41_DECODER_SKIP=exact explicitly.'
+    details: 'OWNER 2026-11-03: the decoder skip of DeepSeek-V4.1-Flash''s Causal Encoder-Decoder (arXiv 2609.19969), EXACT
+      version first. A new switch DECODER_SKIP (off | exact; default off until the owner decides). exact: on every chunk except
+      the request''s last, run layers 0-19 in full and only layer 20''s KV projection (its compressor rows, index keys and
+      candidate pool inputs: what layers 21-39 read), skipping layer 20''s attention / MoE and layers 21-39. On the last chunk
+      run all 40 layers; the decoder layers'' window rows before that chunk do not exist, so mask them (never read stale rows):
+      the last token''s logits and the final 128 window rows of every layer depend on at most ~(20 x 127 + 128) earlier positions,
+      which lie inside the last chunk when it is at least ~2.7k tokens long. When the last chunk is shorter (or a follow-up
+      request appends to a cached prefix), pull its start back so it covers >= 2688 tokens (the contract''s pulled-back last
+      chunk; the encoder layers recompute those positions exactly from their complete caches). The served window caches of
+      layers 21-39 then hold only the last chunk''s rows: decode reads only the last 128. Measure: chunk device / wall time
+      at 51200 and 512000 (a non-last chunk), and the last chunk; accuracy on the computed rows equal to the off path within
+      the limits. Model-level checks only; no fork regression suites on the 8x4. Every Python-built op stays prepared (prepare_program
+      / run_prepared). Later (not this pick): an approximate value (DeepSeek''s 128-token Bounded Replay) behind the same
+      switch. INTERFACE (overseer 2026-11-03): tt-d-gen''s chunk header is {slot_id, actual_start, actual_end} only; nothing
+      says a chunk is the request''s last (a prompt that is a multiple of the chunk ends on a full chunk), and the server
+      chooses where a chunk starts (prefill has no token ids before actual_start). So the model takes an explicit per-chunk
+      argument (last: bool, default True = run every layer, today''s behaviour) that the bring-up harness and runner pass;
+      it does not infer it and does not pull back on its own: the caller starts a short last chunk >= 2688 tokens before its
+      end. The serving side (a last-chunk flag in the header, the writer''s pull-back generalised to >= 2688 tokens, the KV
+      manager not shipping or validating decoder-layer window rows outside the tail) is a tt-d-gen change the overseer requests;
+      the runner contract test is not in this gate. TEST (overseer): add tests/bringup/test_decoder_skip.py, a two-chunk run
+      (rung s10240: chunk 1 not last, so layers 20-39 are skipped, chunk 2 last) checking what the skip must keep exact: the
+      final hidden and top-5 of the last positions and every layer''s final 128 window KV rows of chunk 2 against the golden,
+      each with its limit from the framework''s end-to-end limits (testing/e2e_limits.py, the rung''s drift), recorded as
+      skip_err_final_hidden / skip_err_window_kv_L* / skip_top5_overlap with their _limit; the same values on the off path
+      are recorded beside them (diagnostic). Run it with DS41_DECODER_SKIP=exact explicitly.'
   ab:
     keep_default: true
     env:
@@ -2580,9 +2629,9 @@ tasks:
   - 51200
   - 512000
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_skip.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_skip.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2592,7 +2641,8 @@ tasks:
       skip_err_window_kv_L*: <= limit
       skip_top5_overlap: '>= limit'
 - id: P.31
-  title: 'DECODER_SKIP=replay128: DeepSeek''s Bounded Replay (128-token tail, truncated windows) behind the same switch; short-turn time to first token'
+  title: 'DECODER_SKIP=replay128: DeepSeek''s Bounded Replay (128-token tail, truncated windows) behind the same switch; short-turn
+    time to first token'
   step: perf
   role: perf
   device: true
@@ -2605,7 +2655,17 @@ tasks:
   - ttnn/ttnn/bringup
   - models/demos/moe_block
   brief:
-    details: 'OWNER 2026-11-03: the approximate decoder skip, a third value of P.30''s switch: DECODER_SKIP=replay128 (DeepSeek-V4.1-Flash''s SWA Bounded Replay, arXiv 2609.19969, n_win 128). The last chunk runs layers 20-39 only on its last 128 positions with each window truncated to those positions (no pull-back); a request that appends to a cached prefix replays only the prefix''s last 128 tokens through layers 0-19 (truncated windows) before its new tokens. Approximate by design; the default stays off (owner decides). Lay the 128-row tail out so the device does not pad it to 32 rows on each of 32 chips (e.g. gather it to one mesh row); keep exact and replay128 one code path apart from the tail length. Add tests/bringup/test_short_turn.py: time to first token (device and wall, warm) of a 512-token suffix appended to a 51200-token cached prefix, recorded as short_turn_ms / short_turn_device_ms, plus its last-position top-5 and final hidden error against the golden; the A/B runs it on both sides. OWNER: the window KV state (err_state_window_kv_*, the contract''s window-KV PCC / rel checks) is not gated for this value; every other accuracy metric is, and a miss goes to the owner with the table. Model-level checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
+    details: 'OWNER 2026-11-03: the approximate decoder skip, a third value of P.30''s switch: DECODER_SKIP=replay128 (DeepSeek-V4.1-Flash''s
+      SWA Bounded Replay, arXiv 2609.19969, n_win 128). The last chunk runs layers 20-39 only on its last 128 positions with
+      each window truncated to those positions (no pull-back); a request that appends to a cached prefix replays only the
+      prefix''s last 128 tokens through layers 0-19 (truncated windows) before its new tokens. Approximate by design; the
+      default stays off (owner decides). Lay the 128-row tail out so the device does not pad it to 32 rows on each of 32 chips
+      (e.g. gather it to one mesh row); keep exact and replay128 one code path apart from the tail length. Add tests/bringup/test_short_turn.py:
+      time to first token (device and wall, warm) of a 512-token suffix appended to a 51200-token cached prefix, recorded
+      as short_turn_ms / short_turn_device_ms, plus its last-position top-5 and final hidden error against the golden; the
+      A/B runs it on both sides. OWNER: the window KV state (err_state_window_kv_*, the contract''s window-KV PCC / rel checks)
+      is not gated for this value; every other accuracy metric is, and a miss goes to the owner with the table. Model-level
+      checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
   ab:
     keep_default: true
     env:
@@ -2620,9 +2680,9 @@ tasks:
   ab_positions:
   - 51200
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
     metrics:
       err_layer_L*: <= limit
       err_state_compress_kv_L*: <= limit
@@ -2635,6 +2695,37 @@ tasks:
       top5_overlap: '>= limit'
       short_turn_ms: '> 0'
       short_turn_device_ms: '> 0'
+- id: FIX.22
+  title: 'OWNER 2026-11-04: make bfp4_mse the shipped routed-expert format'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.28
+  gate:
+    cmd: BRINGUP_TASK=P.28 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.28 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER 2026-11-04: make bfp4_mse the shipped routed-expert format. Change only the default of EXPERTS_IMPL in
+      tt/settings.py from bfp4 to bfp4_mse and its description''s owner-decision line (P.28''s A/B: err_final_hidden 0.140
+      vs 0.190, same bytes, device +1.9 ms / wall -1.0 ms at 51200, within noise). Nothing else. The bfp4_mse laid-out weight
+      cache is complete on this node (tt_cache/8x4/v1/experts-5254448103b6, 40 layers, a backup copy is going to /data), so
+      loads hit the cache; if a load reports cache=miss, stop and say so instead of converting inside a timed test. Model-level
+      checks only (the gate reruns P.28''s ladder at rung last and the profile).'
+    gate_tasks:
+    - P.28
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2661,6 +2752,7 @@ tasks:
   - P.30
   - P.31
   - P.29
+  - FIX.22
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
@@ -2681,6 +2773,49 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
+- id: P.32
+  title: 'WINDOW_KV_KEEP=final: keep only each layer''s last window rows per user (a ring), not the window history'
+  step: perf
+  role: perf
+  device: true
+  hold: 'owner 2026-11-04: after X.3; released with --until P.32'
+  deps:
+  - X.3
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-04: the memory half of DeepSeek-V4.1-Flash''s bounded window (arXiv 2609.19969: SWA KV is not persisted). A new switch WINDOW_KV_KEEP (full | final; default full until the owner decides; full = today: every position of every layer''s window KV). final = per user and layer only the last 192 window rows (128 the window reads + 64, the server''s kv_block_size: a follow-up turn starts at align_down(prev_end, 64), so its 128-row carry is still in the ring), written in place as a ring; the compressed KV and index keys unchanged. Everything that reads window rows reads the ring: the chunk''s 128-row carry, a pulled-back chunk, load_host / load_ring / to_host for the harness. A start whose carry is not in the ring (a prefix reused from another request, a resume older than the ring) is served by the decoder-skip modes P.30 / P.31 already have (exact: the caller pulls back >= 2688 tokens; replay128: the 128-token replay); with DECODER_SKIP=off such a start is refused with a clear error, never computed from missing rows. Add tests/bringup/test_window_ring.py: (1) a 3-chunk prompt (rung s10240 + one more chunk, or the goldens available) and a follow-up turn starting at align_down(end, 64), with WINDOW_KV_KEEP=final vs full: the last chunk''s final hidden, top-5 and every layer''s final 128 window rows against the golden with the framework''s end-to-end limits (testing/e2e_limits.py), recorded as ring_err_final_hidden / ring_err_window_kv_L* / ring_top5_overlap with their _limit, the full path''s values beside them; (2) a start outside the ring under DECODER_SKIP=off raises. Memory: test_dram.py (1M, one slot) on both sides; the served window cache per chip per user should fall from ~1.25 GiB to ~5 MB. The serving contract''s window-KV per-position tests and the tt-d-gen runner tests expect the full history: not in this gate (tt-d-gen change pending). Model-level checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
+  ab:
+    keep_default: true
+    env:
+      WINDOW_KV_KEEP: full
+      ENGRAM_TABLE: resident
+    change:
+      WINDOW_KV_KEEP: final
+      ENGRAM_TABLE: resident
+  ab_mode: full
+  ab_rungs:
+  - last
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_window_ring.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      ring_err_final_hidden: <= limit
+      ring_err_window_kv_L*: <= limit
+      ring_top5_overlap: '>= limit'
+      dram_load_gib_max: '> 0'
+      dram_peak_gib_max: '> 0'
 - id: O.1
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
