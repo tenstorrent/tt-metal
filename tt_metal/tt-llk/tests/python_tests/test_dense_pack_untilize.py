@@ -183,3 +183,14 @@ def test_pack_untilize(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+def test_dense_pack_untilize_remap_state_repeats():
+    test_pack_untilize(
+        input_output_formats([DataFormat.Float16_b])[0],
+        DestAccumulation.No,
+        [32, 32],
+        1,
+        DestSync.Half,
+        loop_factor=2,
+    )

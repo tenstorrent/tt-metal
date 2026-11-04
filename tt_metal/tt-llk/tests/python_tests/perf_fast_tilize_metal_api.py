@@ -7,7 +7,9 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_fast_tilize_metal_api import test_fast_tilize_metal_api
+from test_fast_tilize_metal_api import (
+    test_fast_tilize_metal_api as _test_fast_tilize_metal_api,
+)
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
@@ -30,7 +32,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 def test_perf_fast_tilize_metal_api(
     perf_report, formats, dest_acc, dimensions, run_types, loop_factor, is_perf
 ):
-    test_fast_tilize_metal_api(
+    _test_fast_tilize_metal_api(
         formats,
         dest_acc,
         dimensions,

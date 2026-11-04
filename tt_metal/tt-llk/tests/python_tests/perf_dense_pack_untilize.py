@@ -7,7 +7,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_dense_pack_untilize import test_pack_untilize
+from test_dense_pack_untilize import test_pack_untilize as _test_pack_untilize
 
 
 @pytest.mark.perf
@@ -31,7 +31,7 @@ def test_perf_pack_untilize(
     loop_factor,
     is_perf,
 ):
-    test_pack_untilize(
+    _test_pack_untilize(
         formats,
         dest_acc,
         input_dimensions,

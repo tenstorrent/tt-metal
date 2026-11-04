@@ -9,9 +9,9 @@ from test_sfpu_sdpa import (
     Precision,
     _dest_configurations,
     _variants,
-    test_sfpu_sdpa,
-    test_sfpu_sdpa_correction,
 )
+from test_sfpu_sdpa import test_sfpu_sdpa as _test_sfpu_sdpa
+from test_sfpu_sdpa import test_sfpu_sdpa_correction as _test_sfpu_sdpa_correction
 
 
 @pytest.mark.perf
@@ -23,7 +23,7 @@ from test_sfpu_sdpa import (
 def test_perf_sfpu_sdpa(
     perf_report, variant, precision, run_types, loop_factor, is_perf
 ):
-    test_sfpu_sdpa(
+    _test_sfpu_sdpa(
         variant,
         precision,
         is_perf=is_perf,
@@ -42,7 +42,7 @@ def test_perf_sfpu_sdpa(
 def test_perf_sfpu_sdpa_correction(
     perf_report, dest_config, scale_bf16, run_types, loop_factor, is_perf
 ):
-    test_sfpu_sdpa_correction(
+    _test_sfpu_sdpa_correction(
         dest_config,
         scale_bf16,
         is_perf=is_perf,

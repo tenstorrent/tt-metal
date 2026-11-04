@@ -14,6 +14,18 @@ PERF_MEASUREMENT_AXES = dict(
     is_perf=[True],
 )
 
+PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE = dict(
+    run_types=[
+        [
+            run_type
+            for run_type in ALL_PERF_RUN_TYPES
+            if run_type != PerfRunType.MATH_ISOLATE
+        ]
+    ],
+    loop_factor=[PERF_LOOP_FACTOR],
+    is_perf=[True],
+)
+
 
 def with_functional_defaults(test_config_kwargs):
     """Copy templates and runtimes, appending the functional perf symbols when absent.

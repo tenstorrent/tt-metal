@@ -82,9 +82,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
-
         if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
         {
             // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does; the rmsnorm init must
@@ -112,9 +109,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Scalar dest-reuse: 1 dummy SrcB (MOP start_op) + N tiles * faces SrcA.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _perf_unpack_loop_set_valid<true, true>(TILE_NUM_FACES); // refresh the scalar seed
                 _perf_unpack_set_valid(ckernel::SrcB);
                 _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(RMSNORM_NUM_TILES * RMSNORM_NUM_FACES);
             }
@@ -123,6 +120,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+
+                _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */,
+                    RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */,
+                    FACE_R_DIM,
+                    RMSNORM_NUM_FACES);
                 // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
                 _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -176,12 +183,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* is_int_fpu_en */,
             PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
-        // Seed DEST[0]; element [0] of it becomes the broadcast scalar. The
-        // dest-available wait is inside the L1_TO_L1 loop, before each math call.
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            0 /* dst_index */, formats.math, formats.math);
-
-        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
         PROFILER_SYNC();
     }
     {
@@ -193,8 +194,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(RMSNORM_NUM_TILES * RMSNORM_NUM_FACES);
+                if constexpr (unpack_to_dest)
+                {
+                    math_unpack_to_dest_math_ready();
+                    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(0);
+                    math::math_unpack_to_dest_tile_ready();
+                }
+                else
+                {
+                    _perf_math_loop_clear_valid<true, true>(TILE_NUM_FACES); // scalar seed
+                }
                 _perf_math_clear_valid(ckernel::SrcB);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(RMSNORM_NUM_TILES * RMSNORM_NUM_FACES);
             }
         }
         else
@@ -207,6 +218,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_wait_for_dest_available_<DST_SYNC>();
                 }
+                _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                    DataCopyType::A2D,
+                    is_fp32_dest_acc_en,
+                    BroadcastType::NONE,
+                    false /* is_int_fpu_en */,
+                    PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false /* unpack_to_dest */>(
+                        0 /* dst_index */, formats.math, formats.math);
+                }
+                else
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        0 /* dst_index */, formats.math, formats.math);
+                }
+                _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
                 _llk_math_rmsnorm_bcast_scalar_dest_reuse_<
                     ELTWISE_BINARY_OP,
                     RMSNORM_NUM_TILES,

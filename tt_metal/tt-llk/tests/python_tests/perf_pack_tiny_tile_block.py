@@ -8,8 +8,12 @@ from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_pack_tiny_tile_block import (
     FORMATS,
-    test_pack_tiny_tile_block,
-    test_pack_tiny_tile_reconfig,
+)
+from test_pack_tiny_tile_block import (
+    test_pack_tiny_tile_block as _test_pack_tiny_tile_block,
+)
+from test_pack_tiny_tile_block import (
+    test_pack_tiny_tile_reconfig as _test_pack_tiny_tile_reconfig,
 )
 
 
@@ -40,7 +44,7 @@ def test_perf_pack_tiny_tile_block(
     loop_factor,
     is_perf,
 ):
-    test_pack_tiny_tile_block(
+    _test_pack_tiny_tile_block(
         formats,
         dest_acc,
         tile_dims,
@@ -78,7 +82,7 @@ def test_perf_pack_tiny_tile_reconfig(
     loop_factor,
     is_perf,
 ):
-    test_pack_tiny_tile_reconfig(
+    _test_pack_tiny_tile_reconfig(
         formats,
         dest_acc,
         tile_dims,

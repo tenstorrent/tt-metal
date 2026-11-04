@@ -5,14 +5,14 @@ import pytest
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.param_config import parametrize
-from helpers.perf.blaze import PERF_MEASUREMENT_AXES
+from helpers.perf.blaze import PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE
 from test_sfpu_clamped_silu import (
     ALL_OPS,
     FORMATS,
     _op_ranges,
     _op_scalars,
-    test_sfpu_clamped_silu,
 )
+from test_sfpu_clamped_silu import test_sfpu_clamped_silu as _test_sfpu_clamped_silu
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
@@ -34,7 +34,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
     # One stimulus range per op. The ranges are not a recorded kernel column.
     input_range=lambda op: [_op_ranges(op)[0]],
 )
-@parametrize(**PERF_MEASUREMENT_AXES)
+@parametrize(**PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE)
 def test_perf_sfpu_clamped_silu(
     perf_report,
     formats,
@@ -46,7 +46,7 @@ def test_perf_sfpu_clamped_silu(
     loop_factor,
     is_perf,
 ):
-    test_sfpu_clamped_silu(
+    _test_sfpu_clamped_silu(
         formats,
         dest_acc,
         op,

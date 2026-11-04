@@ -9,7 +9,9 @@ from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_custom_mm_reuse_dest_srcb import (
     REUSE_FORMATS,
     REUSE_KT_NT,
-    test_custom_mm_reuse_dest_srcb,
+)
+from test_custom_mm_reuse_dest_srcb import (
+    test_custom_mm_reuse_dest_srcb as _test_custom_mm_reuse_dest_srcb,
 )
 
 
@@ -24,7 +26,7 @@ from test_custom_mm_reuse_dest_srcb import (
 def test_perf_custom_mm_reuse_dest_srcb(
     perf_report, formats, dest_acc, reuse_kt_nt, run_types, loop_factor, is_perf
 ):
-    test_custom_mm_reuse_dest_srcb(
+    _test_custom_mm_reuse_dest_srcb(
         formats,
         dest_acc,
         reuse_kt_nt,

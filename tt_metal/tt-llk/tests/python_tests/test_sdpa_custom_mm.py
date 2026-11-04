@@ -408,6 +408,18 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
     _run(M, K, N, signal_granularity=sg, read_transposed=False, mm_transpose=False)
 
 
+def test_sdpa_custom_mm_signalling_repeats():
+    _run(
+        1,
+        64,
+        32,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        loop_factor=2,
+    )
+
+
 @dataclass
 class SDPA_MASK_REENTRY(TemplateParameter):
     def convert_to_cpp(self):

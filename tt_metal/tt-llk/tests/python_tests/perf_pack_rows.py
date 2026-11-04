@@ -6,7 +6,8 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_pack_rows import dimension_combinations, test_pack_rows
+from test_pack_rows import dimension_combinations
+from test_pack_rows import test_pack_rows as _test_pack_rows
 
 
 @pytest.mark.perf
@@ -35,7 +36,7 @@ def test_perf_pack_rows(
     loop_factor,
     is_perf,
 ):
-    test_pack_rows(
+    _test_pack_rows(
         formats,
         dest_acc,
         num_rows_to_pack,

@@ -79,6 +79,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        _perf_unpack_loop_set_valid<true, true>(TILES_PER_SEQ);
+                        _perf_unpack_loop_set_valid<true, true>(1); // local sort
+                        if (c > 0)
+                        {
+                            _perf_unpack_loop_set_valid<true, true>(1); // rebuild
+                        }
+                    }
+                }
+            }
+        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -120,7 +138,62 @@ static __attribute__((noinline)) void copy_chunk(std::uint32_t chunk, std::uint3
 {
     for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
     {
-        ckernel::_llk_math_topk_xl_copy_(tile + t, dst_format, tile_active_elements(chunk_active_elements(chunk), t));
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile + t);
+            ckernel_template::run();
+            math::clear_dst_reg_addr();
+        }
+        else
+        {
+            ckernel::_llk_math_topk_xl_copy_(tile + t, dst_format, tile_active_elements(chunk_active_elements(chunk), t));
+        }
+    }
+}
+
+inline void topk_xl_split_perf_math_drain_copy(std::uint32_t elements, std::uint32_t dst_tile)
+{
+    if constexpr (unpack_to_dest)
+    {
+        if (elements == 0)
+        {
+            _perf_math_loop_clear_valid<true, true>(1);
+            return;
+        }
+        math_unpack_to_dest_math_ready();
+        if (elements < ELEMENTS_PER_TILE)
+        {
+            _perf_math_loop_clear_valid<true, true>(1);
+        }
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_tile);
+        math::math_unpack_to_dest_tile_ready();
+    }
+    else
+    {
+        _perf_math_loop_clear_valid<true, true>(1);
+    }
+}
+
+inline void topk_xl_split_perf_math_drain(std::uint32_t loop_factor)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; ++r)
+        {
+            for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; ++c)
+            {
+                const std::uint32_t active = chunk_active_elements(c);
+                for (std::uint32_t t = 0; t < TILES_PER_SEQ; ++t)
+                {
+                    topk_xl_split_perf_math_drain_copy(tile_active_elements(active, t), 2 * TILES_PER_SEQ + t);
+                }
+                _perf_math_loop_clear_valid<true, true>(1); // local sort
+                if (c > 0)
+                {
+                    _perf_math_loop_clear_valid<true, true>(1); // rebuild
+                }
+            }
+        }
     }
 }
 
@@ -149,6 +222,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            topk_xl_split_perf_math_drain(LOOP_FACTOR);
         }
         else
         {
@@ -207,11 +284,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        // Math posts F2S and waits on S2F. PACK_ISOLATE does not run math, so it
-        // must not take those tokens. UNPACK_ISOLATE and MATH_ISOLATE do run math,
-        // and pack has to answer S2F or math never clears the dvalids unpack posted.
-        // Those two modes skip only the L1 pack.
-        constexpr bool exchange_tokens = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
+        // Only the full split algorithm posts F2S and waits on S2F. The drain-only
+        // UNPACK_ISOLATE/L1_CONGESTION path consumes source valids without split tokens.
+        constexpr bool exchange_tokens = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE;
         constexpr bool pack_l1         = PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
         if constexpr (exchange_tokens || pack_l1)
         {

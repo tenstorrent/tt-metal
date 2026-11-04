@@ -200,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
         else
@@ -226,10 +226,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     _llk_math_eltwise_sfpu_done_();
 
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
-                    if constexpr (sync_with_math)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                     {
-                        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
+                        if constexpr (sync_with_math)
+                        {
+                            _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                        }
                     }
                 }
             }

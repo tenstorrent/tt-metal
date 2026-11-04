@@ -6,7 +6,8 @@ from conftest import skip_for_wormhole
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sfpu_softmax_k import ALL_K, FORMATS, test_sfpu_softmax_k
+from test_sfpu_softmax_k import ALL_K, FORMATS
+from test_sfpu_softmax_k import test_sfpu_softmax_k as _test_sfpu_softmax_k
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
@@ -29,7 +30,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 def test_perf_sfpu_softmax_k(
     perf_report, formats, dest_acc, k, run_types, loop_factor, is_perf
 ):
-    test_sfpu_softmax_k(
+    _test_sfpu_softmax_k(
         formats,
         dest_acc,
         k,

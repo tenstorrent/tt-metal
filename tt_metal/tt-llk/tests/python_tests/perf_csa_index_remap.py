@@ -6,7 +6,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import DestSync
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_csa_index_remap import test_csa_index_remap
+from test_csa_index_remap import test_csa_index_remap as _test_csa_index_remap
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -21,7 +21,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 def test_perf_csa_index_remap(
     perf_report, row_offset, dst_index, dest_sync, run_types, loop_factor, is_perf
 ):
-    test_csa_index_remap(
+    _test_csa_index_remap(
         row_offset,
         dst_index,
         dest_sync,

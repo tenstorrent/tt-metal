@@ -600,3 +600,12 @@ def test_top32_rm_pre_sorted_via_metal_wrappers(
         run_types=run_types,
         loop_factor=loop_factor,
     )
+
+
+def test_top32_rm_pack_state_repeats():
+    test_top32_rm(
+        FORMATS[0],
+        ELEMENTS_PER_CHUNK,
+        DestAccumulation.No,
+        loop_factor=2,
+    )

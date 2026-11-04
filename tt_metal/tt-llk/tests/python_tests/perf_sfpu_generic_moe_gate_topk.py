@@ -7,10 +7,18 @@ from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_sfpu_generic_moe_gate_topk import (
     invoke_with_perf,
-    test_sfpu_generic_moe_gate_biased_scores,
-    test_sfpu_generic_moe_gate_biased_scores_multiple_faces,
-    test_sfpu_generic_moe_gate_partial_face,
-    test_sfpu_generic_moe_gate_topk,
+)
+from test_sfpu_generic_moe_gate_topk import (
+    test_sfpu_generic_moe_gate_biased_scores as _test_sfpu_generic_moe_gate_biased_scores,
+)
+from test_sfpu_generic_moe_gate_topk import (
+    test_sfpu_generic_moe_gate_biased_scores_multiple_faces as _test_sfpu_generic_moe_gate_biased_scores_multiple_faces,
+)
+from test_sfpu_generic_moe_gate_topk import (
+    test_sfpu_generic_moe_gate_partial_face as _test_sfpu_generic_moe_gate_partial_face,
+)
+from test_sfpu_generic_moe_gate_topk import (
+    test_sfpu_generic_moe_gate_topk as _test_sfpu_generic_moe_gate_topk,
 )
 
 
@@ -43,7 +51,7 @@ def test_perf_sfpu_generic_moe_gate_topk(
     is_perf,
 ):
     invoke_with_perf(
-        test_sfpu_generic_moe_gate_topk,
+        _test_sfpu_generic_moe_gate_topk,
         num_selected_experts,
         full_sort,
         normalize,
@@ -70,7 +78,7 @@ def test_perf_sfpu_generic_moe_gate_partial_face(
     is_perf,
 ):
     invoke_with_perf(
-        test_sfpu_generic_moe_gate_partial_face,
+        _test_sfpu_generic_moe_gate_partial_face,
         num_total_experts,
         num_selected_experts,
         normalize,
@@ -102,7 +110,7 @@ def test_perf_sfpu_generic_moe_gate_biased_scores(
     is_perf,
 ):
     invoke_with_perf(
-        test_sfpu_generic_moe_gate_biased_scores,
+        _test_sfpu_generic_moe_gate_biased_scores,
         num_total_experts,
         num_selected_experts,
         normalize,
@@ -131,7 +139,7 @@ def test_perf_sfpu_generic_moe_gate_biased_scores_multiple_faces(
     is_perf,
 ):
     invoke_with_perf(
-        test_sfpu_generic_moe_gate_biased_scores_multiple_faces,
+        _test_sfpu_generic_moe_gate_biased_scores_multiple_faces,
         num_total_experts,
         num_selected_experts,
         normalize,

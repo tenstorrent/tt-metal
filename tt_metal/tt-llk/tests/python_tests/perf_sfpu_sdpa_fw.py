@@ -4,7 +4,8 @@
 import pytest
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sfpu_sdpa_fw import Precision, _variants, test_sfpu_sdpa_fw
+from test_sfpu_sdpa_fw import Precision, _variants
+from test_sfpu_sdpa_fw import test_sfpu_sdpa_fw as _test_sfpu_sdpa_fw
 
 
 @pytest.mark.perf
@@ -16,7 +17,7 @@ from test_sfpu_sdpa_fw import Precision, _variants, test_sfpu_sdpa_fw
 def test_perf_sfpu_sdpa_fw(
     perf_report, variant, precision, run_types, loop_factor, is_perf
 ):
-    test_sfpu_sdpa_fw(
+    _test_sfpu_sdpa_fw(
         variant,
         precision,
         is_perf=is_perf,

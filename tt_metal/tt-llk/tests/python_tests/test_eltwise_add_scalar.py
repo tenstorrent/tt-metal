@@ -24,12 +24,12 @@ supports ``MathFidelity::LoFi`` (fidelity > LoFi is an ELWMUL-only hardware
 feature), so the test runs at LoFi.
 
 Every lane of every output tile is defined (a full tile is packed), so the
-golden validates all lanes at the format tolerance. Runtime pass/fail is not
-checked in this harness (no BH card); the bar is a clean Blackhole compile plus
-a golden faithfully mirroring the header math.
+golden validates all lanes at the format tolerance. The former blanket
+Blackhole wedge skip was removed after the test passed on Blackhole silicon.
 """
 
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -58,6 +58,8 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 
 def _prepare_dest_reuse_inputs(

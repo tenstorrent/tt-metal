@@ -239,6 +239,23 @@ inline void unpack_transpose_tile(std::uint32_t l1_tile, std::uint32_t src_forma
     }
 }
 
+inline void top32_perf_unpack_mock()
+{
+    if constexpr (unpack_to_dest)
+    {
+        _perf_unpack_loop_set_valid<true, true>(1);
+    }
+    else
+    {
+        _perf_unpack_set_valid(ckernel::SrcA);
+    }
+}
+
+inline void top32_perf_unpack_chunk_mock()
+{
+    _perf_unpack_loop_set_valid<true, true>(1);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -274,6 +291,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PRE_SORTED_MODE)
+                {
+                    for (std::uint32_t chunk = 0; chunk < NUM_TILE_CHUNKS; ++chunk)
+                    {
+                        top32_perf_unpack_mock();
+                        top32_perf_unpack_mock();
+                    }
+                }
+                constexpr std::uint32_t FIRST_CHUNK = PRE_SORTED_MODE ? TAIL_FIRST : 0;
+                for (std::uint32_t first = FIRST_CHUNK; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+                {
+                    top32_perf_unpack_chunk_mock();
+                    top32_perf_unpack_chunk_mock();
+                }
+            }
         }
         else
         {
@@ -333,6 +370,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_MATH
+
+// The pre-sorted path plus isolate-specific source/drain protocol is close to the
+// TRISC1 code budget under -O3.
+#pragma GCC optimize("O2")
 
 // The experimental top32_rm LLK headers carry unused parameters that predate this test:
 // nothing outside the Metal JIT build compiled them, and that build does not treat
@@ -463,11 +504,28 @@ inline void math_transpose_init(std::uint32_t math_format)
     }
 }
 
+inline void top32_perf_math_copy(std::uint32_t dst_tile, std::uint32_t math_format)
+{
+    _llk_math_top32_rm_init_<is_fp32_dest_acc_en>(4, math_format);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_tile);
+    for (std::uint32_t face = 0; face < 4; ++face)
+    {
+        ckernel_template::run();
+    }
+    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
+    math::clear_dst_reg_addr();
+}
+
 // Mode 1: transpose_tile's math half, per format branch, mirroring api/compute/transpose.h.
 // On the 32-bit path the unpacker only reordered faces, so the within-face 16x16 transpose
 // happens here; on the 16-bit path the unpacker did the whole 32x32 and this is a datacopy.
 inline void math_transpose_tile(std::uint32_t dst_tile, std::uint32_t math_format)
 {
+    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        top32_perf_math_copy(dst_tile, math_format);
+        return;
+    }
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         dst_tile, math_format, math_format);
     if constexpr (unpack_to_dest)
@@ -483,6 +541,11 @@ inline void math_transpose_tile(std::uint32_t dst_tile, std::uint32_t math_forma
 // the data is already in Dest and what is left is the within-face transpose.
 inline void copy_chunk_to_dest(std::uint32_t dst_tile, std::uint32_t num_faces, std::uint32_t src_format, std::uint32_t dst_format)
 {
+    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        top32_perf_math_copy(dst_tile, dst_format);
+        return;
+    }
     _llk_math_top32_rm_init_<is_fp32_dest_acc_en>(num_faces, dst_format);
     if constexpr (unpack_to_dest)
     {
@@ -506,6 +569,52 @@ inline void sort_chunk(std::uint32_t dst_tile, bool direction)
     top32_rebuild(dst_tile, direction, true /* skip_second */);
 }
 
+inline void top32_perf_math_drain_direct(std::uint32_t dst_tile)
+{
+    math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_tile);
+    math::math_unpack_to_dest_tile_ready();
+}
+
+inline void top32_perf_math_drain(std::uint32_t loop_factor)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        if constexpr (PRE_SORTED_MODE)
+        {
+            for (std::uint32_t chunk = 0; chunk < NUM_TILE_CHUNKS; ++chunk)
+            {
+                // Keep congestion's unpack-to-DEST writes disjoint from PACK's VALUE/INDEX tiles.
+                for (const std::uint32_t tile : {STAGE_VALUE_TILE, STAGE_INDEX_TILE})
+                {
+                    if constexpr (unpack_to_dest)
+                    {
+                        top32_perf_math_drain_direct(tile);
+                        _perf_math_loop_clear_valid<true, true>(1);
+                    }
+                    else
+                    {
+                        _perf_math_loop_clear_valid<true, false>(1);
+                    }
+                }
+            }
+        }
+
+        constexpr std::uint32_t FIRST_CHUNK = PRE_SORTED_MODE ? TAIL_FIRST : 0;
+        for (std::uint32_t first = FIRST_CHUNK; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+        {
+            for (const std::uint32_t tile : {STAGE_VALUE_TILE, STAGE_INDEX_TILE})
+            {
+                if constexpr (unpack_to_dest)
+                {
+                    top32_perf_math_drain_direct(tile);
+                }
+                _perf_math_loop_clear_valid<true, true>(1);
+            }
+        }
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -527,6 +636,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            top32_perf_math_drain(LOOP_FACTOR);
         }
         else
         {
@@ -687,10 +800,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // The result is a COLUMN: one datum per Dest row, 32 rows of it. Narrowing the packer's
                 // x count to a single datum is what turns that column into 32 contiguous L1 elements,
                 // and is exactly what the consumer does before its two pack_tile calls.
+                cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM);
                 TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
 
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(params.buffer_Res[0]));
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(params.buffer_Res[1]));
+
+                TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+                cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
 
                 if constexpr (sync_with_math)
                 {

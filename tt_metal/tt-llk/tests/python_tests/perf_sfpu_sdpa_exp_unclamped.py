@@ -10,7 +10,9 @@ from test_sfpu_sdpa_exp_unclamped import (
     BF16_ONE,
     FORMATS,
     INPUT_RANGES,
-    test_sfpu_sdpa_exp_unclamped,
+)
+from test_sfpu_sdpa_exp_unclamped import (
+    test_sfpu_sdpa_exp_unclamped as _test_sfpu_sdpa_exp_unclamped,
 )
 
 
@@ -45,7 +47,7 @@ def test_perf_sfpu_sdpa_exp_unclamped(
     loop_factor,
     is_perf,
 ):
-    test_sfpu_sdpa_exp_unclamped(
+    _test_sfpu_sdpa_exp_unclamped(
         formats,
         input_range,
         scale_en,

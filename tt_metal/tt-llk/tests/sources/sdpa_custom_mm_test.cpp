@@ -328,8 +328,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Math still emits the production FPU->SFPU notifications. Drain
+            // them without touching DEST/L1 so the 4-bit semaphore cannot
+            // saturate across repeated isolated calls.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+                {
+                    for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)
+                    {
+                        t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU);
+                        t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+                    }
+                }
+            }
         }
         else
         {

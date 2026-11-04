@@ -70,3 +70,12 @@ def test_sdpa_bcast_col_srcb_reuse(
         run_types=run_types,
         loop_factor=loop_factor,
     )
+
+
+def test_sdpa_bcast_col_srcb_reuse_repeat_state():
+    test_sdpa_bcast_col_srcb_reuse(
+        SDPA_BCAST_FORMATS[0],
+        MathOperation.Elwmul,
+        SDPA_BCAST_TILE_COUNTS[0],
+        loop_factor=2,
+    )

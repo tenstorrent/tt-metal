@@ -11,10 +11,14 @@ from test_top32_rm import (
     PRE_SORTED_FORMATS,
     PRE_SORTED_ROW_ELEMENTS,
     ROW_ELEMENTS,
-    test_top32_rm,
-    test_top32_rm_pre_sorted,
-    test_top32_rm_pre_sorted_via_metal_wrappers,
-    test_top32_rm_via_metal_wrappers,
+)
+from test_top32_rm import test_top32_rm as _test_top32_rm
+from test_top32_rm import test_top32_rm_pre_sorted as _test_top32_rm_pre_sorted
+from test_top32_rm import (
+    test_top32_rm_pre_sorted_via_metal_wrappers as _test_top32_rm_pre_sorted_via_metal_wrappers,
+)
+from test_top32_rm import (
+    test_top32_rm_via_metal_wrappers as _test_top32_rm_via_metal_wrappers,
 )
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -30,7 +34,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 def test_perf_top32_rm(
     perf_report, formats, row_elements, dest_acc, run_types, loop_factor, is_perf
 ):
-    test_top32_rm(
+    _test_top32_rm(
         formats,
         row_elements,
         dest_acc,
@@ -50,7 +54,7 @@ def test_perf_top32_rm(
 def test_perf_top32_rm_pre_sorted(
     perf_report, formats, row_elements, run_types, loop_factor, is_perf
 ):
-    test_top32_rm_pre_sorted(
+    _test_top32_rm_pre_sorted(
         formats,
         row_elements,
         is_perf=is_perf,
@@ -70,7 +74,7 @@ def test_perf_top32_rm_pre_sorted(
 def test_perf_top32_rm_via_metal_wrappers(
     perf_report, formats, row_elements, dest_acc, run_types, loop_factor, is_perf
 ):
-    test_top32_rm_via_metal_wrappers(
+    _test_top32_rm_via_metal_wrappers(
         formats,
         row_elements,
         dest_acc,
@@ -90,7 +94,7 @@ def test_perf_top32_rm_via_metal_wrappers(
 def test_perf_top32_rm_pre_sorted_via_metal_wrappers(
     perf_report, formats, row_elements, run_types, loop_factor, is_perf
 ):
-    test_top32_rm_pre_sorted_via_metal_wrappers(
+    _test_top32_rm_pre_sorted_via_metal_wrappers(
         formats,
         row_elements,
         is_perf=is_perf,

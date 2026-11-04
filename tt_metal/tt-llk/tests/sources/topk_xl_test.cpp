@@ -206,9 +206,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        _perf_unpack_loop_set_valid<true, true>(TILES_PER_SEQ);
+                        if constexpr (LOCAL_SORT_NEEDS_SRCB)
+                        {
+                            _perf_unpack_loop_set_valid<true, true>(1);
+                        }
+                        if (c > 0 && !SORT_MODE_COLUMNS)
+                        {
+                            _perf_unpack_loop_set_valid<true, true>(1);
+                        }
+                    }
+                    if constexpr (REBUILD_LONE_CHUNK)
+                    {
+                        _perf_unpack_loop_set_valid<true, true>(1);
+                    }
+                }
+            }
+        }
         else
         {
-            // Custom dest-feed unpack: MATH_ISOLATE still runs the real copy so SFPU has DEST/src.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
@@ -373,6 +397,14 @@ inline void topk_xl_separate_indices(std::uint32_t dst_index)
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_<K, group_id>, dst_index, VectorMode::RC_custom);
 }
 
+inline void topk_xl_perf_math_copy(std::uint32_t dst_index, std::uint32_t dst_format)
+{
+    ckernel::_llk_math_topk_xl_copy_init_(dst_format);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    ckernel_template::run();
+    math::clear_dst_reg_addr();
+}
+
 // Shared core: copy the chunk into `slot`, stamp indices, fused local-sort.
 // Marked noinline to avoid overflowing the code region.
 template <std::uint32_t K>
@@ -381,7 +413,14 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     ckernel::_llk_math_topk_xl_copy_init_(dst_format);
     for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
     {
-        ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            topk_xl_perf_math_copy(slot + t, dst_format);
+        }
+        else
+        {
+            ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+        }
     }
 
     topk_xl_add_lsb_indices_init();
@@ -410,7 +449,14 @@ __attribute__((noinline)) void copy_sort_rt(std::uint32_t slot, std::uint32_t ac
     ckernel::_llk_math_topk_xl_copy_init_(dst_format);
     for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
     {
-        ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            topk_xl_perf_math_copy(slot + t, dst_format);
+        }
+        else
+        {
+            ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+        }
     }
 
     topk_xl_add_lsb_indices_init();
@@ -517,6 +563,61 @@ inline void topk_xl_chunk_base_init()
     }
 }
 
+inline void topk_xl_perf_math_drain_copy(std::uint32_t elements, std::uint32_t dst_tile)
+{
+    if constexpr (unpack_to_dest)
+    {
+        if (elements == 0)
+        {
+            _perf_math_loop_clear_valid<true, true>(1);
+            return;
+        }
+
+        math_unpack_to_dest_math_ready();
+        if (elements < ELEMENTS_PER_TILE)
+        {
+            _perf_math_loop_clear_valid<true, true>(1);
+        }
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_tile);
+        math::math_unpack_to_dest_tile_ready();
+    }
+    else
+    {
+        _perf_math_loop_clear_valid<true, true>(1);
+    }
+}
+
+inline void topk_xl_perf_math_drain(std::uint32_t loop_factor)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; ++r)
+        {
+            for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; ++c)
+            {
+                const std::uint32_t active = chunk_active_elements(c);
+                for (std::uint32_t t = 0; t < TILES_PER_SEQ; ++t)
+                {
+                    // SLOT1 is outside PACK's result region in congestion mode.
+                    topk_xl_perf_math_drain_copy(tile_active_elements(active, t), SLOT1 + t);
+                }
+                if constexpr (LOCAL_SORT_NEEDS_SRCB)
+                {
+                    _perf_math_loop_clear_valid<true, true>(1);
+                }
+                if (c > 0 && !SORT_MODE_COLUMNS)
+                {
+                    _perf_math_loop_clear_valid<true, true>(1);
+                }
+            }
+            if constexpr (REBUILD_LONE_CHUNK)
+            {
+                _perf_math_loop_clear_valid<true, true>(1);
+            }
+        }
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -539,6 +640,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            topk_xl_perf_math_drain(LOOP_FACTOR);
         }
         else
         {

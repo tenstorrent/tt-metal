@@ -132,32 +132,32 @@ def create_eltwise_bcast_col_custom_config(
         MATH_OP(mathop=mathop),
         BROADCAST_TYPE(broadcast_type),
         CT_DIM(ct_dim),
-    ]
+    ] + (
+        []
+        if is_perf
+        else [
+            INPUT_DIMENSIONS(
+                full_rt_dim=_BCST_COL_RT_DIM,
+                full_ct_dim=ct_dim,
+                block_ct_dim=ct_dim,
+                block_rt_dim=_BCST_COL_RT_DIM,
+            ),
+            PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
+        ]
+    )
     runtimes = [
         TILE_COUNT(tile_count),
         LOOP_FACTOR(loop_factor),
-    ]
-
-    if not is_perf:
-        templates.extend(
-            [
-                INPUT_DIMENSIONS(
-                    full_rt_dim=_BCST_COL_RT_DIM,
-                    full_ct_dim=ct_dim,
-                    block_ct_dim=ct_dim,
-                    block_rt_dim=_BCST_COL_RT_DIM,
-                ),
-                PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
-            ]
-        )
-        runtimes.extend(
-            [
-                NUM_FACES(num_faces, num_faces, num_faces),
-                TEST_FACE_DIMS(face_r_dim),
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            ]
-        )
+    ] + (
+        []
+        if is_perf
+        else [
+            NUM_FACES(num_faces, num_faces, num_faces),
+            TEST_FACE_DIMS(face_r_dim),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ]
+    )
 
     return create_test_or_perf_config(
         is_perf=is_perf,

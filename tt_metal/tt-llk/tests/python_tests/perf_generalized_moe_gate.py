@@ -249,7 +249,7 @@ def test_perf_generalized_moe_gate_copy4rows_back_to_back(
 
 
 @pytest.mark.perf
-@parametrize(knobs=[(0, 8), (4, 0), (4, 8)])
+@parametrize(knobs=[(0, 0), (0, 8), (4, 0), (4, 8)])
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_generalized_moe_gate_step1_hi(
     perf_report, knobs, run_types, loop_factor, is_perf
@@ -295,12 +295,14 @@ def test_perf_generalized_moe_gate_step2(
 
 
 @pytest.mark.perf
+@parametrize(perf_config_index=[0, 1, 2])
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_generalized_moe_gate_merge4_top8(
-    perf_report, run_types, loop_factor, is_perf
+    perf_report, perf_config_index, run_types, loop_factor, is_perf
 ):
     moe_gate.invoke_with_perf(
         moe_gate.test_generalized_moe_gate_merge4_top8,
+        perf_config_index=moe_gate._one(perf_config_index),
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 
@@ -384,11 +386,13 @@ def test_perf_generalized_moe_gate_combine_finalize(
 
 
 @pytest.mark.perf
+@parametrize(perf_config_index=[0, 1])
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_generalized_moe_gate_idx_offset(
-    perf_report, run_types, loop_factor, is_perf
+    perf_report, perf_config_index, run_types, loop_factor, is_perf
 ):
     moe_gate.invoke_with_perf(
         moe_gate.test_generalized_moe_gate_idx_offset,
+        perf_config_index=moe_gate._one(perf_config_index),
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )

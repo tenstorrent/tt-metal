@@ -550,3 +550,17 @@ def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **
         return
     finally:
         _ACTIVE_PERF = None
+
+
+def test_sfpu_generic_moe_gate_topk_pack_formats_repeat():
+    global _ACTIVE_PERF
+    _ACTIVE_PERF = (False, None, None, 2)
+    try:
+        _check_moe_gate(
+            4,
+            full_sort=True,
+            normalize=False,
+            zero_tail=True,
+        )
+    finally:
+        _ACTIVE_PERF = None

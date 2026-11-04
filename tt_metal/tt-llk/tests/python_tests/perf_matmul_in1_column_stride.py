@@ -7,7 +7,9 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_matmul_in1_column_stride import test_matmul_in1_column_stride_and_restore
+from test_matmul_in1_column_stride import (
+    test_matmul_in1_column_stride_and_restore as _test_matmul_in1_column_stride_and_restore,
+)
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
@@ -30,7 +32,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 def test_perf_matmul_in1_column_stride_and_restore(
     perf_report, formats, dest_acc, kt_dim, run_types, loop_factor, is_perf
 ):
-    test_matmul_in1_column_stride_and_restore(
+    _test_matmul_in1_column_stride_and_restore(
         formats,
         dest_acc,
         kt_dim,
