@@ -50,12 +50,7 @@ constexpr bool is_2d = is_2d_fabric != 0;
 
 // VC1 (multi-mesh fabrics): VC1 sender channels, a VC1 receiver channel, and VC1's downstream connections in the
 // runtime args.
-constexpr bool has_vc1 =
-#if defined(FABRIC_2D_VC1_ACTIVE)
-    true;
-#else
-    false;
-#endif
+constexpr bool has_vc1 = ACTUAL_VC1_SENDER_CHANNELS > 0;
 
 // VC2 (neighbour exchange): a worker channel and a receiver channel that only delivers.
 constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;

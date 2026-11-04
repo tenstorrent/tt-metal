@@ -68,9 +68,9 @@ __attribute__((noinline)) void sync_erisc(Phase phase) {
 }
 
 FORCE_INLINE void postcode(tt::tt_fabric::EDMStatus status) {
-#if !defined(FABRIC_2D_VC1_ACTIVE)
-    POSTCODE(status);
-#endif
+    if constexpr (!has_vc1) {
+        POSTCODE(status);
+    }
 }
 
 FORCE_INLINE volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status() {
