@@ -1043,6 +1043,34 @@ PERF_TEST_SCHEMAS = {
             "perf_custom_mm_reuse_dest_srcb": "perf_custom_mm_reuse_dest_srcb"
         },
     },
+    "perf_matmul_custom": {
+        "version": 1,
+        "columns": [
+            "c_dimm",
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "k_dimm",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "r_dimm",
+            "throttle_level",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_matmul_custom": "perf_matmul_custom"},
+    },
 }
 
 
