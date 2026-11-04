@@ -8,6 +8,7 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -581,7 +582,25 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         const auto& mem = attributes.output_memory_config;
         const auto grid = x.device()->compute_with_storage_grid_size();
         const std::array<uint32_t, 2> ar_shard_shape{1, hidden / kDownCoresPerExpert};
-        TT_FATAL(ar.ring_size > 1, "fused_experts: all_reduce needs more than one chip on axis {}", ar.cluster_axis);
+        TT_FATAL(ar.ring_size > 1, "fused_experts: all_reduce needs more than one chip, got {}", ar.ring_size);
+        if (!ar.cluster_axis.has_value()) {
+            // One pass over a 2D mesh: a 2D fabric multicast reaches every chip, rows and columns at
+            // once, which a 1D fabric's single-axis lines cannot.
+            const auto& mesh = *x.device();
+            TT_FATAL(
+                mesh.shape().dims() == 2 && ar.ring_size == mesh.shape().mesh_size(),
+                "fused_experts: an all_reduce over both mesh axes needs the input on all {} chips of a 2D mesh, "
+                "got {} chips of a {}D mesh",
+                mesh.shape().mesh_size(),
+                ar.ring_size,
+                mesh.shape().dims());
+            TT_FATAL(
+                tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+                "fused_experts: an all_reduce over both mesh axes needs a 2D fabric");
+            TT_FATAL(
+                ttnn::ccl::is_axis_straight(mesh, 0) && ttnn::ccl::is_axis_straight(mesh, 1),
+                "fused_experts: an all_reduce over both mesh axes needs both axes wired straight");
+        }
         TT_FATAL(
             ar.num_links >= 1 && ar.num_links <= kDownCoresPerExpert,
             "fused_experts: all_reduce num_links must be in [1, {}], got {}",
@@ -690,7 +709,7 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         tensor_args.router_weight,
         tensor_args.router_bias,
         attributes.all_reduce.has_value(),
-        attributes.all_reduce.has_value() ? attributes.all_reduce->cluster_axis : 0u,
+        attributes.all_reduce.has_value() ? attributes.all_reduce->cluster_axis : std::nullopt,
         attributes.all_reduce.has_value() ? attributes.all_reduce->ring_size : 0u,
         attributes.all_reduce.has_value() ? attributes.all_reduce->num_links : 0u,
         attributes.all_reduce.has_value() ? static_cast<uint32_t>(attributes.all_reduce->topology) : 0u);
@@ -751,7 +770,7 @@ FusedExpertsDeviceOperation::invoke(
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
     const std::optional<Tensor>& router_bias,
-    std::optional<uint32_t> all_reduce_cluster_axis,
+    const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
     tt::tt_fabric::Topology all_reduce_topology) {
     operation_attributes_t attributes{
@@ -776,10 +795,26 @@ FusedExpertsDeviceOperation::invoke(
         .output_memory_config = memory_config.value_or(
             fused_experts_input_is_replicated(input_tensor) ? ttnn::DRAM_MEMORY_CONFIG : input_tensor.memory_config()),
     };
-    if (all_reduce_cluster_axis.has_value()) {
+    if (all_reduce_cluster_axes.has_value()) {
+        // Only the axes the mesh spans more than one chip along reduce anything; both of a 2D mesh
+        // reduce over every chip at once, which is what an unset cluster_axis means.
+        const auto mesh_shape = input_tensor.device()->shape();
+        std::vector<uint32_t> axes;
+        for (const uint32_t axis : *all_reduce_cluster_axes) {
+            TT_FATAL(
+                axis < mesh_shape.dims(),
+                "fused_experts: all_reduce axis {} is out of range for a {}D mesh",
+                axis,
+                mesh_shape.dims());
+            if (mesh_shape[axis] > 1 && std::find(axes.begin(), axes.end(), axis) == axes.end()) {
+                axes.push_back(axis);
+            }
+        }
+        TT_FATAL(!axes.empty(), "fused_experts: the all_reduce axes span a single chip of a {} mesh", mesh_shape);
+        const std::optional<uint32_t> cluster_axis = axes.size() == 1 ? std::optional<uint32_t>(axes[0]) : std::nullopt;
         attributes.all_reduce = FusedAllReduceParams{
-            .cluster_axis = *all_reduce_cluster_axis,
-            .ring_size = ttnn::ccl::get_topological_dimension(input_tensor, all_reduce_cluster_axis),
+            .cluster_axis = cluster_axis,
+            .ring_size = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis),
             .num_links = all_reduce_num_links,
             .topology = all_reduce_topology,
         };
@@ -824,7 +859,7 @@ fused_experts(
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
     const std::optional<Tensor>& router_bias,
-    std::optional<uint32_t> all_reduce_cluster_axis,
+    const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
     uint32_t all_reduce_num_links,
     tt::tt_fabric::Topology all_reduce_topology) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
@@ -849,7 +884,7 @@ fused_experts(
         shared_swiglu_limit,
         router_weight,
         router_bias,
-        all_reduce_cluster_axis,
+        all_reduce_cluster_axes,
         all_reduce_num_links,
         all_reduce_topology);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

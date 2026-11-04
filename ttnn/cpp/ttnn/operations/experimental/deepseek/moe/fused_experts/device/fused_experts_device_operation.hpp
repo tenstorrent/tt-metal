@@ -147,7 +147,7 @@ struct FusedExpertsDeviceOperation {
         std::optional<float> shared_swiglu_limit,
         const std::optional<Tensor>& router_weight,
         const std::optional<Tensor>& router_bias,
-        std::optional<uint32_t> all_reduce_cluster_axis,
+        const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes,
         uint32_t all_reduce_num_links,
         tt::tt_fabric::Topology all_reduce_topology);
 };
@@ -177,7 +177,7 @@ fused_experts(
     std::optional<float> shared_swiglu_limit = std::nullopt,
     const std::optional<Tensor>& router_weight = std::nullopt,
     const std::optional<Tensor>& router_bias = std::nullopt,
-    std::optional<uint32_t> all_reduce_cluster_axis = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& all_reduce_cluster_axes = std::nullopt,
     uint32_t all_reduce_num_links = 1,
     tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear);
 }  // namespace ttnn::prim
