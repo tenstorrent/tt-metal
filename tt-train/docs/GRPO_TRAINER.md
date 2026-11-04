@@ -194,7 +194,11 @@ from ttml.trainers import GRPOConfig
 | `epsilon` | `float` | — | `epsilon` | Clipping parameter for the GRPO surrogate loss (analogous to PPO clip range). |
 | `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * (per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations)`. **Currently, `prompts_to_train` must be divisible by the generation batch size in prompts (`per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations`) to avoid a ragged final batch.** |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
-| `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
+| `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. Must be a non-negative int; a fractional warmup ratio is rejected. |
+| `lr_scheduler_type` | `str` | `"constant_with_warmup"` | `lr_scheduler_type` | Same values as TRL: `"constant"` (flat; ignores `warmup_steps`), `"constant_with_warmup"`, `"cosine"` (decays to 0), `"cosine_with_min_lr"` (decays to `base_lr * min_lr_rate`). Other TRL values are not supported. TRL's default is `"linear"`, so a ported config that leaves this unset gets a constant LR after warmup instead of a linear decay. Warmup is `(i + 1) / warmup_steps` for 0-indexed step `i`; TRL's is `i / warmup_steps`. Optimizers without LR-scheduler support (`MuonWithAdamW`) only accept `"constant"`, or `"constant_with_warmup"` with `warmup_steps <= 1`; anything else raises in `_setup`. |
+| `min_lr_rate` | `float \| None` | `None` | `lr_scheduler_kwargs={"min_lr_rate": ...}` | Final LR as a fraction of the base LR; required for `"cosine_with_min_lr"`, ignored otherwise. |
+| `use_clip_grad_norm` | `bool` | `False` | `max_grad_norm > 0` | Clip the gradient norm before `optimizer.step()`. TRL clips by default (`max_grad_norm=1.0`), so a ported config trains unclipped unless this is set. Raises in `_setup` when any parameter is sharded (FSDP/TP). |
+| `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
@@ -413,7 +417,7 @@ Two contracts are worth calling out:
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
 | `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
-| `on_before_optimizer_step` | `(trainer)` | After gradient accumulation, before `optimizer.step()`. |
+| `on_before_optimizer_step` | `(trainer)` | After gradient sync, before gradient clipping and `optimizer.step()`, so callbacks see unclipped gradients. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |
 
@@ -543,6 +547,9 @@ Parameters too small to shard into whole tiles can be kept replicated with
 Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
 shards rather than full tensors) — set `checkpointing: false`.
 
+Gradient clipping is also unsupported under FSDP: with `use_clip_grad_norm: true`,
+`_setup` raises when any parameter is sharded.
+
 ---
 
 ## DDP / Multi-device
@@ -589,8 +596,8 @@ Each checkpoint directory contains:
 | `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
 | `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |
 | `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GRPOConfig` and tokenizer |
-| `trainer_state.json` | Training progress (global step, learning rate of each param group) | Current optimizer step and the per-group LRs the last step trained with |
-| `scheduler.pt` | Learning rate scheduler state (step, per-group base and last LRs) | `torch.save(scheduler.get_state_dict())` |
+| `trainer_state.json` | Training progress (global step, learning rate) | Optimizer step and the LR used by that step |
+| `scheduler.pt` | Learning rate scheduler state | `torch.save(scheduler.get_state_dict())` when a scheduler exists, otherwise a fallback dict with base LR/warmup/step |
 | `rng_state.pth` | Python, NumPy, and PyTorch RNG states for reproducibility | `torch.save()` |
 | `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |

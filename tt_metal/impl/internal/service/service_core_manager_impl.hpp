@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <optional>
-#include <stddef.h>
+#include <cstddef>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -74,6 +75,12 @@ public:
 
     // Called on every EnqueueMeshWorkload - common case is no claims, in which case routing is skipped.
     bool has_any_claims() const;
+    // Bumped whenever the set of claimed cores changes (claim / release / device close). Lets callers
+    // cache a decision that depends only on which cores are claimed, e.g. whether a program's CBs sit
+    // on a service core, and revalidate only when the claims actually change. Like the rest of this
+    // class it assumes claims change sequentially on the main thread; the counter does not make the
+    // claim maps safe to mutate concurrently.
+    uint64_t claims_generation() const { return claims_generation_.load(std::memory_order_acquire); }
     // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
     // programs to the SD path and to device-scope placement/CB validation.
     bool is_service_core(ChipId device_id, CoreCoord core) const;
@@ -98,6 +105,7 @@ private:
     MetalEnvImpl& env_;
     MetalContext& ctx_;
     std::unordered_map<ChipId, DeviceServiceState> devices_;
+    std::atomic<uint64_t> claims_generation_{0};
 };
 
 }  // namespace tt::tt_metal::internal

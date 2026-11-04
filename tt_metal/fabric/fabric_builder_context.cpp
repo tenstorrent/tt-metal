@@ -47,8 +47,7 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
     // The credit plan follows express enablement (per mesh) and multi-TXQ (device-wide, from the
     // shared router config) -- the same facts the per-router derivation used, lifted to the scope
     // they actually vary at.
-    const auto& base_config = get_fabric_router_config();
-    const bool multi_txq_enabled = base_config.sender_txq_id != base_config.receiver_txq_id;
+    const bool multi_txq_enabled = get_fabric_router_config().multi_txq_enabled();
     const CreditTransportPlan plan{
         .vc0_uses_counters = multi_txq_enabled,
         .vc1_uses_counters = multi_txq_enabled || express_enabled,
@@ -114,7 +113,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.intermesh_vc_disabled;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -124,9 +124,10 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
     // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
-    // the boundary shape is defined by its from-boundary VC1 fanout.
+    // the boundary shape is defined by its from-boundary VC1 fanout (on VC0 with intermesh_vc_disabled).
     const bool has_intermesh_z_boundary =
-        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+        (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.intermesh_vc_disabled) &&
+        fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
         const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
@@ -308,7 +309,7 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
         router_config_->edm_local_tensix_sync_address,
         router_config_->termination_signal_address};
 
-    if (router_config_->sender_txq_id != router_config_->receiver_txq_id) {
+    if (router_config_->multi_txq_enabled()) {
         addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);
         addresses_to_clear.push_back(router_config_->to_sender_channel_remote_completion_counters_base_addr);
         addresses_to_clear.push_back(router_config_->receiver_channel_remote_ack_counters_base_addr);
@@ -381,6 +382,18 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
+
+            if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && needs_mesh_pass_through) {
+                log_warning(
+                    tt::LogFabric, "TT_METAL_FABRIC_DISABLE_INTERMESH_VC is ignored: mesh pass-through needs VC1");
+            } else if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc()) {
+                config = IntermeshVCConfig::disabled();
+                config.mode = IntermeshVCMode::FULL_MESH;
+                config.intermesh_vc_disabled = true;
+                log_info(
+                    tt::LogFabric,
+                    "Intermesh VC disabled (TT_METAL_FABRIC_DISABLE_INTERMESH_VC): inter-mesh traffic lands on VC0");
+            }
         }
     }
 
@@ -397,6 +410,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

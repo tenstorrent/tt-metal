@@ -14,7 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "tt-metalium/buffer_types.hpp"
@@ -730,15 +730,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // sender/receiver, TRISC pop on the consumer). On Quasar, implicit-sync would add an extra final-credit ACK
     // on top of those explicit pops -> in0 tile-counter underflow, so opt the bound DFBs out of implicit sync.
     // config_1xx (WH/BH placement) and config_2xx (Quasar) are each ignored on the other arch.
-    const auto dm_hw_config = [](tt_metal::DataMovementProcessor proc,
-                                 tt_metal::NOC noc) -> DataMovementHardwareConfig {
+    // Quasar is single-NoC, so its multicast channels are lowered for NOC_0, and its kernels say NOC_0 too: the
+    // multicast helpers check that a sender's NoC matches its channel's.
+    const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
+    const auto dm_hw_config = [is_quasar_mm](tt_metal::DataMovementProcessor proc,
+                                             tt_metal::NOC noc) -> DataMovementHardwareConfig {
         return DataMovementHardwareConfig{
-            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = proc, .noc = noc},
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
             .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
         };
     };
-    // Quasar is single-NoC, so its multicast channels are lowered for NOC_0.
-    const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Which kernels this instantiation builds

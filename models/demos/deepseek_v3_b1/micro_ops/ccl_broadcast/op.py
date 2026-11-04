@@ -409,7 +409,7 @@ class BroadcastConfig:
         # 2. one dst_mesh_id / dst_chip_id pair per neighbor
         for dst_node in d["dst_nodes"]:
             for link_idx in range(self.num_links):
-                setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
+                setup_args = ttnn.setup_fabric_connection(self.mesh_device, src_node, dst_node, link_idx, program, core)
                 if self._setup_fabric_rt_arg_count is None:
                     self._setup_fabric_rt_arg_count = len(setup_args)
                 else:
