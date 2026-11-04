@@ -4,8 +4,8 @@
 // its output tile columns, in blocks of up to NBLK. Per block, group of J = KPC kbs and column c, in one DEST pass: for
 // each kb j of the group, P[r] += x'[r, kb] @ T[kb, c] for all r (4 matmul_blocks, rt = m, ternary in1 with a forced
 // exponent: exact products), then the SFPU multiplies every P[r] by the column's ratio r_j = s_j / s_(j+1) (s_j for the
-// group's last kb; scales.ratio_chain), so the pass ends with sum_j s_j P_j. The ratio vectors come from the
-// broadcast-ratio tile of scales.pack_ratio_bcast in DEST tile 7 (fp16 hi + lo, summed in fp32 into LREG4..7), then one
+// group's last kb; scales.ratio_chain), so the pass ends with sum_j s_j P_j. The ratio vectors come from the column's
+// group ratio tile of scales.pack_ratio_group in DEST tile 7 (fp16 hi + lo, summed in fp32 into LREG4..7), then one
 // SFPLOADMACRO per SFPU row loads, multiplies and stores the row. The packer adds the pass into the fp32 accumulator
 // tile (r, c) in L1 (L1 accumulation; the first group overwrites). After the block every accumulator goes out as bf16
 // (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
@@ -153,17 +153,15 @@ ALWI void scale_tile_srca() {
 
 void kernel_main() {
     constexpr uint32_t NBLK = get_compile_time_arg_val(0);
-    constexpr uint32_t KPC = get_compile_time_arg_val(1);             // J: kbs per DEST pass and per x' chunk
-    constexpr uint32_t WSLOT = NBLK * 4, SSLOT = (NBLK + 3) / 4 + 1;  // t2_writer.cpp's CB slots per kb
+    constexpr uint32_t KPC = get_compile_time_arg_val(1);  // J: kbs per DEST pass and per x' chunk
+    constexpr uint32_t WSLOT = NBLK * 4;  // t2_writer.cpp's weight slot per kb; its ratio slot per group: NBLK tiles
     const uint32_t KB = get_common_arg_val<uint32_t>(0);
     const uint32_t n_count = get_arg_val<uint32_t>(0);
     const uint32_t m = get_arg_val<uint32_t>(1);
     const uint32_t nblk = get_arg_val<uint32_t>(2);  // the row's block count: every core takes every multicast chunk
     const uint32_t ACC = get_arg_val<uint32_t>(3);   // accumulator tiles per block: the whole ring (m_max x NBLK), so
                                                      // every block starts at the ring's start (tile r * NBLK + c)
-    const uint32_t n_first = get_arg_val<uint32_t>(4);  // first output tile column: column n's ratios are column n % 4
-                                                        // of broadcast-ratio tile n / 4
-    const uint32_t XSLOT = ACC / NBLK * 4 * KPC;        // t2_reader.cpp's x' slot: m_max rows of 4 KPC tiles
+    const uint32_t XSLOT = ACC / NBLK * 4 * KPC;     // t2_reader.cpp's x' slot: m_max rows of 4 KPC tiles
     if (m == 0) {
         return;
     }
@@ -178,34 +176,33 @@ void kernel_main() {
             }
             continue;
         }
-        const uint32_t u0 = (n_first + c0) / 4;
         MATH((ckernel::sfpu::t2_macro_init()));
         cb_reserve_back(cb_acc, ACC);
         pack_reconfig_data_format(cb_acc);
         for (uint32_t g = 0; g < KB; g += KPC) {
             cb_wait_front(cb_x, XSLOT);
             cb_wait_front(cb_w, KPC * WSLOT);
-            cb_wait_front(cb_s, KPC * SSLOT);
+            cb_wait_front(cb_s, NBLK);
             for (uint32_t c = 0; c < nb; ++c) {
-                const uint32_t n = n_first + c0 + c;
                 tile_regs_acquire();
+                // the column's ratio tile for the whole group (scales.pack_ratio_group) into DEST tile 7
+                copy_init(cb_s);
+                scale_tile_srca();
+                copy_tile(cb_s, c, 7);
+                reconfig_data_format_srca(cb_w);
+                matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
+                ternary_srca();
                 for (uint32_t j = 0; j < KPC; ++j) {
-                    if (j > 0) {  // the SFPU pass of kb j - 1 finishes before DEST tiles 0..7 are written again
+                    if (j > 0) {  // the SFPU pass of kb j - 1 finishes before the matmuls add into DEST again
                         MATH((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU)));
                     }
-                    copy_init(cb_s);
-                    scale_tile_srca();
-                    copy_tile(cb_s, j * SSLOT + n / 4 - u0, 7);
-                    reconfig_data_format_srca(cb_w);
-                    matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
-                    ternary_srca();
 #ifndef T2_NOMM
                     for (uint32_t i = 0; i < 4; ++i) {
                         matmul_block(cb_x, cb_w, j * 4 + i, j * WSLOT + c * 4 + i, 0, 0, 1, m, 4 * KPC);
                     }
 #endif
 #ifndef T2_NOSCALE
-                    scale_col(n % 4, m);
+                    scale_col(j, m);
 #endif
                 }
                 tile_regs_commit();
@@ -222,7 +219,7 @@ void kernel_main() {
             }
             cb_pop_front(cb_x, XSLOT);
             cb_pop_front(cb_w, KPC * WSLOT);
-            cb_pop_front(cb_s, KPC * SSLOT);
+            cb_pop_front(cb_s, NBLK);
         }
         pack_reconfig_l1_acc(0);
         cb_push_back(cb_acc, ACC);

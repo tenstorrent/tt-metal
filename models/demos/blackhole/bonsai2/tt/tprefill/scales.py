@@ -6,8 +6,8 @@ The SFPU multiplies a product tile P (fp32 DEST) by its columns' fp16 scales. SF
 (tests/probe4.py): face f is SFPU rows 8f..8f+7; SFPU row 8f+k holds face rows 4*(k/2)..+3 (one per 8-lane subvector) at
 the even (k even) or odd (k odd) columns of the face. So for one output tile column and one kb, P's rows need 4 lane
 vectors (fc, par): face column half fc (faces 0, 2 or 1, 3) and column parity par, lane (s, i) = scale of column
-16 fc + 2 i + par for every face row s. A broadcast-scale tile holds those 4 vectors for 8 output tile columns (combo z,
-vector v = 2 fc + par at SFPU row 4 z + v), so the SFPU loads a scale vector with one DEST read."""
+16 fc + 2 i + par for every face row s, so the SFPU loads a vector with one DEST read. linear2.py chains J kbs per DEST
+pass and multiplies by scale ratios (ratio_chain); one tile per column and kb group holds them (pack_ratio_group)."""
 
 import numpy as np
 
@@ -30,29 +30,6 @@ def scales_from_records(rec: np.ndarray, ppr: int, K: int, N: int) -> np.ndarray
     return s
 
 
-def pack_scale_bcast(s_nb: np.ndarray) -> np.ndarray:
-    """s [N, KB] float16 -> [Nt / 8 * KB, 1024] uint16: per unit of 8 output tile columns and kb, one fp16 32x32 tile
-    (face order) of broadcast scale vectors (module docstring). Nt must be a multiple of 8."""
-    N, KB = s_nb.shape
-    Nt = N // TILE
-    assert Nt % 8 == 0, Nt
-    s = s_nb.reshape(Nt // 8, 8, TILE, KB)  # [unit, z, col, kb]
-    tiles = np.zeros((Nt // 8, KB, 4, 2, 16, 16), dtype=np.float16)  # [unit, kb, face, row, col pair-split]
-    out = np.zeros((Nt // 8, KB, 4, 16, 16), dtype=np.float16)  # [unit, kb, face f, face row, face col]
-    for z in range(8):
-        for v in range(4):
-            fc, par = v >> 1, v & 1
-            q = 4 * z + v  # SFPU row
-            f, k = q // 8, q % 8
-            cols = 16 * fc + 2 * np.arange(8) + par  # the 8 lanes' columns
-            vals = s[:, z, cols, :]  # [unit, 8 lanes, kb]
-            for sub in range(4):
-                row = 4 * (k >> 1) + sub
-                out[:, :, f, row, 2 * np.arange(8) + (k & 1)] = vals.transpose(0, 2, 1)
-    del tiles
-    return np.ascontiguousarray(out.reshape(Nt // 8 * KB, 1024)).view(np.uint16)
-
-
 def ratio_chain(s_nb: np.ndarray, J: int) -> np.ndarray:
     """s [N, KB] -> r [N, KB] float64 for a chain of J kbs per DEST pass (kb groups J g .. J g + J - 1): after kb j's
     product P_j the SFPU multiplies the running sum by r_j = s_j / s_(j+1) (s_j for a group's last kb), so the next
@@ -68,35 +45,12 @@ def ratio_chain(s_nb: np.ndarray, J: int) -> np.ndarray:
     return r
 
 
-def pack_ratio_bcast(r_nb: np.ndarray) -> np.ndarray:
-    """r [N, KB] (float64) -> [Nt / 4 * KB, 1024] uint16: per unit of 4 output tile columns and kb, one fp16 32x32 tile
-    (face order) of broadcast vectors: column z of the unit has 8 vectors at SFPU rows 8 z + v', v' = 4 h + v (v = 2 fc
-    + par as pack_scale_bcast; h = 0: fp16(r), h = 1: fp16(r - fp16(r)), so the SFPU's fp32 sum of the two is r to
-    ~2^-22). Nt must be a multiple of 4."""
-    N, KB = r_nb.shape
-    Nt = N // TILE
-    assert Nt % 4 == 0, Nt
-    hi = r_nb.astype(np.float16)
-    lo = (r_nb - hi.astype(np.float64)).astype(np.float16)
-    parts = [hi.reshape(Nt // 4, 4, TILE, KB), lo.reshape(Nt // 4, 4, TILE, KB)]  # [unit, z, col, kb]
-    out = np.zeros((Nt // 4, KB, 4, 16, 16), dtype=np.float16)  # [unit, kb, face f, face row, face col]
-    for z in range(4):
-        for h in range(2):
-            for v in range(4):
-                fc, par = v >> 1, v & 1
-                q = 8 * z + 4 * h + v  # SFPU row
-                f, k = q // 8, q % 8
-                cols = 16 * fc + 2 * np.arange(8) + par  # the 8 lanes' columns
-                vals = parts[h][:, z, cols, :]  # [unit, 8 lanes, kb]
-                for sub in range(4):
-                    out[:, :, f, 4 * (k >> 1) + sub, 2 * np.arange(8) + (k & 1)] = vals.transpose(0, 2, 1)
-    return np.ascontiguousarray(out.reshape(Nt // 4 * KB, 1024)).view(np.uint16)
-
-
 def pack_ratio_group(r_nb: np.ndarray, J: int) -> np.ndarray:
     """r [N, KB] (float64) -> [Nt * KB / J, 1024] uint16: per output tile column n and kb group g (J <= 4 kbs), one fp16
-    32x32 tile (face order) whose SFPU rows 8 j + 4 h + v hold kb J g + j's vectors (h, v as pack_ratio_bcast), so one
-    copy into DEST serves the column's whole group. Tile index n * KB / J + g."""
+    32x32 tile (face order) whose SFPU rows 8 j + 4 h + v hold kb J g + j's lane vectors, so one copy into DEST serves the
+    column's whole group. Vector v = 2 fc + par (module docstring: face column half fc, column parity par) has lane
+    (s, i) = the ratio of column 16 fc + 2 i + par for every face row s; h = 0: fp16(r), h = 1: fp16(r - fp16(r)), so the
+    SFPU's fp32 sum of the two is r to ~2^-22. Tile index n * KB / J + g."""
     N, KB = r_nb.shape
     Nt, G = N // TILE, KB // J
     assert J <= 4 and KB % J == 0, (J, KB)

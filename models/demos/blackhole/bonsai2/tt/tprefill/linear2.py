@@ -3,7 +3,7 @@
 """2D exact ternary prefill linear: Y = X' W'^T in Bonsai's own ternary weights, as linear.py, laid out for large K.
 
 Each core row is a row group (a slice of the token row tiles); its 13 cores split the output tile columns evenly (GLU: in
-(gate, up) pairs; a core's columns may start inside a unit of 4 of scales.pack_ratio_bcast's tiles). The row's first core multicasts the group's x' tiles per kb to the row only
+(gate, up) pairs). The row's first core multicasts the group's x' tiles per kb to the row only
 (kernels/t2_reader.cpp), so each core receives 1/10 of x' (linear.py multicasts all of it to every core); each core
 streams its columns' ternary tiles per kb from the decode records (kernels/t2_writer.cpp) and keeps fp32 accumulators in
 L1 (packer L1 accumulation), so it can hold any number of columns (kernels/t2_compute.cpp). J = 4 kbs share one DEST
@@ -16,10 +16,9 @@ import torch
 
 import ttnn
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import KBLOCK, TILE, pack_records_inline
-from models.demos.blackhole.bonsai2.tt.tprefill.scales import pack_ratio_bcast, ratio_chain, scales_from_records
+from models.demos.blackhole.bonsai2.tt.tprefill.scales import pack_ratio_group, ratio_chain, scales_from_records
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/tprefill/kernels/"
-UNIT = 4  # output tile columns per broadcast-ratio tile
 L1_BUDGET = 1100 * 1024  # L1 for the x' slots, the fp32 accumulators and the weight / ratio slots of a column block
 
 
@@ -46,7 +45,7 @@ class TernaryPrefillLinear2:
         """rec: the decode records on the device; s_nb [N, K / 128] float16: their scales (for the ratio tiles)."""
         self.device, self.rec, self.ppr, self.K, self.N, self.glu = device, rec, ppr, K, N, glu
         self.J = _chain(K // KBLOCK)
-        self.sbc = _upload(device, pack_ratio_bcast(ratio_chain(s_nb, self.J)), ttnn.uint16)
+        self.sbc = _upload(device, pack_ratio_group(ratio_chain(s_nb, self.J), self.J), ttnn.uint16)
 
     @classmethod
     def from_host(cls, device, t_kn, s_nb):
@@ -72,7 +71,6 @@ class TernaryPrefillLinear2:
         lead, T = list(x.shape)[:-2], list(x.shape)[-2]
         assert list(x.shape)[-1] == K and T % TILE == 0, (x.shape, K)
         Kt, Nt, KB, Mt = K // TILE, N // TILE, K // KBLOCK, T // TILE
-        assert Nt % UNIT == 0, Nt
         Nt_out = Nt // 2 if glu else Nt
         kpc = self.J  # kbs per DEST pass and per x' multicast chunk
         out = ttnn.allocate_tensor_on_device(
@@ -91,7 +89,7 @@ class TernaryPrefillLinear2:
         m_max = max(m_of)
         assert m_max <= 7, f"T={T}: {m_max} row tiles per row group (DEST holds 7 products and the scale tile)"
         xbytes = 2 * m_max * 4 * kpc * 2048  # two x' slots (t2_reader.cpp)
-        per_col = m_max * 4096 + 2 * kpc * 4 * 256 + 2 * kpc * 2048 // UNIT  # accumulators, weight and ratio slots
+        per_col = m_max * 4096 + 2 * kpc * 4 * 256 + 2 * 2048  # accumulators, weight and ratio slots
         NBLK = max(2, min(max(n_of), (L1_BUDGET - xbytes) // per_col) // step * step)
         nblk = -(-max(n_of) // NBLK)  # every core of a row takes every chunk (rows share the column split)
         vx = [device.worker_core_from_logical_core(ttnn.CoreCoord(xx, 0)).x for xx in range(GX)]
@@ -110,7 +108,7 @@ class TernaryPrefillLinear2:
             for xx in range(GX):
                 rd[xx][y] = [1 if xx == 0 else 0, s0.x, s0.y, m_first[y], m_of[y], nblk, GX, len(runs)] + rects
                 wr[xx][y] = [n_first[xx], n_of[xx], m_first[y], m_of[y]]
-                cp[xx][y] = [n_of[xx], m_of[y], nblk, m_max * NBLK, n_first[xx]]
+                cp[xx][y] = [n_of[xx], m_of[y], nblk, m_max * NBLK]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
 
         def cb(index, fmt, page, pages, cores=crs):
@@ -140,7 +138,7 @@ class TernaryPrefillLinear2:
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "t2_writer.cpp",
                     core_ranges=crs,
-                    compile_time_args=[NBLK]
+                    compile_time_args=[NBLK, kpc]
                     + ttnn.TensorAccessorArgs(self.rec).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(self.sbc).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
@@ -174,7 +172,7 @@ class TernaryPrefillLinear2:
             cbs=x_cbs
             + [
                 cb(1, ttnn.bfloat8_b, 256, 2 * kpc * NBLK * 4),
-                cb(3, ttnn.float32, 2048, 2 * kpc * (-(-NBLK // UNIT) + 1)),
+                cb(3, ttnn.float32, 2048, 2 * NBLK),
                 cb(24, ttnn.float32, 4096, m_max * NBLK),
                 cb(16, ttnn.bfloat16, 2048, 4),
             ],
