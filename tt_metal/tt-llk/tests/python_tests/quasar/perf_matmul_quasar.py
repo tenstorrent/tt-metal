@@ -4,14 +4,13 @@
 import pytest
 from helpers.constraints import get_valid_math_fidelities
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR, Transpose
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
     MATMUL_FORMAT,
     TINY_MATMUL_FORMATS,
     TINY_MATMUL_SHAPE_CASES,
     matmul_dest_acc_modes,
-    matmul_dest_sync_modes,
     matmul_enable_direct_indexing,
     matmul_register_format_hints,
     matmul_tile_dimensions,
@@ -25,7 +24,7 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
@@ -80,7 +79,7 @@ def test_perf_matmul_quasar(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
     format=TINY_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(

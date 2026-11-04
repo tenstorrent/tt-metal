@@ -120,6 +120,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/overlapped_tensor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/d2d_pipeline_descriptor.fbs
 )
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)

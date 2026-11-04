@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include <umd/device/types/arch.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/utils/semver.hpp>
 
 namespace tt::tt_metal {
 

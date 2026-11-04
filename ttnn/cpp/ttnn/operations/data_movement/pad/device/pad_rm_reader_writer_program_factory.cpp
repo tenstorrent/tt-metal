@@ -65,7 +65,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // Build the pad-value const tensor once on cache miss and release its owning MeshTensor into
     // the artifact.  The framework parks it in the cache entry, so its address stays valid for

@@ -107,23 +107,12 @@ def test_bw_tanh_mixed_operand_dtypes(input_shapes, grad_dtype, input_dtype, dev
     assert status
 
 
-# Exhaustive BF16 accuracy of ttnn.tanh_bw.
+# Exhaustive BF16 accuracy of ttnn.tanh_bw: every BF16 bit pattern with each gradient in TANH_BW_GRADS.
 #
-# Every BF16 bit pattern is paired with each gradient in GRADS. The reference is grad times 4.0 *
-# torch.exp(-2.0 * x.abs()) / (1.0 + torch.exp(-2.0 * x.abs())) ** 2, the exact derivative of
-# torch.tanh(x), in float64 at every finite input (float64 autograd rounds it, as where the forward
-# rounds to its limit), and torch autograd at the others, rounded once to BF16 with subnormal results
-# flushed to zero.
-# The SFPU may read a subnormal operand as zero, so torch is evaluated both at the operands and at
-# the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
-# path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
-# the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
-# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for
-# main's single program's on the same operands.
-# The output is 0 wherever |x| >= 65.849, where even exp(-2|x|) * 2^64 is below the smallest normal,
-# for a finite grad, as main's single program computes it; torch keeps the exact product.
+# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
+# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# Declared lanes, as main's single program computes them unless noted: 0 wherever |x| >= 65.849, where even
+# exp(-2|x|) * 2^64 is below the smallest normal, for a finite grad.
 TANH_BW_GRADS = [
     "1",
     "-1",
@@ -174,8 +163,8 @@ def _tanh_bw_torch_reference(grad, x, flush):
         )
 
 
-def _tanh_bw_reference(grad, x, flush, board):
-    """Torch, except on the declared lanes in the module docstring."""
+def _tanh_bw_reference(grad, x, flush):
+    """Torch, except on the declared lanes."""
     result = _tanh_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(torch.isfinite(grad) & (x32.abs() >= 65.84899139404297), torch.zeros_like(result), result)
@@ -239,29 +228,18 @@ def test_tanh_bw_exhaustive_bfloat16(grad, device):
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_g = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.tanh_bw(tt_g, tt_x)[0]).to(torch.bfloat16)
-    # Main's single program on the same operands: a gradient in L1 beside an input in DRAM keeps it.
-    tt_g_l1 = ttnn.from_torch(
-        g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    stock = ttnn.to_torch(ttnn.tanh_bw(tt_g_l1, tt_x)[0]).to(torch.bfloat16)
-
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    (ours, ours_classes), (composite, composite_classes) = _tanh_bw_versus_torch(g, x, actual), _tanh_bw_versus_torch(
-        g, x, stock
-    )
-    print(
-        f"ULP tanh_bw {board} ours={ours:.3f} stock={composite:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
-    )
+    ours, ours_classes = _tanh_bw_versus_torch(g, x, actual)
+    print(f"ULP tanh_bw {board} ours={ours:.3f} ours_class_mismatches={ours_classes} grad={grad}")
     ulp = torch.minimum(
-        _tanh_bw_pure_ulp(_tanh_bw_reference(g, x, False, board), actual),
-        _tanh_bw_pure_ulp(_tanh_bw_reference(g, x, True, board), actual),
+        _tanh_bw_pure_ulp(_tanh_bw_reference(g, x, False), actual),
+        _tanh_bw_pure_ulp(_tanh_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
         f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
-        f"expected {_tanh_bw_reference(g, x, False, board).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
+        f"expected {_tanh_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
@@ -279,6 +257,7 @@ TANH_BW_FUSED_CALLS = (
     "sharded_to_interleaved",
     "interleaved_to_sharded",
     "mixed_placements",
+    "grad_in_l1",
     "input_grad",
     "input_grad_in_l1",
     "input_grad_sharded",
@@ -384,11 +363,8 @@ def _tanh_bw_placements(shape):
     ],
 )
 def test_tanh_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in tiles, interleaved or sharded in L1 or DRAM, with one placement or
-    an output config run the fused program and match torch, with or without a BF16 input_grad,
-    which the program writes in place in any layout. Every other call keeps the composite, which
-    broadcasts and takes any layout, placement and dtype; it writes an FP32 input_grad in place, and
-    matches torch."""
+    """BF16 tiles of one shape, interleaved or sharded in L1 or DRAM, in any placements or an output config, run
+    the fused program, also into a BF16 input_grad; every other call keeps main's single program."""
     shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)

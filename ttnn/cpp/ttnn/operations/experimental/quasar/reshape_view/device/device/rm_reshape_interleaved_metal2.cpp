@@ -52,8 +52,8 @@ void kernel_main() {
     // replace the legacy cb_in0/cb_in1 single-kernel scratch CBs (which would be Gen2 self-loops).
     Scratchpad<uint8_t> src_stage(scratch::src_stage);
     Scratchpad<uint8_t> dst_stage(scratch::dst_stage);
-    const uint32_t source_buffer = src_stage.get_base_address();
-    const uint32_t dest_buffer = dst_stage.get_base_address();
+    const auto source_buffer = src_stage.local_mem();
+    const auto dest_buffer = dst_stage.local_mem();
 
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;

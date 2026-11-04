@@ -6,8 +6,6 @@
 
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
-
 namespace qkv_conv {
 
 // Kimi-K3 supplies four learned causal-convolution taps; output row r reads input rows r - 3 .. r.
@@ -15,13 +13,19 @@ constexpr uint32_t tap_count = 4;
 constexpr uint32_t history_rows = tap_count - 1;
 
 // A 32x32 BFLOAT16 tile is four 16x16 faces, [top left, top right, bottom left, bottom right]. A tile row is one face
-// row in each of its left and right faces.
+// row in each of its left and right faces. The tile geometry is spelled out here rather than taken from tt::constants
+// so this header stays compiler-neutral (it is compiled by both the host and the kernel toolchains); the host program
+// factory static_asserts that the values agree.
+constexpr uint32_t tile_height = 32;
+constexpr uint32_t tile_width = 32;
+constexpr uint32_t face_height = 16;
+constexpr uint32_t face_width = 16;
 constexpr uint32_t element_bytes = sizeof(uint16_t);
-constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
-constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
-constexpr uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
-constexpr uint32_t tile_bytes = tt::constants::TILE_HW * element_bytes;
-constexpr uint32_t tile_row_bytes = tt::constants::TILE_WIDTH * element_bytes;
+constexpr uint32_t face_rows = face_height;
+constexpr uint32_t face_row_bytes = face_width * element_bytes;
+constexpr uint32_t face_bytes = face_height * face_width * element_bytes;
+constexpr uint32_t tile_bytes = tile_height * tile_width * element_bytes;
+constexpr uint32_t tile_row_bytes = tile_width * element_bytes;
 
 // Alignment of every DRAM and L1 read the kernels issue; the smallest read holding a face row is the aligned run of
 // face rows around it.
@@ -50,7 +54,7 @@ constexpr uint32_t dest_group(uint32_t tiles, uint32_t limit = max_dest_tiles) {
 // The reader stages each channel tile as a left and a right strip of face rows: the three rows before the tile, then
 // its 32 rows. A strip starts strip_phase bytes past an aligned address, so its row history_rows, where the tile's
 // faces land, is aligned.
-constexpr uint32_t strip_rows = history_rows + tt::constants::TILE_HEIGHT;
+constexpr uint32_t strip_rows = history_rows + tile_height;
 constexpr uint32_t strip_stride = align_up(strip_rows * face_row_bytes, read_alignment);
 constexpr uint32_t strip_phase = read_alignment - (history_rows * face_row_bytes) % read_alignment;
 
