@@ -3240,9 +3240,8 @@ bool run_sfpu_typecast(
                                (sfpu_util::typecast_is_8bit_int(out_fmt) &&
                                 (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt)));
 
-    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. A narrow integer source is
-    // neither Float32 nor 32-bit, so this is out_is_32bit for that case. Production ttnn uses
-    // 32-bit Dest plus Unpack-to-Dest for an 8-bit input; this follows the LLK typecast resolver.
+    // fp32_dest_acc_en: a 32-bit endpoint or preserve_fp32. A narrow source is neither, so this is out_is_32bit.
+    // Production uses 32-bit Dest for an 8-bit input; this follows the LLK resolver.
     const bool fp32_dest_acc = preserve_fp32 || in_is_32bit || out_is_32bit;
 
     // 32-bit inputs and narrow integer sources unpack to Dest so the SFPU load sees the L1 bits.

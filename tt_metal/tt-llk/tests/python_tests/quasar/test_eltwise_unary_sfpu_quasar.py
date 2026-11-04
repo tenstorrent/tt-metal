@@ -828,7 +828,7 @@ TYPECAST_CASES = (
     TypecastCase(DataFormat.Int32, DataFormat.Int8),
     TypecastCase(DataFormat.Int8, DataFormat.Int16),
     TypecastCase(DataFormat.Int16, DataFormat.Int8),
-    # Int8 <-> UInt8 plants values outside [0, 127]. See _INT8_UINT8_SEEDS.
+    # Int8 <-> UInt8 plants values outside [0, 127]. See _INT8_TO_UINT8_SEEDS and _UINT8_TO_INT8_SEEDS.
     TypecastCase(DataFormat.Int8, DataFormat.UInt8),
     TypecastCase(DataFormat.UInt8, DataFormat.Int8),
 )
@@ -2046,7 +2046,7 @@ _INT8_EDGE_GROUPS = (
     ("saturation", _INT8_EDGE_SATURATION),
 )
 
-# Int16 used to keep the low 15 bits, so 32768 and 40000 wrapped. The direct convert saturates.
+# The convert saturates.
 _INT16_EDGE_GROUPS = (
     (
         "fraction just past an even tie",
@@ -2210,7 +2210,7 @@ def test_typecast_fp32_to_int8_edge_cases_quasar(dest_sync):
 @pytest.mark.quasar
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full])
 def test_typecast_fp32_to_int16_edge_cases_quasar(dest_sync):
-    """Float32 -> Int16 rounds the full float and saturates, including values that used to wrap."""
+    """Float32 -> Int16 rounds the full float and saturates."""
     _run_fp32_to_int_edge_case(
         dest_sync[0], DataFormat.Int16, _INT16_EDGE_GROUPS, "Float32 -> Int16"
     )
