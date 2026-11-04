@@ -32,10 +32,8 @@ inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_til
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0: pack init supports PackMode::Default and PackMode::Untilize only");
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
 
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
@@ -46,23 +44,23 @@ inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_til
     if (num_tiles > 1 || partial_face) {
         SAN_HOOK(init<OperationPack>(
             StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
-            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
-            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(tensor_shape.face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(tensor_shape.total_num_faces()),
             StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
-            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(tensor_shape.num_faces_c_dim == 1),
             StateVal<OperationPack::NumTiles>(num_tiles)));
     } else {
         SAN_HOOK(init<OperationPack>(
             StateDiscard<std::uint32_t>(pack_dst_format[output_id]),
-            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
-            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(tensor_shape.face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(tensor_shape.total_num_faces()),
             StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
-            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(tensor_shape.num_faces_c_dim == 1),
             StateVal<OperationPack::NumTiles>(num_tiles)));
     }
 
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        pack_dst_format[output_id], tensor_shape, partial_face, num_tiles);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
