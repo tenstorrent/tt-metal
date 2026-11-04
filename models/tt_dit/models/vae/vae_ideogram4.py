@@ -27,7 +27,7 @@ from ...parallel.manager import CCLManager
 from .vae_sd35 import VAEDecoder
 
 # DRAM width slices per decoder conv shape, (input height, input width, in channels, out channels)
-# -> num_slices, for the API's 14 output sizes on a BH Galaxy (4x8, TP4); shapes already in the shared
+# -> num_slices, for the API's 14 output sizes and 512x512 on a BH Galaxy (4x8, TP4); shapes already in the shared
 # Conv2d table are not repeated, and 1 runs the conv unsliced in L1. A fixed count, unlike ttnn's
 # automatic choice, does not depend on the L1 free at call time, so the weights a conv prepares for a
 # size always match how it runs there. The counts are the ones ttnn picks itself with width-only
@@ -163,7 +163,39 @@ _SLICE_PARAMS: dict[tuple[int, int], dict[tuple[int, int, int, int], int]] = {
         (2048, 1360, 256, 128): 43,
         (2048, 1360, 128, 128): 43,
         (2048, 1360, 128, 3): 43,
+        # 512x512, the pipeline's default size (ceil(w / 32))
+        (64, 64, 32, 512): 2,
+        (64, 64, 512, 512): 2,
+        (256, 256, 512, 256): 8,
+        (256, 256, 256, 256): 8,
+        (512, 512, 256, 128): 16,
+        (512, 512, 128, 128): 16,
     },
+}
+
+# Output sizes (width, height) the table covers on each mesh shape: every decoder conv either has an
+# entry above or is in the shared Conv2d table. Any other size is rejected on these meshes, because a
+# conv with no slice config can run with too few slices and clash with resident L1 buffers.
+SUPPORTED_SIZES: dict[tuple[int, int], frozenset[tuple[int, int]]] = {
+    (4, 8): frozenset(
+        {
+            (512, 512),
+            (1024, 1024),
+            (1280, 720),
+            (720, 1280),
+            (1152, 864),
+            (864, 1152),
+            (1248, 832),
+            (832, 1248),
+            (2048, 2048),
+            (2048, 1152),
+            (1152, 2048),
+            (2048, 1536),
+            (1536, 2048),
+            (2048, 1360),
+            (1360, 2048),
+        }
+    ),
 }
 
 
@@ -198,6 +230,19 @@ class Ideogram4VAEDecoder(Module):
         configure_conv2d(vae, slice_params=_SLICE_PARAMS, config_tensors_in_dram=True)
         return vae
 
+    def check_output_size(self, width: int, height: int) -> None:
+        """Raise ValueError if this mesh has a slice table and it does not cover the output size."""
+        mesh_shape = tuple(self.post_quant_conv.mesh_device.shape)
+        sizes = SUPPORTED_SIZES.get(mesh_shape)
+        if sizes is not None and (width, height) not in sizes:
+            msg = (
+                f"Ideogram 4 VAE: output size {width}x{height} is not supported on mesh {mesh_shape}; "
+                f"supported (width, height) sizes are {sorted(sizes)}"
+            )
+            raise ValueError(msg)
+
     def forward(self, z: ttnn.Tensor) -> ttnn.Tensor:
         """z: [B, H/8, W/8, z_channels] (NHWC, tile layout). Returns [B, H, W, out_channels]."""
+        _, latent_h, latent_w, _ = z.shape
+        self.check_output_size(latent_w * 8, latent_h * 8)
         return self.decoder(self.post_quant_conv(z))

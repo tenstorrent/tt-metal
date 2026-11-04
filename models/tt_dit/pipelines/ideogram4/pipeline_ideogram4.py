@@ -737,13 +737,14 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             for t in (sb.llm, sb.cond_llm_mask, sb.uncond_llm_mask):
                 ttnn.deallocate(t)
 
-    @staticmethod
-    def _check_size(width: int, height: int) -> None:
+    def _check_size(self, width: int, height: int) -> None:
         # The latent grid is (height, width) // (patch*ae); a non-divisible size would silently
         # floor (e.g. 513 -> a 512px image), so reject it up front with a clear error.
-        vae_patch = 16  # patch * ae
+        vae_patch = self.patch * self.ae
         if height % vae_patch != 0 or width % vae_patch != 0:
             raise ValueError(f"height and width must be multiples of {vae_patch} (patch*ae); got {height}x{width}")
+        # Before any device work, rather than after the denoising loop.
+        self.decode_stage.vae_decoder.check_output_size(width, height)
 
     @property
     def warmed_sizes(self) -> tuple[tuple[int, int], ...]:
