@@ -859,7 +859,8 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      # 4.2 min before test_batched_decode.py's data-parallel test (two TP=2 models, one per P300 board) joined it.
+      timeout: 7
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
