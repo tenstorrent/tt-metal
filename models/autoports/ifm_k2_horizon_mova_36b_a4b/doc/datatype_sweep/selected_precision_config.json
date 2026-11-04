@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "config_id": "head4_ccl4_norm4_lofi",
+  "config_id": "dense8_hifi2_bfp4experts",
   "weight_groups": {
-    "attention_dtype": "bfloat4_b",
-    "attention_decode_dtype": "bfloat4_b",
-    "output_weight_dtype": "bfloat4_b",
-    "mlp_dtype": "bfloat4_b",
-    "down_weight_dtype": "bfloat4_b",
+    "attention_dtype": "bfloat8_b",
+    "attention_decode_dtype": "bfloat8_b",
+    "output_weight_dtype": "bfloat8_b",
+    "mlp_dtype": "bfloat8_b",
+    "down_weight_dtype": "bfloat8_b",
     "experts_dtype": "bfloat4_b",
     "expert_down_dtype": "bfloat4_b",
-    "value_dtype": "bfloat4_b"
+    "value_dtype": "bfloat8_b"
   },
   "layer_exceptions": [
     {
@@ -24,14 +24,14 @@
     }
   ],
   "compute_fidelities": {
-    "attention": "LoFi",
-    "mlp": "LoFi",
-    "experts": "LoFi",
-    "value": "LoFi"
+    "attention": "HiFi2",
+    "mlp": "HiFi2",
+    "experts": "HiFi2",
+    "value": "HiFi2"
   },
   "activations": {
-    "attention_activation": "bfloat4_b",
-    "mlp_activation": "bfloat4_b",
+    "attention_activation": "bfloat8_b",
+    "mlp_activation": "bfloat8_b",
     "expert_activation": "bfloat8_b",
     "expanded_expert_activation": "bfloat8_b",
     "prefill_value_activation": "bfloat8_b",
@@ -42,11 +42,11 @@
     "value_activation": "bfloat16"
   },
   "residual_dtype": "bfloat16",
-  "ccl_dtype": "bfloat4_b",
+  "ccl_dtype": "bfloat8_b",
   "prefill_ccl_dtype": "bfloat16",
   "kv_cache_dtype": "bfloat8_b",
-  "lm_head_dtype": "bfloat4_b",
-  "lm_head_fidelity": "LoFi",
+  "lm_head_dtype": "bfloat16",
+  "lm_head_fidelity": "HiFi4",
   "embedding_dtype": "bfloat16",
   "norm_dtype": "bfloat16",
   "norm_fidelity": "HiFi4",
