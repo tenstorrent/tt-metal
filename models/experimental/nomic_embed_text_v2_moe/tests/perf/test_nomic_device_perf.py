@@ -33,7 +33,11 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # 300.0, before the routed experts 312.8, with their w2 at HiFi2 609.1, before the large-input work
 # 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4, before
 # grouped_matmul_w1/w2, the small-M dense routing, the MoE glue rework and router_front_end 1046.1.
-EXPECTED_SEQUENCES_PER_S = 1127.3
+# Since 1127.3: QKV, the head split and rotary as one generated op (nomic_qkv_rotary_heads, about
+# 1292 alone) and the layer norms as one generated op on its own ND layout, the residual stream
+# moved onto it (nomic_residual_layer_norm; router_front_end and routed_combine take the batch
+# unflattened), 2026-11-04.
+EXPECTED_SEQUENCES_PER_S = 1336.2
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
