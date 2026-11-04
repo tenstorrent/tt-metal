@@ -73,6 +73,12 @@ void kernel_main() {
                 SE_KC * SE_MTR * 2048;  // (SE_MTR: my MT rows of every chunk - row rr of chunk rr / MT)
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + RXS_ID);
             constexpr uint32_t NRD = SE_KTO / SE_KC;
+#ifdef SE_NIT
+            constexpr uint32_t NIT = SE_NIT;  // (router iterations: SE_MTR of the row's rows each)
+#else
+            constexpr uint32_t NIT = 1;
+#endif
+            constexpr uint32_t TOT = NRD * NIT;  // (the rounds of every iteration: their counts run on)
             volatile tt_l1_ptr uint32_t* xack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + XACK_ID);
 #ifdef SE_RTRX_L1
             {  // (the row's x is the own shard the row's cores just loaded into x own: read from their L1, not the 2 MB
@@ -83,12 +89,14 @@ void kernel_main() {
                 *xrl = 0;  // (re-armed: one count a row core a call, all in)
             }
 #endif
-            for (uint32_t rd = 0; rd < NRD; ++rd) {
-                const uint32_t xa = rtr_xa + (rd & 1) * XS;  // (two buffers; past two rounds the row's acks first)
-                if (NRD > 2 && rd >= 2)
-                    while (*xack < (rd - 1) * GX) invalidate_l1_cache();
+            for (uint32_t g = 0; g < TOT; ++g) {
+                const uint32_t rd = g % NRD, it = g / NRD;  // (round rd of iteration it)
+                const uint32_t xa = rtr_xa + (g & 1) * XS;  // (two buffers; past two rounds the row's acks first)
+                if (TOT > 2 && g >= 2)
+                    while (*xack < (g - 1) * GX) invalidate_l1_cache();
                 for (uint32_t r = 0; r < SE_MTR; ++r)
                     for (uint32_t k = 0; k < SE_KC; ++k) {
+                        const uint32_t rg = it * SE_MTR + r;  // (the row's row rg of the call)
 #ifdef SE_RTRX_L1
                         // (K tile kt of the chip's slice: own-shard position kt / KB - its owner column and x-own slot
                         // as x_gather3's dst_of; row r: chunk r / MT, local row r % MT)
@@ -96,11 +104,11 @@ void kernel_main() {
                         const uint32_t col = (j & 1) ? se_ra(ft0 + S0 + hh % S1) : se_ra(ft0 + hh % S0);
                         const uint32_t nw = se_ra(ft0 + S0 + S1 + 2 * col), b1 = se_ra(ft0 + S0 + S1 + 2 * col + 1);
                         const uint32_t slot = (j & 1) ? b1 + hh / S1 : hh / S0;
-                        const uint32_t xa_ = xown + ((((r / MT) * nw + slot) * MT + r % MT) * KB + kt % KB) * 2048;
+                        const uint32_t xa_ = xown + ((((rg / MT) * nw + slot) * MT + rg % MT) * KB + kt % KB) * 2048;
                         noc_async_read(get_noc_addr(se_ra(vx0 + col), ry, xa_), xa + (k * SE_MTR + r) * 2048, 2048);
 #else
                         noc_async_read(
-                            rxg.get_noc_addr(GROW(r / MT, cy * MT + r % MT) * SE_KTO + rd * SE_KC + k),
+                            rxg.get_noc_addr(GROW(rg / MT, cy * MT + rg % MT) * SE_KTO + rd * SE_KC + k),
                             xa + (k * SE_MTR + r) * 2048,
                             2048);
 #endif
@@ -108,13 +116,13 @@ void kernel_main() {
                 noc_async_read_barrier();
                 noc_async_write_multicast_loopback_src(xa, get_noc_multicast_addr(lx, ry, rx, ry, xa), XS, GX);
                 noc_async_writes_flushed();
-                *src = rd + 1;
+                *src = g + 1;
                 noc_semaphore_set_multicast_loopback_src(
                     SE_EW + RXS_ID, get_noc_multicast_addr(lx, ry, rx, ry, SE_EW + RXR_ID), GX);
                 noc_async_writes_flushed();
             }
-            if (NRD > 2) {  // (re-arm: every ack landed - the last were waited for)
-                noc_semaphore_inc(get_noc_addr(SE_EW + XACK_ID), 0u - (NRD - 2) * GX);
+            if (TOT > 2) {  // (re-arm: every ack landed - the last were waited for)
+                noc_semaphore_inc(get_noc_addr(SE_EW + XACK_ID), 0u - (TOT - 2) * GX);
                 noc_async_atomic_barrier();
             }
         }

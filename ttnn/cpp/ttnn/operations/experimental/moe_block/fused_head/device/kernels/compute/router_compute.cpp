@@ -61,91 +61,100 @@ void kernel_main() {
     MATH((*reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 0));
     compute_kernel_hw_startup<SrcOrder::Reverse>(PSYNC, PSYNC, HOLD);  // (bf16 sources, as the logits matmul had)
     pack_reconfig_data_format(HOLD);
-    cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
-    PACK(({
-        volatile uint32_t* hw =
-            reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(1 + get_arg_val<uint32_t>(0) + G) + 112);
-        while (*hw == 0) {
+#ifdef RT_NIT
+    constexpr uint32_t NIT = RT_NIT;  // (router iterations: my row tile of each)
+#else
+    constexpr uint32_t NIT = 1;
+#endif
+    for (uint32_t it = 0; it < NIT; ++it) {
+        cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
+        if constexpr (NIT > 1) {
+            cb_pop_front(12, 1);
         }
-        *hw = 0;  // (re-arm)
-    }));
-    PACK((llk_pack_reconfig_l1_acc(0)));
-    DeviceZoneScopedN("SE-RFIN");
-    cb_reserve_back(PSYNC, 1);
-    cb_push_back(PSYNC, 1);
-    cb_wait_front(PSYNC, 1);  // (UNPACK: the partials are in L1)
-    cb_pop_front(PSYNC, 1);
-    cb_wait_front(BIAS, ET);
-    const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
-    for (uint32_t o = 0; o < nops; ++o) {
-        const uint32_t e = get_arg_val<uint32_t>(1 + o) >> 8;
-        const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
-        cb_reserve_back(SC, ET);
-        cb_wait_front(IDX, ET);
-        pack_reconfig_data_format(HOLD);
-        // the sources' partials in landing order (ARRB: the slot): all but the last summed into my block's HOLD as they
-        // land (fp32 on the SFPU, packed back in place), the last in the passes below - after the last arrival only its
-        // add is left
-        uint32_t last = 0;
-        for (uint32_t a = 0; a < na; ++a) {
-            cb_wait_front(ARRB, 1);
-            const uint32_t sl = read_tile_value(ARRB, 0, 0);
-            cb_pop_front(ARRB, 1);
-            if (a + 1 == na) {
-                last = sl;
-                break;
+        PACK(({
+            volatile uint32_t* hw =
+                reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(1 + get_arg_val<uint32_t>(0) + G) + 112);
+            while (*hw == 0) {
             }
-            for (uint32_t i0 = 0; i0 < ET; i0 += 2) {
-                const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
+            *hw = 0;  // (re-arm)
+        }));
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        DeviceZoneScopedN("SE-RFIN");
+        cb_reserve_back(PSYNC, 1);
+        cb_push_back(PSYNC, 1);
+        cb_wait_front(PSYNC, 1);  // (UNPACK: the partials are in L1)
+        cb_pop_front(PSYNC, 1);
+        cb_wait_front(BIAS, ET);
+        const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
+        for (uint32_t o = 0; o < nops; ++o) {
+            const uint32_t e = get_arg_val<uint32_t>(1 + o) >> 8;
+            const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
+            cb_reserve_back(SC, ET);
+            cb_wait_front(IDX, ET);
+            pack_reconfig_data_format(HOLD);
+            // the sources' partials in landing order (ARRB: the slot): all but the last summed into my block's HOLD as
+            // they land (fp32 on the SFPU, packed back in place), the last in the passes below - after the last arrival
+            // only its add is left
+            uint32_t last = 0;
+            for (uint32_t a = 0; a < na; ++a) {
+                cb_wait_front(ARRB, 1);
+                const uint32_t sl = read_tile_value(ARRB, 0, 0);
+                cb_pop_front(ARRB, 1);
+                if (a + 1 == na) {
+                    last = sl;
+                    break;
+                }
+                for (uint32_t i0 = 0; i0 < ET; i0 += 2) {
+                    const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(HOLD);
+                    copy_init(HOLD);
+                    for (uint32_t j = 0; j < n; ++j) {
+                        copy_tile(HOLD, e * ET + i0 + j, j);
+                    }
+                    reconfig_data_format_srca(HOLD, ARRF);
+                    copy_init(ARRF);
+                    for (uint32_t j = 0; j < n; ++j) {
+                        copy_tile(ARRF, sl * ET + i0 + j, 2 + j);
+                    }
+                    add_binary_tile_init();
+                    for (uint32_t j = 0; j < n; ++j) {
+                        add_binary_tile(j, 2 + j, j);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < n; ++j) {
+                        pack_tile<true>(j, HOLD, e * ET + i0 + j);
+                    }
+                    tile_regs_release();
+                }
+                cb_reserve_back(PSYNC, 1);  // (PACK -> UNPACK: the sums are in HOLD before the next pass reads them)
+                cb_push_back(PSYNC, 1);
+                cb_wait_front(PSYNC, 1);
+                cb_pop_front(PSYNC, 1);
+            }
+            {
+                DeviceZoneScopedN("SE-RFARR");
+            }  // (a mark: every arrival in - the fin from here to the top-K)
+            // (all in DEST at fp32: the partials, the bias unpacked straight to DEST, the adds on the SFPU - the FPU's
+            // srcA / srcB hold TF32, a 10-bit mantissa: the sums and the bias add through them moved scores by up to
+            // ~1e-3 and the picks of close experts with them) (a score tile a pass: DEST 0 its score, 1 its key, 2 / 3
+            // the operands - the score is kept: packed back over its logits in HOLD, where the joint rows read the
+            // picks' weights exactly; the key's low bits are the id)
+            for (uint32_t i = 0; i < ET; ++i) {
                 tile_regs_acquire();
                 reconfig_data_format_srca(HOLD);
                 copy_init(HOLD);
-                for (uint32_t j = 0; j < n; ++j) {
-                    copy_tile(HOLD, e * ET + i0 + j, j);
+                copy_tile(HOLD, e * ET + i, 0);
+                if (na) {  // (+ the last source's partial)
+                    reconfig_data_format_srca(HOLD, ARRF);
+                    copy_init(ARRF);
+                    copy_tile(ARRF, last * ET + i, 2);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 2, 0);
                 }
-                reconfig_data_format_srca(HOLD, ARRF);
-                copy_init(ARRF);
-                for (uint32_t j = 0; j < n; ++j) {
-                    copy_tile(ARRF, sl * ET + i0 + j, 2 + j);
-                }
-                add_binary_tile_init();
-                for (uint32_t j = 0; j < n; ++j) {
-                    add_binary_tile(j, 2 + j, j);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < n; ++j) {
-                    pack_tile<true>(j, HOLD, e * ET + i0 + j);
-                }
-                tile_regs_release();
-            }
-            cb_reserve_back(PSYNC, 1);  // (PACK -> UNPACK: the sums are in HOLD before the next pass reads them)
-            cb_push_back(PSYNC, 1);
-            cb_wait_front(PSYNC, 1);
-            cb_pop_front(PSYNC, 1);
-        }
-        {
-            DeviceZoneScopedN("SE-RFARR");
-        }  // (a mark: every arrival in - the fin from here to the top-K)
-        // (all in DEST at fp32: the partials, the bias unpacked straight to DEST, the adds on the SFPU - the FPU's
-        // srcA / srcB hold TF32, a 10-bit mantissa: the sums and the bias add through them moved scores by up to ~1e-3
-        // and the picks of close experts with them)
-        // (a score tile a pass: DEST 0 its score, 1 its key, 2 / 3 the operands - the score is kept: packed back over
-        // its logits in HOLD, where the joint rows read the picks' weights exactly; the key's low bits are the id)
-        for (uint32_t i = 0; i < ET; ++i) {
-            tile_regs_acquire();
-            reconfig_data_format_srca(HOLD);
-            copy_init(HOLD);
-            copy_tile(HOLD, e * ET + i, 0);
-            if (na) {  // (+ the last source's partial)
-                reconfig_data_format_srca(HOLD, ARRF);
-                copy_init(ARRF);
-                copy_tile(ARRF, last * ET + i, 2);
-                add_binary_tile_init();
-                add_binary_tile(0, 2, 0);
-            }
-            {  // the owner: scores = sigmoid(logits) (RT_SQRTSOFTPLUS: sqrt(softplus)), biased = scores + bias (bias^T:
-               // per row)
+                {  // the owner: scores = sigmoid(logits) (RT_SQRTSOFTPLUS: sqrt(softplus)), biased = scores + bias
+                   // (bias^T: per row)
 #ifdef RT_SQRTSOFTPLUS
                 softplus_tile_init();  // (INP_FLOAT32: the fp32 polynomial, as stock ttnn.softplus on fp32; beta 1,
                                        // threshold 20)
@@ -166,13 +175,13 @@ void kernel_main() {
                 copy_init(IDX);
                 copy_tile(IDX, i, 3);
                 MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rt_key<EM>, 1, VectorMode::RC_custom)));
-            }
+                }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(1, SC, i);
             pack_tile<true>(0, HOLD, e * ET + i);
             tile_regs_release();
-        }
+            }
         cb_push_back(SC, ET);
         // the owner's 32 tokens' top-K on the SFPU (ttnn.topk's bitonic network), each token a column, fp32 straight
         // to DEST (no srcA rounding): the running top K of every column in DEST tile 0, each next 32 experts copied
@@ -229,6 +238,9 @@ void kernel_main() {
             }
         }
         tile_regs_commit();
+        if constexpr (NIT > 1) {
+            cb_pop_front(SC, ET);  // (copied into DEST: the next iteration's scores reuse the pages)
+        }
         cb_reserve_back(BEST, 1);
         tile_regs_wait();
         pack_reconfig_data_format(BEST);
@@ -253,6 +265,9 @@ void kernel_main() {
                 volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
                 while (*ms == 0) {
                 }
+                if constexpr (NIT > 1) {
+                    *ms = 0;  // (re-arm: PACK sets it again only after the next iteration's top-K)
+                }
                 rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24);
                 *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             }));
@@ -260,7 +275,12 @@ void kernel_main() {
 #ifdef RT_ROUTE
         // dispatch prep: the route words of my 32 owned tokens from the joint rows (BRISC's word 80: all shares
         // written), into L1 for the BRISC's write (word 96); off the routing chain (the UNPACK thread is idle here)
-        const uint32_t rl1 = get_arg_val<uint32_t>(t1 + 5), tok0 = get_arg_val<uint32_t>(t1 + 6);
+#ifdef RT_NIT
+        const uint32_t tok0 = get_arg_val<uint32_t>(t1 + 6) + it * 32 * RT_RBI;  // (my row tile of iteration it)
+#else
+        const uint32_t tok0 = get_arg_val<uint32_t>(t1 + 6);
+#endif
+        const uint32_t rl1 = get_arg_val<uint32_t>(t1 + 5);
         const uint32_t ol1 = get_arg_val<uint32_t>(t1 + 2);
         UNPACK(({
             volatile uint32_t* rd = reinterpret_cast<volatile uint32_t*>(words + 80);
@@ -274,5 +294,10 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(words + 96) = 1;
         }));
 #endif
-    }
+        }
+        if constexpr (NIT > 1) {  // (the BEST page read by every share of the rows: the next iteration packs it again)
+            cb_wait_front(BEST, 1);
+            cb_pop_front(BEST, 1);
+        }
+    }  // (router iterations)
 }

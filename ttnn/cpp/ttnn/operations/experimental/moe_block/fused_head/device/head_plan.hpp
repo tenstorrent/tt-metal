@@ -121,6 +121,7 @@ struct HeadFitOptions {
     bool largest = true;   // on an L1 refusal, also the largest rows a mesh row that fit
     bool explain = true;   // the unconstrained pick and the L1 note
     bool fallback = true;  // MoEBlockConfig.head_dram_fallback
+    uint32_t min_router_iters = 1;  // MoEBlockConfig.head_router_iterations (at least; 1: the planner's)
 };
 
 // head_plan.fit: the head's whole host plan.
@@ -144,6 +145,10 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap);
 std::pair<double, Parts> head_cost(
     const HeadShape& shape, const HeadLayout& lay, const SeEngineSizing& eng, const HeadCost& c = {});
 std::vector<HeadPlanned> head_plan_layouts(
-    const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit = false, bool xdram = false);
+    const HeadShape& shape,
+    const ArenaMax& arena_max,
+    bool keep_unfit = false,
+    bool xdram = false,
+    uint32_t min_router_iters = 1);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

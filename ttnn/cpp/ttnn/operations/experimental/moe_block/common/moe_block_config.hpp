@@ -84,6 +84,9 @@ struct MoEBlockConfig {
     bool deterministic = true;          // the router's fin in a fixed order (RT_ARR_ORDERED)
     std::optional<float> combine_snap;  // power of two q: every routed term rounded to a multiple of q
     bool head_dram_fallback = true;     // the head planner may take its DRAM fallback
+    // the fused head's router iterations (HeadLayout.NIT): 0 the planner's (the router stage in one go wherever a
+    // layout fits so), n at least n (tests: the iterated router on a shape that would not need it)
+    uint32_t head_router_iterations = 0;
 
     // Geometry inputs that are not derived
     uint32_t num_links = 2;     // links per direction, the same on every axis

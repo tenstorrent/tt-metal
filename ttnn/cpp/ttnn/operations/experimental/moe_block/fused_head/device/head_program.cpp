@@ -221,6 +221,9 @@ public:
     // router
     std::vector<CoreCoord> rcores;
     uint32_t RB = 0, KT = 0, ET = 0, K = 0, NS = 1;
+    // router iterations (HeadLayout.NIT): the router stage over RBi = RB / NIT of my owned row tiles at a time, one
+    // router core each
+    uint32_t NIT = 1, RBi = 0;
     Regions roff;
     int64_t rbytes = 0, pbuf_sub = 0;
     // the mailbox words
@@ -248,7 +251,7 @@ public:
     // head_words' order
     static uint32_t word_index(const std::string& n) {
         static const std::vector<std::string> names = {
-            "mbox", "arr", "xg", "rt", "slot_words", "sfree", "ra_c", "ra_p", "ra_s", "yhello", "ewords"};
+            "mbox", "arr", "xg", "rt", "slot_words", "sfree", "ra_c", "ra_p", "ra_s", "yhello", "ewords", "rit"};
         const auto it = std::find(names.begin(), names.end(), n);
         TT_FATAL(it != names.end(), "fused_head: no persistent words '{}'", n);
         return u32(it - names.begin());
@@ -620,19 +623,16 @@ std::shared_ptr<const HeadModel> make_head_model(
         ea.latent = *sh.latent / 32 / G;
     }
     ea.router = std::make_pair(sh.E / 32, sh.H / G / 32);  // (the router logits on the matmul cores)
-    TT_FATAL(
-        lay.NIT == 1,
-        "fused_head: {} router iterations planned ({}) - the kernels run the router stage in one go only so far",
-        lay.NIT,
-        describe_layout(lay));
+    ea.router_iters = lay.NIT;
     ea.arena_max = arena_cap_of(config.l1_free, lay.KB, sh.payload, config.cb_floor);
     ea.w_dtype = sh.w_dtype;
     ea.xring = lay.xdram ? 2 : 0;
     h.eng.emplace(ea);
     const SeEngineSizing& e = *h.eng;
 
-    // the movers: ports, the watcher, the router cores (HeadSE3)
-    const uint32_t nrt = sh.rows / 32 / G;
+    // the movers: ports, the watcher, the router cores (HeadSE3) - a router core a row tile of one router iteration
+    h.NIT = lay.NIT;
+    const uint32_t nrt = sh.rows / 32 / G / lay.NIT;
     if (nrt + 2 * h.L + 1 <= h.grid.y) {
         for (uint32_t cy = h.grid.y - nrt; cy < h.grid.y; ++cy) {
             h.rcores.emplace_back(h.MX, cy);
@@ -783,11 +783,13 @@ std::shared_ptr<const HeadModel> make_head_model(
 
     // the router cores (RouterStream)
     h.RB = sh.rows / 32 / G;
+    TT_FATAL(h.RB % h.NIT == 0, "fused_head: {} router iterations do not divide {} row tiles", h.NIT, h.RB);
+    h.RBi = h.RB / h.NIT;
     h.KT = sh.H / G / 32;
     h.ET = sh.E / 32;
     h.K = sh.K;
-    TT_FATAL(h.rcores.size() >= h.RB, "fused_head: {} router cores < {}", h.rcores.size(), h.RB);
-    h.rcores.resize(h.RB);
+    TT_FATAL(h.rcores.size() >= h.RBi, "fused_head: {} router cores < {}", h.rcores.size(), h.RBi);
+    h.rcores.resize(h.RBi);
     {
         std::tie(h.roff, h.rbytes) = router_layout(G, h.ET, h.K, h.ET);
         TT_FATAL(
@@ -907,6 +909,11 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& h) {
         {"yhello", cells({h.watcher}), 16},
     };
     out.push_back({"ewords", h.engine_cores(), 64});
+    // router iterations: [0] router core 0's count of the chip's router cores / ports done with an iteration, [16] a
+    // port's count of the chip's router cores done
+    if (h.NIT > 1) {
+        out.push_back({"rit", cells(with(h.rcores, h.all_ports())), 4 * 2});
+    }
     return out;
 }
 
@@ -1387,7 +1394,8 @@ Args ChipProgram::prep_ncrisc(uint32_t cx, uint32_t cy) const {
 std::vector<Args> ChipProgram::engine_dests() const {
     std::vector<Args> dests;
     for (uint32_t Rr = 0; Rr < h.G * h.RB; ++Rr) {
-        const uint32_t bb = Rr / h.RB, j = Rr % h.RB;
+        // (owner bb's row tile jt: router iteration jt / RBi, its router core jt % RBi)
+        const uint32_t bb = Rr / h.RB, j = (Rr % h.RB) % h.RBi;
         Args dr;
         if (bb == p) {
             const auto c = h.virt(h.rcores[j]);
@@ -1460,9 +1468,10 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     if (e.xfree) {
         cb(kXfreeCb, "xfree", 16 * e.NCH, bf16, 16);
     }
-    cb(kRtrRx, "rx", 2 * e.KC * MT * e.NCH * 2048, bf16, 2048);
+    const uint32_t mtr = MT * e.NCH / h.NIT;  // (a core's rows of one router iteration)
+    cb(kRtrRx, "rx", 2 * e.KC * mtr * 2048, bf16, 2048);
     cb(kRtrRw, "rw", 2 * e.ETC * e.KC * 2048, bf16, 2048);
-    cb(kRtrRo, "ro", e.ETC * MT * e.NCH * 4096, fp32, 4096);
+    cb(kRtrRo, "ro", e.ETC * mtr * 4096, fp32, 4096);
     cb(ACC, "acc", e.acc_pages * 4096, fp32, 4096);
 
     std::vector<uint32_t> xa_ct, w_ct, y_ct;
@@ -1628,7 +1637,11 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     nd.emplace_back("SE_RO", iv(kRtrRo));
     nd.emplace_back("SE_KTO", iv(h.KT));
     nd.emplace_back("SE_ETC", iv(e.ETC));
-    nd.emplace_back("SE_MTR", iv(MT * e.NCH));
+    nd.emplace_back("SE_MTR", iv(MT * e.NCH / h.NIT));  // (a core's rows of one router iteration)
+    if (h.NIT > 1) {  // (the router phase NIT times; ewords RGO: router core 0's go count)
+        nd.emplace_back("SE_NIT", iv(h.NIT));
+        nd.emplace_back("RGO_ID", iv(160));
+    }
     nd.emplace_back("SE_RG", iv(e.RG));
     nd.emplace_back("SE_RD", iv(3));
     nd.emplace_back("XACK_ID", iv(kXack));
@@ -1874,8 +1887,17 @@ Args ChipProgram::la_block(XDir d, uint32_t v) const {
 
 // router_stream.RouterStream.port_block: the port sender's logits args
 Args ChipProgram::port_block(XDir d, uint32_t v) const {
+    // (router iterations: my "rit" word - my count of the chip's router cores done at +16, router core 0's count at
+    // +0 - router core 0's NoC, the router cores an iteration; every port counts on router core 0, a peer or not)
+    Args iter = {0u, 0u, 0u};
+    if (h.NIT > 1) {
+        const auto c0 = h.virt(h.rcores[0]);
+        iter = Args{word("rit"), u32(c0.x | c0.y << 16), h.RBi};
+    }
     if (!h.chip(coord).rg.peer(d)) {
-        return Args(11, 0u);
+        Args out(11, 0u);
+        add(out, iter);
+        return out;
     }
     const auto bs = h.dests(p, d);
     const auto js = h.port_layout(v);
@@ -1904,6 +1926,7 @@ Args ChipProgram::port_block(XDir d, uint32_t v) const {
              sfree + 64 * static_cast<uint32_t>(d)}) {
         out.push_back(x);
     }
+    add(out, iter);
     return out;
 }
 
@@ -1967,6 +1990,9 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
     define(sender, "LA_CHL", la_chl);
     define(sender, "RS_NPASS", uv(npass));
     routing_defines(sender);
+    if (h.NIT > 1) {
+        define(sender, "LS_NIT", iv(h.NIT));
+    }
     routing_accessors(sender);
     for (const auto& [d, v, core] : ch.ports) {
         auto pl = h.port_plan(coord, d, v);
@@ -2363,6 +2389,32 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
     const Args tail = {RA("words"), RA("best"), RA("out"), scale_bits};
     const Arg sv_ = RA("hold") + p * ET * 4096;
     const auto order = h.arrival_order(p);
+    // router iterations: the router BRISC's args - the "rit" word, router core 0 (counts every router core and logits
+    // port of the chip done with an iteration, then increments every matmul core's go word), the active ports' count,
+    // the ports (told my iteration is done), the ewords and the matmul cores
+    Args iter_args;
+    if (h.NIT > 1) {
+        const auto c0 = h.virt(h.rcores[0]);
+        uint32_t nact = 0;  // (the ports that relay logits: each counts an iteration's sub-blocks sent)
+        for (const auto& [d, v, core] : h.chip(coord).ports) {
+            nact += h.chip(coord).rg.peer(d) && !h.dests(p, d).empty() && !h.port_layout(v).empty() ? 1 : 0;
+        }
+        add(iter_args, Args{word("rit"), u32(c0.x | c0.y << 16), nact});
+        const auto pts = h.all_ports();
+        add(iter_args, u32(pts.size()));
+        for (const auto& c : pts) {
+            const auto v = h.virt(c);
+            add(iter_args, u32(v.x | v.y << 16));
+        }
+        add(iter_args, Args{word("ewords"), u32(e.GX)});  // (the matmul cores: their NoC x's, then y's)
+        for (uint32_t cx = 0; cx < e.GX; ++cx) {
+            add(iter_args, u32(h.virt(CoreCoord(cx, 0)).x));
+        }
+        add(iter_args, u32(e.GY));
+        for (uint32_t cy = 0; cy < e.GY; ++cy) {
+            add(iter_args, u32(h.virt(CoreCoord(0, cy)).y));
+        }
+    }
     std::vector<std::pair<CoreCoord, Args>> n_rt, c_rt, b_rt;
     for (uint32_t j = 0; j < h.rcores.size(); ++j) {
         const CoreCoord core = h.rcores[j];
@@ -2389,6 +2441,10 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         add(b, Args{scale_bits, RA("out"), RA("words"), RA("best"), RA("route")});
         b.push_back(S(SRC_ROUTE));
         add(b, Args{32 * jr, sv_});
+        if (h.NIT > 1) {  // (router iterations: RT_ITA args before the planner's - am I router core 0, then iter_args)
+            add(b, u32(j == 0));
+            add(b, iter_args);
+        }
         add(b, ra_args(j));
         b_rt.emplace_back(core, b);
     }
@@ -2433,7 +2489,15 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         add(common_v,
             Args{S(SRC_START), S(SRC_END), Arg(coord.first), Arg(h.R), Arg(h.S * h.C), Arg(p * h.S), Arg(h.S)});
     }
+    auto iter_defs = [&](KernelDescriptor& k) {  // (router iterations: RT_NIT of them, RT_RBI router cores)
+        if (h.NIT > 1) {
+            define(k, "RT_NIT", iv(h.NIT));
+            define(k, "RT_RBI", iv(h.RBi));
+            define(k, "RT_RGO", iv(160));  // (the matmul cores' go word in their ewords: the engine's RGO_ID)
+        }
+    };
     auto eng_defs = [&](KernelDescriptor& k) {
+        iter_defs(k);
         define(k, "RT_MSYNC_OFF", uv(region_of_router("msync")));
         define(k, "RT_FOLD", uv(h.cfg.shape.fold));
         if (h.cfg.ordered) {
@@ -2498,6 +2562,8 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         define(bk, "RT_CT0", iv(rt_ct0));
         define(bk, "RT_PAGE", iv(bufs[SRC_ROUTE]->aligned_page_size()));
         define(bk, "RT_RW", iv(route_words(h.N)));
+        define(bk, "RT_ITA", iv(h.NIT > 1 ? 1 + iter_args.size() : 0));
+        iter_defs(bk);
         append_accessor(bk.compile_time_args, bufs[SRC_ROUTE]);
         planner_defines(bk, b_ra0);
         mine(b_rt, bk);

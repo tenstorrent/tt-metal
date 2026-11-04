@@ -127,6 +127,35 @@ void kernel_main() {
             }
         }
         bool lgok = lgneed == 0;  // (every owner I send logits to started this call)
+#ifdef LS_NIT
+        // router iterations: the iteration whose logits I send, and the "started" rounds told past the first - round k
+        // once my chip's router cores are all done with iteration k - 1 (their count on my "rit" word, +16)
+        uint32_t lit = 0, ltok = 0;
+        volatile tt_l1_ptr uint32_t* rfree = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ls.rit + 16);
+        auto lgtok = [&]() {
+            if (ltok + 1 < LS_NIT && lgns > 0) {
+                invalidate_l1_cache();
+                if (*rfree >= ls.rbi * (ltok + 1)) {
+                    noc_async_writes_flushed();  // (the logits header's last packet left: re-routed here)
+                    volatile tt_l1_ptr PACKET_HEADER_TYPE* gh = lshdr;
+                    for (uint32_t i = 0; i < lgns; ++i) {
+                        const uint32_t w = get_arg_val<uint32_t>(lg0 + 3 + 2 * i),
+                                       xy = get_arg_val<uint32_t>(lg0 + 4 + 2 * i);
+                        (void)fabric_set_unicast_route(
+                            gh, static_cast<uint16_t>(w & 0xFFFF), static_cast<uint16_t>(w >> 16));
+                        gh->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(xy & 0xFF, (xy >> 8) & 0xFF, lgfence), 1, true});
+                        conn.wait_for_empty_write_slot();
+                        conn.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(gh), sizeof(PACKET_HEADER_TYPE));
+                    }
+                    ++ltok;
+                }
+            } else if (ltok + 1 < LS_NIT) {
+                ++ltok;  // (no chip sends me logits through this port)
+            }
+        };
+#endif
         if (wait_ready) {
             DeviceZoneScopedN("SE-RDYWAIT");  // (its end: the neighbour's port started - launch skew + a hop)
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), 1);
@@ -165,6 +194,25 @@ void kernel_main() {
         };
         auto lpoll = [&]() {
             zpoll();
+#ifdef LS_NIT
+            lgtok();
+            if (!lgok) {
+                invalidate_l1_cache();
+                lgok = *lgf >= lgneed * (lit + 1);  // (every owner I send to: its router cores free for iteration lit)
+            }
+            if (lgok) {
+                ls.poll(conn, lshdr, false);
+                if (ls.done() && lit + 1 < LS_NIT) {  // (iteration lit's sub-blocks all left: its slots are free)
+                    noc_async_writes_flushed();
+                    if (ls.active()) {
+                        noc_semaphore_inc(get_noc_addr(ls.c0 & 0xFFFF, ls.c0 >> 16, ls.rit), 1);
+                    }
+                    ls.next_iteration();
+                    ++lit;
+                    lgok = lgneed == 0;
+                }
+            }
+#else
             if (!lgok) {
                 invalidate_l1_cache();
                 lgok = *lgf >= lgneed;
@@ -172,6 +220,7 @@ void kernel_main() {
             if (lgok) {
                 ls.poll(conn, lshdr, false);
             }
+#endif
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
             rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
         };
@@ -229,10 +278,16 @@ void kernel_main() {
             invalidate_l1_cache();
             lpoll();
         }
+#ifdef LS_NIT
+        while (lit + 1 < LS_NIT || !ls.done() || ltok + 1 < LS_NIT) {  // (every iteration's logits; every "started")
+            lpoll();
+        }
+#else
         if (lgneed) {
             noc_semaphore_wait_min(lgf, lgneed);
         }
         ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
+#endif
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
         rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
         noc_async_writes_flushed();
@@ -247,12 +302,26 @@ void kernel_main() {
         if (lneed) {
             noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
         }
+#ifdef LS_NIT
+        constexpr uint32_t LG_ROUNDS = LS_NIT;  // (a "started" a router iteration from each owner I send to)
+#else
+        constexpr uint32_t LG_ROUNDS = 1;
+#endif
         if (lgneed) {
-            noc_semaphore_inc(get_noc_addr(lgfence), 0u - lgneed);  // (re-arm, as the latent's)
+            noc_semaphore_inc(get_noc_addr(lgfence), 0u - lgneed * LG_ROUNDS);  // (re-arm, as the latent's)
         }
         noc_async_atomic_barrier();
         conn.close();
     }
+#ifdef LS_NIT
+    {  // (re-arm: my chip's router cores counted every iteration but the last here - also on a port with nothing to
+       // send)
+        volatile tt_l1_ptr uint32_t* rf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ls.rit + 16);
+        noc_semaphore_wait_min(rf, ls.rbi * (LS_NIT - 1));
+        noc_semaphore_inc(get_noc_addr(ls.rit + 16), 0u - ls.rbi * (LS_NIT - 1));
+        noc_async_atomic_barrier();
+    }
+#endif
     if (rneed) {  // (re-arm: every matmul core counted its router phase here - also on a port with nothing to send)
         noc_semaphore_wait_min(rdone, rneed);
         noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(rdone)), 0u - rneed);

@@ -67,7 +67,13 @@ void kernel_main() {
     {  // the router's logits first (every chain starts here): my expert tiles x my MT rows over the chip's K slice
         DeviceZoneScopedN("SE-RTRMM");
         constexpr uint32_t etc = SE_ETC;  // (every core the same count; past the experts: unused tiles)
-        {  // (a K chunk's ETC x MT partials in DEST, then fp32 into RO with the packer's L1 accumulation)
+#ifdef SE_NIT
+        constexpr uint32_t NIT = SE_NIT;  // (router iterations: SE_MTR of my rows each)
+#else
+        constexpr uint32_t NIT = 1;
+#endif
+        for (uint32_t it = 0; it < NIT; ++it) {
+            // (a K chunk's ETC x MT partials in DEST, then fp32 into RO with the packer's L1 accumulation)
             reconfig_data_format(SE_RX, SE_RW);
             pack_reconfig_data_format(SE_RO);
             // (row groups of SE_RG rows: ETC x SE_RG tiles in DEST - all rows at once where they fit)

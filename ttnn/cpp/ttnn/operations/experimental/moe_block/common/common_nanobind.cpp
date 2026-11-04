@@ -127,6 +127,7 @@ void bind_config(nb::module_& mod) {
     cfg.def_rw("deterministic", &MoEBlockConfig::deterministic)
         .def_rw("combine_snap", &MoEBlockConfig::combine_snap)
         .def_rw("head_dram_fallback", &MoEBlockConfig::head_dram_fallback)
+        .def_rw("head_router_iterations", &MoEBlockConfig::head_router_iterations)
         .def_rw("num_links", &MoEBlockConfig::num_links)
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)
         .def_rw("persist_l1_small", &MoEBlockConfig::persist_l1_small)

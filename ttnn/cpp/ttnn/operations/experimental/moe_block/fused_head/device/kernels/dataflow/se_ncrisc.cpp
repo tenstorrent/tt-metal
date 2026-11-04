@@ -25,6 +25,11 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* ew(uint32_t o) {
 constexpr auto rx_args = TensorAccessorArgs<SE_RTR_CT0>();  // (the chip's x shard [rows, H / TP], DRAM)
 constexpr auto rw_args = TensorAccessorArgs<rx_args.next_compile_time_args_offset()>();  // (W_r^T [E, H / TP])
 constexpr uint32_t CB_WIN = 1, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
+#ifdef SE_NIT
+constexpr uint32_t NIT = SE_NIT;  // (router iterations: the router phase over SE_MTR of my rows at a time)
+#else
+constexpr uint32_t NIT = 1;
+#endif
 constexpr uint32_t NSD1 = NSD ? NSD : 1;                    // (never divided by 0)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
@@ -46,7 +51,7 @@ void kernel_main() {
     const uint32_t wbase = se_ra(a++), n0d = se_ra(a++);
     const uint32_t wbank = se_ra(a++);  // (the DRAM bank holding my W-own region)
     const uint32_t R0 = a;  // (the router logits' args)
-    a += 10 + SE_RD * SE_MTR;
+    a += 10 + SE_RD * SE_MTR * NIT;
     const uint32_t wg0 = a, wd0 = wg0 + NPG;  // pass widths (gate / up, down)
     a = wd0 + NPD;
     const uint32_t ty = se_ra(a++), by = se_ra(a++);
@@ -88,89 +93,110 @@ void kernel_main() {
     // first core), my row's NoC y, the router cores' NoC [RB], their HOLD, their counter, my column has experts)
     const uint32_t etc = se_ra(R0 + 2), re0 = se_ra(R0 + 3);
     const uint32_t rxa = se_ra(R0 + 4), rwa = se_ra(R0 + 5);
-    {
-        // K chunks of SE_KC tiles, at most two rounds, a buffer each (no slot reused: no acks): the row's first core's
-        // BRISC multicasts the row's x along the row (NOC0), the column's first core multicasts its W_r^T expert tiles
-        // down the column (here, NOC1 - same-NoC row and column multicasts stall each other); a lead reads round
-        // rd + 1 while round rd's multicast goes; every core pushes a round once its words say it landed
-        DeviceZoneScopedN("SE-RTRLD");
-        // (the column's W_r^T lead on row NoC x % GY, not row 0: the NOC1 read responses come back along the
-        // lead's row (-y, then -x), and 11 leads on one row shared its links - ~3 us a round's reads vs ~0.6 for the
-        // x leads, who sit on different rows)
-        const uint32_t wly = se_ra(ys0 + cxv % GY);
-        const bool lw = etc && cy == cxv % GY;
-        const bool hw = se_ra(R0 + 9);
-        const auto wg2 = TensorAccessor(rw_args, se_ra(R0 + 1), 2048);
-        constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
-        // (two buffers: past two rounds a buffer is reused - every receiver acks a round once its compute popped it
-        // (its next reserve went through): +1 on the row's x lead and the column's W lead, who wait for all of them)
-        const uint32_t xlx = se_ra(R0 + 7), xly = se_ra(R0 + 8);
-        for (uint32_t rd = 0; rd < NRD; ++rd) {
-            cb_reserve_back(SE_RX, SE_KC * SE_MTR);
-            cb_reserve_back(SE_RW, SE_ETC * SE_KC);
-            if (NRD > 2 && rd >= 2) {
-                noc_semaphore_inc(get_noc_addr(xlx, xly, SE_EW + XACK_ID), 1);
-                if (hw) {
-                    noc_semaphore_inc(get_noc_addr(cxv, wly, SE_EW + WACK_ID), 1);
-                }
-            }
-            if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
-                const uint32_t wa = rwa + (rd & 1) * WS;
-                if (NRD > 2 && rd >= 2) {
-                    while (*ew(WACK_ID) < (rd - 1) * GY) {
-                        invalidate_l1_cache();
+    for (uint32_t it = 0; it < NIT; ++it) {  // (router iterations: my rows it SE_MTR ..)
+        {
+            // K chunks of SE_KC tiles, at most two rounds, a buffer each (no slot reused: no acks): the row's first
+            // core's BRISC multicasts the row's x along the row (NOC0), the column's first core multicasts its W_r^T
+            // expert tiles down the column (here, NOC1 - same-NoC row and column multicasts stall each other); a lead
+            // reads round rd + 1 while round rd's multicast goes; every core pushes a round once its words say it
+            // landed
+            DeviceZoneScopedN("SE-RTRLD");
+            // (the column's W_r^T lead on row NoC x % GY, not row 0: the NOC1 read responses come back along the
+            // lead's row (-y, then -x), and 11 leads on one row shared its links - ~3 us a round's reads vs ~0.6 for
+            // the x leads, who sit on different rows)
+            const uint32_t wly = se_ra(ys0 + cxv % GY);
+            const bool lw = etc && cy == cxv % GY;
+            const bool hw = se_ra(R0 + 9);
+            const auto wg2 = TensorAccessor(rw_args, se_ra(R0 + 1), 2048);
+            constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
+            constexpr uint32_t TOT = NRD * NIT;  // (the rounds of every iteration: their counts run on across them)
+            // (two buffers: past two rounds a buffer is reused - every receiver acks a round once its compute popped it
+            // (its next reserve went through): +1 on the row's x lead and the column's W lead, who wait for all of
+            // them)
+            const uint32_t xlx = se_ra(R0 + 7), xly = se_ra(R0 + 8);
+            for (uint32_t rd = 0; rd < NRD; ++rd) {
+                const uint32_t g = it * NRD + rd;  // (the round over every iteration)
+                cb_reserve_back(SE_RX, SE_KC * SE_MTR);
+                cb_reserve_back(SE_RW, SE_ETC * SE_KC);
+                if (TOT > 2 && g >= 2) {
+                    noc_semaphore_inc(get_noc_addr(xlx, xly, SE_EW + XACK_ID), 1);
+                    if (hw) {
+                        noc_semaphore_inc(get_noc_addr(cxv, wly, SE_EW + WACK_ID), 1);
                     }
                 }
+                if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
+                    const uint32_t wa = rwa + (g & 1) * WS;
+                    if (TOT > 2 && g >= 2) {
+                        while (*ew(WACK_ID) < (g - 1) * GY) {
+                            invalidate_l1_cache();
+                        }
+                    }
+                    for (uint32_t e = 0; e < etc; ++e) {
+                        for (uint32_t k = 0; k < SE_KC; ++k) {
+                            noc_async_read(
+                                wg2.get_noc_addr((re0 + e) * SE_KTO + rd * SE_KC + k),
+                                wa + (e * SE_KC + k) * 2048,
+                                2048);
+                        }
+                    }
+                    noc_async_read_barrier();
+                    noc_async_write_multicast_loopback_src(
+                        wa, get_noc_multicast_addr(cxv, by, cxv, ty, wa), etc * SE_KC * 2048, GY);
+                    noc_async_writes_flushed();
+                    *ew(RWR_ID) = g + 1;
+                    noc_semaphore_set_multicast_loopback_src(
+                        (SE_EW + RWR_ID), get_noc_multicast_addr(cxv, by, cxv, ty, (SE_EW + RWR_ID)), GY);
+                }
+                while (*ew(RXR_ID) < g + 1) {
+                    invalidate_l1_cache();
+                }
+                cb_push_back(SE_RX, SE_KC * SE_MTR);
+                while (hw && *ew(RWR_ID) < g + 1) {
+                    invalidate_l1_cache();
+                }
+                cb_push_back(SE_RW, SE_ETC * SE_KC);
+            }
+            if (it + 1 == NIT) {
+                noc_async_writes_flushed();  // (my sets' source words read: re-arm them)
+                *ew(RXR_ID) = 0;  // (re-armed: no more sets come this call - the x lead sets from its own word, RXS)
+                *ew(RWR_ID) = 0;
+                if (TOT > 2 && lw) {  // (every ack landed: the last were waited for)
+                    noc_semaphore_inc(get_noc_addr(SE_EW + WACK_ID), 0u - (TOT - 2) * GY);
+                    noc_async_atomic_barrier();
+                }
+            }
+        }
+        {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
+            DeviceZoneScopedN("SE-RTROUT");
+#ifdef SE_NIT
+            if (it > 0) {  // (router core 0's go: every router core and logits port of the chip is done with it - 1)
+                while (*ew(RGO_ID) < it) {
+                    invalidate_l1_cache();
+                }
+            }
+#endif
+            cb_wait_front(SE_RO, SE_ETC * SE_MTR);
+            // (row tile r of mine: my own owner's block into its router core's HOLD, another owner's straight into the
+            // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
+            const uint32_t ro = get_read_ptr(SE_RO);
+            for (uint32_t r = 0; r < SE_MTR; ++r) {
+                const uint32_t rg = it * SE_MTR + r;  // (my row rg of the call)
+                const uint32_t dw = se_ra(R0 + 10 + 3 * rg), dx = dw & 0xFFFF, dy = dw >> 16;
+                const uint32_t base = se_ra(R0 + 11 + 3 * rg), ctr = se_ra(R0 + 12 + 3 * rg);
                 for (uint32_t e = 0; e < etc; ++e) {
-                    for (uint32_t k = 0; k < SE_KC; ++k) {
-                        noc_async_read(
-                            wg2.get_noc_addr((re0 + e) * SE_KTO + rd * SE_KC + k), wa + (e * SE_KC + k) * 2048, 2048);
-                    }
+                    noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
                 }
-                noc_async_read_barrier();
-                noc_async_write_multicast_loopback_src(
-                    wa, get_noc_multicast_addr(cxv, by, cxv, ty, wa), etc * SE_KC * 2048, GY);
-                noc_async_writes_flushed();
-                *ew(RWR_ID) = rd + 1;
-                noc_semaphore_set_multicast_loopback_src(
-                    (SE_EW + RWR_ID), get_noc_multicast_addr(cxv, by, cxv, ty, (SE_EW + RWR_ID)), GY);
+                noc_async_write_barrier();  // (landed before the count)
+                if (etc) {
+                    noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
+                }
             }
-            while (*ew(RXR_ID) < rd + 1) {
-                invalidate_l1_cache();
-            }
-            cb_push_back(SE_RX, SE_KC * SE_MTR);
-            while (hw && *ew(RWR_ID) < rd + 1) {
-                invalidate_l1_cache();
-            }
-            cb_push_back(SE_RW, SE_ETC * SE_KC);
+            cb_pop_front(SE_RO, SE_ETC * SE_MTR);
         }
-        noc_async_writes_flushed();  // (my sets' source words read: re-arm them)
-        *ew(RXR_ID) = 0;             // (re-armed: no more sets come this call - the x lead sets from its own word, RXS)
-        *ew(RWR_ID) = 0;
-        if (NRD > 2 && lw) {  // (every ack landed: the last were waited for)
-            noc_semaphore_inc(get_noc_addr(SE_EW + WACK_ID), 0u - (NRD - 2) * GY);
-            noc_async_atomic_barrier();
-        }
-    }
-    {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
-        DeviceZoneScopedN("SE-RTROUT");
-        cb_wait_front(SE_RO, SE_ETC * SE_MTR);
-        // (row tile r of mine: my own owner's block into its router core's HOLD, another owner's straight into the
-        // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
-        const uint32_t ro = get_read_ptr(SE_RO);
-        for (uint32_t r = 0; r < SE_MTR; ++r) {
-            const uint32_t dw = se_ra(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
-            const uint32_t base = se_ra(R0 + 11 + 3 * r), ctr = se_ra(R0 + 12 + 3 * r);
-            for (uint32_t e = 0; e < etc; ++e) {
-                noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
-            }
-            noc_async_write_barrier();  // (landed before the count)
-            if (etc) {
-                noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
-            }
-        }
-        cb_pop_front(SE_RO, SE_ETC * SE_MTR);
-    }
+    }  // (router iterations)
+#ifdef SE_NIT
+    *ew(RGO_ID) = 0;  // (re-armed: router core 0's last go came before my last iteration's sends)
+#endif
 #ifdef SE_RDONE
     {  // my router phase is over - x rows / W_r^T read, the partials out: +1 on every port's "router done" word (the
        // ports credit this chip's arrival zones / tell the latent's senders "started" once every core's is: the
