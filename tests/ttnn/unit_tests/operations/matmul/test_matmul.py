@@ -2358,7 +2358,13 @@ def test_matmul_split_by_batch(device, a_shape, b_shape, memory_config, expect_s
     assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
 
 
-@pytest.mark.parametrize("case", ["transposed_tile", "sub_device"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "transposed_tile",
+        pytest.param("sub_device", marks=skip_for_slow_dispatch("sub-device managers need fast dispatch")),
+    ],
+)
 def test_matmul_split_by_batch_excluded(device, case):
     """A matmul that would split by batch keeps the simple config with a transposed A tile or a loaded sub-device."""
     torch.manual_seed(0)
