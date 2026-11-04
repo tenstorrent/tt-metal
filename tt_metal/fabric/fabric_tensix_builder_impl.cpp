@@ -20,7 +20,7 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include <bit>
 #include <algorithm>
 #include <utility>
@@ -324,8 +324,15 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
         args.push_back(static_cast<uint32_t>(size));
     }
 
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, program, logical_core, args, CoreType::WORKER);
+    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::Program>(
+        fabric_context_,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        program,
+        logical_core,
+        args,
+        CoreType::WORKER);
 
     return args;
 }

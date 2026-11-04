@@ -11,7 +11,7 @@ mesh: every moment reports its parameter's placements and distribution shape, a 
 device-for-device into a fresh model, and (TP) an optimizer step cannot relabel a parameter through a mislabelled
 gradient.
 
-Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, ``AdamWFullPrecision``, ``SGD``)
+Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, also on fp32 parameters, and ``SGD``)
 and ``MuonComposite`` have Python classes; ``MorehAdamW``, ``AdamWComposite`` and ``SGDComposite`` have none, but
 ``ttml.optimizers.create_optimizer`` reaches them through the C++ ``OptimizerRegistry`` and hands back an
 ``OptimizerBase`` whose ``step`` / ``get_state_dict`` dispatch virtually (nanobind falls back to the registered base
@@ -40,7 +40,8 @@ import pytest
 import ttml
 import ttnn
 from ttml import checkpointing
-from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
+from ttml.modules import AbstractModuleBase, LinearLayer
+from tp_block import fresh_tp, make_adamw, train_step, trained_tp
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -48,7 +49,7 @@ DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shar
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 # Fused-kernel optimizers with a Python class.
-OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD"]
+OPTIMIZERS = ["AdamW", "AdamW+fp32", "SGD"]
 
 # Composite optimizers, reachable only through ``create_optimizer`` (registry keys in optimizer_registry.cpp). The
 # weight-decay default (0.01) is kept on the AdamW variants so ``AdamWComposite::step``'s weight-decay write is among
@@ -74,13 +75,11 @@ ALL_OPTIMIZERS = SHARDED_PARAM_OPTIMIZERS + ["MuonComposite"]
 
 def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimizers.OptimizerBase":
     if name == "AdamW":
-        cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-        return ttml.optimizers.AdamW(params, cfg)
-    if name == "AdamWFullPrecision":
-        cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
-            lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0
-        )
-        return ttml.optimizers.AdamWFullPrecision(params, cfg)
+        return make_adamw(params)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "SGD":
         cfg = ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.0, nesterov=False)
         return ttml.optimizers.SGD(params, cfg)
@@ -90,22 +89,6 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name in COMPOSITE_CONFIGS:
         return ttml.optimizers.create_optimizer({"lr": 1e-3, **COMPOSITE_CONFIGS[name]}, params)
     raise ValueError(f"Unknown optimizer name: {name!r}")
-
-
-def _train_step(model, opt, input_scale: float = 1.0) -> None:
-    """One forward/backward/optimizer step on a ``(1, 1, DIM, DIM)`` input, so every moment exists and has been
-    touched by the update kernel (and, for FSDP, so the gather -> compute -> reduce-scatter -> reshard hooks ran)."""
-    ctx = ttml.autograd.AutoContext.get_instance()
-    x = ttml.autograd.Tensor.from_numpy(
-        np.random.default_rng(0).standard_normal((1, 1, DIM, DIM), dtype=np.float32) * input_scale,
-        ttnn.Layout.TILE,
-        ttnn.DataType.BFLOAT16,
-    )
-    opt.zero_grad()
-    loss = ttml.ops.unary.mean(model(x))
-    loss.backward(False)
-    opt.step()
-    ctx.reset_graph()
 
 
 def _placement_key(p) -> tuple:
@@ -216,31 +199,13 @@ def _assert_checkpoint_round_trips(path: str, params: "ttml.NamedParameters", op
 # --- TP -------------------------------------------------------------------------------------------------------
 
 
-class TPBlock(AbstractModuleBase):
-    """Replicated linear -> column-parallel -> row-parallel: sharded weights on dims 2 and 3, a sharded bias
-    (column-parallel, dim 3) and replicated params (the first linear, the row-parallel bias)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.inp = LinearLayer(DIM, DIM)
-        self.up = ColumnParallelLinear(DIM, DIM, has_bias=True)
-        self.down = RowParallelLinear(DIM, DIM, has_bias=True, input_is_parallel=True)
-
-    def forward(self, x):
-        return self.down(self.up(self.inp(x)))
-
-
 def _fresh_tp(name: str):
-    """An untrained TPBlock and its optimizer: (model, params, opt)."""
-    model = TPBlock()
-    params = model.parameters()
-    return model, params, _make_optimizer(name, params)
+    """An untrained ``TPBlock(DIM)`` and the optimizer ``name``: (model, params, opt)."""
+    return fresh_tp(DIM, lambda params: _make_optimizer(name, params))
 
 
 def _trained_tp(name: str):
-    model, params, opt = _fresh_tp(name)
-    _train_step(model, opt)
-    return params, opt
+    return trained_tp(DIM, lambda params: _make_optimizer(name, params))
 
 
 class TestTP:
@@ -260,11 +225,12 @@ class TestTP:
             mismatches
         )
 
-    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path):
-        params, opt = _trained_tp("AdamW")
-        path = str(tmp_path / "tp_adamw.ckpt")
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
+    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path, opt_name):
+        params, opt = _trained_tp(opt_name)
+        path = str(tmp_path / "tp.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
-        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp("AdamW")[1:])
+        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp(opt_name)[1:])
 
     @pytest.mark.parametrize("param_label", ["nd", "collapsed_1d"])
     @pytest.mark.parametrize("opt_name", ALL_OPTIMIZERS)
@@ -417,7 +383,7 @@ class TestFSDP:
         model = _build_fsdp_model(init)
         params = model.parameters()
         opt = _make_optimizer(opt_name, params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
 
         expected = _assert_fsdp_layout(model, fsdp_mesh)
         mismatches = _moment_mismatches(opt, expected)
@@ -425,20 +391,21 @@ class TestFSDP:
             mismatches
         )
 
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
     @pytest.mark.parametrize("init", ["eager", "lazy"])
-    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init):
+    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init, opt_name):
         model = _build_fsdp_model(init)
         params = model.parameters()
-        opt = _make_optimizer("AdamW", params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        opt = _make_optimizer(opt_name, params)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         _assert_fsdp_layout(model, fsdp_mesh)  # steady state: the parameters are the shards again
 
-        path = str(tmp_path / f"fsdp_adamw_{init}.ckpt")
+        path = str(tmp_path / f"fsdp_{init}.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
 
         def fresh():
             fresh_params = _build_fsdp_model(init).parameters()
-            return fresh_params, _make_optimizer("AdamW", fresh_params)
+            return fresh_params, _make_optimizer(opt_name, fresh_params)
 
         _assert_checkpoint_round_trips(path, params, opt, fresh)
 
@@ -448,7 +415,7 @@ class TestFSDP:
         model = _build_fsdp_model("eager")
         params = model.parameters()
         opt = _make_optimizer("AdamW", params)
-        _train_step(model, opt, input_scale=FSDP_INPUT_SCALE)
+        train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         expected = _assert_fsdp_layout(model, fsdp_mesh)
 
         model.block.unshard()

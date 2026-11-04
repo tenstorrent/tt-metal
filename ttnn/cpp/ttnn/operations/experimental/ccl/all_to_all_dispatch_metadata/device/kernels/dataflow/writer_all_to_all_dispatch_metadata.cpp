@@ -867,8 +867,10 @@ void kernel_main() {
     constexpr uint32_t mux_ct_args_offset = scores_out_args.next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_args_offset + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_args_offset + 1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_args_offset + 2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_args_offset + 3);
+    // The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map address
+    // it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+    constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(mux_ct_args_offset + 2);
+    constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(mux_ct_args_offset + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_args_offset + 4);
 #endif
 
@@ -923,11 +925,11 @@ void kernel_main() {
     std::array<bool, num_directions> is_termination_master_arr = {false, false, false, false};
     std::array<uint8_t, num_directions> fabric_mux_x_arr = {0, 0, 0, 0};
     std::array<uint8_t, num_directions> fabric_mux_y_arr = {0, 0, 0, 0};
-    std::array<size_t, num_directions> fabric_mux_channel_base_address_arr = {0, 0, 0, 0};
-    std::array<size_t, num_directions> fabric_mux_connection_info_address_arr = {0, 0, 0, 0};
-    std::array<size_t, num_directions> fabric_mux_connection_handshake_address_arr = {0, 0, 0, 0};
-    std::array<size_t, num_directions> fabric_mux_flow_control_address_arr = {0, 0, 0, 0};
-    std::array<size_t, num_directions> fabric_mux_buffer_index_address_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_channel_base_offset_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_connection_info_offset_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_connection_handshake_offset_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_flow_control_offset_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_buffer_index_offset_arr = {0, 0, 0, 0};
     std::array<uint8_t, num_directions> fabric_mux_channel_id_arr = {0, 0, 0, 0};
     std::array<uint32_t, num_directions> termination_sync_address_arr = {0, 0, 0, 0};
     std::array<uint32_t, num_directions> local_fabric_mux_status_address_arr = {0, 0, 0, 0};
@@ -944,11 +946,11 @@ void kernel_main() {
             is_termination_master_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++) == 1;
             fabric_mux_x_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
             fabric_mux_y_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
-            fabric_mux_channel_base_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
-            fabric_mux_connection_info_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
-            fabric_mux_connection_handshake_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
-            fabric_mux_flow_control_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
-            fabric_mux_buffer_index_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_channel_base_offset_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_connection_info_offset_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_connection_handshake_offset_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_flow_control_offset_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_buffer_index_offset_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
             fabric_mux_channel_id_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
             termination_sync_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
             local_fabric_mux_status_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
@@ -963,28 +965,10 @@ void kernel_main() {
         }
     }
 
-    // Build mux connections for each direction
+    // Mux connections for each direction, built once each mux publishes its map's address (below).
     std::array<tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, num_directions>
         fabric_connections;
-    for (uint32_t dir = 0; dir < num_directions; dir++) {
-        if (directions[dir] && mux_connection_valid_arr[dir]) {
-            fabric_connections[dir] =
-                tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-                    fabric_mux_x_arr[dir],
-                    fabric_mux_y_arr[dir],
-                    fabric_mux_channel_id_arr[dir],
-                    fabric_mux_num_buffers_per_channel,
-                    fabric_mux_channel_buffer_size_bytes,
-                    fabric_mux_channel_base_address_arr[dir],
-                    fabric_mux_connection_info_address_arr[dir],
-                    fabric_mux_connection_handshake_address_arr[dir],
-                    fabric_mux_flow_control_address_arr[dir],
-                    fabric_mux_buffer_index_address_arr[dir],
-                    local_flow_control_address_arr[dir],
-                    local_teardown_address_arr[dir],
-                    local_buffer_index_address_arr[dir]);
-        }
-    }
+    std::array<uint32_t, num_directions> fabric_mux_l1_base_arr = {0, 0, 0, 0};
 #else
     // ========================================================================
     // DIRECT EDM PATH: Use WorkerToFabricEdmSender connections directly
@@ -1043,11 +1027,24 @@ void kernel_main() {
     // Wait for mux to be ready and connect
     for (uint32_t dir = 0; dir < num_directions; dir++) {
         if (directions[dir] && mux_connection_valid_arr[dir]) {
-            tt::tt_fabric::wait_for_fabric_endpoint_ready(
-                fabric_mux_x_arr[dir],
-                fabric_mux_y_arr[dir],
-                fabric_mux_status_address,
-                local_fabric_mux_status_address_arr[dir]);
+            fabric_connections[dir] =
+                tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
+                    fabric_mux_x_arr[dir],
+                    fabric_mux_y_arr[dir],
+                    fabric_mux_channel_id_arr[dir],
+                    fabric_mux_num_buffers_per_channel,
+                    fabric_mux_channel_buffer_size_bytes,
+                    fabric_mux_l1_base_semaphore_id,
+                    fabric_mux_channel_base_offset_arr[dir],
+                    fabric_mux_connection_info_offset_arr[dir],
+                    fabric_mux_connection_handshake_offset_arr[dir],
+                    fabric_mux_flow_control_offset_arr[dir],
+                    fabric_mux_buffer_index_offset_arr[dir],
+                    local_flow_control_address_arr[dir],
+                    local_teardown_address_arr[dir],
+                    local_buffer_index_address_arr[dir],
+                    local_fabric_mux_status_address_arr[dir],
+                    fabric_mux_l1_base_arr[dir]);
             tt::tt_fabric::fabric_client_connect(fabric_connections[dir]);
         }
     }
@@ -1376,7 +1373,9 @@ void kernel_main() {
             for (uint32_t dir = 0; dir < num_directions; dir++) {
                 if (directions[dir] && mux_connection_valid_arr[dir]) {
                     tt::tt_fabric::fabric_endpoint_terminate(
-                        fabric_mux_x_arr[dir], fabric_mux_y_arr[dir], fabric_mux_termination_signal_address);
+                        fabric_mux_x_arr[dir],
+                        fabric_mux_y_arr[dir],
+                        fabric_mux_l1_base_arr[dir] + fabric_mux_termination_signal_offset);
                 }
             }
         } else {

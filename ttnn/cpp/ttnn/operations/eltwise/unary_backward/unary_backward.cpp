@@ -34,6 +34,51 @@
 
 namespace ttnn {
 
+namespace {
+
+// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel serves this call. The
+// kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16 operands in untransposed 16x16
+// faces, with one shape, interleaved or sharded in L1 or DRAM: the device operation binds each operand's
+// shard in place or addresses its pages. Every other call, including a broadcast gradient or a host
+// operand, keeps the path the program replaces. It is defined once for every generated route, so a tree
+// may hold it before any route calls it. input_grad, when given, overrides output_mem_config.
+[[maybe_unused]] bool generated_bf16_kernel_applies(
+    const Tensor& grad,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& input_grad = std::nullopt) {
+    const auto* device = input.device();
+    if (device == nullptr || (device->arch() != tt::ARCH::BLACKHOLE && device->arch() != tt::ARCH::WORMHOLE_B0)) {
+        return false;
+    }
+    const auto bf16_tiles = [&](const Tensor& tensor) {
+        const auto tile = tensor.tensor_spec().tile();
+        return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
+               tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+               tile.get_face_shape() ==
+                   tt::tt_metal::Tile::FaceShape{tt::constants::FACE_HEIGHT, tt::constants::FACE_WIDTH} &&
+               !tile.get_transpose_within_face() && !tile.get_transpose_of_faces() &&
+               tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
+    };
+    if (!bf16_tiles(grad) || !bf16_tiles(input)) {
+        return false;
+    }
+    if (input_grad.has_value()) {
+        return bf16_tiles(*input_grad);
+    }
+    // A sharded output config without a shard spec leaves the replaced path to derive one from its
+    // operands, which the program does not do.
+    if (output_mem_config.has_value()) {
+        return !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
+               output_mem_config->nd_shard_spec().has_value();
+    }
+    // Several replaced ops default to their operands' placement, which agrees with the program's only when
+    // both operands share one.
+    return grad.memory_config() == input.memory_config();
+}
+
+}  // namespace
+
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -287,17 +332,57 @@ std::vector<std::optional<Tensor>> pow_bw(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::pow(input, std::fabs(exponent - 1.0f), output_mem_config);
-    if (exponent < 1.0f) {
-        power_input = ttnn::reciprocal(power_input, output_mem_config);
+    // d/dx x^n = n * x^(n-1), computed as one binary program: grad * x with the
+    // power applied to x as an rhs activation and the scale by n as a post
+    // activation. The power op is picked the way ttnn::pow(Tensor, float) picks
+    // it (POWER_ITERATIVE for an integral exponent up to 3, POWER otherwise);
+    // both are sign-correct for a negative base with an integral exponent and
+    // NaN for a non-integral one, so no sign fix-up is needed. The old
+    // where(lez, +inf) was overwriting those values, and x == 0, with +inf.
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const float power_exponent = std::fabs(exponent - 1.0f);
+    std::vector<EltwiseUnaryWithParam> power_ops;
+    if (static_cast<std::int32_t>(std::floor(power_exponent)) == power_exponent) {
+        const auto int_exponent = static_cast<std::int32_t>(power_exponent);
+        if (int_exponent <= 3) {
+            power_ops.emplace_back(UnaryOpType::POWER_ITERATIVE, static_cast<std::uint32_t>(int_exponent));
+        } else {
+            power_ops.emplace_back(UnaryOpType::POWER, int_exponent);
+        }
+    } else {
+        power_ops.emplace_back(UnaryOpType::POWER, power_exponent);
     }
-
-    Tensor result = ttnn::multiply(power_input, exponent, std::nullopt, output_mem_config);
-    power_input.deallocate();
-    Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
-    result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    if (exponent < 1.0f) {
+        power_ops.emplace_back(UnaryOpType::RECIP);
+    }
+    const bool nan_below_zero = exponent < 1.0f && std::nearbyint(exponent) != exponent;
+    // The SFPU reciprocal maps NaN to 0, so the non-integral n < 1 case alone
+    // needs the NaN restored at x < 0.
+    const std::vector<EltwiseUnaryWithParam> scale_by_n = {
+        EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, exponent}};
+    if (nan_below_zero) {
+        Tensor final_result = ttnn::multiply(
+            grad,
+            input,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            /*post_activations=*/scale_by_n,
+            /*lhs_activations=*/{},
+            /*rhs_activations=*/power_ops);
+        where(ttnn::ltz(input), std::nanf(""), final_result, output_mem_config, input_grad);
+    } else {
+        ttnn::multiply(
+            grad,
+            input,
+            std::nullopt,
+            output_mem_config,
+            input_grad,
+            /*post_activations=*/scale_by_n,
+            /*lhs_activations=*/{},
+            /*rhs_activations=*/power_ops);
+    }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }

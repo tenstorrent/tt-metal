@@ -73,7 +73,7 @@ class ConnectorBlock(Module):
             dim,
             ff_dim,
             bias=True,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=mesh_device,
             mesh_axis=tp_axis,
             dtype=lin_dtype,

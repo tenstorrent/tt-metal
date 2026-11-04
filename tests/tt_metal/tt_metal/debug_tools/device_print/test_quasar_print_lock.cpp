@@ -66,7 +66,7 @@ protected:
         const std::string& kernel_src,
         uint32_t num_threads,
         const std::vector<std::string>& arg_names,
-        std::initializer_list<std::pair<std::string, uint32_t>> args,
+        std::initializer_list<std::pair<std::string, experimental::ArgValue>> args,
         bool prints_enabled_build) {
         const experimental::KernelSpecName name{"print_lock_probe"};
         experimental::KernelSpec kernel_spec{

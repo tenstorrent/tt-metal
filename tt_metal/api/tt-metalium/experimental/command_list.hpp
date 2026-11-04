@@ -10,14 +10,18 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Experimental and subject to change: this header carries no API-stability guarantee.
@@ -85,8 +89,8 @@ struct CmdListParameters {
  */
 struct CmdListArgPatch {
     Table<CmdListTensorArgName, ProgramRunArgs::TensorArgument> tensor_args;
-    Table<CmdListRuntimeArgName, uint32_t> runtime_args;
-    Table<CmdListCommonRuntimeArgName, uint32_t> common_runtime_args;
+    Table<CmdListRuntimeArgName, ArgValue> runtime_args;
+    Table<CmdListCommonRuntimeArgName, ArgValue> common_runtime_args;
 };
 
 /**
@@ -119,6 +123,28 @@ public:
     void add(MeshWorkload& workload, const CmdListParameters& parameters = {});
 
     /**
+     * @brief Records one Tensor prefetcher request without sending it.
+     * Takes the same arguments and has the same preconditions as QueueTensorPrefetcherRequest(), and serializes the
+     * request now. Every EnqueueCommandList() of a built list re-queues the recorded requests, in the order they were
+     * recorded, before it enqueues the list's workloads.
+     *
+     * A list replays only these requests. WaitForCqOnTensorPrefetcher() cannot be recorded: it takes effect when
+     * called, so data the requests read, including a group selector's mask, must be written and fenced before the
+     * replay.
+     *
+     * Built lists can be replayed only while the Tensor prefetcher that was active here is still running. Keep the
+     * tensors and pipes alive until it stops.
+     *
+     * @param prefetcher_pipes  See QueueTensorPrefetcherRequest().
+     * @param device_subset     See QueueTensorPrefetcherRequest().
+     * @param input_tensors     See QueueTensorPrefetcherRequest().
+     */
+    void add_tensor_prefetcher_request(
+        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+        const std::vector<TensorPrefetcherInput>& input_tensors);
+
+    /**
      * @brief Builds an independent command list bound to @p cq.
      * User allocations are not retained. Replay uses the raw device addresses encoded in the recorded commands.
      * Parameters start with the values recorded by add().
@@ -134,7 +160,7 @@ public:
     MeshDevice& device() const;
 
     /**
-     * @brief Clears all recorded workloads.
+     * @brief Clears all recorded workloads and Tensor prefetcher requests.
      */
     void clear();
 
@@ -189,16 +215,19 @@ public:
 
 private:
     friend class detail::CommandListBuilderImpl;
-    friend void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
+    friend void EnqueueCommandList(
+        MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap);
 
     /**
      * @brief Replays on the command queue used by build().
      * Use EnqueueCommandList() to replay a command list.
      * The recorded sub-device manager must be active.
      *
-     * @param blocking  If true, waits for completion.
+     * @param blocking              If true, waits for completion.
+     * @param check_dram_overlap    If true, checks recorded tensor ranges against live DRAM allocations before
+     *                              enqueueing. See EnqueueCommandList().
      */
-    void replay(bool blocking) const;
+    void replay(bool blocking, bool check_dram_overlap) const;
 
     class Impl;
     explicit CommandList(std::unique_ptr<Impl> impl);
@@ -209,10 +238,28 @@ private:
  * @brief Replays @p command_list on @p cq.
  * @p cq must match the device and queue used to build the list.
  *
- * @param cq            Command queue to replay on.
- * @param command_list  Command list to replay.
- * @param blocking      If true, waits for completion.
+ * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when SetProgramRunArgs() or
+ * UpdateProgramRunArgs() binds it, or when CommandList::update_args() patches it.
+ *
+ * @param cq                    Command queue to replay on.
+ * @param command_list          Command list to replay.
+ * @param blocking              If true, waits for completion.
+ * @param check_dram_overlap    If true, checks every tensor range against live DRAM allocations before enqueueing:
+ *                              - A free range passes.
+ *                              - A range exactly filled by one allocation, with the same address and size, passes,
+ *                                and replay reads or overwrites that allocation. A warning is logged unless it is the
+ *                                bound tensor's own allocation, so a tensor that does not own its allocation, such as
+ *                                a view, always warns.
+ *                              - Any other overlap fails and nothing is enqueued. This includes a view of part of an
+ *                                allocation.
+ *
+ *                              Use the check while developing and leave it off in production, where it would scan
+ *                              every live DRAM allocation on each replay. DRAM placement is deterministic, so once the
+ *                              check passes, turning it off adds no overlaps, as long as allocations and frees happen
+ *                              in the same order under the same build, device configuration, and debug features
+ *                              (watcher and DPRINT change kernel binary sizes).
  */
-void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
+void EnqueueCommandList(
+    MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap = false);
 
 }  // namespace tt::tt_metal::experimental

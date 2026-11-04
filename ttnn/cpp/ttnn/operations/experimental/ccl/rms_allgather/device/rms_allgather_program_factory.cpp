@@ -199,7 +199,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     const auto stats_tensor_shard_num_pages = stats_tensor_shard_shape[0] * stats_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
 
@@ -1040,14 +1040,26 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
             if (forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, forward_fabric_node_id.value(), i, desc, core, all_gather_rts);
+                    *mesh_device,
+                    target_device_fabric_node_id,
+                    forward_fabric_node_id.value(),
+                    i,
+                    desc,
+                    core,
+                    all_gather_rts);
             }
 
             all_gather_rts.push_back(backward_fabric_node_id.has_value());
             if (backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, backward_fabric_node_id.value(), i, desc, core, all_gather_rts);
+                    *mesh_device,
+                    target_device_fabric_node_id,
+                    backward_fabric_node_id.value(),
+                    i,
+                    desc,
+                    core,
+                    all_gather_rts);
             }
         }
         // Set writer runtime args

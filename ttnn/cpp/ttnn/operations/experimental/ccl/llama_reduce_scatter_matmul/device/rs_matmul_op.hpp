@@ -14,6 +14,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include "ttnn/operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include <optional>
 #include <vector>
@@ -46,23 +48,32 @@ struct Matmul_RS {
         ttnn::prim::MatmulDeviceOperation::operation_attributes_t matmul;
         using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
     };
+    // One ProgramDescriptor per mesh coordinate: the llama reduce-scatter followed by the gather_in0 ring matmul that
+    // feeds it (in two-weight mode signalling the reduce-scatter through the llama MatmulFusedOpSignaler).
     struct Matmul_RS_PF {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
-            ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_vars;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            std::vector<Tensor>& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+    struct DescriptorAdapterOperation {
+        using operation_attributes_t = Matmul_RS::operation_attributes_t;
+        using tensor_args_t = Matmul_RS::tensor_args_t;
+        using spec_return_value_t = Matmul_RS::spec_return_value_t;
+        using tensor_return_value_t = Matmul_RS::tensor_return_value_t;
+    };
+    // Tensor addresses (and the tensor-backed CBs) are buffer bindings patched by the framework on a cache hit; the
+    // reduce-scatter's cross-device GlobalSemaphore is per call and not in the program hash, so it is re-applied here.
+    // A WorkloadDescriptor op has no per-Program override hook, hence this wrapper.
+    struct Matmul_RS_MeshWorkloadFactory {
+        using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+            DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<Matmul_RS_PF>;
+        using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
 
         static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             std::vector<Tensor>& tensor_return_value);
 
@@ -72,7 +83,7 @@ struct Matmul_RS {
             const tensor_args_t& tensor_args,
             std::vector<Tensor>& tensor_return_value);
     };
-    using program_factory_t = std::variant<Matmul_RS_PF>;
+    using program_factory_t = std::variant<Matmul_RS_MeshWorkloadFactory>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
