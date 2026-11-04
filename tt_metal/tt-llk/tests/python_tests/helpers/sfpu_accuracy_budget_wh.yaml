@@ -1019,6 +1019,26 @@ Log:
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
+Log10:  # Wormhole in the craq-sim simulator (30e35f9b, bit-exact SFPU model), not silicon
+- {input: Float16, output: Float16, dest: 'No', measured: 7, note: 'max 6 ULP; run 2026-10-15'}
+- {input: Float16, output: Float16, dest: 'Yes', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float16, output: Float16_b, dest: 'No', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float16, output: Float16_b, dest: 'Yes', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float16, output: Float32, dest: 'No', measured: 54068, note: 'max 49152 ULP; run 2026-10-15'}
+- {input: Float16, output: Float32, dest: 'Yes', measured: 4507, note: 'max 4097 ULP; run 2026-10-15'}
+- {input: Float16_b, output: Float16, dest: 'Yes', measured: 5, note: 'max 4 ULP; run 2026-10-15'}
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'max 0 ULP; run 2026-10-15'}
+- {input: Float16_b, output: Float32, dest: 'No', measured: 72090, note: 'max 65536 ULP; run 2026-10-15'}
+- {input: Float16_b, output: Float32, dest: 'Yes', measured: 36043, note: 'max 32766 ULP; run 2026-10-15'}
+- {input: Float32, output: Float16, dest: 'No', measured: 7, note: 'max 6 ULP; run 2026-10-15'}
+- {input: Float32, output: Float16, dest: 'Yes', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float32, output: Float16_b, dest: 'No', measured: 2, note: 'max 1 ULP; run 2026-10-15'}
+- {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'max 0 ULP; run 2026-10-15'}
+- {input: Float32, output: Float32, dest: 'No', measured: 72090, note: 'max 65536 ULP; run 2026-10-15'}
+- {input: Float32, output: Float32, dest: 'Yes', measured: 3, note: 'max 2 ULP; run 2026-10-15'}
+
+
 Log1p:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: .inf, ulp: 7}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: .inf, ulp: 1}]}
