@@ -8,9 +8,12 @@ Dummy weights and nuScenes' six-camera rig, at the selected variant's image size
 (base's 1600x928 and 200x200 by default). ``BEVFORMER_PERF_FRAMES`` selects 1 or 2 consecutive
 profiled frames and defaults to 1. One preceding frame, which has no previous BEV, establishes the
 temporal state outside the measured region. The first profiled frame also runs once as a warmup and
-PCC gate, then the complete sequence runs between Tracy's ``start`` and ``stop``. The detector runs
-live, not under a trace: the encoder projects the cameras and reads their visibility on the host
-inside its forward.
+PCC gate, then the complete sequence runs between Tracy's ``start`` and ``stop``.
+
+``live`` dispatches the detector op by op. ``trace`` replays the same sequence from
+``TTBEVFormerTrace``'s traces, from the same state; each frame's images are uploaded inside the
+window, as the runner takes one upload per frame, and its other host inputs are prepared before
+it. Report a ``trace`` run with ``tt-perf-report --tracing-mode``.
 """
 
 import os
@@ -32,6 +35,7 @@ from models.experimental.bevformer.tests.common import (
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
+from models.experimental.bevformer.tt.tt_bevformer_trace import TTBEVFormerTrace
 from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 PCC_THRESHOLD = 0.99
@@ -53,8 +57,15 @@ def _check(expected, tt_outputs):
 # first profiled frame's PCC gate. The remaining frames are performance-only: base's 928x1600 take
 # most of the test setup time, and correctness of the temporal sequence is covered separately.
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_bevformer_perf(device, reset_seeds):
+@pytest.mark.parametrize(
+    "device_params, execution",
+    [
+        pytest.param({"l1_small_size": 32 * 1024}, "live", id="live"),
+        pytest.param({"l1_small_size": 32 * 1024, "trace_region_size": 256 << 20}, "trace", id="trace"),
+    ],
+    indirect=["device_params"],
+)
+def test_bevformer_perf(device, execution, reset_seeds):
     torch_model = build_reference_bevformer((BEV_H, BEV_W))
     img = random_image_batch()[None]
     frames = frame_metas(1, NUM_PROFILED_FRAMES + 1, torch.Generator().manual_seed(0))
@@ -82,7 +93,14 @@ def test_bevformer_perf(device, reset_seeds):
         return (*outputs, tt_model.detect(*outputs[:2]))
 
     # Warm the path with a previous BEV without advancing the state used by the measured sequence.
-    _check(expected_first, run_frame(tt_frames[1], initial_prev_bev))
+    warm = run_frame(tt_frames[1], initial_prev_bev)
+    _check(expected_first, warm)
+    scores, labels, _, boxes, valid = (ttnn.to_torch(t) for t in warm[3])
+    warm_detections = (scores, labels, boxes, valid)
+    # Every measured frame once, so the planner is sized for all of them before the window.
+    for frame in tt_frames[2:]:
+        run_frame(frame, initial_prev_bev)
+    generation = tt_model.planner.generation
 
     def run_sequence():
         prev_bev = initial_prev_bev
@@ -91,8 +109,32 @@ def test_bevformer_perf(device, reset_seeds):
             prev_bev = outputs[2]
         return outputs
 
-    tt_outputs = signposted_forward(device, run_sequence)
-    scores, labels, _, boxes, valid = tt_outputs[3]
+    if execution == "live":
+        scores, labels, _, boxes, valid = signposted_forward(device, run_sequence)[3]
+        assert tt_model.planner.generation == generation, "the plan grew inside the measured sequence"
+    else:
+        host_img = to_conv_layout(img.flatten(0, 1), None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        host_frames = [tt_model.host_frame(metas) for metas in frames[1:]]
+        # The traces refill their previous BEV, a copy: the measured sequence starts from the live one's state.
+        runner = TTBEVFormerTrace(tt_model, device, host_img, tt_frames[1], ttnn.clone(initial_prev_bev))
+
+        def run_traced_sequence():
+            for metas, host_frame in zip(frames[1:], host_frames):
+                runner.upload(host_img)
+                outputs = runner(metas, host_frame)
+            return outputs
+
+        try:
+            scores, labels, boxes, valid = signposted_forward(device, run_traced_sequence)
+            assert not runner.stale and tt_model.planner.generation == generation, "a frame in the window ran live"
+        finally:
+            runner.release()
+        if NUM_PROFILED_FRAMES == 1:
+            # The warmup's inputs and previous BEV, on one command queue: the same detections bit for bit.
+            for name, want, have in zip(
+                ("scores", "labels", "boxes", "valid"), warm_detections, (scores, labels, boxes, valid)
+            ):
+                assert torch.equal(want, ttnn.to_torch(have)), f"traced {name} differ from the live warmup's"
     start = time.perf_counter()
     tt_model.get_bboxes(scores, labels, boxes, valid)
     logger.info(f"get_bboxes' readback and compaction on the host: {(time.perf_counter() - start) * 1e3:.1f} ms")

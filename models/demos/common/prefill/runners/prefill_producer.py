@@ -10,7 +10,9 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -27,10 +29,12 @@ from models.demos.common.prefill.prefill_chunk import (
     check_packed_forward_support,
     metadata_size_bytes,
     pack_forward_metadata,
+    packed_forward_capabilities,
     pad_chunks,
     sentinel_metadata,
 )
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    chunk_key,
     connect_layer_completion_channel,
     start_layer_completion_drain,
     wait_for_layer_completions,
@@ -489,16 +493,15 @@ def _config_from_env() -> ProducerConfig:
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
     p_burst = float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0"))
-    check_packed_forward_support(
-        FORWARD_CHUNKS, supports_packed_forward=ADAPTER.supports_packed_forward, mtp_levels=MTP_LEVELS
-    )
+    check_packed_forward_support(FORWARD_CHUNKS, mtp_levels=MTP_LEVELS, **packed_forward_capabilities(ADAPTER))
     if FORWARD_CHUNKS > 1 and p_burst > 0:
         raise ValueError(
             "PREFILL_PRODUCER_P_BURST must be 0 with more than one chunk per forward (packing already bursts)"
         )
 
+    num_users = int(os.environ.get("PREFILL_NUM_USERS", "1"))
     return ProducerConfig(
-        num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
+        num_users=num_users,
         chunks_min=chunks_min,
         chunks_max=chunks_max,
         max_requests=int(os.environ.get("PREFILL_PRODUCER_MAX_REQUESTS", "1")),
@@ -512,8 +515,31 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        slot_lengths=_slot_lengths_from_env(num_users, max_chunks),
         forward_chunks=FORWARD_CHUNKS,
     )
+
+
+def _slot_lengths_from_env(num_users: int, max_chunks: int):
+    """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
+    Slots past the list keep random lengths."""
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
+    if not spec:
+        return None
+    entries = spec.split(",")
+    try:
+        lengths = [int(e) for e in entries]
+    except ValueError:
+        lengths = None
+    # The last chunk is padded to CHUNK_SIZE, so a prompt must fit in whole chunks: a padded chunk past
+    # MAX_SEQ_LEN would reach the runner, whose validation stops the device-owning process.
+    max_len = max_chunks * CHUNK_SIZE
+    if len(entries) > num_users or lengths is None or not all(0 < n <= max_len for n in lengths):
+        raise ValueError(
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {max_len}]"
+            " (whole PREFILL_CHUNK_SIZE chunks within PREFILL_MAX_SEQ_LEN), comma-separated"
+        )
+    return dict(enumerate(lengths))
 
 
 class _Slot:
@@ -544,10 +570,11 @@ def _new_request(
     slot.turn_idx = turn_idx
     if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
         real_len = cfg.slot_lengths[slot.slot_id]
-        if prefix_len + real_len > MAX_SEQ_LEN:
+        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        # The last chunk is padded, so the turn needs whole chunks of room past its prefix.
+        if prefix_len + slot.target_chunks * CHUNK_SIZE > MAX_SEQ_LEN:
             prefix_len = slot.prefix_len = 0
             slot.turn_idx = 0
-        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
         slot.actual_isl = prefix_len + real_len
         return
     remaining_chunks = (MAX_SEQ_LEN - prefix_len) // CHUNK_SIZE
@@ -569,6 +596,54 @@ class RunStats:
     completed: int
     wall_s: float
     total_chunks: int = 0
+
+
+class _ChunkRetireClock:
+    """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
+
+    Every stamp is time.perf_counter() on this process, so chunk time and retire cadence need no cross-host clock
+    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer; its layers= field
+    (layer span @ ms after the first ack) feeds the pipeline gantt.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pushed = {}
+        self._first_ack = {}
+        self._acks = {}
+        self._layer_acks = {}
+        self.warmup = False
+
+    def on_push(self, key: tuple) -> None:
+        with self._lock:
+            self._pushed.setdefault(key, deque()).append(self.warmup)
+
+    def on_ack(self, c) -> None:
+        key = chunk_key(c)
+        with self._lock:
+            now = time.perf_counter()
+            self._first_ack.setdefault(key, now)
+            self._acks[key] = self._acks.get(key, 0) + 1
+            self._layer_acks.setdefault(key, []).append((c.layer_start, c.layer_end, now))
+
+    def on_retire(self, key: tuple, retire_ts: float) -> None:
+        with self._lock:
+            queued = self._pushed.get(key)
+            warmup = queued.popleft() if queued else None
+            if queued is not None and not queued:
+                del self._pushed[key]
+            first_ts = self._first_ack.pop(key, None)
+            acks = self._acks.pop(key, 0)
+            layer_acks = self._layer_acks.pop(key, [])
+        if warmup is None or first_ts is None:
+            logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
+            return
+        slot_id, pos_start, pos_end = key
+        logger.info(
+            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
+            f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
+        )
 
 
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
@@ -1576,13 +1651,26 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
             "and its golden defines a single turn, so a resumed turn would read past its pool and mismatch "
             "the golden. Use one shared trace (unset SLOT_TRACES) for multi-turn runs."
         )
+    if spec and cfg.slot_lengths:
+        raise ValueError(
+            "PREFILL_PRODUCER_SLOT_LENGTHS cuts each slot's prompt from the one shared trace, so it can't be combined "
+            "with PREFILL_PRODUCER_SLOT_TRACES, whose traces set each slot's length. Unset one of them."
+        )
     max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
 
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
-        return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
+        if cfg.slot_lengths:
+            longest, trace_tokens = max(cfg.slot_lengths.values()), len(load_trace_token_ids(trace))
+            # Past the trace the pool repeats it, and the golden has nothing to check those tokens against.
+            if longest > trace_tokens:
+                raise ValueError(
+                    f"PREFILL_PRODUCER_SLOT_LENGTHS asks for {longest} tokens, but the trace {trace} has {trace_tokens}"
+                )
+            pool_tokens = max(pool_tokens, longest)
+        return slot_traces, cfg.slot_lengths, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
     resolved = [resolve_trace_dir(e) for e in entries]
@@ -1744,22 +1832,33 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
+    retire_clock = _ChunkRetireClock()
+
     def push_forward(pushes: list) -> float:
         for p in pushes:
             logger.info(
                 f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
             )
+        for p in pushes:
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end))
         push_start = time.perf_counter()
         _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
     # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
-    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    drain = start_layer_completion_drain(
+        completion_channel,
+        num_layers=layer_bound,
+        chunk_layers=chunk_layers,
+        on_completion=retire_clock.on_ack,
+        on_chunk_complete=lambda key, cov: retire_clock.on_retire(key, time.perf_counter()),
+    )
     try:
         warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
         if warmup_chunks > 0:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            retire_clock.warmup = True
             warmup = [
                 ChunkPush(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
                 for cidx in range(warmup_chunks)
@@ -1768,6 +1867,7 @@ def main() -> None:
                 push_forward(warmup[i : i + FORWARD_CHUNKS])
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            retire_clock.warmup = False
             logger.info("[producer] warmup complete; starting the measured request")
 
         stats = run_schedule(cfg, push_fn=push_forward)

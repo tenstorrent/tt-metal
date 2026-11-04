@@ -707,11 +707,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_binop_scalar": "perf_sfpu_binop_scalar"},
     },
     "perf_sfpu_ema": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "alpha_bits",
             "approx_mode",
             "beta_bits",
+            "binary_init_before_ema",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -785,10 +786,11 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

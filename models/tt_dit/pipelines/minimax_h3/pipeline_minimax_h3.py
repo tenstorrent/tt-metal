@@ -68,7 +68,8 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     load_minimax_h3_text_encoder_weights,
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
+from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
+from ...encoders.vision import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
 from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
