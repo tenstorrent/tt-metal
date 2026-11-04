@@ -7,6 +7,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 
 namespace ttnn::operations::experimental::kda::reduce_affine_transforms::detail {
 
@@ -21,10 +22,9 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
             F_g(S) = A_g @ S + B_g
 
-        It is read in complement form, ``E_g = A_g - I``, from slot 0 (head
-        transforms) of packed summaries, as produced by
-        ``summarize_chunk_recurrence``; ``A_g = E_g + I`` is formed in FP32. The
-        transform index is flattened batch-head-group order:
+        It is read from slot 0 (head transforms) of packed summaries, as produced
+        by ``summarize_chunk_recurrence``, whose transform index is flattened
+        batch-head-group order:
 
             index = batch_head * groups_per_head + group
 
@@ -39,18 +39,6 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
         must be its head-only summary. A tail slot, when present, is not read;
         the separated tail is handled later in the recurrence pipeline.
 
-        The composed transition is returned in complement form, packed as the
-        distributed prefix gathers it (see ``chain_affine_transforms``):
-
-            S_after = S_before + (E @ S_before + B),   E = A_total - I
-
-        Composition runs in A form, ``A = E + I``: A and B enter the matrix engine's
-        source registers, which hold FP32 operands at TF32 precision, so a composed
-        transition close to the identity carries an absolute error of order 2^-11 per
-        composition whatever the size of E. E = A_total - I is then formed in FP32 and
-        rounded once to BF16. A rank with one valid group publishes its summary unchanged.
-        A rank with no valid group writes the identity map, ``(0, 0)``.
-
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
         the same lifetime as ``actual_start``. It defines a nonempty interval within
         physical capacity and need not be 32-aligned: a partial last chunk is
@@ -61,7 +49,7 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
         Args:
             summaries (ttnn.Tensor): Packed group transforms ``[S, B*H*G, K, K+V]``
-                with ``S`` 1 or 2: ``K`` rows of ``[E | B]`` per transform. Must be
+                with ``S`` 1 or 2: ``K`` rows of ``[A | B]`` per transform. Must be
                 a TILE-layout FLOAT32 or BFLOAT16 device tensor.
             groups_per_head (int): Number of consecutive groups ``G`` belonging
                 to each batch-head. Must be positive and divide the transform
@@ -80,11 +68,14 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
-                Compute-kernel configuration. Requires ``fp32_dest_acc_en``.
+                Compute-kernel configuration.
 
         Returns:
-            ttnn.Tensor: New BFLOAT16 TILE-layout tensor ``[1,B*H,K,K+V]`` whose
-                rows are ``[E | B]``, one composed transition per batch-head.
+            tuple[ttnn.Tensor, ttnn.Tensor]: New FLOAT32 TILE-layout tensors
+                ``A[B*H,K,K]`` and ``B[B*H,K,V]``, containing one composed
+                transition per batch-head:
+
+                    S_after = A @ S_before + B
 
         Note:
             ``K`` and ``V`` must be positive and tile-aligned. ``summaries`` may be

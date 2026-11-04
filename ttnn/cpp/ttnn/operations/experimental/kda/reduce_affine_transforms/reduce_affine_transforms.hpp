@@ -4,6 +4,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -11,7 +12,7 @@
 
 namespace ttnn::experimental::kda {
 
-ttnn::Tensor reduce_affine_transforms(
+std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::Tensor& summaries,
     uint32_t groups_per_head,
     const ttnn::Tensor& actual_start,

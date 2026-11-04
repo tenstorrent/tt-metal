@@ -16,7 +16,6 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
 template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
@@ -149,9 +148,6 @@ TT_KERNEL void reader(
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     if constexpr (summary) {
-        // The head summary subtracts it to publish E = A - I.
-        DataflowBuffer identity(dfb::identity);
-        kda::seed_identity_tile(noc, identity);
         seed_summary_pair<Kt, Vt>(state, noc, value_block);
     } else {
         const auto group_entry_states_accessor = TensorAccessor(tensor::group_entry_states);

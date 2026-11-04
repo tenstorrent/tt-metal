@@ -144,7 +144,7 @@ PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_v
     TT_FATAL(
         key_dim > 0 && shape[3] > key_dim && key_dim % tt::constants::TILE_WIDTH == 0 &&
             shape[3] % tt::constants::TILE_WIDTH == 0,
-        "{}: summary rows must be [E | B] with positive, tile-aligned K and V",
+        "{}: summary rows must be [A | B] with positive, tile-aligned K and V",
         operation_name);
     return {
         .slots = static_cast<uint32_t>(shape[0]),
@@ -160,9 +160,11 @@ void check_compute_config(const DeviceComputeKernelConfig& config, std::string_v
         operation_name);
 }
 
-void check_fp32_dest_acc(
-    const DeviceComputeKernelConfig& config, std::string_view operation_name, std::string_view reason) {
-    TT_FATAL(config.fp32_dest_acc_en, "{}: fp32_dest_acc_en=false is unsupported because {}", operation_name, reason);
+void check_fp32_dest_acc(const DeviceComputeKernelConfig& config, std::string_view operation_name) {
+    TT_FATAL(
+        config.fp32_dest_acc_en,
+        "{}: fp32_dest_acc_en=false is unsupported because the recurrent state is carried in FP32 through DST",
+        operation_name);
 }
 
 KdaPrepWorkDist distribute_prep(

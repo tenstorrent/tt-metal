@@ -29,7 +29,7 @@ FORCE_INLINE void issue_value_slice_read(
     }
 }
 
-// One worker owns one value block of one head's state: it streams each chronological step's E and its own B
+// One worker owns one value block of one head's state: it streams each chronological step's A and its own B
 // columns to compute and writes its columns of the entry state and final carry that compute publishes.
 template <
     uint32_t Kt,
@@ -48,7 +48,7 @@ TT_KERNEL void dataflow(
     uint32_t peer_x1,
     uint32_t peer_y1,
     uint32_t receivers) {
-    constexpr uint32_t e_tiles = Kt * Kt;
+    constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t state_tiles = Kt * Vt;
     constexpr uint32_t row_tiles = Kt + Vt_full;
     // This block's columns of a head's [K, V] state: Kt rows of Vt tiles, strided by the full width.
@@ -59,8 +59,7 @@ TT_KERNEL void dataflow(
     const auto entry_state_accessor = TensorAccessor(tensor::entry_state);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer initial(dfb::initial);
-    DataflowBuffer initial_exact(dfb::initial_exact);
-    DataflowBuffer e(dfb::e);
+    DataflowBuffer a(dfb::a);
     DataflowBuffer b(dfb::b);
     DataflowBuffer out(dfb::out);
     Noc noc;
@@ -91,9 +90,6 @@ TT_KERNEL void dataflow(
     // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
     initial.reserve_back(state_tiles);
     issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial, state_page, Vt_full);
-    // The same state again for the complement-form add, which reads it losslessly into DST.
-    initial_exact.reserve_back(state_tiles);
-    issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial_exact, state_page, Vt_full);
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -115,27 +111,26 @@ TT_KERNEL void dataflow(
         write_state(initial, entry_state_accessor);
     }
     initial.push_back(state_tiles);
-    initial_exact.push_back(state_tiles);
 
     for (uint32_t step = 0; step < sp_size; ++step) {
         const uint32_t rank = (topology.first_rank + step) % sp_size;
         const uint32_t transform_row = (rank * BH + head) * Kt;
-        // B: this block's columns of the B half of the step's [E | B] rows.
+        // B: this block's columns of the B half of the step's [A | B] rows.
         b.reserve_back(state_tiles);
         issue_value_slice_read<Kt, Vt>(
             noc, transforms_accessor, b, transform_row * row_tiles + Kt + value_block * Vt, row_tiles);
-        // E: every value block needs the whole E half.
-        const auto stage_e = [&]() {
-            e.reserve_back(e_tiles);
-            issue_value_slice_read<Kt, Kt>(noc, transforms_accessor, e, transform_row * row_tiles, row_tiles);
-            return e.get_write_ptr();
+        // A: every value block needs the whole A half.
+        const auto stage_a = [&]() {
+            a.reserve_back(a_tiles);
+            issue_value_slice_read<Kt, Kt>(noc, transforms_accessor, a, transform_row * row_tiles, row_tiles);
+            return a.get_write_ptr();
         };
         if constexpr (!mcast_shared) {
-            stage_e();
+            stage_a();
             noc.async_read_barrier();
-            e.push_back(e_tiles);
+            a.push_back(a_tiles);
         } else {
-            kda::SharedInput<decltype(e)> inputs[1] = {{&e, e_tiles, value_block == 0 ? stage_e() : 0}};
+            kda::SharedInput<decltype(a)> inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
             if (value_block == 0) {
                 kda::multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
             } else {

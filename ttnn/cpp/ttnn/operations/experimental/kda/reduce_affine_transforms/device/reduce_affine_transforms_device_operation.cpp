@@ -34,10 +34,6 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const auto summary = kda_factory_detail::check_packed_summaries(in.summaries, operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
-    kda_factory_detail::check_fp32_dest_acc(
-        attrs.compute_kernel_config,
-        operation_name,
-        "A = E + I is formed, the transform composes, and E = A - I is published in FP32 DST");
     TT_FATAL(
         summary.transforms == attrs.batch_heads * attrs.groups_per_head && summary.key_dim == attrs.key_dim &&
             summary.value_dim == attrs.value_dim,
@@ -55,17 +51,22 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
 }
 ReduceAffineTransformsOperation::spec_return_value_t ReduceAffineTransformsOperation::compute_output_specs(
     const operation_attributes_t& a, const tensor_args_t&) {
-    // The packed rows [E | B] the distributed prefix gathers, at its BF16 transport precision.
-    return {tt::tt_metal::TensorSpec(
-        Shape({1, a.batch_heads, a.key_dim, a.key_dim + a.value_dim}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            a.output_mem_config))};
+    const auto layout = [&](const Shape& shape) {
+        return tt::tt_metal::TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::FLOAT32,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                a.output_mem_config));
+    };
+    return {
+        layout(Shape({a.batch_heads, a.key_dim, a.key_dim})), layout(Shape({a.batch_heads, a.key_dim, a.value_dim}))};
 }
 ReduceAffineTransformsOperation::tensor_return_value_t ReduceAffineTransformsOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(a, in)[0], in.summaries.device())};
+    auto specs = compute_output_specs(a, in);
+    return {
+        create_device_tensor(specs[0], in.summaries.device()), create_device_tensor(specs[1], in.summaries.device())};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceAffineTransformsOperation::tensor_return_value_t>
@@ -84,7 +85,7 @@ ReduceAffineTransformsOperation::create_op_performance_model(
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
-ttnn::Tensor reduce_affine_transforms(
+std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::Tensor& summaries,
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
@@ -101,7 +102,7 @@ ttnn::Tensor reduce_affine_transforms(
     TT_FATAL(shape[1] > 0, "reduce_affine_transforms: summaries must hold at least one transform");
     TT_FATAL(
         shape[1] % groups == 0, "reduce_affine_transforms: transforms per slot must be divisible by groups_per_head");
-    TT_FATAL(shape[3] > shape[2], "reduce_affine_transforms: summary rows must be [E | B]");
+    TT_FATAL(shape[3] > shape[2], "reduce_affine_transforms: summary rows must be [A | B]");
     auto outputs = ttnn::device_operation::launch<ReduceAffineTransformsOperation>(
         ReduceAffineTransformsParams{
             .batch_heads = static_cast<uint32_t>(shape[1]) / groups,
@@ -113,6 +114,6 @@ ttnn::Tensor reduce_affine_transforms(
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
         ReduceAffineTransformsInputs{.summaries = summaries, .actual_start = actual_start, .actual_end = actual_end});
-    return outputs[0];
+    return {outputs[0], outputs[1]};
 }
 }  // namespace ttnn::experimental::prim
