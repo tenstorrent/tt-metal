@@ -762,7 +762,8 @@ class TtPrefillBlock(LightweightModule):
         The attention half (attn_norm, MLA, KV write, residual) runs once per non-empty chunk on that chunk's
         rows, against its slot_id and actual_start; an empty chunk's rows pass through untouched. The FFN half
         (ffn_norm, MoE or dense FFN, residual) then runs ONCE over all rows, with the MoE skipping each chunk's
-        pad rows. Eager only: no metadata tensors, no D2H acks.
+        pad rows. Eager by default; ``metadata`` selects the traced form. D2H acks go out after the forward, from
+        TtPrefillRuntime.prefill_forward.
 
         on_layer_complete: host completion callback, fired as (global layer index, chunk) once per non-empty
             chunk after that chunk's KV is written, so a consumer can retire each chunk separately.

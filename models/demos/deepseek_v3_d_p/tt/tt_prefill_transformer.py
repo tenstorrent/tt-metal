@@ -603,6 +603,13 @@ class TtPrefillTransformer(LightweightModule):
             "norm" for h^0), otherwise None. No token is produced: the populated KV cache is
             the output.
         """
+        # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
+        # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
+        # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
+        assert d2h_service is None or on_layer_complete is None, (
+            "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
+            "d2h_service and would silently drop on_layer_complete"
+        )
         if chunks is not None:
             assert (
                 metadata is None and mtp_union is None
@@ -622,14 +629,6 @@ class TtPrefillTransformer(LightweightModule):
                 on_layer_hidden=on_layer_hidden,
                 input_is_embedded=input_is_embedded,
             )
-
-        # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
-        # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
-        # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
-        assert d2h_service is None or on_layer_complete is None, (
-            "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
-            "d2h_service and would silently drop on_layer_complete"
-        )
 
         if mtp_union is not None:
             assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"

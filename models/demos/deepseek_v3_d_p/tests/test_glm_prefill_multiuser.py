@@ -7,8 +7,8 @@
 A packed forward holds several chunks, possibly from different users at different depths. Attention runs
 once per chunk against the chunk's own KV slot; the FFN half (ffn_norm, MoE) runs once over every chunk's
 rows. Whatever the packing, each chunk's result must equal what that chunk gets alone. These tests pin
-that down on device, device against device, so they need no checkpoint, ttnn cache or golden trace, and
-they run on a LoudBox.
+that down on device, device against device, so they need no checkpoint, ttnn cache or golden trace; all
+but the pipeline test also run on a LoudBox.
 
 * test_glm_multiuser_interleaved_matches_sequential: one chunk per forward. N users prefilled chunk by
   chunk in round-robin order into one set of cache slots, and each user start to finish into another,
@@ -17,10 +17,13 @@ they run on a LoudBox.
 * test_glm_packed_forward_matches_one_chunk_forwards: four chunks per forward (PrefillChunk, as in
   MiniMax-M3's packed forwards). A schedule with partial chunks, a partial chunk followed by a real one,
   one user's consecutive chunks in the same forward, users at different depths and empty tail chunks must
-  match the same chunks run each alone in its own forward.
+  match the same chunks run each alone in its own forward, and those must match a model built for one chunk
+  per forward.
 * test_glm_packed_traced_matches_eager: the same schedule through TtPrefillRuntime.prefill_forward with
   use_trace (one capture, replayed per forward; per-chunk metadata and the MoE padding config read on
   device) must fill the same KV as the eager packed forward.
+* test_glm_packed_pipeline_matches_one_rank (8x4 only): the model split over two pipeline ranks on one mesh,
+  packed forwards handed rank to rank, must match one rank, eager and traced.
 
 Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP row
 (2x4 -> 1,280-token chunks, 8x4 -> 5,120). On 2x4 every chip sees what a galaxy chip sees in attention
@@ -33,6 +36,7 @@ host RAM.
 """
 
 import copy
+import gc
 
 import pytest
 import torch
@@ -364,7 +368,10 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
     """Packed forwards (slots 0..3) must reproduce every chunk run alone in its own forward (slots 4..7).
 
     Both sides use the same packed model, so the reference forward is the chunk followed by empty chunks:
-    the comparison isolates what sharing a forward with other chunks does to a chunk.
+    the comparison isolates what sharing a forward with other chunks does to a chunk. A second model built for
+    one chunk per forward (forward_chunks=1, the regular path) then runs the same chunks, and the packed model's
+    one-chunk forwards must match it: that catches an error common to every packed forward (its row layout,
+    the MoE sized for FORWARD_CHUNKS chunks, padding), which the first comparison cannot see.
 
     The packed padding-config cache is cut to one entry, so its LRU eviction runs between ragged forwards.
     """
@@ -405,6 +412,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
 
         # Reference: the same chunks, each alone in its own forward, in order within each user.
         failures = []
+        alone = {}  # (slot, actual_start) -> real rows of the chunk alone in a packed forward
         for chunks in forwards:
             for c in chunks:
                 if c.is_empty:
@@ -420,6 +428,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                     chunk,
                 )
                 ref = _chunk_real_rows(hidden, 0, FORWARD_CHUNKS, ref_chunk, sp, chunk_local)
+                alone[(c.slot_id, c.actual_start)] = ref
                 got = packed[(c.slot_id, c.actual_start)]
                 pcc = _pcc(ref, got)
                 logger.info(f"[packed] {c} last-layer PCC {pcc:.6f} max|diff| {(ref - got).abs().max().item():.3e}")
@@ -451,9 +460,42 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
 
         cross = _pcc(packed[(0, 0)], packed[(3, 0)])
         assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D produced the same output (PCC {cross:.6f})"
-        assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         transformer.release_sub_device_managers()
+    del transformer, kvpe_cache, index_kv_cache
+    gc.collect()  # free the packed model's device buffers before the second model allocates
+
+    # The packed model's one-chunk forwards vs a model built for one chunk per forward (same weights).
+    _, single, single_kvpe, single_index = _build(
+        mesh_device, config_only, device_params, num_links, chunk, num_users, forward_chunks=1
+    )
+    try:
+        for chunks in forwards:
+            for c in chunks:
+                if c.is_empty:
+                    continue
+                hidden = _run_forward(single, single_kvpe, single_index, mesh_device, [c], ids_by_slot, chunk)
+                ref = _chunk_real_rows(hidden, 0, 1, c, sp, chunk_local)
+                got = alone[(c.slot_id, c.actual_start)]
+                pcc = _pcc(ref, got)
+                logger.info(f"[single] {c} last-layer PCC {pcc:.6f} max|diff| {(ref - got).abs().max().item():.3e}")
+                if pcc < PACKED_OUTPUT_PCC:
+                    failures.append(f"{c} hidden PCC {pcc:.6f} vs forward_chunks=1 < {PACKED_OUTPUT_PCC}")
+        single_kv = _read_user_slots(single_kvpe, mesh_device, NUM_LAYERS, num_users)
+        single_idx = _read_user_slots(single_index, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_users)
+        for u in range(num_users):
+            for name, ours, theirs, layers in (
+                ("kvpe", kv_slots, single_kv, range(NUM_LAYERS)),
+                ("indexer_k", idx_slots, single_idx, full_layers),
+            ):
+                for rank, layer in enumerate(layers):
+                    pcc = _pcc(theirs[u][rank], ours[u + num_users][rank])
+                    logger.info(f"[single] slot {u} {name}[{layer}] PCC {pcc:.6f}")
+                    if pcc < PACKED_KV_PCC:
+                        failures.append(f"slot {u} {name} layer {layer} PCC {pcc:.6f} vs forward_chunks=1")
+        assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        single.release_sub_device_managers()
 
 
 @pytest.mark.parametrize(
@@ -677,8 +719,8 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
     Eager: the split must be bit-exact against one rank holding every layer (same programs on the same inputs).
     Traced: the ranks replay their captures (per-chunk metadata, MoE padding config, persistent input and indices
     staged before each replay) into slots 0..3, against the same two ranks' models run eagerly into slots 4..7, at
-    TRACED_PCC -- only the traced models on the mesh, as in production, where each rank is its own process: a third,
-    eager MoE model sharing the mesh's TT_CCL state and sub-device managers broke the second capture."""
+    TRACED_PCC -- only the traced models on the mesh, as in production, where each rank is its own process: an eager
+    MoE model sharing the mesh's TT_CCL state and sub-device managers cannot coexist with two captures."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     sp = mesh_device.shape[0]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp

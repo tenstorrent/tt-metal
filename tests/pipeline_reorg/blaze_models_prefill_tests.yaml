@@ -649,8 +649,9 @@
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
       # Several users' chunks on one 4-layer GLM-5.3 (dense, MoE + full indexer, MoE + shared indexer; random
       # weights): interleaved users vs each user alone, packed forwards (several chunks per forward, one MoE
-      # call) vs one chunk per forward, and traced vs eager packed forwards. ~17 min.
-      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # call) vs one chunk per forward, traced vs eager packed forwards, and two pipeline ranks vs one (eager
+      # and traced). ~35 min.
+      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4" -vvv --tb=short
       '
@@ -672,7 +673,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 182
+      timeout: 202
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic

@@ -77,10 +77,10 @@ def zero_pad_and_ack(
     #       across pipeline ranks).
     # cache_layer_idx is the LOCAL per-rank cache slot in both.
     if zero_only or d2h_service is not None or on_layer_complete is not None:
-        # PREFILL_ACK_TIMING splits this window into its zero and its ack. The whole body is skipped
-        # during warmup (neither transport is wired at runtime.compile() time), so both programs are
-        # first compiled here, on the first REAL chunk -- which is where the pipeline's one-time
-        # chunk-0 cost lives. Host wall time only; deliberately no added synchronize, since a sync
+        # PREFILL_ACK_TIMING splits this window into its zero and its ack. A one-chunk-per-forward warmup
+        # wires neither transport, so its programs are first compiled here, on the first REAL chunk --
+        # which is where the pipeline's one-time chunk-0 cost lives (a packed warmup compiles them through
+        # zero_only and a NullLayerCompletionSink). Host wall time only; deliberately no added synchronize, since a sync
         # here would change what the pipeline does as well as what it reports.
         _t0 = time.perf_counter() if _ACK_TIMING else 0.0
         assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
