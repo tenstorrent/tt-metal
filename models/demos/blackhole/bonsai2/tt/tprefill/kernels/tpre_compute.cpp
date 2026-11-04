@@ -53,8 +53,10 @@ inline void pre_scale2() {
                 const uint32_t r = 8 * (fc + 2 * (q / 4)) + 2 * (q % 4) + par;
                 sfpi::vFloat v = sfpi::dst_reg[2 * T + r] * sa + sfpi::dst_reg[r];
                 sfpi::dst_reg[r] = sfpi::dst_reg[4 * T + r] * sb + v;
+#ifndef ZACC
                 sfpi::dst_reg[2 * T + r] = 0.0f;
                 sfpi::dst_reg[4 * T + r] = 0.0f;
+#endif
             }
         }
     }
@@ -168,6 +170,20 @@ ALWI void sfpu_at0(void (*fn)()) {
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     fn();
     math::clear_dst_reg_addr();
+#endif
+}
+
+// ZACC: the P tiles (DEST 2-5) cleared by the FPU's ZEROACC (one 16-row face per instruction, as the unary datacopy
+// clears a tile) instead of SFPU stores, once the previous SFPU pass has read them.
+ALWI void zero_p_tiles() {
+#ifdef TRISC_MATH
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    for (uint32_t t = 2; t < 6; ++t) {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(t);
+        for (uint32_t f = 0; f < 4; ++f) {
+            TT_ZEROACC(p_zeroacc::CLR_16, 1, 0, ADDR_MOD_7, ((t & 3) << 2) + f);
+        }
+    }
 #endif
 }
 
@@ -295,6 +311,9 @@ void kernel_main() {
                 matmul_mode(nb);
                 const uint32_t nj = (KB - g * 32 < 32) ? (KB - g * 32) : 32;
                 for (uint32_t j = 0; j < nj; j += 2) {  // nj is even for every Bonsai K (a multiple of 256)
+#ifdef ZACC
+                    MATH((zero_p_tiles()));
+#endif
                     for (uint32_t h = 0; h < 2; ++h) {
                         const uint32_t kb = g * 32 + j + h;
                         uint32_t x0 = kb * 4;
@@ -307,7 +326,9 @@ void kernel_main() {
                         // this batch's tiles start at n0 * Kt, laid out [k][column] (kernels/tpre_reader.cpp)
                         const uint32_t w0 = n0 * Kt + kb * 4 * nb;
                         for (uint32_t i = 0; i < 4; ++i) {
+#ifndef SKIP_MM
                             matmul_block(cb_x, cb_w, x0 + i, w0 + i * nb, 2 + 2 * h, 0, nb, 1, 1);
+#endif
                         }
                         if constexpr (!RESIDENT) {
                             if ((kb * 4 + 4) % CH == 0) {
@@ -316,7 +337,9 @@ void kernel_main() {
                         }
                     }
                     for (uint32_t b = 0; b < nb; ++b) {
+#ifndef SKIP_SFPU
                         scale_pair(j, b);
+#endif
                     }
                 }
             }

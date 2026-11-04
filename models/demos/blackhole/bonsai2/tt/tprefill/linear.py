@@ -71,6 +71,8 @@ class TernaryPrefillLinear:
         counts = [unit * (base + (1 if c < extra else 0)) for c in range(ncores)]
         n_max = max(counts)
         defs = [d for d in os.environ.get("BONSAI_TPRE_DEFINES", "").split(",") if d]
+        if os.environ.get("BONSAI_TPRE_ZACC", "1") == "1":
+            defs.append("ZACC")  # the P tiles cleared by ZEROACC (kernels/tpre_compute.cpp)
         nbat = 1 if "OVERLAP" in defs else NB  # columns per compute batch
         if glu:
             assert nbat == 2, "GLU pairs need two columns per batch"
