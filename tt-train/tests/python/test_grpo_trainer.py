@@ -452,6 +452,14 @@ def test_setup_ttml_model_rejects_a_checkpoint_missing_a_parameter(patch_llama_w
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.mark.requires_device
+def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_path, expect_error):
+    """A token id past the checkpoint's vocab has no embedding row, so the model setup refuses it up front."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128000)  # the tokenizer has 128256 tokens
+    with expect_error(ValueError, "the tokenizer has 128256 tokens but the checkpoint embeds 128000"):
+        grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+
+
 def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_path):
     headers = []
     monkeypatch.setattr(ttml.checkpointing, "save_checkpoint", lambda path, header, **_: headers.append(header))
