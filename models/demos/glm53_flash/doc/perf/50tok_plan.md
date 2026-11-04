@@ -360,3 +360,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   in-program handshakes (x_g write -> "written" count -> release multicast; down -> reduce signal) cost more than the
   three dispatch boundaries they remove. Next: the per-core timeline of the profiled unit test (`tracy_unit_persist`)
   to see the gaps, then step 2 (resident x removes the x_g write and the gate|up x reads).
+- 2026-11-04 06:52 `gate84_B1_persist_g11d` (8 users, persistent block) PASSED bit-exact vs `gate84_B1_fabar_r2`;
+  step 32.59 vs 32.95 ms (-0.36 ms, ~8 us per layer) while at 32 users it is +20 us per layer: the block's fixed
+  handshake cost is roughly constant and the expert phase inside it scales with the active experts, so the gain
+  appears only where the three programs' launch cost dominated. Still far from the 13 ms the floor needs.
