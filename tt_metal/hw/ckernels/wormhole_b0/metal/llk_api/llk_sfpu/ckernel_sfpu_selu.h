@@ -28,14 +28,14 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
     // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
-    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (as of 7.90.0) never hoists a literal out
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (as of 7.93.0) never hoists a literal out
     // of a loop by itself). With scale_val live as well there is no LReg for the second one, so it
     // stays a per-row literal.
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;
     constexpr float h_top0 = CW_EXPM1_H_TOP0;
-// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
-// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
-#pragma GCC unroll 2
+// Full unroll: measured fastest on WH (each of unroll 4, 2 and 1 is slower). sfpi replays the
+// repeated row body, so the code grows little.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat result = scale_alpha * expm1_cw_clamped_prgm(x, h_top1, h_top0);

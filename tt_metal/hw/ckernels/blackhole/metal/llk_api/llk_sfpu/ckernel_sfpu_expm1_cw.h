@@ -42,7 +42,7 @@ constexpr float CW_EXPM1_H_TOP0 = 8.3751315251e-03f;
  *
  * Each constant may be a float (materialised by SFPLOADI where used, exactly as the literal is in
  * expm1_cw_clamped(x)) or an sfpi::vFloat / vConstFloatPrgmN the caller holds across its row loop: sfpi (as of
- * 7.90.0) never hoists a literal out of a loop by itself, so in a row loop every fp32 literal otherwise costs an
+ * 7.93.0) never hoists a literal out of a loop by itself, so in a row loop every fp32 literal otherwise costs an
  * SFPLOADI pair per row. Identical arithmetic either way. The constants are template-typed rather than
  * sfpi::vFloat because a vFloat parameter is built before the call and stays live through the body, which
  * changes the non-hoisting callers' code.
@@ -58,6 +58,10 @@ constexpr float CW_EXPM1_H_TOP0 = 8.3751315251e-03f;
  * @param neg_ln2_lo: CW_NEG_LN2_LO.
  * @param h_top1: CW_EXPM1_H_TOP1.
  * @param h_top0: CW_EXPM1_H_TOP0.
+ * @note Only the low side is clamped. From x ~ 88.4 (k = 128) the result is NaN or +inf, and past k = 128
+ *       SFPSETEXP keeps only the low 8 bits of k + 127, so 2^k wraps and the result is a wrong finite value
+ *       (-1 from x ~ 89.1). Callers must overwrite those lanes (elu/selu/celu replace every x >= 0 lane) or
+ *       clamp x to at most 89 first (celu does when alpha < 0).
  */
 template <typename K, typename HI, typename LO, typename T1, typename T0>
 sfpi_inline sfpi::vFloat expm1_cw_clamped(
