@@ -224,6 +224,119 @@ class ConvPrefill:
         return out
 
 
+class GateTiles:
+    """The a / b projection output ab [1, T, 2H] (H = 48) -> beta_bh [H, T, 1] = sigmoid(b) and
+    g_bh [H, T] = A_neg * softplus(a + dt_bias), fp32 TILE, in one op (kernels/abp_*.cpp): replaces two slices, the
+    sigmoid / softplus / add / multiply chain (each rounded to bf16) and the untilize / permute / tilize / reshape
+    relayouts of both."""
+
+    def __init__(self, device, dt_bias, a_neg):
+        dt = torch.as_tensor(dt_bias, dtype=torch.float32).reshape(-1)
+        an = torch.as_tensor(a_neg, dtype=torch.float32).reshape(-1)
+        H = dt.numel()
+        assert H == 48 and an.numel() == 48, (H, an.numel())
+        consts = []
+        for v in (dt, an):
+            for i in range(2):
+                t = torch.zeros(32, 32)
+                cols = v[32 * i : 32 * i + 32]  # a-tile i: heads 32 i .. (tile 1: 16 heads, then the b columns)
+                t[:, : cols.numel()] = cols
+                consts.append(t)
+        # order DTB0, DTB1, AN0, AN1
+        self.consts = ttnn.from_torch(
+            torch.cat([consts[0], consts[1], consts[2], consts[3]], 0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        sel = torch.zeros(32, 32, 32)
+        for j in range(32):
+            sel[j, j, 0] = 1.0
+        self.sel = ttnn.from_torch(
+            sel.reshape(32 * 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.H, self.device = H, device
+
+    def __call__(self, ab, T):
+        device, H = self.device, self.H
+        Mt = T // 32
+        assert list(ab.shape)[-1] == 2 * H and list(ab.shape)[-2] == T, ab.shape
+
+        def alloc(shape):
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.float32, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        g_bh, beta_bh = alloc([H, T]), alloc([H, T, 1])
+        grid = device.compute_with_storage_grid_size()
+        assert Mt <= grid.x * grid.y, Mt
+        coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(Mt)]
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        rt = ttnn.RuntimeArgs()
+        for i, c in enumerate(coords):
+            rt[c.x][c.y] = [i]
+
+        def cbd(i, fmt, pages):
+            page = 4096 if fmt == ttnn.float32 else 2048
+            return ttnn.CBDescriptor(
+                total_size=page * pages,
+                core_ranges=crs,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page)],
+            )
+
+        f32, bf = ttnn.float32, ttnn.bfloat16
+        rd_ct = []
+        for t in (ab, self.consts, self.sel):
+            rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        program = ttnn.ProgramDescriptor(
+            kernels=[
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "abp_reader.cpp",
+                    core_ranges=crs,
+                    compile_time_args=rd_ct,
+                    runtime_args=rt,
+                    common_runtime_args=[
+                        ab.buffer_address(),
+                        self.consts.buffer_address(),
+                        self.sel.buffer_address(),
+                        Mt,
+                    ],
+                    config=ttnn.ReaderConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "abp_writer.cpp",
+                    core_ranges=crs,
+                    compile_time_args=ttnn.TensorAccessorArgs(g_bh).get_compile_time_args()
+                    + ttnn.TensorAccessorArgs(beta_bh).get_compile_time_args(),
+                    runtime_args=rt,
+                    common_runtime_args=[g_bh.buffer_address(), beta_bh.buffer_address(), Mt],
+                    config=ttnn.WriterConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "abp_compute.cpp",
+                    core_ranges=crs,
+                    runtime_args=rt,
+                    common_runtime_args=[Mt, _f32_bits(1.0), _f32_bits(1.0), _f32_bits(20.0)],
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+                    ),
+                ),
+            ],
+            semaphores=[],
+            cbs=[
+                cbd(0, bf, 3),
+                cbd(1, f32, 4),
+                cbd(2, bf, 32),
+                cbd(3, f32, 2),
+                cbd(4, f32, 2),
+                cbd(16, f32, 2),
+                cbd(17, f32, 4),
+            ],
+        )
+        ttnn.generic_op([ab, self.consts, self.sel, g_bh, beta_bh], program)
+        return beta_bh, g_bh
+
+
 def supported(gdn, x, valid_len):
     T = list(x.shape)[1]
     return (
@@ -274,8 +387,13 @@ def gdn_chunk_forward(gdn, x, linear_shim):
         ttnn.deallocate(xr)
         ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc)
         na = tern.na
-        a_raw = ttnn.slice(ab, [0, 0, 0], [B, T, na])
-        b_raw = ttnn.slice(ab, [0, 0, na], [B, T, 2 * na])
+        gates = getattr(gdn, "_bonsai_gates", None)
+        if gates is not None and B == 1:
+            beta_bh, g_bh = gates(ab, T)  # sigmoid / softplus gates straight into prep's layouts (GateTiles)
+            a_raw = b_raw = None
+        else:
+            a_raw = ttnn.slice(ab, [0, 0, 0], [B, T, na])
+            b_raw = ttnn.slice(ab, [0, 0, na], [B, T, 2 * na])
         ttnn.deallocate(ab)
         z_off = tern.split // 32
     else:
@@ -287,12 +405,13 @@ def gdn_chunk_forward(gdn, x, linear_shim):
 
     qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
 
-    beta = ttnn.sigmoid(b_raw)
-    g = ttnn.multiply(w.A_neg, ttnn.softplus(ttnn.add(a_raw, w.dt_bias)))
-    for t in (a_raw, b_raw):
-        ttnn.deallocate(t)
-    beta_bh = ttnn.reshape(_to_bht(beta, B, T, H), [B * H, T, 1])
-    g_bh = _to_bht(g, B, T, H)
+    if a_raw is not None:
+        beta = ttnn.sigmoid(b_raw)
+        g = ttnn.multiply(w.A_neg, ttnn.softplus(ttnn.add(a_raw, w.dt_bias)))
+        for t in (a_raw, b_raw):
+            ttnn.deallocate(t)
+        beta_bh = ttnn.reshape(_to_bht(beta, B, T, H), [B * H, T, 1])
+        g_bh = _to_bht(g, B, T, H)
 
     if "device" not in chunk_prep._PREP:
         chunk_prep._PREP["device"] = chunk_prep.ChunkPrep(device)
@@ -353,3 +472,9 @@ def prepare(model):
         gdn._bonsai_finish = OutputFinish(device, norm_w, gdn.norm_eps)
         taps = torch.cat([ttnn.to_torch(t).float().reshape(1, -1) for t in gdn.weights.fused_conv_weight_taps], 0)
         gdn._bonsai_conv = ConvPrefill(device, taps)
+        if os.environ.get("BONSAI_GDN_GATES", "1") == "1" and gdn.num_v_heads == 48:
+            gdn._bonsai_gates = GateTiles(
+                device,
+                ttnn.to_torch(gdn.weights.dt_bias).float().reshape(-1)[:48],
+                ttnn.to_torch(gdn.weights.A_neg).float().reshape(-1)[:48],
+            )
