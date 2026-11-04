@@ -176,8 +176,8 @@ class CausalLMDataset:
 def shard_model(model: Any, replicate: list[str], yaml_config: dict) -> None:
     """Wrap each block, then the root, with FSDP.
 
-    FSDP sums gradients in its own reduce-scatter, so it takes precision.reduce_dtype here; the DDP sync gets the same
-    value from create_optimizer, which runs after sharding.
+    FSDP sums gradients in its own reduce-scatter. It would also find precision.reduce_dtype in the default that
+    create_optimizer stores after sharding, but passing it here keeps FSDP's settings in one place, next to replicate.
     """
     reduce_dtype = ttml.core.reduce_dtype_from_config(yaml_config.get("training_config", {}))
     for block in model.blocks:

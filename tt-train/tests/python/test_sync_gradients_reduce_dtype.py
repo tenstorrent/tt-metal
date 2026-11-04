@@ -48,14 +48,6 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
         ttml.sync_gradients(ttml.NamedParameters(), reduce_dtype=ttnn.DataType.UINT32)
 
 
-@pytest.fixture
-def gradient_reduce_default():
-    """Sets the context's gradient sync default for one test and clears it afterwards."""
-    context = ttml.autograd.AutoContext.get_instance()
-    yield context.set_gradient_reduce_dtype
-    context.set_gradient_reduce_dtype(None)
-
-
 def _synchronized(values: np.ndarray, **reduce_dtype) -> np.ndarray:
     parameters, parameter = _parameters_with_gradients(values)
     ttml.sync_gradients(parameters, axis_names=("dp",), **reduce_dtype)

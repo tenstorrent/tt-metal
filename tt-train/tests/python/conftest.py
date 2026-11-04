@@ -285,3 +285,17 @@ def strict_ccl_topology():
         yield
     finally:
         ttnn.CONFIG.strict_ccl_topology = previous
+
+
+# ---------------------------------------------------------------------------
+# Gradient sync default
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gradient_reduce_default():
+    """Sets the context's gradient sync default (what ``create_optimizer`` stores from ``precision.reduce_dtype``) for
+    one test, and clears it afterwards."""
+    context = ttml.autograd.AutoContext.get_instance()
+    yield context.set_gradient_reduce_dtype
+    context.set_gradient_reduce_dtype(None)

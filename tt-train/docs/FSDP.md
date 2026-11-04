@@ -94,6 +94,7 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
+    reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase
 ```
 
@@ -116,6 +117,7 @@ Wraps `module` in place and returns it. After the call:
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
 | `replicate` | `()` | Regex patterns of parameters to keep replicated instead of sharding, searched for (`re.search`) in each parameter's dotted name relative to `module`. See [Keeping parameters replicated](#keeping-parameters-replicated). |
+| `reduce_dtype` | `None` | The dtype the backward hook reduce-scatters gradients in: `ttnn.DataType.FLOAT32` sums and averages in fp32 and writes the shard in the gradient's dtype. `None` takes `training_config.precision.reduce_dtype`, which `create_optimizer` stores, when the hook runs, as `ttml.sync_gradients` does. See [Gradient reduction in fp32](MIXED_PRECISION.md#gradient-reduction-in-fp32). |
 
 ### Recommended usage pattern (FSDP2-style root)
 
