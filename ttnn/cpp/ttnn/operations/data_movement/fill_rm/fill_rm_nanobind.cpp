@@ -19,64 +19,45 @@ namespace {
 void bind_fill_rm_op(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Generates an NCHW row-major tensor and fill it with high values up to
-            hOnes, wOnes in each HW tile with the rest padded with high values. So
-            for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
+            Creates an ``[N, C, H, W]`` ROW_MAJOR BFLOAT16 tensor on the device of `any`. In each ``H x W`` plane, the
+            top-left ``hOnes x wOnes`` block is set to `val_hi`, and every other element is set to `val_lo`.
+            For example, with ``hOnes=1`` and ``wOnes=2``, the top-left corner of each plane is::
 
-            .. code-block::
-
-                +------------> W
-                | hi hi lo
-                | lo lo lo
-                |
-                v H
-
-            H, W are expected to be multiples of 32.
-
-            The 'any' Tensor arg is only used to pass the device and resulting
-            tensor dtype.
-
-            val_hi/lo are expected to be floats.
-
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | Argument | Description                                                           | Data type             | Valid range            | Required |
-            +==========+=======================================================================+=======================+========================+==========+
-            | N        | Batch count of output tensor                                          | int                   | N > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | C        | Channel count of output tensor                                        | int                   | C > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | H        | Height count of output tensor                                         | int                   | H > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | W        | Width count of output tensor                                          | int                   | W > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | val_hi   | High value to use                                                     | float                 |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | val_lo   | Low value to use                                                      | float                 |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+                hi hi lo ...
+                lo lo lo ...
+                ...
 
             Args:
-                N (number): Batch count of output tensor.
-                C (number): Channel count of output tensor.
-                H (number): Height count of output tensor.
-                W (number): Width count of output tensor.
-                hOnes (number): Height of high values region.
-                wOnes (number): Width of high values region.
-                any (ttnn.tensor): Any input tensor with desired device and data types for output tensor. value greater than 0
-                val_hi (number): High value to use.
-                val_lo (number): Low value to use.
+                N (int): batch size of the output tensor. Must be greater than 0.
+                C (int): number of channels of the output tensor. Must be greater than 0.
+                H (int): height of the output tensor. Use a multiple of 32.
+                W (int): width of the output tensor. Use a multiple of 32.
+                hOnes (int): number of rows, from the top of each ``H x W`` plane, in the high-value region. At most `H`.
+                wOnes (int): number of columns, from the left of each ``H x W`` plane, in the high-value region. At most `W`.
+                any (ttnn.Tensor): a BFLOAT16 tensor on device. Only its device and memory configuration are used.
+                val_hi (float): value for the high-value region. It is rounded to BFLOAT16.
+                val_lo (float): value for every other element. It is rounded to BFLOAT16.
 
-            Keyword args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. It must be interleaved. Defaults to `None`, which uses the memory configuration of `any`.
 
             Returns:
-                ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor, of shape ``[N, C, H, W]``, in ROW_MAJOR layout with BFLOAT16 dtype.
 
+            Note:
+                Supported dtypes and layouts for `any`:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16
+                     - TILE, ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: not supported
         )doc";
 
     ttnn::bind_function<"fill_rm">(
@@ -99,41 +80,38 @@ void bind_fill_rm_op(nb::module_& mod) {
 void bind_fill_ones_rm_op(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
-            ``0``.
-
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | Argument | Description                                                           | Data type             | Valid range            | Required |
-            +==========+=======================================================================+=======================+========================+==========+
-            | N        | Batch count of output tensor                                          | int                   | N > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | C        | Channel count of output tensor                                        | int                   | C > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | H        | Height count of output tensor                                         | int                   | H > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | W        | Width count of output tensor                                          | int                   | W > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+            Same as ``ttnn.fill_rm``, with `val_hi` set to 1 and `val_lo` set to 0: creates an ``[N, C, H, W]`` ROW_MAJOR
+            BFLOAT16 tensor whose top-left ``hOnes x wOnes`` block in each ``H x W`` plane is 1, and every other element 0.
 
             Args:
-                N (number): Batch count of output tensor.
-                C (number): Channel count of output tensor.
-                H (number): Height count of output tensor.
-                W (number): Width count of output tensor.
-                hOnes (number): Height of high values region.
-                wOnes (number): Width of high values region.
-                any (ttnn.tensor): Any input tensor with desired device and data types for output tensor. value greater than 0
+                N (int): batch size of the output tensor. Must be greater than 0.
+                C (int): number of channels of the output tensor. Must be greater than 0.
+                H (int): height of the output tensor. Use a multiple of 32.
+                W (int): width of the output tensor. Use a multiple of 32.
+                hOnes (int): number of rows, from the top of each ``H x W`` plane, in the high-value region. At most `H`.
+                wOnes (int): number of columns, from the left of each ``H x W`` plane, in the high-value region. At most `W`.
+                any (ttnn.Tensor): a BFLOAT16 tensor on device. Only its device and memory configuration are used.
 
-            Keyword args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. It must be interleaved. Defaults to `None`, which uses the memory configuration of `any`.
 
             Returns:
-                ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor, of shape ``[N, C, H, W]``, in ROW_MAJOR layout with BFLOAT16 dtype.
+
+            Note:
+                Supported dtypes and layouts for `any`:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16
+                     - TILE, ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: not supported
         )doc";
 
     ttnn::bind_function<"fill_ones_rm">(

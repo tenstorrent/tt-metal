@@ -17,25 +17,35 @@ namespace ttnn::operations::data_movement::detail {
 void bind_untilize_with_unpadding(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
-
-        Input tensor must be on TT accelerator device, in TILE layout, and may have BFLOAT16,
-        FLOAT32, BFLOAT8_B, INT32, or UINT32 data type.
-
-        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and will have the same
-        data type as the input (BFLOAT8_B inputs are converted to BFLOAT16 on output).
+        Changes the layout of the input tensor from TILE to ROW_MAJOR and removes the elements past `output_tensor_end`.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor
-            output_tensor_end (shape): End indices of input tensor in output tensor.
+            input_tensor (ttnn.Tensor): the input tensor, on device.
+            output_tensor_end (ttnn.Shape or List[int]): the last index to keep in each dimension. The end is inclusive, so the output size of dimension ``i`` is ``output_tensor_end[i] + 1``. It must have the input's rank and stay within the input's padded shape.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`, which uses the input tensor's memory configuration.
+            use_multicore (bool, optional): Whether to use multicore. Defaults to `True`. Sharded outputs always use multicore.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which uses the whole device. Not supported with a sharded input.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor, in ROW_MAJOR layout with the input's dtype. ``BFLOAT8_B`` input gives ``BFLOAT16`` output.
+
+        Note:
+            Supported dtypes and layouts for the input tensor:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8
+                 - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1 input; the output can be interleaved, HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input in L1; the output can be interleaved or sharded
+            - ND sharded: input and output; an ND sharded output needs an ND sharded input
     )doc";
 
     ttnn::bind_function<"untilize_with_unpadding">(

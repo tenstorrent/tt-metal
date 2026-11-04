@@ -18,23 +18,37 @@ namespace ttnn::operations::data_movement::detail {
 void bind_untilize(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Changes data layout of input tensor to ROW_MAJOR.
+            Changes the layout of the input tensor from TILE to ROW_MAJOR.
 
-            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
-
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+            An interleaved input whose logical shape is not tile-aligned gives an output with the logical shape, without the
+            tile padding.
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor, on device.
 
             Keyword Args:
-
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`, which uses the input tensor's memory configuration.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which uses the whole device. It needs interleaved input and output, ``use_multicore=True`` and a tensor one tile row tall.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor, in ROW_MAJOR layout with the input's dtype. ``BFLOAT8_B`` input gives ``BFLOAT16`` output.
+
+            Note:
+                Supported dtypes and layouts for the input tensor:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8
+                     - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input in L1 or DRAM; the output can be interleaved or sharded, except BLOCK_SHARDED in DRAM
+                - ND sharded: input and output
         )doc";
 
     ttnn::bind_function<"untilize">(
