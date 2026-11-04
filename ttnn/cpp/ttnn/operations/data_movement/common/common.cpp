@@ -936,7 +936,8 @@ namespace detail {
 
 bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config) {
     return memory_config.is_sharded() &&
-           memory_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+           (memory_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_config.created_with_nd_shard_spec());
 }
 
 }  // namespace detail
