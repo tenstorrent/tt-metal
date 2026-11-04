@@ -44,6 +44,7 @@ def test_prepare_matches_hf(hw):
         ("video", rgba(28, 28), "does not accept video"),
         ("image", rgba(1, 201), "aspect ratio"),
         ("image", rgba(28, 28)[..., :3], "RGBA"),
+        ("image", rgba(0, 28), "non-empty"),
     ],
 )
 def test_prepare_rejects(expect_error, kind, image, message):
@@ -77,6 +78,8 @@ def test_format_rejects_bad_values(expect_error):
     buf[8:12] = (5).to_bytes(4, "little")
     with expect_error(ValueError, "grid_h"):
         format.read_header(buf)
+    with expect_error(ValueError, "no embeddings"):
+        format.read_header(memoryview(bytearray(format.HEADER_BYTES)))
 
 
 def test_image_pickles_out_of_band():

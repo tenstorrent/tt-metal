@@ -23,8 +23,8 @@ FACTOR = PATCH_SIZE * MERGE_SIZE
 MIN_PIXELS = 4 * FACTOR * FACTOR
 MAX_PIXELS = 576 * FACTOR * FACTOR
 MAX_RATIO = 200
-IMAGE_START = 200029
-IMAGE_END = 200030
+IMAGE_START = 200029  # "]<]start of image[>[" in the MiniMax-M3 tokenizer
+IMAGE_END = 200030  # "]<]end of image[>["
 
 
 @dataclass(frozen=True)
@@ -68,8 +68,8 @@ class MiniMaxM3Media:
     def prepare(self, kind: str, media: np.ndarray) -> M3Image:
         if kind != "image":
             raise ValueError(f"MiniMax-M3 does not accept {kind}")
-        if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 4:
-            raise ValueError(f"expected uint8 RGBA [height, width, 4], got {media.dtype} {media.shape}")
+        if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 4 or 0 in media.shape:
+            raise ValueError(f"expected a non-empty uint8 RGBA [height, width, 4], got {media.dtype} {media.shape}")
         h, w = smart_resize(*media.shape[:2])
         rgb = torch.from_numpy(np.ascontiguousarray(media[..., :3])).permute(2, 0, 1)
         resized = tvF.resize(rgb, [h, w], interpolation=tvF.InterpolationMode.BICUBIC, antialias=True)
