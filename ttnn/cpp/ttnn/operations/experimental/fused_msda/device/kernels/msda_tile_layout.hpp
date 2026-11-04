@@ -22,6 +22,10 @@ namespace fused_msda_tile_layout {
 // within-face row stride is 32 B.
 constexpr uint32_t FACE_NBYTES = 512;
 constexpr uint32_t WITHIN_FACE_ROW_STRIDE = 32;
+// One face row: half a tile row. Face rows are unpadded, so its size is the stride.
+constexpr uint32_t FACE_ROW_COLS = 16;
+constexpr uint32_t FACE_ROW_NBYTES = FACE_ROW_COLS * sizeof(uint16_t);
+static_assert(FACE_ROW_NBYTES == WITHIN_FACE_ROW_STRIDE);
 constexpr uint32_t TILE_NBYTES = 2048;
 constexpr uint32_t TILE_MAX_ROWS = 32;
 

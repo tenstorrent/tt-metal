@@ -101,8 +101,8 @@ void bind_fused_msda(nb::module_& mod) {
               or packed (B, S, H*D). The packed form is what a Linear over
               embed_dims emits and costs one DRAM page per (b, s) instead of one
               per (b, s, h) — prefer it. With H > 1 it needs D*2 to be a multiple
-              of the buffer's alignment (D = 16 in DRAM is rejected on Blackhole;
-              use (B, S, H, D) or L1 there).
+              of the buffer's alignment (on Blackhole, D % 32 == 16 in DRAM is
+              rejected, e.g. D = 16 or 48; use (B, S, H, D) or L1 there).
             * :attr:`sampling_locations`: (B, Q, H, L, P, 2) ROW_MAJOR bfloat16, or the
               packed form (B, Q, H, L*P*2). The packed form costs one DRAM page per
               (b, q, h) instead of one per sample point and avoids 8x page padding —

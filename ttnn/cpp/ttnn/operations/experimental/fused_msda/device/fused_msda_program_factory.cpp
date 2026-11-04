@@ -31,10 +31,13 @@ namespace {
 
 constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/";
 
+uint32_t buffer_alignment(BufferType buffer_type) {
+    return buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                           : tt::tt_metal::hal::get_l1_alignment();
+}
+
 uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
-    const uint32_t alignment = buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                               : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(raw_bytes, alignment);
+    return tt::round_up(raw_bytes, buffer_alignment(buffer_type));
 }
 
 // One unit of work: up to 32 consecutive queries of a single (batch, head).
@@ -605,17 +608,17 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // Packed value stores the heads back to back in one (b, s) page, so head h
     // is read at byte offset h * D * elem_size, which must be a multiple of
     // value's buffer alignment. Checked here, on the buffer the program reads,
-    // not in derive_shapes: the L1-fit query runs that on a value it has yet to
-    // stage. The writer's per-head output offsets need only the NoC write
-    // alignment, which writer_msda.cpp static_asserts.
+    // not in derive_shapes: can_use_fused_msda_from_offsets_l1_value runs
+    // derive_shapes on a DRAM value it has yet to stage in L1. The writer's
+    // per-head output offsets need only the NoC write alignment, which
+    // writer_msda.cpp static_asserts.
     if (s.num_heads > 1 && s.value_packed) {
         TT_FATAL(
             value_stick_aligned == value_stick_raw,
             "fused_msda: packed value (B, S, H*D) reads head h at byte offset h * {} B, which must be a multiple "
-            "of value's buffer alignment ({} B per head after alignment); pass value as (B, S, H, D) or place it "
-            "in L1",
+            "of value's {} B buffer alignment; pass value as (B, S, H, D) or place it in L1",
             value_stick_raw,
-            value_stick_aligned);
+            buffer_alignment(value.buffer()->buffer_type()));
     }
 
     // ---- circular buffers (see README.md §6) ----

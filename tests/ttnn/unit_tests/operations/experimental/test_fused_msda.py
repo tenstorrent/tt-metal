@@ -124,6 +124,17 @@ def _pack_value(value: torch.Tensor) -> torch.Tensor:
     return value.reshape(B, S, H * D).contiguous()
 
 
+def _packed_value_fits_dram(num_heads, head_dim):
+    """Does the op accept packed value (B, S, H*D) with these heads in DRAM?
+
+    Head h is read at byte offset h*D*2 inside one (b, s) page, so with more than one
+    head that offset must be a multiple of the DRAM alignment: on Blackhole (64 B) every
+    D % 32 == 16 is refused. test_fused_msda_rejects_unaligned_packed_value_heads pins
+    the refusal; this helper only tells the other tests where value can go.
+    """
+    return num_heads == 1 or (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
+
+
 def _num_valid_queries_case(B, Q, H, seed, packed=True, D=32, ref_fp32=False):
     spatial_shapes = [(12, 20), (6, 10)]
     L, P, Z = 2, 4, 2
@@ -258,8 +269,8 @@ def _assert_rows_match(reference, expected, got, counts, Q):
 # The host-list test's shapes, plus counts above Q, which the host list rejects and the kernels
 # clamp to Q, and a batch with no valid query. D = 48 takes the reader-only scatter, D = 32 the
 # row-major staging (split between reader and writer on Blackhole); float32 reference points
-# change the reader's defines and, packed, the tiled geometry's reference tile. D = 48 runs in
-# L1: its 96-byte head stick is not DRAM-aligned on every architecture.
+# change the reader's defines and, packed, the tiled geometry's reference tile. D = 48's value
+# runs in L1: its 96-byte head stick is not DRAM-aligned on every architecture.
 SMALL_COUNTS = (3, 70, 2, ([70, 33, 1], [5, 64, 69], [0, 71, 40]))
 LARGE_COUNTS = (2, 300, 8, ([300, 129], [17, 288], [1000, 0]))
 
@@ -287,10 +298,8 @@ def test_fused_msda_v2_num_valid_queries_tensor_matches_host_list(device, B, Q, 
     """
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
-    # The value is packed: head h is read at byte offset h*D*2 inside one page, which DRAM refuses unless
-    # that is a multiple of its alignment (test_fused_msda_rejects_unaligned_packed_value_heads).
-    dram_value_ok = H == 1 or (D * 2) % ttnn.device.get_dram_alignment() == 0
-    memory = "dram" if dram_value_ok else "l1"
+    # _num_valid_queries_case always packs value.
+    memory = "dram" if _packed_value_fits_dram(H, D) else "l1"
     calls = []
     for seed, num_valid in enumerate(counts):
         tensors, spatial_shapes, reference = _num_valid_queries_case(
@@ -306,7 +315,9 @@ def test_fused_msda_v2_num_valid_queries_tensor_matches_host_list(device, B, Q, 
         )
     assert len({counts_t.buffer_address() for _, counts_t, _, _ in calls}) == len(calls)
 
-    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else None
+    # The output goes to DRAM whatever value's placement: its half-row writes need only the NoC
+    # write alignment, so large-d48 also writes a half with no partner into DRAM.
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
     for inputs, counts_t, num_valid, reference in calls:
         out = ttnn.experimental.fused_msda_from_offsets(
             *inputs,
@@ -475,8 +486,8 @@ _V1_ONE_LEVEL = [(10, 10)]
 _V1_FOUR_LEVELS = [(16, 20), (8, 10), (4, 5), (2, 3)]
 
 
-# Pairwise cover of the boundary values, not the full product. Value and output
-# are in DRAM (from_torch's default). H=8 with D=16 puts output heads 32 B apart,
+# Pairwise cover of the boundary values, not the full product. Value is in DRAM
+# (from_torch's default) and the output follows it. H=8 with D=16 puts output heads 32 B apart,
 # a multiple of every architecture's NoC write alignment; value is canonical,
 # one page per head, so no read starts inside a page.
 @pytest.mark.parametrize(
@@ -528,8 +539,8 @@ def test_fused_msda_v1(device, B, Q, H, spatial_shapes, P, D, align_corners):
 )
 def test_fused_msda_output_placement(device, value_memory, Q, H, D):
     """The writer sends every 16-value half of a tile row straight to its byte
-    offset in the output page, so the output buffer, not value's, decides where
-    the writes land. D=16 and D=48 end on a half with no partner, D=64 spans two
+    offset in the output page, so only the output buffer's NoC write alignment
+    constrains where they land, whatever value's placement. D=16 and D=48 end on a half with no partner, D=64 spans two
     d-tiles, and Q leaves a tail block. L1 and DRAM output of the same inputs
     must be bit-identical: the writer only moves bytes.
     """
@@ -596,7 +607,7 @@ def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D, spatia
     offset) addressing of every gathering RISC differ. A mismatch is an
     addressing bug, not bf16 rounding.
     """
-    if memory == "dram" and (D * 2) % ttnn.device.get_dram_alignment() != 0:
+    if memory == "dram" and not _packed_value_fits_dram(H, D):
         pytest.skip(
             f"packed value with {D * 2} B heads in DRAM is rejected on this device "
             f"(test_fused_msda_rejects_unaligned_packed_value_heads)"
@@ -1716,10 +1727,11 @@ def test_fused_msda_rejects_unaligned_packed_value_heads(device, expect_error):
     heads; the same value in L1 is accepted (test_fused_msda_v1_packed_value_equivalence).
     """
     H, D = 8, 16
-    if (D * 2) % ttnn.device.get_dram_alignment() == 0:
+    if _packed_value_fits_dram(H, D):
         pytest.skip(f"this device's {ttnn.device.get_dram_alignment()} B DRAM alignment permits {D * 2} B heads")
     spatial_shapes = [(6, 6), (3, 3)]
     value, loc, attn = _random_case(1, 8, H, len(spatial_shapes), 2, D, spatial_shapes)
+    # Output in L1, so the only placement the op can refuse is value's.
     with expect_error(RuntimeError, "packed value"):
         ttnn.experimental.fused_msda(
             _to_device_in(_pack_value(value), device, "dram"),

@@ -20,7 +20,8 @@
 // cross-core communication, because each block owns exactly one head. Every
 // write lands at the page base plus a multiple of HALF_NBYTES, and the
 // static_asserts below hold HALF_NBYTES against the NoC write alignment of L1
-// and DRAM, so any H works at any D % 16 == 0.
+// and DRAM, so the output takes any H at any D % 16 == 0. Packed value reads
+// have their own constraint, checked in the program factory.
 //
 // With SPLIT_GATHER the writer also gathers part of every row-major block the
 // reader reserves; see msda_gather_rows.hpp.
@@ -81,16 +82,14 @@ struct WriterGatherCfg {
     static constexpr uint32_t STICK_NBYTES = value_stick_nbytes;
 };
 
-// One face row: the 16 columns of half a tile row.
-constexpr uint32_t HALF_COLS = 16;
-constexpr uint32_t HALF_NBYTES = fused_msda_tile_layout::WITHIN_FACE_ROW_STRIDE;
+constexpr uint32_t HALF_COLS = fused_msda_tile_layout::FACE_ROW_COLS;
+constexpr uint32_t HALF_NBYTES = fused_msda_tile_layout::FACE_ROW_NBYTES;
 constexpr uint32_t TILE_NBYTES = fused_msda_tile_layout::TILE_NBYTES;
 constexpr uint32_t TILE_COLS = 2 * HALF_COLS;
 constexpr uint32_t N_D_TILES = (D + TILE_COLS - 1) / TILE_COLS;
 constexpr uint32_t HEAD_NBYTES = D * sizeof(uint16_t);
 // Each half is written whole, so D must end on a half boundary.
 static_assert(D % HALF_COLS == 0 && D > 0, "D must be a positive multiple of 16");
-static_assert(HALF_NBYTES == HALF_COLS * sizeof(uint16_t));
 static_assert(HEAD_NBYTES % HALF_NBYTES == 0, "every head starts at a multiple of HALF_NBYTES");
 static_assert(
     HALF_NBYTES % NOC_L1_WRITE_ALIGNMENT_BYTES == 0,
@@ -192,5 +191,7 @@ void kernel_main() {
         noc.async_writes_flushed();
         output_tile_cb.pop_front(N_D_TILES);
     }
+    // The writes need only reach the output before the op completes, so one
+    // barrier covers every block.
     noc.async_write_barrier();
 }
