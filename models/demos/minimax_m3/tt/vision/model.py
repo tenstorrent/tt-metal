@@ -302,9 +302,10 @@ class M3VLVisionModel(LightweightModule):
         free, why_not = l1_free_for_activations(self.device)
         if free:
             return placement
-        if not self._logged_dram_fallback:
-            logger.warning(f"the vision blocks keep their activations in DRAM: {why_not}")
-            self._logged_dram_fallback = True
+        # A warning the first time, and every fallback after it at debug level, with its own reason.
+        log = logger.debug if self._logged_dram_fallback else logger.warning
+        log(f"the vision blocks keep their activations in DRAM: {why_not}")
+        self._logged_dram_fallback = True
         return DRAM_PLACEMENT
 
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
