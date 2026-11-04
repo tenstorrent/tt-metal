@@ -129,7 +129,6 @@ FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model
         .rows = t("rows", dram_spec(s.rows_rows, s.rows_cols, DataType::UINT16, Layout::ROW_MAJOR)),
         .xbuf = t("xbuf", dram_spec(s.xbuf_rows, s.xbuf_cols, DataType::BFLOAT16, Layout::ROW_MAJOR)),
         .route = t("route", dram_spec(1, s.route_words, DataType::UINT32, Layout::ROW_MAJOR)),
-        .latent = std::nullopt,
         .slots = t("slots", dram_spec(s.slots_rows, s.slot_words, DataType::UINT32, Layout::ROW_MAJOR)),
         .fslots = t("fslots", dram_spec(s.fslots_rows, s.slot_words, DataType::UINT32, Layout::ROW_MAJOR)),
         .counts =
@@ -142,9 +141,6 @@ FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model
             t("table", dram_spec(s.plan_outs[3].first, s.plan_outs[3].second, DataType::UINT32, Layout::ROW_MAJOR)),
         .plan = t("plan", dram_spec(s.plan_outs[4].first, s.plan_outs[4].second, DataType::UINT32, Layout::ROW_MAJOR)),
     };
-    if (s.latent_rows) {
-        in.latent = t("latent", dram_spec(s.latent_rows, s.latent_cols, DataType::BFLOAT16, Layout::TILE));
-    }
     return in;
 }
 
@@ -299,7 +295,6 @@ FusedHeadOutputs fused_head(
         .rows = in.rows,
         .xbuf = in.xbuf,
         .route = in.route,
-        .latent = in.latent,
         .counts = in.counts,
         .regions = in.regions,
         .token_index = in.token_index,

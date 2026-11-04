@@ -9,9 +9,7 @@
 // and the host defines the switches / offsets the macros below build the addresses from:
 //   RT_ENG_ON       RT_ENG = common arg 1, only with the logits on the matmul cores
 //   RT_MSYNC_OFF    RT_MSYNC = arena base + RT_MSYNC_OFF
-//   RT_PWORD_OFF    RT_PWORD = arena base + RT_PWORD_OFF, the router split only
-//   RT_PART_OFF     RT_PART = arena base + RT_PART_OFF, the router split only
-// The kernels test RT_ENG / RT_PART with #ifdef: each is defined exactly when its switch / offset define is set.
+// The kernels test RT_ENG with #ifdef: it is defined exactly when its switch is set.
 #pragma once
 
 // (get_common_arg_val must be declared before router_rows.hpp, which the kernels include ahead of their API headers)
@@ -26,10 +24,4 @@
 #endif
 #ifdef RT_MSYNC_OFF
 #define RT_MSYNC (get_common_arg_val<uint32_t>(0) + RT_MSYNC_OFF)
-#endif
-#ifdef RT_PWORD_OFF
-#define RT_PWORD (get_common_arg_val<uint32_t>(0) + RT_PWORD_OFF)
-#endif
-#ifdef RT_PART_OFF
-#define RT_PART (get_common_arg_val<uint32_t>(0) + RT_PART_OFF)
 #endif

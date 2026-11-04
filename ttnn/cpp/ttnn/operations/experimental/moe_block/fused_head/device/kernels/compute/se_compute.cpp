@@ -13,9 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
-#ifdef SE_PREP
 #include "api/compute/pack_untilize.h"
-#endif
 #include "api/debug/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
@@ -36,20 +34,17 @@ struct SeGluCfg {
 };
 }  // namespace ckernel::sfpu
 #endif
-constexpr uint32_t MT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1),
-                   NSG = get_compile_time_arg_val(2);
-constexpr uint32_t NPG = get_compile_time_arg_val(3), NCH = get_compile_time_arg_val(4),
-                   HT = get_compile_time_arg_val(5);
-constexpr uint32_t POMAX = get_compile_time_arg_val(6), KBD = get_compile_time_arg_val(7),
-                   NSD = get_compile_time_arg_val(8);
-constexpr uint32_t NPD = get_compile_time_arg_val(9), WSLOT = get_compile_time_arg_val(10),
-                   PWDMAX = get_compile_time_arg_val(11);
-constexpr uint32_t G = get_compile_time_arg_val(12), SPS = get_compile_time_arg_val(13);  // (shards, steps a shard)
-constexpr uint32_t GX = get_compile_time_arg_val(14), HA = GX * MT * POMAX;  // (h-all: [column][MT][POMAX])
+constexpr uint32_t MT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
+constexpr uint32_t NPG = get_compile_time_arg_val(2), NCH = get_compile_time_arg_val(3);
+constexpr uint32_t POMAX = get_compile_time_arg_val(4), KBD = get_compile_time_arg_val(5),
+                   NSD = get_compile_time_arg_val(6);
+constexpr uint32_t NPD = get_compile_time_arg_val(7), WSLOT = get_compile_time_arg_val(8);
+constexpr uint32_t G = get_compile_time_arg_val(9), SPS = get_compile_time_arg_val(10);  // (shards, steps a shard)
+constexpr uint32_t GX = get_compile_time_arg_val(11), HA = GX * MT * POMAX;              // (h-all: [column][MT][POMAX])
 // Words [0, NC) - the per-group block (gate / down tables, h column offsets, HT) and the RS / prep tables' prefix every
 // core of the group shares - are this kernel's common args (sent once a chip, not once a core); the rest of a core's
 // tables are its runtime args from NC on. Indices stay absolute (the host's tables point at them).
-constexpr uint32_t SE_NC = get_compile_time_arg_val(15);
+constexpr uint32_t SE_NC = get_compile_time_arg_val(12);
 FORCE_INLINE uint32_t se_arg(uint32_t i) {
     return i < SE_NC ? get_common_arg_val<uint32_t>(i) : get_arg_val<uint32_t>(i - SE_NC);
 }
@@ -275,7 +270,6 @@ void kernel_main() {
             cb_push_back(SE_LAT, SE_LATP);     // with chunks a chunk's LAT + LATZ, the next chunk's packed past them)
 #endif
         }
-#ifdef SE_RS
         {
             DeviceZoneScopedN("SE-DOWNRS");
             // (down + reduce-scatter) the host's program: pass i - all of K in DEST over h-all and the streamed W_down;
@@ -333,7 +327,6 @@ void kernel_main() {
                 } else if (kind == 1) {
                     cb_reserve_back(SE_FINC, 1);
                     cb_push_back(SE_FINC, 1);
-#ifdef SE_PREP
                 } else if (kind == 3) {
                     // dispatch prep: my rows of the chip's owned tokens (x own / the latent) untilized into PO, a unit
                     // (n tiles of one row tile, contiguous in L1 at PU + off) at a time; the NCRISC writes PO's rows
@@ -379,7 +372,6 @@ void kernel_main() {
 #ifdef SE_XFREE
                     cb_reserve_back(SE_XFREE, 1);  // (x own's ring: this chunk's slot read - the BRISC may reload it)
                     cb_push_back(SE_XFREE, 1);
-#endif
 #endif
                 } else {
                     const uint32_t e6 = et0 + 6 * idx, cnt = se_arg(e6), mode = se_arg(e6 + 1);
@@ -456,39 +448,5 @@ void kernel_main() {
                 }
             }
         }
-#else
-        DeviceZoneScopedN("SE-DOWN");
-        // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
-        cb_wait_front(HALL, HA);
-        for (uint32_t pd = 0; pd < NPD; ++pd) {
-            const uint32_t pw = se_arg(NPG + pd);
-            matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);  // (h rows strided POMAX within a column's block)
-            uint32_t c = 0;                                  // (the column block of K tile k: k in [h0[c], h0[c + 1]))
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < NSD; ++i) {
-                cb_wait_front(WIN, WSLOT);
-                for (uint32_t k = 0; k < KBD; ++k) {
-                    const uint32_t kt = i * KBD + k;
-                    while (kt >= se_arg(NPG + NPD + c + 1)) {
-                        ++c;
-                    }
-                    const uint32_t a0 = c * MT * POMAX + kt - se_arg(NPG + NPD + c);
-                    matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
-                }
-                cb_pop_front(WIN, WSLOT);
-            }
-            tile_regs_commit();
-            cb_reserve_back(OUT, MT * PWDMAX);
-            tile_regs_wait();
-            for (uint32_t r = 0; r < MT; ++r) {
-                for (uint32_t t = 0; t < pw; ++t) {
-                    pack_tile<true>(r * pw + t, OUT, r * PWDMAX + t);
-                }
-            }
-            tile_regs_release();
-            cb_push_back(OUT, MT * PWDMAX);
-        }
-        cb_pop_front(HALL, HA);
-#endif
     }
 }

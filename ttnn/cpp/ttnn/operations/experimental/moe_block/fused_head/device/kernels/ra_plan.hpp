@@ -28,7 +28,6 @@ constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + 128, O_RGN = O_CNT 
 constexpr uint32_t O_ROWS = O_RGN + al64(4 * (EPC + 32));
 constexpr uint32_t NOWND = (N + M - 1) / M;  // (destinations an instance owns the header totals of: d % M == q)
 constexpr uint32_t O_CX = O_ROWS + 64, O_PSUM = O_CX + N * BB, O_TOT = O_PSUM + NOWND * M * BB;
-constexpr uint32_t O_DBG = O_TOT + al64(NOWND * BB);
 constexpr uint32_t LMW = 1024;  // local-memory counters: per global expert, later per (my expert, token) if they fit
 static_assert(NG <= LMW, "local counters: NG up to 1024");
 static_assert(S <= 2048 && EPC <= 64, "an entry: token (11 bits) | expert (6 bits) | weight (15 bits)");
@@ -85,11 +84,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     a += 3 * N;
     const uint32_t port_arg = a;  // the port cores (x, y)
     a += 3 * NPORT;
-    const uint32_t dbg_addr = get_arg_val<uint32_t>(a++), ready_sem = get_arg_val<uint32_t>(a++);  // (port cores')
+    const uint32_t ready_sem = get_arg_val<uint32_t>(a++);  // (port cores')
     const uint32_t go_sem = get_arg_val<uint32_t>(a++), parts_sem = get_arg_val<uint32_t>(a++),
                    ex_sem = get_arg_val<uint32_t>(a++);
-    uint32_t ts[10];
-    ts[0] = get_timestamp_32b();
     // (the RISC's L1 data cache - off by default: every L1 load is then ~10+ cycles; write-through, so only NoC
     // arrivals need the invalidations this kernel already does; off again before returning, for the firmware)
     set_l1_data_cache<true>();
@@ -124,7 +121,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             n_my += K;
         }
     }
-    ts[1] = get_timestamp_32b();
     // (2) my per-destination totals to every planner core
     uint32_t* nq = reinterpret_cast<uint32_t*>(B + O_NQ);
     for (uint32_t d = 0; d < N; ++d) {
@@ -158,7 +154,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ex_sem), M - 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ex_sem) = 0;
     invalidate_l1_cache();
-    ts[2] = get_timestamp_32b();
     // (3) my entries sorted by global expert into staging (each destination's run aligned as its place in the packet,
     // mod 16), straight into the port cores' packet buffers
     const uint32_t* ex = reinterpret_cast<const uint32_t*>(B + O_EX);
@@ -226,7 +221,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             noc_semaphore_inc(get_noc_addr(x, y, get_arg_val<uint32_t>(port_arg + 3 * i + 2)), 1);
         }
     }
-    ts[3] = get_timestamp_32b();
     // (4) while the packets fly: my home tokens' rows (local: I am their home) - n_local / want / n_ret; want rows
     // straight to the plan, n_local to core 0
     uint32_t nr[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -284,7 +278,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem) = 0;
         }
     }
-    ts[4] = get_timestamp_32b();
     // (6) the headers (every expert's total -> regions; my experts: a contiguous range balanced by rows), then every
     // packet's entries
     const auto sl = TensorAccessor(sl_args, sl_addr, PCAP);
@@ -393,7 +386,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
-    ts[5] = get_timestamp_32b();
     // my experts' entries: sources in order, each source's slices in order, each slice's run of my experts (one
     // contiguous range: a slice is sorted by expert); an entry carries its token and expert
     // rows: per expert, ordered by (token, home, k): count per (expert, token), prefix, then each entry its row
@@ -425,7 +417,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             c += n;
         }
     }
-    ts[6] = get_timestamp_32b();
     uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
     uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
     uint32_t ninj[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -483,7 +474,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             noc_async_write(B + O_TAB + (pg - R0 / 32) * 256, get_noc_addr(pg, tg), 256);
         }
     }
-    ts[7] = get_timestamp_32b();
     // (7) n_inj / n_ret partials to core 0; core 0 writes counts / regions and the plan's words 0..31 and 600, 601
     {
         uint32_t* pin = reinterpret_cast<uint32_t*>(B + O_PIN + q * 64);
@@ -526,24 +516,6 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
         noc_async_write(B + O_ROWS, get_noc_addr(0, pgg) + 592 * 4, 64);
     }
     noc_async_write_barrier();
-    ts[8] = get_timestamp_32b();
-    if (dbg_addr) {
-        uint32_t* d = reinterpret_cast<uint32_t*>(B + O_DBG);
-        for (uint32_t i = 0; i < 9; ++i) {
-            d[i] = ts[i];
-        }
-        d[9] = 0;
-        for (uint32_t e = e0; e < e1; ++e) {
-            d[9] += tot[e];
-        }
-        d[10] = R0;
-        d[11] = R1;
-        d[12] = n_my;
-        d[13] = B;
-        const InterleavedAddrGen<true> dg = {.bank_base_address = dbg_addr, .page_size = 64};
-        noc_async_write(B + O_DBG, get_noc_addr(q, dg), 64);
-        noc_async_write_barrier();
-    }
     noc_async_atomic_barrier();
     set_l1_data_cache<false>();
 }

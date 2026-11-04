@@ -62,7 +62,6 @@ struct HeadLayout {
     bool on_engine = false;
     uint32_t GX = 11;
     bool compact = false;  // compact RS arrival zones
-    bool split = false;    // the router's fin + top-K over two cores a row tile
     bool xdram = false;    // the DRAM fallback: x gathered into DRAM ahead of the program, reloaded a chunk at a time
     auto operator<=>(const HeadLayout&) const = default;
 };
@@ -104,11 +103,6 @@ struct HeadFit {
     std::string note;                 // what L1 forced, or the DRAM fallback's cost
 };
 
-enum class RouterPlacementMode : uint8_t {
-    Measured,  // fused_head.router_placement's pick, the other where it does not fit
-    Model,     // both, ranked by the cost model
-};
-
 // The arena cap a K step allows.
 using ArenaMax = std::function<int64_t(uint32_t kb)>;
 ArenaMax arena_max_of(int64_t l1_free, uint32_t payload);
@@ -116,10 +110,6 @@ ArenaMax arena_max_fixed(int64_t bytes);
 
 struct HeadFitOptions {
     std::optional<int64_t> l1_free;  // free L1 a core at the head's build (default kL1Free - kL1Margin)
-    bool split = false;
-    std::optional<bool> on_engine;  // given: only such layouts
-    uint32_t KB = 0;                // given (non-zero): only this K step
-    RouterPlacementMode placement = RouterPlacementMode::Measured;
     bool largest = true;   // on an L1 refusal, also the largest rows a mesh row that fit
     bool explain = true;   // the unconstrained pick and the L1 note
     bool fallback = true;  // MoEBlockConfig.head_dram_fallback
@@ -130,7 +120,7 @@ HeadFit head_plan_fit(const HeadShape& shape, const HeadFitOptions& options = {}
 HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const HeadFitOptions& options);
 
 // The pieces fit() is built from (exposed for tests and the device op's build).
-uint32_t engine_width(const HeadShape& shape, bool split = false);
+uint32_t engine_width(const HeadShape& shape);
 std::vector<std::array<uint32_t, 3>> head_layouts(const HeadShape& shape, uint32_t mt_max = 2);  // (GY, MT, NCH)
 std::vector<uint32_t> k_steps(const HeadShape& shape);
 std::string shape_checks(const HeadShape& shape);
@@ -146,12 +136,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap);
 std::pair<double, Parts> head_cost(
     const HeadShape& shape, const HeadLayout& lay, const SeEngineSizing& eng, const HeadCost& c = {});
 std::vector<HeadPlanned> head_plan_layouts(
-    const HeadShape& shape,
-    const ArenaMax& arena_max,
-    bool keep_unfit = false,
-    RouterPlacementMode placement = RouterPlacementMode::Measured,
-    bool split = false,
-    bool xdram = false);
+    const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit = false, bool xdram = false);
 
 // fused_head.router_placement: (the logits on the matmul cores?, estimates).
 bool router_on_engine(

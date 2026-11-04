@@ -9,9 +9,8 @@ the source's parity, as main's). A Galaxy (the cases' mesh); skipped without one
 
 Compared per chip, bit for bit: the shared expert's output se, rows, route, the combine plan (counts, regions,
 token_index, table, plan) and the chip's own slots of the dispatch buffer xbuf (the head writes only those; a latent
-model's are the latent rows); not the latent output (with the dispatch prep the head never writes it: the latent rows go
-to xbuf). The cases' bf8 weights are on the bf8 grid: the reference's fp32 -> bf16 -> bf8 upload and this op's
-fp32 -> bf8 packing give the same device weights. Run to run, every output bit-identical
+model's are the latent rows). The cases' bf8 weights are on the bf8 grid: the reference's fp32 -> bf16 -> bf8 upload
+and this op's fp32 -> bf8 packing give the same device weights. Run to run, every output bit-identical
 (test_fused_head_deterministic)."""
 
 import importlib.util
@@ -132,8 +131,7 @@ def test_fused_head_bit_exact(case):
     meta, ref, head = case
     out = head()
     got = {}
-    # (not latent: with the dispatch prep the latent rows go to xbuf - the latent output is never written, the
-    # reference's holds whatever its fresh DRAM allocation held)
+    # (a latent model's latent rows go to xbuf)
     names = ["se", "rows", "route", "counts", "regions", "token_index", "table", "plan"]
     for n in names:
         for rc, t in hz.from_mesh(getattr(out, n), (head.R, head.C)).items():

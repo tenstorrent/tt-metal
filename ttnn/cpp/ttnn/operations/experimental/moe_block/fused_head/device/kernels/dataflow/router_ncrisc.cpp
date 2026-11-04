@@ -46,16 +46,16 @@ void kernel_main() {
     const auto wg = TensorAccessor(w_args, w_addr, 2048);
     const auto bg = TensorAccessor(b_args, b_addr, 4096);
     const auto ig = TensorAccessor(i_args, i_addr, 2048);
-    cb_reserve_back(BIAS, RT_ETF);
+    cb_reserve_back(BIAS, ET);
     cb_reserve_back(IDX, ET);
-    for (uint32_t t = 0; t < RT_ETF; ++t) {
+    for (uint32_t t = 0; t < ET; ++t) {
         noc_async_read(bg.get_noc_addr(t), get_write_ptr(BIAS) + t * 4096, 4096);
     }
     for (uint32_t t = 0; t < ET; ++t) {
-        noc_async_read(ig.get_noc_addr(RT_HB + t), get_write_ptr(IDX) + t * 2048, 2048);
+        noc_async_read(ig.get_noc_addr(t), get_write_ptr(IDX) + t * 2048, 2048);
     }
     noc_async_read_barrier();
-    cb_push_back(BIAS, RT_ETF);
+    cb_push_back(BIAS, ET);
     cb_push_back(IDX, ET);
 #ifdef RT_ENG
     {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
@@ -143,20 +143,7 @@ void kernel_main() {
             }
         }
     }
-#ifdef RT_SPLIT
-#if RT_HALF == 0
-    {  // (my partner's best K - the row tile's other expert half - written into my PART: to the compute's merge)
-        volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_PWORD);
-        while (*pw == 0) {
-            invalidate_l1_cache();
-        }
-        *pw = 0;  // (re-arm: one a call)
-        cb_reserve_back(RT_PART_CB, 1);
-        cb_push_back(RT_PART_CB, 1);
-    }
-#endif
-#endif
-    {  // (my share of the joint rows - tokens 8 .. 15 - once the top-K is done; split half 1: of its picks' scores)
+    {  // (my share of the joint rows - tokens 8 .. 15 - once the top-K is done)
         const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
         volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 64);
         while (*done == 0) {
@@ -166,17 +153,13 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();
         invalidate_l1_cache();
-#if RT_HALF == 0
-        rows_::make<K, RT_ETF, ET>(
+        rows_::make<K, ET>(
             get_arg_val<uint32_t>(t2 + 1),
             get_arg_val<uint32_t>(t2 + 4),
             get_arg_val<uint32_t>(t2 + 2),
             get_arg_val<uint32_t>(t2 + 3),
             8,
             16);
-#else
-        rows_::picked<K, RT_ETF, ET>(get_arg_val<uint32_t>(t2 + 1), get_arg_val<uint32_t>(t2 + 4), 8, 16);
-#endif
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }

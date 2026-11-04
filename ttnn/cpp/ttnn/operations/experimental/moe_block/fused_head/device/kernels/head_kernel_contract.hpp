@@ -20,7 +20,6 @@
 //   dataflow/router_ncrisc.cpp   router cores      RISCV_1, NOC0    router NCRISC (+ router rows, ra::plan)
 //   compute/router_compute.cpp   router cores      compute          router compute (+ router rows, rw_ route words)
 //   dataflow/router_brisc.cpp    router cores      RISCV_0, NOC1    router BRISC (+ router rows, ra::plan)
-// (router split: the three router kernels once a half, each over its half's cores, with their own RT_SPLIT defines)
 //
 // Shared pieces are headers; the planner's and the route words' parameters are the RAP_* / RW_* defines; the GROW
 // macro is se_defs.hpp; addresses are common runtime args (se_defs.hpp, router_addr.hpp), never defines.
@@ -39,7 +38,7 @@ constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/moe_bl
 
 // ---------------------------------------------------------------------------------------------------------------------
 // x_gather3 port kernels (xg_reader, xg_sender): compile-time args (XGather3.pieces `ct`); the reader appends x's
-// TensorAccessorArgs at XG_CT_COUNT (= 15).
+// TensorAccessorArgs at XG_CT_COUNT (= 14).
 enum XgCt : uint32_t {
     XG_CT_KB = 0,  // e.KB, the engine's K step
     XG_CT_MT,      // e.MT
@@ -48,7 +47,6 @@ enum XgCt : uint32_t {
     XG_CT_CR,      // e.CR = GY MT
     XG_CT_NCH,     // e.NCH
     XG_CT_NV,      // self.nv, links
-    XG_CT_KLT,     // self.klt, K tiles a shard
     XG_CT_GROUP,   // self.group, packets a group
     XG_CT_INC,     // INC_EVERY = 8
     XG_CT_GX,      // e.GX
@@ -100,19 +98,14 @@ enum SeBriscCt : uint32_t {
     SE_B_CT_NSG,
     SE_B_CT_NPG,
     SE_B_CT_NCH,
-    SE_B_CT_HT,
     SE_B_CT_POMAX,
-    SE_B_CT_CR,
     SE_B_CT_S0,
     SE_B_CT_S1,
-    SE_B_CT_KT,
     SE_B_CT_XREADY,  // semaphore id XREADY = 0
-    SE_B_CT_HCNT,    // 1 + 2 NWS (unused by the kernel's logic)
-    SE_B_CT_HFREE,   // 3 + 2 NWS
     SE_B_CT_COUNT,   // x TensorAccessorArgs from here
 };
-// NCRISC compile-time args (`nct`), then w, y TensorAccessorArgs, (SE_LAT) the latent out's, (SE_PREP) xbuf's at
-// SE_PREP_CT0, (SE_RTR) the router x and W_r^T at SE_RTR_CT0.
+// NCRISC compile-time args (`nct`), then w, y TensorAccessorArgs, xbuf's at SE_PREP_CT0, (SE_RTR) the router x and
+// W_r^T at SE_RTR_CT0.
 enum SeNcriscCt : uint32_t {
     SE_N_CT_GY = 0,
     SE_N_CT_MT,
@@ -125,29 +118,22 @@ enum SeNcriscCt : uint32_t {
     SE_N_CT_NPD,
     SE_N_CT_NWS,  // 3
     SE_N_CT_WSLOT,
-    SE_N_CT_WTB,  // W tile bytes: bf8 1088, bf4 576, bf16 2048
-    SE_N_CT_NTH,
-    SE_N_CT_CR,
-    SE_N_CT_PWDMAX,
+    SE_N_CT_WTB,    // W tile bytes: bf8 1088, bf4 576, bf16 2048
     SE_N_CT_WV,     // semaphore id 1
     SE_N_CT_WFREE,  // semaphore id 1 + NWS
-    SE_N_CT_NOUT,   // 2
     SE_N_CT_COUNT,  // w TensorAccessorArgs from here
 };
 // Compute compile-time args (one kernel a column group (wg, wd) of SeEngine3.groups).
 enum SeComputeCt : uint32_t {
     SE_C_CT_MT = 0,
     SE_C_CT_KB,
-    SE_C_CT_NSG,
     SE_C_CT_NPG,
     SE_C_CT_NCH,
-    SE_C_CT_HT,
     SE_C_CT_POMAX,
     SE_C_CT_KBD,
     SE_C_CT_NSD,
     SE_C_CT_NPD,
     SE_C_CT_WSLOT,
-    SE_C_CT_PWDMAX,
     SE_C_CT_G,    // len(so): the K shards
     SE_C_CT_SPS,  // NSG / len(so)
     SE_C_CT_GX,
@@ -159,16 +145,17 @@ enum SeComputeCt : uint32_t {
 //   SE_GROW_OWN_CR = CR / shards, SE_GROW_OWN_RT = rows / 32 / shards - only when NCH > 1 and shards > 1
 //     (se_defs.hpp GROW);
 //   SE_WRING (if WRING); SE_PREP_LAST (NCH > 1 and not xfree); SE_XRING (XR, `u`, if xring); SE_XFREE 21 (if xfree);
-//   with rs: SE_NENT (rs.G), SE_RS, SE_HOLD 6, SE_FINB 7, SE_ARRF 8, SE_ARRB 9, SE_FINC 10, SE_OUTF 11, SE_PSYNC 12,
-//     SE_FFREE 20, SE_FIN_ROWS (if _fin_rows()), SE_P (rs.P), SE_ZF / SE_ZB (rs.zone_tiles), SE_RS_PM (rs.npass,
+//   the down + reduce-scatter: SE_NENT (rs.G), SE_HOLD 6, SE_FINB 7, SE_ARRF 8, SE_ARRB 9, SE_FINC 10, SE_OUTF 11,
+//   SE_PSYNC 12,
+//     SE_FFREE 20, SE_FIN_ROWS (if _fin_rows()), SE_ZF / SE_ZB (rs.zone_tiles), SE_RS_PM (rs.npass,
 //     `u`, if rs.pm);
-//   with a latent: SE_LAT 13, SE_NGU, SE_LWMAX, SE_LATP, SE_LRB (CR / shards), G_LT (shards LT);
-//   with the router on the engine: SE_RTR, SE_RX 17, SE_RW 18, SE_RO 19, SE_KTO, SE_ETC, SE_ET, SE_MTR (MT NCH),
-//     SE_RG, SE_RD (6 split / 3), SE_RTR_SPLIT (split, `u`, if split), XACK_ID 128, WACK_ID 144, SE_GX, RXR_ID 0,
+//   with a latent: SE_LAT 13, SE_NGU, SE_LWMAX, SE_LATP;
+//   with the router on the engine: SE_RTR, SE_RX 17, SE_RW 18, SE_RO 19, SE_KTO, SE_ETC, SE_MTR (MT NCH),
+//     SE_RG, SE_RD 3, XACK_ID 128, WACK_ID 144, RXR_ID 0,
 //     RWR_ID 16, SE_RDONE (if rtr_overlay), RXS_ID 32, SE_KC, SE_RTRX_L1 + XRL_ID 96 (if not xring),
 //     SE_RTR_BCT0 (len(bct + xa_ct)), SE_RTR_CT0 (NCRISC accessor offset);
 //     (SE_EW, the ewords address, is a common runtime arg, below)
-//   with prep: SE_PREP, SE_PU 14, SE_PO 15, SE_PREP_FULL, SE_PREP_BCT, SE_PREP_ROW (xbuf aligned page size),
+//   the dispatch prep: SE_PU 14, SE_PO 15, SE_PREP_FULL, SE_PREP_BCT, SE_PREP_ROW (xbuf aligned page size),
 //     SE_PREP_CT0, SE_LRDY 16 (with a latent);
 //   compute only, first: SE_GLU (glu code: silu 1, situ 2, clamped_silu 3, swiglu_oai 4) and SE_GLU_BETA,
 //     SE_GLU_LBETA, SE_GLU_LIMIT, SE_GLU_ALPHA (float literals `...f`, se_engine3.glu_defines).
@@ -188,7 +175,7 @@ constexpr uint32_t kSeEwordsCommonArgAfterSpan = 2;  // SE_EW = common[2 + commo
 //           + (route words) the route tensor's (RT_CT0).
 enum RouterCt : uint32_t {
     RT_CT_KT = 0,  // H / TP / 32
-    RT_CT_ET,      // expert tiles a router core (ETL)
+    RT_CT_ET,      // expert tiles (E / 32)
     RT_CT_G,
     RT_CT_KBR,
     RT_CT_K,
@@ -204,18 +191,16 @@ enum RouterCommonArg : uint32_t {
 //   NCRISC and compute (`eng`): RT_ENG_ON (on_engine; RT_ENG = common arg 1), RT_MSYNC_OFF (off["msync"], `u`;
 //     RT_MSYNC = arena base + it), RT_FOLD (fold, `u`), RT_RW_SOLO (logits on the router cores and
 //     one router core), RT_ARR_ORDERED (RouterSpec.ordered = MoEBlockConfig.deterministic);
-//   all three with the split (`sd`, per half h): RT_SPLIT, RT_HALF h, RT_HB (h ETL, `u`), RT_ETF (ET, `u`),
-//     RT_PWORD_OFF (off["words"] + 128, `u`), RT_PART_OFF (off["part"], `u`), RT_PART_CB 13;
-//   compute: RT_SQRTSOFTPLUS + INP_FLOAT32 1 (score_func sqrtsoftplus); half 0 with route words: RT_ROUTE + the
+//   compute: RT_SQRTSOFTPLUS + INP_FLOAT32 1 (score_func sqrtsoftplus); RT_ROUTE + the
 //     route-word defines RW_R, RW_C, RW_ME (r C + c), RW_K, RW_RW (route_words(N): 1, 2 past 16 chips), RW_E
 //     (ET 32 / fold), RW_WRAPX / RW_WRAPY (true / false: torus and the axis > 2), RW_XRING_INIT / RW_YRING_INIT
 //     (ring_table(C / R, wrap) comma lists), RW_CHIPS_INIT (e // EPC for e < E, comma list);
-//   BRISC: RT_FOLD; half 0 with route words: RT_ROUTE, RT_CT0 (len(ct + acc(out) + ra accessors)), RT_PAGE (the
+//   BRISC: RT_FOLD; RT_ROUTE, RT_CT0 (len(ct + acc(out) + ra accessors)), RT_PAGE (the
 //     route tensor's aligned page size), RT_RW;
 //   NCRISC and BRISC with the routing exchange (router_stream._ra_src): RA_PLAN, the routing defines (above) and
 //     ra::plan's RAP_* (RoutingStream.kernel_subs: RAP_S, RAP_K, RAP_EPC, RAP_R, RAP_C, RAP_ME, RAP_A, RAP_L,
 //     RAP_P (nps[coord]), RAP_TPP 32, RAP_M, RAP_HBP, RAP_BB, RAP_BBP, RAP_PCAP, RAP_NPORT, RAP_ROWS_CAP,
-//     RAP_ENT_CAP, RAP_WX, RAP_WY, RAP_DCACHE 1 (RAP_YT is gone: ties always by parity), RAP_PROBE_NOSTORE 0, RAP_CT0 -
+//     RAP_ENT_CAP, RAP_WX, RAP_WY (ties always by parity), RAP_CT0 -
 //     NCRISC len(ct + x, w, b, ix accessors), BRISC len(ct + out accessor)).
 // Runtime args (RouterStream.pieces): NCRISC [x, w, b, ix addrs] + [bb RB + j % RB for bb < G] + [G - 1, arr[0]]
 // + _arrival_order(p) + tail [words, best, out (arena offsets + base), scale bits] + [sv] + (routing) _ra_args2;

@@ -14,13 +14,10 @@ using namespace dataflow_kernel_lib;
 constexpr uint32_t GX = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4),
                    NCH = get_compile_time_arg_val(5);
-constexpr uint32_t HT = get_compile_time_arg_val(6), POMAX = get_compile_time_arg_val(7),
-                   CR = get_compile_time_arg_val(8);
-constexpr uint32_t S0 = get_compile_time_arg_val(9), S1 = get_compile_time_arg_val(10),
-                   KT = get_compile_time_arg_val(11);
-constexpr uint32_t XREADY = get_compile_time_arg_val(12), HCNT = get_compile_time_arg_val(13),
-                   HFREE = get_compile_time_arg_val(14);
-constexpr auto x_args = TensorAccessorArgs<15>();
+constexpr uint32_t POMAX = get_compile_time_arg_val(6), S0 = get_compile_time_arg_val(7),
+                   S1 = get_compile_time_arg_val(8);
+constexpr uint32_t XREADY = get_compile_time_arg_val(9);
+constexpr auto x_args = TensorAccessorArgs<10>();
 #ifdef SE_RTR
 constexpr auto brx_args = TensorAccessorArgs<SE_RTR_BCT0>();  // (the router's x: the chip's x shard [rows, H / TP])
 #endif
@@ -244,16 +241,10 @@ void kernel_main() {
                 } else {
                     rh->receive(m * GX + c);
                 }
-#ifdef SE_RS
                 cb_push_back(CB_HALL, MT * POMAX);  // (column c's block: the down's first pass starts on its K tiles)
-#endif
             }
-#ifndef SE_RS
-            cb_push_back(CB_HALL, HA);
-#endif
             cb_pop_front(CB_HOWN, MT * POMAX);
         }
-#ifdef SE_RS
         {  // (down + reduce-scatter) each finished sub-block's hand-off: +1 on its port's mailbox word of mine (the
            // words count up over the chunks: the port's targets do)
             DeviceZoneScopedN("SE-HAND");
@@ -267,7 +258,6 @@ void kernel_main() {
                 cb_pop_front(SE_FINC, nh);  // (the next chunk's hand-offs from the front again)
             }
         }
-#endif
         if (SE_XRING < NCH && m + SE_XRING < NCH && x_ct) {
             // (the ring: chunk m + SE_XRING into chunk m's slot - its rounds sent, its prep done (my hand-offs above
             // waited for the chunk's fins, after its prep op): the load lands under the chunks between)

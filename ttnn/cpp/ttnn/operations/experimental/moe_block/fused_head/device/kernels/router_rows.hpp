@@ -6,20 +6,6 @@
 // A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
 // kernel).
 #pragma once
-#ifndef RT_FOLD
-#define RT_FOLD 1
-#endif
-// (RT_SPLIT: a row tile's experts over two router cores - RT_HALF 0 / 1, its expert tiles from RT_HB, ET of them;
-// RT_ETF every expert tile: the bias, the keys' id bits and the joint rows are the whole row tile's)
-#ifndef RT_ETF
-#define RT_ETF ET
-#endif
-#ifndef RT_HB
-#define RT_HB 0
-#endif
-#ifndef RT_HALF
-#define RT_HALF 0
-#endif
 namespace rows_ {
 // (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
 FORCE_INLINE uint32_t fo(uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); }
@@ -68,29 +54,12 @@ FORCE_INLINE uint32_t bf16_of(uint32_t x, int32_t f) {
 }
 // the expert id bits of a top-K key (the low mantissa bits of its fp32 score)
 constexpr uint32_t em_of(uint32_t et) { return et * 32 <= 256 ? 0xFF : et * 32 <= 512 ? 0x1FF : 0x3FF; }
-// the fp32 score of expert eid (one of mine: expert tiles RT_HB .., ETL of them) for token column c - the fin's score
-// tiles at sv, transposed like the logits: (eid % 32, c) of tile eid / 32
-template <uint32_t ETL>
+// the fp32 score of expert eid for token column c - the fin's score tiles at sv, transposed like the logits:
+// (eid % 32, c) of tile eid / 32
 FORCE_INLINE uint32_t score_of(uint32_t sv, uint32_t eid, uint32_t c) {
-    return reinterpret_cast<const uint32_t*>(sv + ((eid >> 5) - RT_HB) * 4096)[fo(eid & 31, c)];
+    return reinterpret_cast<const uint32_t*>(sv + (eid >> 5) * 4096)[fo(eid & 31, c)];
 }
-// (split half 1) its picks' scores, for its partner's rows: the score of the key at (q, c) of the best page at (q, c)
-// of the page after its own PART page (sent with the best page)
-template <uint32_t K, uint32_t ET, uint32_t ETL>
-inline void picked(uint32_t bv, uint32_t sv, uint32_t c0, uint32_t c1) {
-#ifdef RT_PART
-    constexpr uint32_t EM = em_of(ET);
-    for (uint32_t c = c0; c < c1; ++c) {
-        for (uint32_t q = 0; q < K; ++q) {
-            const uint32_t key = reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];
-            reinterpret_cast<uint32_t*>(RT_PART + 4096)[fo(q, c)] = score_of<ETL>(sv, key & EM, c);
-        }
-    }
-#else
-    (void)bv, (void)sv, (void)c0, (void)c1;
-#endif
-}
-template <uint32_t K, uint32_t ET, uint32_t ETL>
+template <uint32_t K, uint32_t ET>
 inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
     // weights = score / their sum x scale in integers (the RISCs have no FPU, no 64-bit divide): the K scores in one
     // block exponent (the largest's top bit at 25: a sum of up to 32 below 2^31), the sum normalized to bit 30, its
@@ -107,19 +76,7 @@ inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, u
                 reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];  // (the top-K's key: id in the low bits)
             const uint32_t eid = key & EM;
             ids[q] = eid;
-            if ((eid >> 5) - RT_HB < ETL) {
-                w[q] = score_of<ETL>(sv, eid, c);
-            } else {  // (split: the partner half's pick - its key and score at the same place of its two PART pages)
-                w[q] = 0;
-#ifdef RT_PART
-                for (uint32_t r = 0; r < K; ++r) {
-                    if (reinterpret_cast<const uint32_t*>(RT_PART)[fo(r, c)] == key) {
-                        w[q] = reinterpret_cast<const uint32_t*>(RT_PART + 4096)[fo(r, c)];
-                        break;
-                    }
-                }
-#endif
-            }
+            w[q] = score_of(sv, eid, c);
             if (w[q] >> 31) {
                 w[q] = 0;  // (sigmoid and sqrt(softplus) scores are >= 0)
             }

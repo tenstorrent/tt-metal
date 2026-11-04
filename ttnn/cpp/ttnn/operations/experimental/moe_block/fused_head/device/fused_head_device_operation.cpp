@@ -44,14 +44,12 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.lay.on_engine,
         c.lay.GX,
         c.lay.compact,
-        c.lay.split,
         c.lay.xdram,
         c.shape.rows,
         c.shape.A,
         c.fidelity,
         c.w_dtype,
         c.ordered,
-        c.rows_cap,
         c.l1_free,
         args.x.tensor_spec(),
         args.w.tensor_spec(),
@@ -98,8 +96,6 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
         check_dram(*t, "an argument");
     }
     TT_FATAL(
-        args.latent.has_value() == bool(attrs.config.shape.latent), "fused_head: a latent model takes the latent out");
-    TT_FATAL(
         args.y.logical_shape()[-2] == s.y_rows && args.y.logical_shape()[-1] == s.y_cols,
         "fused_head: y must be [{}, {}]",
         s.y_rows,
@@ -134,7 +130,6 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_ROWS, &a.rows);
     set(SRC_XBUF, &a.xbuf);
     set(SRC_ROUTE, &a.route);
-    set(SRC_LATENT, a.latent ? &*a.latent : nullptr);
     set(SRC_RW, &a.w_router);
     set(SRC_RB, &a.router_bias);
     set(SRC_RIX, &a.router_index);

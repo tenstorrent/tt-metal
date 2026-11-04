@@ -976,7 +976,10 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
         wd.push_back(split_units(p, NPD, 1));
     }
     const RsPlan* rs = a.rs;
-    if (rs) {
+    if (rs == nullptr) {
+        fail("se_engine3: no reduce-scatter plan");
+    }
+    {
         if (!(rs->pwmax == PWDMAX && rs->MT == MT && rs->GX == GX && rs->GY == GY)) {
             fail(
                 "se_engine3: the RS plan's tiling (GX " + std::to_string(rs->GX) + " GY " + std::to_string(rs->GY) +
@@ -1042,7 +1045,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
     }
     XR = a.xring ? std::min(a.xring, NCH) : NCH;
     xring = XR < NCH;
-    xfree = xring && a.prep && !a.latent;
+    xfree = xring && !a.latent;
     xown_t = int64_t(XR) * nown * MT * KB;
     PFULL = a.latent ? LWMAX : KB;
     for (uint32_t d = 1; d <= kDestTiles; ++d) {
@@ -1053,7 +1056,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
 
     // se_engine3._rs_regions: the same at every W ring / h slot count
     Regions rsr0;
-    if (rs) {
+    {
         uint32_t hold = 0, finb = 0;
         size_t nhand = 0;
         for (uint32_t p = 0; p < rs->G; ++p) {
@@ -1115,7 +1118,6 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
             {"hall", int64_t(HSL) * GX * MT * POMAX * 2048},
             {"xin", int64_t(2) * MT * KB * 2048},
             {"acc", acc_pages * 4096},
-            {"out", rs ? 0 : int64_t(2) * MT * PWDMAX * 2048},  // (NOUT down passes)
             {"words", 256},
             {"xfree", xfree ? 16 * int64_t(NCH) : 0},
         };
@@ -1124,11 +1126,9 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
             seq.emplace_back("lat", int64_t(MT) * LWMAX * 2048);
             seq.emplace_back("latz", int64_t(a.shards - 1) * MT * LWMAX * 2048 + int64_t(NCH - 1) * LATP * 2048);
         }
-        if (a.prep) {
-            seq.emplace_back("po", int64_t(2) * PFULL * 2048);
-            if (a.latent) {
-                seq.emplace_back("lrdy", 16 * int64_t(std::max<uint32_t>(4, NCH)));
-            }
+        seq.emplace_back("po", int64_t(2) * PFULL * 2048);
+        if (a.latent) {
+            seq.emplace_back("lrdy", 16 * int64_t(std::max<uint32_t>(4, NCH)));
         }
         for (const auto& [k_, v] : seq) {
             set_region(off, k_, o);
@@ -1172,7 +1172,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
                 fail("the router logits on the engine: ETC x its row group in DEST");
             }
             int64_t zgrow = 0;
-            if (rs && rs->compact) {
+            if (rs->compact) {
                 for (RsDir d : {RsDir::Fwd, RsDir::Bwd}) {
                     zgrow += (int64_t(rs->transport.slots[static_cast<int>(d)]) * rs->P - rs->zone_tiles(d)) * 2048;
                 }
@@ -1236,9 +1236,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
     if (a.router) {  // (the router's buffers over a region another chip writes: those writes wait for "router done")
         const int64_t lo = at("rx"), hi = at("ro") + int64_t(ETC) * MT * NCH * 4096;
         auto over = [&](const std::string& k, int64_t v) { return v > 0 && at(k) < hi && lo < at(k) + v; };
-        if (rs) {
-            rtr_zones = over("arrf", region(rs_sizes, "arrf")) || over("arrb", region(rs_sizes, "arrb"));
-        }
+        rtr_zones = over("arrf", region(rs_sizes, "arrf")) || over("arrb", region(rs_sizes, "arrb"));
         if (a.latent) {
             rtr_latz = over("latz", int64_t(shards - 1) * MT * LWMAX * 2048 + int64_t(NCH - 1) * LATP * 2048);
         }
@@ -1295,7 +1293,7 @@ uint32_t SeEngineSizing::bsize(uint32_t c, uint32_t b) const {
 
 bool SeEngineSizing::fin_rows() const {
     const RsPlan* rs = args.rs;
-    return rs != nullptr && rs->scatter == -1 && NCH > 1 && shards > 1 && (CR / shards) % MT != 0;
+    return rs->scatter == -1 && NCH > 1 && shards > 1 && (CR / shards) % MT != 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1333,9 +1331,9 @@ std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, u
     return {off, o};
 }
 
-int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K, bool split) {
+int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K) {
     const uint32_t ET = E / 32;
-    return router_layout(G, split ? ET / 2 : ET, K, 1, ET).second;
+    return router_layout(G, ET, K, 1, ET).second;
 }
 
 int64_t routing_header_bytes(uint32_t EPC, uint32_t M) {
@@ -1393,16 +1391,7 @@ RoutingSizes routing_a2a_sizes(
     for (size_t i = 0; i < why.size(); ++i) {
         w += (i ? "; " : "") + why[i];
     }
-    return RoutingSizes{
-        M,
-        IC,
-        plan_l1,
-        port_l1,
-        PCAP,
-        2 * int64_t(N) * PCAP,
-        2 * 1024 + 4 * (2 * int64_t(EPC) + 3 * N) + 64,
-        why.empty(),
-        w};
+    return RoutingSizes{M, IC, plan_l1, port_l1, why.empty(), w};
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1438,7 +1427,7 @@ std::variant<RoutingPaths, std::string> routing_paths(uint32_t R, uint32_t C, bo
             if (ring || p > 0) {
                 ch.prev = std::make_pair(r, int(pymod(p - 1, C)));
             }
-            // fabric_all_gather_py._schedule(p, C, ring, balance=ring): which directions send shards
+            // the gather's schedule: which directions send shards
             int G = int(C);
             if (ring && G % 2 == 0 && G >= 4) {
                 ch.sends[kFwd] = G / 2 > 0;

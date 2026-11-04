@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_ct.hpp"
-constexpr auto x_args = TensorAccessorArgs<15>();
+constexpr auto x_args = TensorAccessorArgs<14>();
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_walk.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_la_reader.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_rs_reader.hpp"

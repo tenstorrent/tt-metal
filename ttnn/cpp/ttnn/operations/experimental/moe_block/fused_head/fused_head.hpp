@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ttnn.experimental.moe_block.fused_head: the fused head: x all-gather, shared expert + reduce-scatter, router, routing
-// exchange + planner, dispatch prep, latent (one program a chip). Reference: models/demos/moe_block/tt/fused_head.py
-// HeadSE3 and moe_block.py FusedHead on mstaletovic/moe-trim.
+// exchange + planner, dispatch prep (one program a chip).
 //
 // The host plan (device/head_plan.hpp) and the host model of the programs (device/head_program.hpp) are made once a
 // block and kept in its resources; a call takes the resources' persistent words and tensors and launches the device
@@ -64,7 +63,6 @@ struct FusedHeadOutputs {
     Tensor rows;                   // the owners' joint routing rows [RB, 64 K] uint16
     Tensor xbuf;                   // the dispatch buffer [N rows / TP, H or latent] (this chip's owned slots written)
     Tensor route;                  // the owned tokens' route words
-    std::optional<Tensor> latent;  // the owners' latent rows [rows / TP, latent] (a latent model)
     // the combine plan the routing planner writes (the routed experts' combine reads it)
     Tensor counts, regions, token_index, table, plan;
 };

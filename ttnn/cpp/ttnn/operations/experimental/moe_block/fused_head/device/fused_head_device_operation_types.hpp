@@ -58,7 +58,6 @@ struct FusedHeadInputs {
     Tensor rows{};                                     // the owners' joint routing rows
     Tensor xbuf{};                                     // the dispatch buffer
     Tensor route{};                                    // the owned tokens' route words
-    std::optional<Tensor> latent;                      // the owners' latent rows (a latent model)
     Tensor slots{};                                    // the routing exchange's slots
     Tensor fslots{};                                   // its forwarding slots
     Tensor counts{}, regions{}, token_index{}, table{}, plan{};  // the combine plan the routing planner writes

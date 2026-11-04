@@ -169,9 +169,8 @@ struct SeEngineArgs {
     uint32_t rows = 0, H = 0, I = 0;
     uint32_t GX = 11, GY = 10, MT = 1, KB = 16;
     uint32_t shards = 1;
-    const RsPlan* rs = nullptr;
-    std::optional<uint32_t> latent;  // tiles a chip
-    bool prep = false;
+    const RsPlan* rs = nullptr;                           // the down + reduce-scatter's plan (required)
+    std::optional<uint32_t> latent;                       // tiles a chip
     std::optional<std::pair<uint32_t, uint32_t>> router;  // (ET, KTO): the logits on the engine
     int64_t arena_max = kArenaMax;
     WeightDtype w_dtype = WeightDtype::Bf8;
@@ -219,7 +218,7 @@ struct SeEngineSizing {
 // ---- router_stream.RouterStream ----
 // (offsets, bytes) of the router cores' arena regions at K block kbr.
 std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, uint32_t kbr, uint32_t ETF = 0);
-int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K, bool split);
+int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K);
 
 // ---- combine_rf/routing_a2a.py ----
 int64_t routing_header_bytes(uint32_t EPC, uint32_t M);
@@ -227,7 +226,7 @@ int64_t routing_slot_bytes(uint32_t S, uint32_t K, uint32_t EPC, uint32_t M);
 int64_t routing_worst_rows(uint32_t N, uint32_t S, uint32_t K, uint32_t EPC);
 struct RoutingSizes {
     uint32_t M;
-    int64_t inst_cap, plan_l1, port_l1, packet, slots_dram, local;
+    int64_t inst_cap, plan_l1, port_l1;
     bool fits;
     std::string why;
 };

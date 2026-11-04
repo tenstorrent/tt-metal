@@ -15,18 +15,10 @@ constexpr uint32_t KBD = get_compile_time_arg_val(6), NSD = get_compile_time_arg
                    NPD = get_compile_time_arg_val(8);
 constexpr uint32_t NWS = get_compile_time_arg_val(9), WSLOT = get_compile_time_arg_val(10),
                    WTB = get_compile_time_arg_val(11);
-constexpr uint32_t NTH = get_compile_time_arg_val(12), CR = get_compile_time_arg_val(13),
-                   PWDMAX = get_compile_time_arg_val(14);
-constexpr uint32_t WV = get_compile_time_arg_val(15), WFREE = get_compile_time_arg_val(16),
-                   NOUT = get_compile_time_arg_val(17);
-constexpr auto w_args = TensorAccessorArgs<18>();
+constexpr uint32_t WV = get_compile_time_arg_val(12), WFREE = get_compile_time_arg_val(13);
+constexpr auto w_args = TensorAccessorArgs<14>();
 constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
-#ifdef SE_LAT
-constexpr auto l_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
-#endif
-#ifdef SE_PREP
 constexpr auto p_args = TensorAccessorArgs<SE_PREP_CT0>();  // (the dispatch buffer [N S, W] row-major)
-#endif
 #ifdef SE_RTR
 FORCE_INLINE volatile tt_l1_ptr uint32_t* ew(uint32_t o) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + o);
@@ -34,8 +26,8 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* ew(uint32_t o) {
 constexpr auto rx_args = TensorAccessorArgs<SE_RTR_CT0>();  // (the chip's x shard [rows, H / TP], DRAM)
 constexpr auto rw_args = TensorAccessorArgs<rx_args.next_compile_time_args_offset()>();  // (W_r^T [E, H / TP])
 #endif
-constexpr uint32_t CB_WIN = 1, CB_OUT = 4, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
-constexpr uint32_t NPD1 = NPD ? NPD : 1, NSD1 = NSD ? NSD : 1;          // (never divided by 0)
+constexpr uint32_t CB_WIN = 1, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
+constexpr uint32_t NSD1 = NSD ? NSD : 1;                    // (never divided by 0)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
 }
@@ -172,28 +164,6 @@ void kernel_main() {
         // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
         const uint32_t ro = get_read_ptr(SE_RO);
         for (uint32_t r = 0; r < SE_MTR; ++r) {
-#ifdef SE_RTR_SPLIT
-            // (the row tile's experts over two router cores: tile g to half g / SE_RTR_SPLIT's destination, at
-            // g % SE_RTR_SPLIT; each half counted its own tiles)
-            const uint32_t a0 = R0 + 10 + SE_RD * r;
-            uint32_t n[2] = {0, 0};
-            for (uint32_t e = 0; e < etc; ++e) {
-                const uint32_t g = re0 + e, hh = g >= SE_RTR_SPLIT ? 1 : 0;
-                const uint32_t dw = se_ra(a0 + 3 * hh), base = se_ra(a0 + 3 * hh + 1);
-                noc_async_write(
-                    ro + (e * SE_MTR + r) * 4096,
-                    get_noc_addr(dw & 0xFFFF, dw >> 16, base + (g - hh * SE_RTR_SPLIT) * 4096),
-                    4096);
-                ++n[hh];
-            }
-            noc_async_write_barrier();  // (landed before the counts)
-            for (uint32_t hh = 0; hh < 2; ++hh) {
-                const uint32_t dw = se_ra(a0 + 3 * hh), ctr = se_ra(a0 + 3 * hh + 2);
-                if (n[hh]) {
-                    noc_semaphore_inc(get_noc_addr(dw & 0xFFFF, dw >> 16, ctr), n[hh]);
-                }
-            }
-#else
             const uint32_t dw = se_ra(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
             const uint32_t base = se_ra(R0 + 11 + 3 * r), ctr = se_ra(R0 + 12 + 3 * r);
             for (uint32_t e = 0; e < etc; ++e) {
@@ -203,7 +173,6 @@ void kernel_main() {
             if (etc) {
                 noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
             }
-#endif
         }
         cb_pop_front(SE_RO, SE_ETC * SE_MTR);
     }
@@ -217,9 +186,6 @@ void kernel_main() {
         }
     }
 #endif
-    constexpr bool rout = true;
-#else
-    constexpr bool rout = true;
 #endif
     {
         {  // (after my core's x load: the DRAM serves the x first - the gather is waiting on it)
@@ -282,12 +248,11 @@ void kernel_main() {
         }
     };
     const uint32_t NR = NCH * NB;                                // (W rounds a call)
-    uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
+    uint32_t ws = 0, woff = 0, wr = 0, wc = NWS;                 // (send, my offset, pushed, credited)
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) {
         ++ws;  // (skip rounds I do not hold)
     }
-#ifdef SE_RS
     // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (its pages pushed - the arg's
     // high half: P, or with compact zones my tiles of its block) once my arrival counter reached its threshold (the
     // low half; 0: nothing comes - a block I hold no tile of); the fin sub-block to y
@@ -300,7 +265,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* arrf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(f0 + 4));
     volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(f0 + 5));
     uint32_t af = 0, ab = 0, fo = 0;
-    const uint32_t NPY = 0;  // (no plain y writes: the fin sub-block is the output)
 // (chunks: the counters count up over them - a chunk's thresholds + its index x the arrivals a chunk; args at
 // f0 + 6: the fin's y0 of chunks 1 .., the ports facing my fwd / bwd upstream (NoC x | y << 16), their zone-free
 // word, my FINB-free word, the ports reading my FINB)
@@ -327,39 +291,17 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(NCH > 1 ? se_ra(f0 + 6 + NCH + 2) : 0);
     const uint32_t fnr = NCH > 1 ? se_ra(f0 + 6 + NCH + 3) : 0;
 #ifdef SE_LAT
-    // (the latent: my rows of my own block - mine and every other chip's slice of them - to the owner's latent [RB, G
-    // LT])
-    const uint32_t L0 = f0 + 6 + CHX, lnr = se_ra(L0), lr0 = se_ra(L0 + 1);
-    const uint32_t lnsrc = se_ra(L0 + 2), lzone = se_ra(L0 + 4);
-    volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(L0 + 3));
-    const uint32_t LT = se_ra(L0 + 5), lc0 = se_ra(L0 + 6), llw = se_ra(L0 + 7);
-    const uint32_t lp = se_ra(L0 + 8), lorow = se_ra(L0 + 9);
-    const auto lg = TensorAccessor(l_args, se_ra(L0 + 10), 2048);
-    // (chunks done: my own rows written; the arrivals in - chunk m's latent block at LAT + m LATP pages, its zone
-    // LATZ + the same; the owner's rows of chunk m at m SE_LRB)
-#ifdef SE_PREP
-    const uint32_t NLO = 0,
-                   NLI = lnr == 0 || lnsrc == 0 ? 0 : NCH;  // (dispatch prep: the compute untilizes my rows' latent)
+    // (the latent: once every other chip's slice of my rows has landed (lctr: lnsrc arrivals a chunk), the compute's
+    // prep may untilize them)
+    const uint32_t L0 = f0 + 6 + CHX, lnr = se_ra(L0), lnsrc = se_ra(L0 + 1);
+    volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(L0 + 2));
+    const uint32_t NLI = lnr == 0 || lnsrc == 0 ? 0 : NCH;
+    uint32_t li = 0;
 #else
-    const uint32_t NLO = lnr == 0 ? 0 : NCH, NLI = lnr == 0 || lnsrc == 0 ? 0 : NCH;
+    constexpr uint32_t NLI = 0, li = 0;
 #endif
-    uint32_t lo = 0, li = 0;
-    auto lwrite = [&](uint32_t src, uint32_t q, uint32_t m) {  // (rows lr0 .. of a [MT][LWMAX] block, chip q's columns)
-        for (uint32_t i = 0; i < lnr; ++i) {
-            for (uint32_t t = 0; t < llw; ++t) {
-                noc_async_write(
-                    src + ((lr0 + i) * SE_LWMAX + t) * 2048,
-                    lg.get_noc_addr((lorow + m * SE_LRB + i) * G_LT + q * LT + lc0 + t),
-                    2048);
-            }
-        }
-    };
-#else
-    constexpr uint32_t NLO = 0, NLI = 0, lo = 0, li = 0;
-#endif
-#ifdef SE_PREP  // (dispatch prep: per unit the dispatch buffer's row, byte offset in it, bytes a row)
 #ifdef SE_LAT
-    const uint32_t P0 = f0 + 6 + 11 + CHX;
+    const uint32_t P0 = f0 + 6 + 3 + CHX;
 #else
     const uint32_t P0 = f0 + 6 + CHX;
 #endif
@@ -367,31 +309,17 @@ void kernel_main() {
     const auto pg = TensorAccessor(p_args, se_ra(P0 + 1), SE_PREP_ROW);
     uint32_t fsrc = 0, frow = 0,
              fco = 0;  // (the last prep unit: the fence's source / rows - mine: nothing else writes them)
-#else
-    constexpr uint32_t pnu = 0;
-#endif
     uint32_t pu = 0;
     while (ws < NR || wr < NR || wc < NR || af < NCH * naf || ab < NCH * nab || fo < NCH * fcount || ff < NFF ||
-           lo < NLO || li < NLI || pu < pnu || !rout) {
+           li < NLI || pu < pnu) {
         invalidate_l1_cache();
 #ifdef SE_LAT
-        if (lo < NLO && cb_pages_available_at_front(SE_LAT, (lo + 1) * SE_LATP)) {
-            lwrite(get_read_ptr(SE_LAT) + lo * SE_LATP * 2048, lp, lo);
-            ++lo;
-        }
         if (li < NLI && *lctr >= (li + 1) * lnsrc) {
-#ifdef SE_PREP
             cb_reserve_back(SE_LRDY, 1);  // (the compute's prep may untilize the arrivals)
             cb_push_back(SE_LRDY, 1);
-#else
-            for (uint32_t sl = 0; sl < lnsrc; ++sl) {
-                lwrite(lzone + li * SE_LATP * 2048 + sl * MT * SE_LWMAX * 2048, sl < lp ? sl : sl + 1, li);
-            }
-#endif
             ++li;
         }
 #endif
-#ifdef SE_PREP
         if (pu < pnu && cb_pages_available_at_front(SE_PO, SE_PREP_FULL)) {  // a prep unit's 32 rows to the buffer
             const uint32_t src = get_read_ptr(SE_PO), q = P0 + 2 + 3 * pu;
             const uint32_t row = se_ra(q), co = se_ra(q + 1), nb = se_ra(q + 2);
@@ -407,7 +335,6 @@ void kernel_main() {
             cb_pop_front(SE_PO, SE_PREP_FULL);
             ++pu;
         }
-#endif
         if (af < NCH * naf) {
             const uint32_t sl = af % naf, mc = af / naf;
             if (NCH > 1 && sl == 0 && mc > zsf) {  // (chunk mc's first slot: chunk mc - 1's zone all read (popped) -
@@ -494,11 +421,6 @@ void kernel_main() {
             cb_push_back(SE_FFREE, 1);
             ++ff;
         }
-#else
-    const uint32_t NPY = NCH * NPD;
-    while (ws < NR || wr < NR || wc < NR || p < NPY) {
-        invalidate_l1_cache();
-#endif
         if (wi < WPN) {
             prefetch(0);  // (keep the window full)
         }
@@ -544,35 +466,14 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(cxv, se_ra(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
             ++wc;
         }
-        if (p < NPY && cb_pages_available_at_front(CB_OUT, MT * PWDMAX)) {  // down pass p's y (chunk p / NPD)
-            cb_wait_front(CB_OUT, MT * PWDMAX);
-            const uint32_t m = p / NPD1, pd = p % NPD1, l1 = get_read_ptr(CB_OUT);
-            uint32_t c0 = n0d;
-            for (uint32_t i = 0; i < pd; ++i) {
-                c0 += se_ra(wd0 + i);
-            }
-            const uint32_t w = se_ra(wd0 + pd);
-            for (uint32_t r = 0; r < MT; ++r) {
-                for (uint32_t t = 0; t < w; ++t) {
-                    noc_async_write(
-                        l1 + (r * PWDMAX + t) * 2048, yg.get_noc_addr(GROW(m, cy * MT + r) * NTH + c0 + t), 2048);
-                }
-            }
-            noc_async_write_barrier();
-            cb_pop_front(CB_OUT, MT * PWDMAX);
-            ++p;
-        }
     }
-#ifdef SE_PREP
     if (pu) {  // (the prep's fence: a non-posted rewrite of 4 B in every DRAM bank - the last unit's rows, one a bank -
         // after the posted writes on the same VC: its ack means they all landed)
         for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
             noc_async_write(fsrc + i * SE_PREP_FULL * 64, pg.get_noc_addr(frow + i) + fco, 4);
         }
     }
-#endif
     noc_async_write_barrier();
-#ifdef SE_RS
     {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)
         if (nfmax) {
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - NCH * nfmax);
@@ -584,7 +485,6 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ffw)), 0u - NFF * fnr);
         }
     }
-#endif
 #ifdef SE_LAT
     if (lnr && lnsrc) {
         noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(lctr)), 0u - NCH * lnsrc);  // (re-arm)

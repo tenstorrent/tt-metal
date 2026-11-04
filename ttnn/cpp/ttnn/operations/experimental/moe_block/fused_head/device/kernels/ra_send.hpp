@@ -6,9 +6,6 @@
 // A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
 // kernel).
 #pragma once
-#ifndef RA_NF_
-#define RA_NF_ 16  // (a forwarding port's slots: their flags, then the landed count - RoutingStream.NF)
-#endif
 // one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
 // planner core 0; kind 1: the next forwarding port's DRAM slot page (fbase: the forward slots tensor, slot | page <<
 // 8), its flag on that port), chunks of MAXP, the last with the increment. (A forward slot in DRAM, not the port's L1:
@@ -241,11 +238,8 @@ struct RAFwd {
                 const uint32_t par = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[14];
                 const uint32_t src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[15];
                 uint32_t bytes = ra_bytes(pb, RA_M, RA_HBP);
-                if (bytes > PCAP) {  // (debug: a slot whose counts say more than a slot holds - not this call's
-                                     // packet: recorded in the flag's spare words (bytes, how often), sent clamped)
-                    f[1] = bytes;
-                    f[2] = f[2] + 1;
-                    f[3] = src;
+                if (bytes >
+                    PCAP) {  // (a slot whose counts say more than a slot holds - not this call's packet: clamped)
                     bytes = PCAP;
                 }
                 ra_hop(

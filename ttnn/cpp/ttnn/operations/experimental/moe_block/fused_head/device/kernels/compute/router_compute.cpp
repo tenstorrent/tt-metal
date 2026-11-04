@@ -30,7 +30,7 @@ constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_v
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
 constexpr uint32_t XR = 0, WR = 1, HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, FINC = 7, PSYNC = 8;
 constexpr uint32_t BEST = 9, IDX = 11;
-constexpr uint32_t EM = rows_::em_of(RT_ETF);
+constexpr uint32_t EM = rows_::em_of(ET);
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
 // a score tile's top-K keys: the fp32 score with its low mantissa bits (EM) replaced by the expert id (the uint16 id
@@ -105,7 +105,7 @@ void kernel_main() {
     cb_push_back(PSYNC, 1);
     cb_wait_front(PSYNC, 1);  // (UNPACK: the partials are in L1)
     cb_pop_front(PSYNC, 1);
-    cb_wait_front(BIAS, RT_ETF);
+    cb_wait_front(BIAS, ET);
     const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
     for (uint32_t o = 0; o < nops; ++o) {
         const uint32_t op = get_arg_val<uint32_t>(1 + o), kind = op & 0xFF, e = op >> 8;
@@ -193,7 +193,7 @@ void kernel_main() {
 #endif
                 reconfig_data_format_srca(ARRF, BIAS);
                 copy_init(BIAS);
-                copy_tile(BIAS, RT_HB + i, 2);
+                copy_tile(BIAS, i, 2);
                 add_binary_tile_init();
                 add_binary_tile(0, 2, 1);
                 // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key: the id tile two on, DEST 3)
@@ -256,26 +256,6 @@ void kernel_main() {
                     0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
             }
         }
-#if defined(RT_SPLIT) && RT_HALF == 0
-        {  // my best K (DEST tile 0) against my partner's (its BEST page - the other expert half, its candidates
-           // below it - into DEST tile 1): one round as a first pair, the K best of the 64 on top (keys unique - the
-           // expert id in the low bits: the same picks as one core over every tile)
-            DeviceZoneScopedN("SE-RMERGE");
-            cb_wait_front(RT_PART_CB, 1);
-            reconfig_data_format_srca(RT_PART_CB);
-            copy_init(RT_PART_CB);
-            copy_tile(RT_PART_CB, 0, 1);
-            ckernel::topk_tile_init<true, false>();
-            ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
-            for (uint32_t m = 0; m + 1 < NM; ++m) {
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, KS);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, KS, LK, false);
-            }
-            ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
-            ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
-            cb_pop_front(RT_PART_CB, 1);
-        }
-#endif
         tile_regs_commit();
         cb_reserve_back(BEST, 1);
         tile_regs_wait();
@@ -292,34 +272,18 @@ void kernel_main() {
            // the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
             const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
             const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), sv = get_arg_val<uint32_t>(t1 + 4);
-#if RT_HALF == 0
             PACK(({
                 *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                rows_::make<K, RT_ETF, ET>(bvc, sv, olc, scl, 24, 32);
+                rows_::make<K, ET>(bvc, sv, olc, scl, 24, 32);
                 *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
             }));
             MATH(({
                 volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
                 while (*ms == 0) {
                 }
-                rows_::make<K, RT_ETF, ET>(bvc, sv, olc, scl, 16, 24);
+                rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24);
                 *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             }));
-#else  // (half 1 hands its best K to its partner, with its picks' scores: no rows)
-            (void)olc, (void)scl;
-            PACK(({
-                *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                rows_::picked<K, RT_ETF, ET>(bvc, sv, 24, 32);
-                *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
-            }));
-            MATH(({
-                volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
-                while (*ms == 0) {
-                }
-                rows_::picked<K, RT_ETF, ET>(bvc, sv, 16, 24);
-                *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
-            }));
-#endif
         }
 #ifdef RT_ROUTE
         // dispatch prep: the route words of my 32 owned tokens from the joint rows (BRISC's word 80: all shares

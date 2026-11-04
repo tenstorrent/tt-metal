@@ -41,7 +41,6 @@ void bind_head_plan(nb::module_& mod) {
         .def_ro("on_engine", &HeadLayout::on_engine)
         .def_ro("GX", &HeadLayout::GX)
         .def_ro("compact", &HeadLayout::compact)
-        .def_ro("split", &HeadLayout::split)
         .def_ro("xdram", &HeadLayout::xdram)
         .def(nb::self == nb::self)
         .def("__repr__", [](const HeadLayout& l) { return describe_layout(l); });
@@ -102,7 +101,6 @@ void bind_fused_head(nb::module_& mod) {
         .def_ro("rows", &FusedHeadOutputs::rows)
         .def_ro("xbuf", &FusedHeadOutputs::xbuf)
         .def_ro("route", &FusedHeadOutputs::route)
-        .def_ro("latent", &FusedHeadOutputs::latent)
         .def_ro("counts", &FusedHeadOutputs::counts)
         .def_ro("regions", &FusedHeadOutputs::regions)
         .def_ro("token_index", &FusedHeadOutputs::token_index)
@@ -161,7 +159,7 @@ void bind_fused_head(nb::module_& mod) {
                 holds that L1 for good: a block shares one arena between its ops).
 
         Returns:
-            FusedHeadOutputs: se, rows, xbuf, route, latent, and the combine plan (counts, regions, token_index, table,
+            FusedHeadOutputs: se, rows, xbuf, route and the combine plan (counts, regions, token_index, table,
             plan) - the resources' tensors, rewritten each call.
 
         The plan, the host model and the persistent words are made on the first call and kept in the resources; a

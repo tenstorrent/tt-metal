@@ -2,24 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The fused head's programs, one a chip (reference: models/demos/moe_block/tt/fused_head.py HeadSE3._run and the
-// pieces it assembles - se_engine3.SeEngine3.pieces, x_gather3.XGather3.pieces, router_stream.RouterStream.pieces,
-// routing_stream.RoutingStream - on mstaletovic/moe-trim).
+// The fused head's programs, one a chip: the shared-expert engine, the x gather, the router and the routing exchange.
 //
 // HeadModel is everything the build derives from the planned layout and the mesh, once a block (the engine's sizing,
 // the reduce-scatter plan, the gather's rings / ports / copy cores, the router cores and their layout, the routing
 // exchange's senders, paths and planner instances, the persistent words each piece needs). build_head_workload makes
-// the per-chip programs from a model, the persistent words' addresses and the tensors. Differences from the
-// reference, none in what the kernels compute or in their NoC / fabric traffic:
+// the per-chip programs from a model, the persistent words' addresses and the tensors:
 //  * the arena is an L1 tensor given to the op (by default one the block's resources keep), not one allocated each
 //    call: the same address on every core and chip, so the CBs over its regions bind to it at their offsets;
-//  * the persistent words (mailboxes, flags, counters, the reference's global semaphores) are word tensors of the
-//    block's resources;
+//  * the persistent words (mailboxes, flags, counters) are word tensors of the block's resources;
 //  * every address argument is recorded with its source and offset (HeadPatches): a cache hit rewrites only the
 //    arguments of sources whose address moved;
-//  * addresses the reference baked into defines are common runtime args (kernels/head_kernel_contract.hpp);
+//  * addresses are common runtime args, never defines (kernels/head_kernel_contract.hpp);
 //  * the fabric connections are main's (append_fabric_connection_rt_args); the routing planner splits torus ties by
-//    the source's parity, as main's fabric (the reference's default, tie_mode 2).
+//    the source's parity, as main's fabric.
 
 #pragma once
 
@@ -68,7 +64,6 @@ struct HeadProgramConfig {
     float route_scale = 1.0f;
     bool sqrtsoftplus = false;              // router score sqrt(softplus); else sigmoid
     bool ordered = true;                    // MoEBlockConfig.deterministic
-    uint32_t rows_cap = 0;                  // the plan's row capacity (0: the worst case)
     uint32_t handoff_bytes = 16;            // MoEBlockConfig.handoff_bytes()
     int64_t l1_free = kL1Free - kL1Margin;  // the free L1 the plan assumed (the engine sizes its arena under its cap)
 
@@ -94,7 +89,6 @@ enum HeadSrc : uint16_t {
     SRC_ROWS,    // the owners' joint routing rows
     SRC_XBUF,    // the dispatch buffer
     SRC_ROUTE,   // the owned tokens' route words
-    SRC_LATENT,  // the owners' latent rows
     SRC_RW,      // W_r^T [E, H / TP]
     SRC_RB,      // the router bias tiles
     SRC_RIX,     // the expert index tiles
@@ -168,10 +162,8 @@ struct HeadTensorShapes {
     uint32_t rows_rows, rows_cols;                           // uint16 ROW_MAJOR
     uint32_t xbuf_rows, xbuf_cols;                           // bf16 ROW_MAJOR
     uint32_t route_words;                                    // uint32 ROW_MAJOR [1, route_words]
-    uint32_t latent_rows, latent_cols;                       // bf16 TILE (0: no latent)
     uint32_t slots_rows, fslots_rows, slot_words;            // uint32 ROW_MAJOR [rows, slot_words]
     std::array<std::pair<uint32_t, uint32_t>, 5> plan_outs;  // uint32 ROW_MAJOR
-    uint32_t w_tiles_per_region, w_regions;                  // the engine weights: regions of tiles (bank-sharded)
     uint32_t arena_bytes;
 };
 HeadTensorShapes head_tensor_shapes(const HeadModel& model);

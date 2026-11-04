@@ -135,16 +135,6 @@ void kernel_main() {
         }
         const uint64_t arr_noc = get_noc_addr(px, py, arrival);
         uint32_t h = 0, unflushed = 0;
-#ifndef RA_N_
-#define RA_N_ 1
-#define RA_M_ 1
-#define RA_EPC_ 1
-#define RA_ME_ 0
-#define RA_HBP_ 64
-#define RA_BB_ 16
-#define RA_BBP_ 16
-#define RA_MAXP_ 64
-#endif
         auto rpoll = [&]() {  // (every matmul core's router phase is over: the zones, LATZ free - also between the x
             // gather's packets: the upstream's chunk 0 reduce-scatter waits for it)
             if (!rtold && *rdone >= rneed) {

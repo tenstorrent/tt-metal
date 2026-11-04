@@ -74,7 +74,7 @@ int64_t region_of(const Regions& r, const std::string& k) {
 
 // head_plan.cores_check: every per-core requirement past the matmul cores' arena; "" or why not.
 std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsPlan& rs, int64_t arena) {
-    const uint32_t G = shape.G, L = shape.links, gx = shape.grid[0], gy = shape.grid[1];
+    const uint32_t G = shape.G, L = shape.links, gy = shape.grid[1];
     const bool ring = shape.ring && G > 2;
     if (rs.P >= 256 || (G > 4 && rs.scatter != -2)) {
         return "reduce-scatter counts word: blocks of < 256 tiles (P " + s(rs.P) + "), past TP 4 the rows scatter only";
@@ -94,22 +94,13 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
         }
     }
     const uint32_t nrt = shape.rows / 32 / G;
-    const uint32_t S2 = lay.split ? 2 : 1;
     if (lay.GX * lay.GY / L > 128) {
         return "a port's reduce-scatter cores: " + s(lay.GX * lay.GY / L) + " > 128 (x_gather3's rdc / seen tables)";
     }
     if (3 * L > gy) {
         return "mover column: " + s(2 * L) + " ports + " + s(L) + " copy cores > " + s(gy) + " cells";
     }
-    if (nrt + 2 * L + 1 <= gy) {
-        if (lay.split && lay.GX > gx - 2) {
-            return "router split: column " + s(gx - 2) + " must be free (" + s(lay.GX) + " matmul core columns)";
-        }
-    } else {
-        if (lay.split) {
-            return "router split: " + s(nrt) + " router cores + " + s(2 * L) +
-                   " ports + the watcher > the mover column's " + s(gy) + " cells";
-        }
+    if (nrt + 2 * L + 1 > gy) {
         const int64_t free = (int64_t(gy) - lay.GY) * lay.GX;
         const bool rect = lay.xdram && !lay.on_engine && router_rect(nrt, lay.GX, gy - lay.GY) != 0;
         if (lay.GY >= gy || !(nrt <= lay.GX || (lay.on_engine && nrt <= free) || rect)) {
@@ -120,9 +111,9 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
                    ")";
         }
     }
-    const uint32_t nc = S2 * nrt;
-    const uint32_t ET = shape.E / 32, ETL = ET / S2, KT = shape.H / G / 32;
-    auto layout = [&](uint32_t kbr) { return router_layout(G, ETL, shape.K, kbr, ET); };
+    const uint32_t nc = nrt;
+    const uint32_t ET = shape.E / 32, KT = shape.H / G / 32;
+    auto layout = [&](uint32_t kbr) { return router_layout(G, ET, shape.K, kbr, ET); };
     uint32_t best = 0;
     for (uint32_t d = 1; d < 5; ++d) {
         if (KT % d == 0 && layout(d).second <= arena) {
@@ -134,10 +125,10 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
         return "router cores: " + kb0(rbytes) + " KB > the arena's " + kb0(arena) + " KB";
     }
     int64_t ns = ceil_div(nc, L);
-    while (!lay.on_engine && ns > 1 && int64_t(G - 1) * ns * ETL * 4096 > arena / 2) {
+    while (!lay.on_engine && ns > 1 && int64_t(G - 1) * ns * ET * 4096 > arena / 2) {
         --ns;
     }
-    const int64_t pbuf = int64_t(G - 1) * ns * ETL * 4096;
+    const int64_t pbuf = int64_t(G - 1) * ns * ET * 4096;
     if (pbuf > arena) {
         return "the ports' logits sub-blocks: " + kb0(pbuf) + " KB > the arena's " + kb0(arena) + " KB";
     }
@@ -378,8 +369,8 @@ bool router_on_engine(
     return eng < rc;
 }
 
-uint32_t engine_width(const HeadShape& shape, bool split) {
-    int64_t GX = std::min<int64_t>(int64_t(shape.grid[0]) - 1 - (split ? 1 : 0), shape.I / 32);
+uint32_t engine_width(const HeadShape& shape) {
+    int64_t GX = std::min<int64_t>(int64_t(shape.grid[0]) - 1, shape.I / 32);
     if (shape.latent) {
         GX = std::min<int64_t>(GX, *shape.latent / 32 / shape.G);
     }
@@ -427,7 +418,7 @@ std::vector<uint32_t> k_steps(const HeadShape& shape) {
 std::string describe_layout(const HeadLayout& lay) {
     return "matmul cores " + s(lay.GX) + "x" + s(lay.GY) + " MT " + s(lay.MT) + ", " + s(lay.NCH) + " row chunk" +
            (lay.NCH > 1 ? "s" : "") + ", K step " + s(lay.KB) + ", router " +
-           (lay.on_engine ? "on the matmul cores" : "cores") + (lay.split ? ", split" : "");
+           (lay.on_engine ? "on the matmul cores" : "cores");
 }
 
 HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) {
@@ -458,7 +449,6 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         if (shape.latent) {
             a.latent = *shape.latent / 32 / shape.G;
         }
-        a.prep = true;
         if (lay.on_engine) {
             a.router = std::make_pair(shape.E / 32, shape.H / shape.G / 32);
         }
@@ -473,7 +463,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         const std::string why = err.what();
         return {std::nullopt, 0, {}, why.empty() ? "sizing failed" : why};
     }
-    const int64_t need = al64(router_min_bytes(shape.G, shape.E, shape.K, lay.split));
+    const int64_t need = al64(router_min_bytes(shape.G, shape.E, shape.K));
     if (need > cap) {
         return {std::nullopt, need, eng->sizes, "router cores' arena " + kb0(need) + " KB > " + kb0(cap) + " KB"};
     }
@@ -571,33 +561,18 @@ std::pair<double, Parts> head_cost(
 }
 
 std::vector<HeadPlanned> head_plan_layouts(
-    const HeadShape& shape,
-    const ArenaMax& arena_max,
-    bool keep_unfit,
-    RouterPlacementMode placement,
-    bool split,
-    bool xdram) {
+    const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit, bool xdram) {
     std::vector<HeadPlanned> out;
     const uint32_t GXe = engine_width(shape);
     for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
         for (uint32_t kb : k_steps(shape)) {
-            std::optional<bool> pref;
-            if (placement == RouterPlacementMode::Measured) {
-                pref = router_on_engine(shape.E, shape.H, shape.I, shape.G, shape.rows, shape.latent, GXe, GY, MT, NCH);
-            }
+            const bool pref =
+                router_on_engine(shape.E, shape.H, shape.I, shape.G, shape.rows, shape.latent, GXe, GY, MT, NCH);
             std::vector<HeadPlanned> got;
             const Cells cells = router_cells(shape, GY, GXe);
-            const bool sp = split && cells == Cells::Column && (shape.E / 32) % 2 == 0;
-            if (split && !sp) {
-                continue;
-            }
-            const std::vector<bool> ons =
-                (!pref || *pref) ? std::vector<bool>{true, false} : std::vector<bool>{false, true};
+            const std::vector<bool> ons = pref ? std::vector<bool>{true, false} : std::vector<bool>{false, true};
             for (bool on : ons) {
                 if (cells == Cells::Rows && !on && !xdram) {
-                    continue;
-                }
-                if (sp && !on) {
                     continue;
                 }
                 const std::vector<bool> compacts =
@@ -611,9 +586,8 @@ std::vector<HeadPlanned> head_plan_layouts(
                         .NCH = NCH,
                         .KB = kb,
                         .on_engine = on,
-                        .GX = engine_width(shape, sp),
+                        .GX = GXe,
                         .compact = compact,
-                        .split = sp,
                         .xdram = xdram};
                     sized = head_size(shape, lay, arena_max(kb));
                     if (sized.eng) {
@@ -642,7 +616,7 @@ std::vector<HeadPlanned> head_plan_layouts(
     });
     // (inside kTie of the best the model does not separate layouts: there the fewest row chunks, then the layout the
     // fit-first rule took, then the prediction)
-    if (!out.empty() && !split && !xdram) {
+    if (!out.empty() && !xdram) {
         auto old = legacy(shape, arena_max);
         std::vector<const HeadPlanned*> pool;
         for (const auto& p : out) {
@@ -751,42 +725,30 @@ HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const H
                   " row tiles an owner: row chunks of whole owner blocks, MT <= 2, the router cores' cells)";
         return res;
     }
-    const auto ps = head_plan_layouts(shape, arena_max, true, options.placement, options.split);
-    auto want = [&](const HeadPlanned& p) {
-        return (!options.on_engine || p.lay.on_engine == *options.on_engine) && (!options.KB || p.lay.KB == options.KB);
-    };
+    const auto ps = head_plan_layouts(shape, arena_max, true);
     std::vector<HeadPlanned> ok;
     for (const auto& p : ps) {
-        if (p.t != kInf && want(p)) {
+        if (p.t != kInf) {
             ok.push_back(p);
         }
     }
     if (ok.empty()) {
         std::vector<HeadPlanned> unfit;
         for (const auto& p : ps) {
-            if (p.t == kInf && want(p)) {
+            if (p.t == kInf) {
                 unfit.push_back(p);
             }
         }
         if (unfit.empty()) {
-            for (const auto& p : ps) {
-                if (p.t == kInf) {
-                    unfit.push_back(p);
-                }
-            }
-        }
-        if (unfit.empty()) {
-            res.why = std::string("no layout with the router on_engine=") +
-                      (options.on_engine ? (*options.on_engine ? "True" : "False") : "None") + " and K step " +
-                      (options.KB ? s(options.KB) : "None");
+            res.why = "no layout";
             return res;
         }
         std::string why = summary(unfit, arena_max);
-        if (options.fallback && !options.split) {
-            const auto pxa = head_plan_layouts(shape, arena_max, true, options.placement, false, true);
+        if (options.fallback) {
+            const auto pxa = head_plan_layouts(shape, arena_max, true, true);
             std::vector<HeadPlanned> px, ux;
             for (const auto& p : pxa) {
-                if (p.t != kInf && want(p)) {
+                if (p.t != kInf) {
                     px.push_back(p);
                 }
                 if (p.t == kInf) {
@@ -842,12 +804,9 @@ HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const H
         return res;
     }
     try {
-        for (const auto& p :
-             head_plan_layouts(shape, arena_max_fixed(kUnlimited), false, options.placement, options.split)) {
-            if (want(p)) {
-                res.free = p;
-                break;
-            }
+        const auto free = head_plan_layouts(shape, arena_max_fixed(kUnlimited), false);
+        if (!free.empty()) {
+            res.free = free.front();
         }
     } catch (const std::exception&) {  // (the unconstrained pick only explains the note)
         res.free.reset();
