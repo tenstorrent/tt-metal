@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_tp0, unrotate_cache_layer
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120
 

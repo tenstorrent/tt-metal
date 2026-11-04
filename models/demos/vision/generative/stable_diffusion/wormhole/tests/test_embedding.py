@@ -12,7 +12,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs im
     get_reference_stable_diffusion_pipeline,
 )
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_embeddings import TtTimestepEmbedding
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)

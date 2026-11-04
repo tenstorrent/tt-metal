@@ -35,7 +35,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_d
     create_torch_dispatch_input_tensor,
     verify_output,
 )
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _swiglu_reference
+from tt_py_test_utils_common.moe_compute_helpers import _swiglu_reference
 
 faulthandler.enable()
 

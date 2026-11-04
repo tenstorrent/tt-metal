@@ -7,7 +7,7 @@ import ttnn
 
 from models.experimental.audiox.reference.rotary import RotaryEmbedding, apply_rotary_pos_emb as ref_apply
 from models.experimental.audiox.tt.rotary import apply_rotary_pos_emb as tt_apply, precompute_rotary_cos_sin
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 PCC_THRESHOLD = 0.99

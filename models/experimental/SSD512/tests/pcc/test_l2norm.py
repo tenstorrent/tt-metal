@@ -9,7 +9,7 @@ from loguru import logger
 from models.common.utility_functions import tt_to_torch_tensor
 from models.experimental.SSD512.tt.layers.tt_l2norm import TtL2Norm
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

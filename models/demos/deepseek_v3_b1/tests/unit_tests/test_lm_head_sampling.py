@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul imp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 from models.demos.deepseek_v3_b1.weights.prepare import _MTP_LAYER_IDX
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 _LM_HEAD_SAMPLING_REFERENCE_PT_ENV = "DEEPSEEK_V3_LM_HEAD_SAMPLING_REFERENCE_PT"
 

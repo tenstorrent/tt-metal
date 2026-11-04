@@ -26,7 +26,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.experts import routed_windows
 from models.experimental.nomic_embed_text_v2_moe.tt.router import TtNomicRouter
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -148,7 +148,7 @@ def test_routing_metadata_from_the_router(device, config, tt_router, batch, seql
     padding rows inside the pass's last tile row.
     """
     # Imported here, so a moved op test tree fails this test alone rather than the module.
-    from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+    from tt_py_test_utils_common.routing_metadata_reference import (
         assert_matches_reference,
     )
 

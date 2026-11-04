@@ -111,7 +111,7 @@ def _load_golden_kv(
 def _pcc_per_head(tag: str, expected: torch.Tensor, actual: torch.Tensor, threshold: float, failures: list) -> float:
     """Compare expected vs actual K/V per (layer, head), logging each layer's PCC and recording any slice
     at or below ``threshold`` in ``failures``, and return the worst PCC over all (layer, head) slices."""
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     worst, worst_at = 1.0, None
     for i in range(expected.shape[0]):

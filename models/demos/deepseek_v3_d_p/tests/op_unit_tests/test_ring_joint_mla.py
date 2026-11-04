@@ -18,8 +18,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.sdpa_test_utils import fa_rand
 
 _WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
 

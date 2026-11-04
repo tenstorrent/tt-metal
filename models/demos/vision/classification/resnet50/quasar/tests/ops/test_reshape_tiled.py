@@ -38,7 +38,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # (in_shape, out_shape, id): TILE-layout DRAM tensor reshaped to a DIFFERENT tile grid (real data movement
 # -> reshape_tiled). out tile count > 1 so the work splits across >= 2 cores (forces the DM->DM handoff).

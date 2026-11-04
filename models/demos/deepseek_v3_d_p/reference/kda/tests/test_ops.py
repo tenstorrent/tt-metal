@@ -14,7 +14,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import (
     kda_recurrent_reference,
     sigmoid_gated_rms_norm_reference,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_equal
+from tt_py_test_utils_common.kda_test_utils import assert_accurate, assert_equal
 
 
 def test_causal_convolution_split_equivalence() -> None:

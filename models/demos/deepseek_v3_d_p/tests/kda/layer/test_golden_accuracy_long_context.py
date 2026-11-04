@@ -38,12 +38,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     to_sp_input,
 )
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    TokenErrorAccumulator,
-    assert_accurate,
-    make_actual_start,
-    nrmse,
-)
+from tt_py_test_utils_common.kda_test_utils import TokenErrorAccumulator, assert_accurate, make_actual_start, nrmse
 
 # The 1M case runs ~7 min on SP2xTP4 plus setup; pytest.ini's 300 s default would cut it short.
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]

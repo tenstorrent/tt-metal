@@ -17,7 +17,7 @@ from models.demos.vision.segmentation.segformer.tests.pcc.test_segformer_selfout
     create_custom_mesh_preprocessor as create_customer_preprocessor_selfoutput,
 )
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_attention import TtSegformerAttention
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 DSV3 = get_adapter("deepseek_v3_d_p")
 

@@ -13,7 +13,7 @@ from models.experimental.chronos_forecast.tests.mesh_params import DATA_PARALLEL
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_tt_forward_trace_pcc(mesh_device):
     ttnn = pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -54,7 +54,7 @@ def test_tt_forward_trace_two_cq_pcc(mesh_device):
     correct if CQ1 waits for that replay to finish before overwriting its inputs.
     """
     ttnn = pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -100,7 +100,7 @@ def test_tt_forward_trace_two_cq_pcc(mesh_device):
 def test_tt_forward_trace_stream_pcc(mesh_device):
     """Every streamed batch matches the reference; 6 series also exercises mesh padding."""
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH

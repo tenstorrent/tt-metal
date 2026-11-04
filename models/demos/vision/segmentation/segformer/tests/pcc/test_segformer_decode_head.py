@@ -17,7 +17,7 @@ from models.demos.vision.segmentation.segformer.tests.pcc.test_segformer_mlp imp
 )
 from models.demos.vision.segmentation.segformer.tt.common import fold_batch_norm2d_into_conv2d
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

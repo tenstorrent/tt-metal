@@ -30,7 +30,7 @@ def test_residual_block_pcc(mesh_device, shape):
     the T=32 patched context (B=2, P=2, d_model=6). Single-chip only.
     """
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
@@ -53,7 +53,7 @@ def test_residual_block_pcc(mesh_device, shape):
 def test_encoder_block_pcc(mesh_device):
     """TT Chronos2EncoderBlock (tiny golden dims) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import (
         Chronos2EncoderBlock as RefBlock,
@@ -94,7 +94,7 @@ def test_encoder_block_pcc(mesh_device):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_encoder_pcc(mesh_device):
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import (
         Chronos2Encoder as RefEncoder,
@@ -133,7 +133,7 @@ def test_encoder_pcc(mesh_device):
 def test_output_embedding_pcc(mesh_device):
     """TT output patch embedding (TtResidualBlock reuse, dummy 6->336) vs oracle."""
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -158,7 +158,7 @@ def test_output_embedding_pcc(mesh_device):
 def test_tt_encode_pcc(mesh_device):
     """TT Chronos encode (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -185,7 +185,7 @@ def test_tt_encode_pcc(mesh_device):
 def test_tt_forward_pcc(mesh_device):
     """TT Chronos forward (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -222,7 +222,7 @@ def test_tt_forward_pcc(mesh_device):
 def test_tt_forward_device_resident_pcc(mesh_device):
     """Device-resident embeddings + encoder + output head vs reference."""
     ttnn = pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
@@ -264,7 +264,7 @@ def test_tt_forward_pretrained_pcc(mesh_device):
     ttnn = pytest.importorskip("ttnn")
     from pathlib import Path
 
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tt.model import TtChronos, tt_chronos_config_from_torch_model
@@ -340,7 +340,7 @@ def test_tt_host_path_pretrained_pcc(mesh_device, group_ids):
     pytest.importorskip("ttnn")
     from pathlib import Path
 
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tt.model import TtChronos

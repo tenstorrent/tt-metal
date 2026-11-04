@@ -10,7 +10,7 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.mla.test_rope_deepseek import apply_rotary_pos_emb_torch
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_rope_tensors(device, qk_rope_head_dim=64, max_seq_len=2048, bsz=32):

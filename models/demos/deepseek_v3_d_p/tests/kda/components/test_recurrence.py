@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     collect_accuracy_and_determinism_results,

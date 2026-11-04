@@ -7,8 +7,8 @@ import pytest
 from models.common.utility_functions import comp_pcc
 
 from models.common.utility_functions import skip_for_blackhole
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
-from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded import (
+from tt_py_test_utils_common.all_reduce_core_ranges import FF1_CRS_RS_OUT
+from tt_py_test_utils_common.distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
     create_output_memory_config,
@@ -16,23 +16,23 @@ from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded i
     compute_pre_allgather_stats,
     compute_post_allgather_output,
 )
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
+from tt_py_test_utils_common.sdpa_test_utils import (
     run_test_sdpa_decode_paged_attention_single_iter,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
+from tt_py_test_utils_common.nlp_create_qkv_heads_decode import (
     run_test_create_min_width_shard,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
-from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
+from tt_py_test_utils_common.nlp_concat_heads_decode import run_test_concat_head
+from tt_py_test_utils_common.paged_fused_update_cache import (
     run_test_paged_fused_update_cache_decode,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
+from models.demos.llama3_70b_galaxy.tests.unit_tests.rotary_embedding_llama_runners import (
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
+from tt_py_test_utils_common.eltwise_binary import run_elt_binary_mul_with_sub_devices
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
+from tt_py_test_utils_common.embedding_tests import run_embeddings_tests
 
 
 @pytest.mark.parametrize(

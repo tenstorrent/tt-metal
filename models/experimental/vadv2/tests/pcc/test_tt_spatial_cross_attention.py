@@ -9,7 +9,7 @@ from loguru import logger
 from models.experimental.vadv2.reference import spatial_cross_attention
 from models.experimental.vadv2.tt import tt_spatial_cross_attention
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,

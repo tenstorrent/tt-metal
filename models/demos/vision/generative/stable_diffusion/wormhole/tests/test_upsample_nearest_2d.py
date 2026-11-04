@@ -11,7 +11,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.common import SD_L
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_upsample_nearest_2d import (
     upsample_nearest2d,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)

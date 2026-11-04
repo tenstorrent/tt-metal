@@ -12,7 +12,7 @@ from models.common.utility_functions import torch_random
 from models.demos.vision.classification.vit.blackhole.tt import (
     ttnn_optimized_sharded_vit_hiRes_bh as ttnn_optimized_sharded_vit,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])

@@ -28,7 +28,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # (layer, in_ch, out_ch, spatial, id) — height-sharded 3x3 conv2 of layer1/2 (the split-path convs).
 # NOTE: layer3 also uses the height split (f6b15a lets its K=72/N=8 weights fit) but its 14x14=196 output

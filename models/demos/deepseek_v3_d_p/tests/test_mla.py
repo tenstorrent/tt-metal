@@ -54,8 +54,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def run_mla_inference(

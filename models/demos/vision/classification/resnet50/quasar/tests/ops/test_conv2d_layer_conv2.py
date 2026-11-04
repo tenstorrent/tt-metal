@@ -38,7 +38,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # (layer, in_ch, out_ch, spatial, shard_layout, id) — the 3x3 conv2 of each resnet50 layer (module2+, s1, p1).
 LAYER_CONV2 = [

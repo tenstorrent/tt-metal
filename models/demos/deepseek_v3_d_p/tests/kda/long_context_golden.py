@@ -33,7 +33,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import golden_floor
+from tt_py_test_utils_common.kda_test_utils import golden_floor
 
 MANIFEST = "manifest.json"
 

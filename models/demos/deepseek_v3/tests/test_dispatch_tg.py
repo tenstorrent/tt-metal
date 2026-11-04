@@ -24,8 +24,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
+from tt_py_test_utils_common.all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
+from tt_py_test_utils_common.moe_compute_helpers import gen_expert_mapping
 
 
 def gen_tensors_for_metadata_op(

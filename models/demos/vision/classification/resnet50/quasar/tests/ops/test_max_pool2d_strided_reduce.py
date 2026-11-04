@@ -40,7 +40,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_quasar
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # Small deterministic sweep (channel tiles = channels/32), mirroring the tt-llk dim sweep spirit.
 CHANNELS = [32, 64, 128]

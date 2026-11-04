@@ -7,7 +7,7 @@ from torch import nn
 
 import ttnn
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tt_py_test_utils_common.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def transpose_for_scores(config, x, device, permute_tensor: bool):

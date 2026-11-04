@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from models.experimental.ops.quasar.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ...tt.tt_upsample import BilinearUpsampleMatmulTTNN
 from ...tt.tt_upsample import BilinearUpsampleTorch
 from ...tt.common import PDL_L1_SMALL_SIZE

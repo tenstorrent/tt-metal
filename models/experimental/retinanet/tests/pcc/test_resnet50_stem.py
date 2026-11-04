@@ -10,7 +10,7 @@ from collections import OrderedDict
 from PIL import Image
 from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 from models.experimental.retinanet.tt.tt_stem import resnet50Stem, neck_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d

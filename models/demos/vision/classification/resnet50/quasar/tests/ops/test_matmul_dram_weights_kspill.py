@@ -48,7 +48,7 @@ _WH_SKIP_NO_PROGRAM_CONFIG_SINGLE_CORE = (
     "Off Quasar no program config means the fork's legacy auto config, which returns wrong values (PCC ~0.5) for "
     "these single-core GEMMs on WH. Run on Quasar."
 )
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_allclose, assert_with_pcc
 
 TILE = 32
 

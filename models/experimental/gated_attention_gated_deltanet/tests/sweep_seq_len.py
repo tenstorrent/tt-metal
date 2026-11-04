@@ -33,7 +33,9 @@ def sweep_gated_attention(device, seq_lens, warmup=2, iterations=3, batch_size=2
     import gc
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     header = f"{'T':>7} | {'B':>2} | {'Torch (ms)':>11} | {'TTNN (ms)':>11} | {'Speedup':>8} | {'PCC':>10}"
     sep = "-" * len(header)
@@ -110,7 +112,7 @@ def sweep_gated_attention(device, seq_lens, warmup=2, iterations=3, batch_size=2
 def sweep_gated_deltanet(device, seq_lens, chunk_size=64, warmup=2, iterations=3):
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     header = f"{'T':>7} | {'Torch (ms)':>11} | {'TTNN (ms)':>11} | {'Speedup':>8} | {'PCC':>10}"
     sep = "-" * len(header)

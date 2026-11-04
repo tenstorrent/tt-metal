@@ -10,7 +10,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from tt_py_test_utils_common.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     decode_tail,

@@ -7,7 +7,7 @@ import pytest
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from models.experimental.vovnet.tt.effective_se_module import TtEffectiveSEModule
 from models.experimental.vovnet.common import load_torch_model, VOVNET_L1_SMALL_SIZE

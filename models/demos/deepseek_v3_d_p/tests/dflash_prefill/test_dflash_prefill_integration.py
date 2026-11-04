@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     extract_tt_state_dict,
     load_and_compute_layer_by_layer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
 SEQ_LEN_5K = 5120  # matches test_prefill_transformer's "5k" config; 5120 / sp_factor(8) = 640 tok/chip

@@ -52,7 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
 DEPTHS = [1, 5, 12, 24]
 # 1 chunk is 5120 tokens; 11 chunks is 56320 — the "55k" leg. The second is not just a longer run:

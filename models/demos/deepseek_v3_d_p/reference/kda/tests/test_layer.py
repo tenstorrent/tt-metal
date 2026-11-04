@@ -7,12 +7,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    assert_accurate,
-    assert_bit_identical,
-    assert_equal,
-    nrmse,
-)
+from tt_py_test_utils_common.kda_test_utils import assert_accurate, assert_bit_identical, assert_equal, nrmse
 
 
 @pytest.mark.parametrize("use_full_rank_gate", [False, True])

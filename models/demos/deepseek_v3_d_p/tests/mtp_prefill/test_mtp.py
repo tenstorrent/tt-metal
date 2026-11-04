@@ -72,7 +72,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
 # Keyed by use_pretrained.
