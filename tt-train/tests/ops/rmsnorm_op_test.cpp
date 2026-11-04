@@ -444,15 +444,15 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden) {
     CompareKernelVsComposite({1U, 1U, 32U, 5120U});
 }
 
-// A single tile-row is split into column slices that fit in L1; RMSNormModes covers the whole-row paths of these
-// widths.
+// Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
-    // C = 8192 (1 << 13): a whole row would fit in L1 except gamma
+    // C = 8192 (1 << 13), fits in L1 except gamma parameter
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
+// Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
-    // C = 16384 (1 << 14): a whole row does not fit in L1
+    // C = 16384 (1 << 14), does not fit in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
@@ -471,9 +471,9 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
     CompareKernelVsComposite({1U, 1U, 1U, 4095U});
 }
 
-// Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache as a whole row
+// Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
-    // C = 16383 (1 << 14 - 1), sliced; only the last slice masks
+    // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
@@ -498,10 +498,9 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on whole rows (128 tile-rows) and on the sliced
-// single row; RMSNormModes also runs the streaming path without it. add_grad drops the gradient of a frozen gamma by
-// itself, so the program cache is what shows the skip: after a trained run of the same shape, the frozen run compiles
-// exactly one program, the backward without dL/dgamma.
+// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on whole rows and on a sliced row. add_grad drops
+// the gradient of a frozen gamma by itself, so the program cache is what shows the skip: after a trained run of the
+// same shape, the frozen run compiles exactly one program, the backward without dL/dgamma.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_FrozenGamma) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
