@@ -3,12 +3,12 @@
 """2D exact ternary prefill linear: Y = X' W'^T in Bonsai's own ternary weights, as linear.py, laid out for large K.
 
 Each core row is a row group (a slice of the token row tiles); its 13 cores split the output tile columns evenly (GLU: in
-(gate, up) pairs; a core's columns may start inside a unit of 8 of scales.py's broadcast tiles). The row's first core multicasts the group's x' tiles per kb to the row only
+(gate, up) pairs; a core's columns may start inside a unit of 4 of scales.pack_ratio_bcast's tiles). The row's first core multicasts the group's x' tiles per kb to the row only
 (kernels/t2_reader.cpp), so each core receives 1/10 of x' (linear.py multicasts all of it to every core); each core
 streams its columns' ternary tiles per kb from the decode records (kernels/t2_writer.cpp) and keeps fp32 accumulators in
-L1 (packer L1 accumulation), so it can hold any number of columns (kernels/t2_compute.cpp)."""
+L1 (packer L1 accumulation), so it can hold any number of columns (kernels/t2_compute.cpp). J = 4 kbs share one DEST
+pass per column (scales.ratio_chain), so the packer and the DEST handshake run once per 4 kbs."""
 
-import math
 import os
 
 import numpy as np
@@ -16,11 +16,19 @@ import torch
 
 import ttnn
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import KBLOCK, TILE, pack_records_inline
-from models.demos.blackhole.bonsai2.tt.tprefill.scales import pack_scale_bcast, scales_from_records
+from models.demos.blackhole.bonsai2.tt.tprefill.scales import pack_ratio_bcast, ratio_chain, scales_from_records
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/tprefill/kernels/"
-UNIT = 8  # output tile columns per broadcast-scale tile
-ACC_BUDGET = 460 * 1024  # L1 for the fp32 accumulators of a column block
+UNIT = 4  # output tile columns per broadcast-ratio tile
+L1_BUDGET = 1100 * 1024  # L1 for the x' slots, the fp32 accumulators and the weight / ratio slots of a column block
+
+
+def _chain(KB):
+    """J: kbs per DEST pass (and per x' chunk), BONSAI_T2_KPC (default 4), halved until it divides KB."""
+    j = int(os.environ.get("BONSAI_T2_KPC", "4"))
+    while KB % j:
+        j //= 2
+    return j
 
 
 def _upload(device, a, dtype=ttnn.uint32):
@@ -34,20 +42,21 @@ def _upload(device, a, dtype=ttnn.uint32):
 
 
 class TernaryPrefillLinear2:
-    def __init__(self, device, rec, ppr, K, N, sbc, glu=False):
-        """rec: the decode records on the device; sbc: pack_scale_bcast's tiles on the device."""
-        self.device, self.rec, self.ppr, self.K, self.N, self.sbc, self.glu = device, rec, ppr, K, N, sbc, glu
+    def __init__(self, device, rec, ppr, K, N, s_nb, glu=False):
+        """rec: the decode records on the device; s_nb [N, K / 128] float16: their scales (for the ratio tiles)."""
+        self.device, self.rec, self.ppr, self.K, self.N, self.glu = device, rec, ppr, K, N, glu
+        self.J = _chain(K // KBLOCK)
+        self.sbc = _upload(device, pack_ratio_bcast(ratio_chain(s_nb, self.J)), ttnn.uint16)
 
     @classmethod
     def from_host(cls, device, t_kn, s_nb):
         rec, ppr = pack_records_inline(t_kn, s_nb)
-        return cls(device, _upload(device, rec), ppr, *t_kn.shape, _upload(device, pack_scale_bcast(s_nb), ttnn.uint16))
+        return cls(device, _upload(device, rec), ppr, *t_kn.shape, s_nb)
 
     @classmethod
     def from_records(cls, device, rec_dev, rec_host, ppr, K, N, glu=False):
         """Share decode records already on the device (rec_host: the same records on the host, for the scales)."""
-        sbc = pack_scale_bcast(scales_from_records(rec_host, ppr, K, N))
-        return cls(device, rec_dev, ppr, K, N, _upload(device, sbc, ttnn.uint16), glu)
+        return cls(device, rec_dev, ppr, K, N, scales_from_records(rec_host, ppr, K, N), glu)
 
     @classmethod
     def from_decode(cls, lin, rec_host):
@@ -65,9 +74,7 @@ class TernaryPrefillLinear2:
         Kt, Nt, KB, Mt = K // TILE, N // TILE, K // KBLOCK, T // TILE
         assert Nt % UNIT == 0, Nt
         Nt_out = Nt // 2 if glu else Nt
-        kpc = int(os.environ.get("BONSAI_T2_KPC", "1"))  # kbs per x' multicast chunk (2: no gain)
-        while KB % kpc:
-            kpc //= 2
+        kpc = self.J  # kbs per DEST pass and per x' multicast chunk
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape(lead + [T, Nt_out * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
         )
@@ -83,7 +90,9 @@ class TernaryPrefillLinear2:
         n_first = np.cumsum([0] + n_of[:-1]).tolist()
         m_max = max(m_of)
         assert m_max <= 7, f"T={T}: {m_max} row tiles per row group (DEST holds 7 products and the scale tile)"
-        NBLK = max(2, min(max(n_of), ACC_BUDGET // (m_max * 4096)) // step * step)
+        xbytes = 2 * m_max * 4 * kpc * 2048  # two x' slots (t2_reader.cpp)
+        per_col = m_max * 4096 + 2 * kpc * 4 * 256 + 2 * kpc * 2048 // UNIT  # accumulators, weight and ratio slots
+        NBLK = max(2, min(max(n_of), (L1_BUDGET - xbytes) // per_col) // step * step)
         nblk = -(-max(n_of) // NBLK)  # every core of a row takes every chunk (rows share the column split)
         vx = [device.worker_core_from_logical_core(ttnn.CoreCoord(xx, 0)).x for xx in range(GX)]
         runs, start = [], 0
@@ -111,13 +120,9 @@ class TernaryPrefillLinear2:
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
             )
 
-        # x' chunks (4 m tiles each): one ring for every core, a multiple of every row group's chunk (a chunk never
-        # wraps it) holding at least two chunks (separate descriptors per row group gave wrong results)
-        pages = 1
-        for mm in set(m_of):
-            pages = math.lcm(pages, 4 * kpc * mm)
-        while pages < 8 * kpc * m_max:
-            pages *= 2
+        # x' chunks: fixed slots of m_max rows x 4 kpc tiles (every row group's slots line up in the one CB descriptor;
+        # separate descriptors per row group gave wrong results), two per ring
+        pages = 2 * m_max * 4 * kpc
         x_cbs = [cb(0, ttnn.bfloat16, 2048, pages)]
         dm = [("GLU_PAIRS", "1")] if glu else []
         dbg = [(d, "1") for d in os.environ.get("BONSAI_T2_DEFINES", "").split(",") if d]
@@ -129,7 +134,7 @@ class TernaryPrefillLinear2:
                     compile_time_args=[kpc] + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
                     runtime_args=rd,
                     defines=dbg,
-                    common_runtime_args=[x.buffer_address(), Kt],
+                    common_runtime_args=[x.buffer_address(), Kt, m_max],
                     config=ttnn.WriterConfigDescriptor(),  # BRISC, NOC 0
                 ),
                 ttnn.KernelDescriptor(
@@ -168,8 +173,8 @@ class TernaryPrefillLinear2:
             semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(2)],
             cbs=x_cbs
             + [
-                cb(1, ttnn.bfloat8_b, 256, 2 * NBLK * 4),
-                cb(3, ttnn.float32, 2048, 2 * (-(-NBLK // UNIT) + 1)),
+                cb(1, ttnn.bfloat8_b, 256, 2 * kpc * NBLK * 4),
+                cb(3, ttnn.float32, 2048, 2 * kpc * (-(-NBLK // UNIT) + 1)),
                 cb(24, ttnn.float32, 4096, m_max * NBLK),
                 cb(16, ttnn.bfloat16, 2048, 4),
             ],

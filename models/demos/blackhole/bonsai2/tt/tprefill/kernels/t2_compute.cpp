@@ -1,18 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 // 2D exact ternary prefill linear (linear2.py), compute. This core: token row tiles r < m (m <= 7) of its row group x
-// its output tile columns, in blocks of up to NBLK. Per block, kb and column c: P[r] = x'[r, kb] @ T[kb, c] for all r
-// (4 matmul_blocks, rt = m, ternary in1 with a forced exponent: exact), then the SFPU multiplies every P[r] by the
-// column's fp16 scales of the kb (the broadcast-scale tile of scales.py in DEST tile 7: its 4 lane vectors go to
-// LREG4..7, then one SFPLOADMACRO per SFPU row loads, multiplies and stores the row; T2_SFPI: the older sfpi loop), and
-// the packer adds P[r] into the fp32 accumulator tile (r, c) in L1 (L1 accumulation; the first kb overwrites). After
-// the block every accumulator goes out as bf16 (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
+// its output tile columns, in blocks of up to NBLK. Per block, group of J = KPC kbs and column c, in one DEST pass: for
+// each kb j of the group, P[r] += x'[r, kb] @ T[kb, c] for all r (4 matmul_blocks, rt = m, ternary in1 with a forced
+// exponent: exact products), then the SFPU multiplies every P[r] by the column's ratio r_j = s_j / s_(j+1) (s_j for the
+// group's last kb; scales.ratio_chain), so the pass ends with sum_j s_j P_j. The ratio vectors come from the
+// broadcast-ratio tile of scales.pack_ratio_bcast in DEST tile 7 (fp16 hi + lo, summed in fp32 into LREG4..7), then one
+// SFPLOADMACRO per SFPU row loads, multiplies and stores the row. The packer adds the pass into the fp32 accumulator
+// tile (r, c) in L1 (L1 accumulation; the first group overwrites). After the block every accumulator goes out as bf16
+// (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/matmul.h"
-#include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/compute_kernel_api.h"  // silu_tile_init
 
@@ -24,55 +25,10 @@ constexpr uint32_t cb_acc = tt::CBIndex::c_24;  // fp32 accumulators
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
-// P[r] (DEST tiles r < m) *= the column's scales: combo Z of the broadcast-scale tile in DEST tile 7 (SFPU rows 4 Z +
-// v, v = 2 fc + par). SFPU row q of a tile is face q / 8, column parity q % 2 (module docstring of scales.py).
-template <int Z>
-inline void scale_p(uint32_t m) {
-    constexpr uint32_t T = 32;
-    const sfpi::vFloat s0 = sfpi::dst_reg[7 * T + 4 * Z + 0];
-    const sfpi::vFloat s1 = sfpi::dst_reg[7 * T + 4 * Z + 1];
-    const sfpi::vFloat s2 = sfpi::dst_reg[7 * T + 4 * Z + 2];
-    const sfpi::vFloat s3 = sfpi::dst_reg[7 * T + 4 * Z + 3];
-    for (uint32_t r = 0; r < m; ++r) {
-#ifdef T2_SFPU_SERIAL
-#pragma GCC unroll 32
-        for (uint32_t q = 0; q < T; ++q) {
-            const uint32_t v = 2 * ((q / 8) & 1) + (q & 1);
-            const sfpi::vFloat sv = v == 0 ? s0 : v == 1 ? s1 : v == 2 ? s2 : s3;
-            sfpi::dst_reg[q] = sfpi::dst_reg[q] * sv;
-        }
-#else
-        // four rows at a time (loads, then multiplies, then stores) so each multiply's latency is hidden; rows q and q
-        // + 2 share a scale vector (same face, same column parity)
-#pragma GCC unroll 8
-        for (uint32_t q = 0; q < T; q += 4) {
-            const uint32_t f = (q / 8) & 1;
-            const sfpi::vFloat se = f ? s2 : s0;  // even columns
-            const sfpi::vFloat so = f ? s3 : s1;  // odd columns
-            sfpi::vFloat a = sfpi::dst_reg[q];
-            sfpi::vFloat b = sfpi::dst_reg[q + 1];
-            sfpi::vFloat c = sfpi::dst_reg[q + 2];
-            sfpi::vFloat d = sfpi::dst_reg[q + 3];
-            a = a * se;
-            b = b * so;
-            c = c * se;
-            d = d * so;
-            sfpi::dst_reg[q] = a;
-            sfpi::dst_reg[q + 1] = b;
-            sfpi::dst_reg[q + 2] = c;
-            sfpi::dst_reg[q + 3] = d;
-        }
-#endif
-        // next tile: the LLK's face step (_llk_math_eltwise_sfpu_inc_dst_face_addr_) is two inc_dst_addr<8> per face
-#pragma GCC unroll 8
-        for (uint32_t f = 0; f < 8; ++f) {
-            math::inc_dst_addr<8>();
-        }
-    }
-}
-// SFPLOADMACRO version of scale_p: one instruction per SFPU row. Templates k = 0..3: LReg[16] = LREG(4 + k) * VD + 0
-// (the 4 scale vectors in LREG4..7); macro k: load the row into VD = LREG0, MAD with template k (VB = VD, result in
-// LReg[16]), store LReg[16] back to the row 2 instructions later (the pattern of tt-llk's _mul_int_).
+// P[r] (DEST tiles r < m) *= the column's ratios, one instruction per SFPU row (SFPU row q of a tile is face q / 8,
+// column parity q % 2; scales.py). Templates k = 0..3: LReg[16] = LREG(4 + k) * VD + 0 (the 4 ratio vectors in
+// LREG4..7); macro k: load the row into VD = LREG0, MAD with template k (VB = VD, result in LReg[16]), store LReg[16]
+// back to the row 2 instructions later (the pattern of tt-llk's _mul_int_).
 inline void t2_macro_init() {
     TTI_SFPMUL(p_sfpu::LREG4, 0, p_sfpu::LCONST_0, 12, 0);
     TTI_SFPMUL(p_sfpu::LREG5, 0, p_sfpu::LCONST_0, 13, 0);
@@ -99,11 +55,21 @@ inline void t2_macro_init() {
 inline void scale_macro(uint32_t z, uint32_t m) {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    const uint32_t sa = 7 * 64 + 8 * z;  // scale vectors v = 0..3 of combo z in DEST tile 7
+    // column z of the unit: hi vectors v = 0..3 at SFPU rows 8 z + v of DEST tile 7, lo vectors at 8 z + 4 + v
+    const uint32_t sa = 7 * 64 + 16 * z;
     TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 0);
     TT_SFPLOAD(p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 2);
     TT_SFPLOAD(p_sfpu::LREG6, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 4);
     TT_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 6);
+    TT_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 8);
+    TT_SFPLOAD(p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 10);
+    TT_SFPLOAD(p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 12);
+    TT_SFPLOAD(p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 14);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG4, 0);  // hi * 1 + lo
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+    TTI_SFPNOP;  // the macros' MAD reads LREG4..7 without the automatic MAD stall
     TTI_SFPNOP;
     for (uint32_t r = 0; r < m; ++r) {  // ADDR_MOD_6 steps 2 per row: 32 rows reach the next tile
         T2_ROW(0);
@@ -157,20 +123,11 @@ inline void glu_full() {
 }  // namespace ckernel::sfpu
 #endif
 
-#define SP_CASE(Z) \
-    case Z: ckernel::sfpu::scale_p<Z>(m); break;
 ALWI void scale_col(uint32_t z, uint32_t m) {
 #ifdef TRISC_MATH
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-#ifndef T2_SFPI
     ckernel::sfpu::scale_macro(z, m);
-    math::clear_dst_reg_addr();
-    return;
-#endif
-    switch (z) {
-        SP_CASE(0) SP_CASE(1) SP_CASE(2) SP_CASE(3) SP_CASE(4) SP_CASE(5) SP_CASE(6) SP_CASE(7) default : break;
-    }
     math::clear_dst_reg_addr();
 #endif
 }
@@ -196,16 +153,17 @@ ALWI void scale_tile_srca() {
 
 void kernel_main() {
     constexpr uint32_t NBLK = get_compile_time_arg_val(0);
-    constexpr uint32_t WSLOT = NBLK * 4, SSLOT = (NBLK + 7) / 8 + 1;  // t2_writer.cpp's CB slots per kb
-    constexpr uint32_t KPC = get_compile_time_arg_val(1);  // kbs per x' chunk (rows of 4 KPC tiles)
+    constexpr uint32_t KPC = get_compile_time_arg_val(1);             // J: kbs per DEST pass and per x' chunk
+    constexpr uint32_t WSLOT = NBLK * 4, SSLOT = (NBLK + 3) / 4 + 1;  // t2_writer.cpp's CB slots per kb
     const uint32_t KB = get_common_arg_val<uint32_t>(0);
     const uint32_t n_count = get_arg_val<uint32_t>(0);
     const uint32_t m = get_arg_val<uint32_t>(1);
     const uint32_t nblk = get_arg_val<uint32_t>(2);  // the row's block count: every core takes every multicast chunk
     const uint32_t ACC = get_arg_val<uint32_t>(3);   // accumulator tiles per block: the whole ring (m_max x NBLK), so
                                                      // every block starts at the ring's start (tile r * NBLK + c)
-    const uint32_t n_first = get_arg_val<uint32_t>(4);  // first output tile column: column n's scales are combo n % 8
-                                                        // of broadcast-scale tile n / 8
+    const uint32_t n_first = get_arg_val<uint32_t>(4);  // first output tile column: column n's ratios are column n % 4
+                                                        // of broadcast-ratio tile n / 4
+    const uint32_t XSLOT = ACC / NBLK * 4 * KPC;        // t2_reader.cpp's x' slot: m_max rows of 4 KPC tiles
     if (m == 0) {
         return;
     }
@@ -215,55 +173,45 @@ void kernel_main() {
         const uint32_t nb = n_count > c0 ? (n_count - c0 < NBLK ? n_count - c0 : NBLK) : 0;
         if (nb == 0) {  // no columns left here: keep the row's multicast flowing
             for (uint32_t kb = 0; kb < KB; kb += KPC) {
-                cb_wait_front(cb_x, m * 4 * KPC);
-                cb_pop_front(cb_x, m * 4 * KPC);
+                cb_wait_front(cb_x, XSLOT);
+                cb_pop_front(cb_x, XSLOT);
             }
             continue;
         }
-        const uint32_t u0 = (n_first + c0) / 8;
-#ifndef T2_SFPI
+        const uint32_t u0 = (n_first + c0) / 4;
         MATH((ckernel::sfpu::t2_macro_init()));
-#endif
         cb_reserve_back(cb_acc, ACC);
         pack_reconfig_data_format(cb_acc);
-        for (uint32_t kb = 0; kb < KB; ++kb) {
-            if (kb % KPC == 0) {
-                cb_wait_front(cb_x, m * 4 * KPC);
-            }
-            const uint32_t x0 = (kb % KPC) * 4;
-            cb_wait_front(cb_w, WSLOT);
-            cb_wait_front(cb_s, SSLOT);
+        for (uint32_t g = 0; g < KB; g += KPC) {
+            cb_wait_front(cb_x, XSLOT);
+            cb_wait_front(cb_w, KPC * WSLOT);
+            cb_wait_front(cb_s, KPC * SSLOT);
             for (uint32_t c = 0; c < nb; ++c) {
+                const uint32_t n = n_first + c0 + c;
                 tile_regs_acquire();
-#ifndef T2_NOSCOPY
-                copy_init(cb_s);
-                scale_tile_srca();
-                copy_tile(cb_s, (n_first + c0 + c) / 8 - u0, 7);
-                reconfig_data_format_srca(cb_w);
-                matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
-                ternary_srca();
-#else
-                if (c == 0 && kb == 0) {
+                for (uint32_t j = 0; j < KPC; ++j) {
+                    if (j > 0) {  // the SFPU pass of kb j - 1 finishes before DEST tiles 0..7 are written again
+                        MATH((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU)));
+                    }
+                    copy_init(cb_s);
+                    scale_tile_srca();
+                    copy_tile(cb_s, j * SSLOT + n / 4 - u0, 7);
                     reconfig_data_format_srca(cb_w);
                     matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
                     ternary_srca();
-                }
-#endif
 #ifndef T2_NOMM
-                for (uint32_t i = 0; i < 4; ++i) {
-                    matmul_block(cb_x, cb_w, x0 + i, c * 4 + i, 0, 0, 1, m, 4 * KPC);
-                }
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        matmul_block(cb_x, cb_w, j * 4 + i, j * WSLOT + c * 4 + i, 0, 0, 1, m, 4 * KPC);
+                    }
 #endif
 #ifndef T2_NOSCALE
-#ifdef T2_SFPI
-                addcmul_tile_init();
+                    scale_col(n % 4, m);
 #endif
-                scale_col((n_first + c0 + c) % 8, m);
-#endif
+                }
                 tile_regs_commit();
                 tile_regs_wait();
-                if (c == 0 && kb < 2) {  // the block's first kb overwrites the accumulators, later kbs add
-                    pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
+                if (c == 0 && g < 2 * KPC) {  // the block's first group overwrites the accumulators, later ones add
+                    pack_reconfig_l1_acc(g > 0 ? 1 : 0);
                 }
 #ifndef T2_NOPACK
                 for (uint32_t r = 0; r < m; ++r) {
@@ -272,11 +220,9 @@ void kernel_main() {
 #endif
                 tile_regs_release();
             }
-            if (kb % KPC == KPC - 1) {
-                cb_pop_front(cb_x, m * 4 * KPC);
-            }
-            cb_pop_front(cb_w, WSLOT);
-            cb_pop_front(cb_s, SSLOT);
+            cb_pop_front(cb_x, XSLOT);
+            cb_pop_front(cb_w, KPC * WSLOT);
+            cb_pop_front(cb_s, KPC * SSLOT);
         }
         pack_reconfig_l1_acc(0);
         cb_push_back(cb_acc, ACC);

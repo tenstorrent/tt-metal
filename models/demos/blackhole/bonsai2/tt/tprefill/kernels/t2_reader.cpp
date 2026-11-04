@@ -12,6 +12,7 @@
 void kernel_main() {
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t Kt = get_common_arg_val<uint32_t>(1);
+    const uint32_t m_max = get_common_arg_val<uint32_t>(2);
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
     const uint32_t s_x = get_arg_val<uint32_t>(1), s_y = get_arg_val<uint32_t>(2);
     const uint32_t m_first = get_arg_val<uint32_t>(3), m_count = get_arg_val<uint32_t>(4);
@@ -24,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t TB = 2048;
     const uint32_t KB = Kt / 4;
     const uint32_t CHT = m_count * 4 * KPC;  // tiles per chunk, laid out [row][k]
+    const uint32_t XSLOT = m_max * 4 * KPC;  // fixed CB slot per chunk (every row group's slots line up)
 
     const auto xs = TensorAccessor(x_args, x_addr, TB);
     const uint32_t ready = get_semaphore(0);
@@ -33,7 +35,7 @@ void kernel_main() {
     const uint64_t ready_noc = get_noc_addr(s_x, s_y, ready);
     for (uint32_t b = 0; b < nblk; ++b) {
         for (uint32_t kb = 0; kb < KB; kb += KPC) {
-            cb_reserve_back(cb_x, CHT);
+            cb_reserve_back(cb_x, XSLOT);
             const uint32_t dst = get_write_ptr(cb_x);
             if (is_sender) {
 #ifndef T2_NOXREAD
@@ -74,7 +76,7 @@ void kernel_main() {
                 noc_semaphore_wait(valid_p, 1);
 #endif
             }
-            cb_push_back(cb_x, CHT);
+            cb_push_back(cb_x, XSLOT);
         }
     }
     noc_async_atomic_barrier();
