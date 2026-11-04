@@ -202,7 +202,7 @@ inline void unpack_matmul(
  */
 template <LLKMemDescriptor A, LLKMemDescriptor B, bool EN_32BIT_DEST>
 LLK_2_0_NOINLINE void math_hw_configure() {
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST>(A.format, B.format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(A.format, B.format);
     _reset_dest_register_offset_();
     _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
 }
@@ -210,7 +210,7 @@ LLK_2_0_NOINLINE void math_hw_configure() {
 /** @brief Init for SrcA -> Dest datacopy of one tile of shape D.shape (ALU formats + MOP). */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST>
 LLK_2_0_NOINLINE void math_datacopy_init() {
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST>(D.format, D.format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(D.format, D.format);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, EN_32BIT_DEST>(
         D.shape.total_num_faces() * D.shape.face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 }
@@ -231,7 +231,7 @@ template <
 LLK_2_0_NOINLINE void math_binary_init(const bool acc_to_dest) {
     constexpr ckernel::MathFidelity fidelity =
         TYPE == EltwiseBinaryType::ELWMUL ? FIDELITY : ckernel::MathFidelity::LoFi;
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST>(DA.format, DB.format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(DA.format, DB.format);
     _llk_math_eltwise_binary_init_<TYPE, fidelity>(DA.format, DB.format, DA.shape, acc_to_dest);
 }
 
@@ -246,7 +246,7 @@ inline void math_binary(const std::uint32_t dst_index) {
  */
 template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool EN_32BIT_DEST, ckernel::MathFidelity FIDELITY>
 LLK_2_0_NOINLINE void math_matmul_init(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST>(D1.format, D0.format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(D1.format, D0.format);
     _llk_math_matmul_init_<FIDELITY>(D1.format, D0.format, ct_dim, rt_dim, D0.shape, D1.shape);
 }
 

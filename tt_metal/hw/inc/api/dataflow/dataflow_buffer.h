@@ -416,7 +416,7 @@ public:
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_UNPACK
         const auto& dfb = local_dfb_interface_;
-        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].rd_entry_idx, dfb.stride_size_tiles};
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
 #else
         return Operand{0};  // only the unpack TRISC reads the front; other TRISCs never use the address
 #endif
@@ -439,7 +439,7 @@ public:
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_PACK
         const auto& dfb = local_dfb_interface_;
-        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].wr_entry_idx, dfb.stride_size_tiles};
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
 #else
         return Operand{0};  // only the pack TRISC writes the back; other TRISCs never use the address
 #endif
