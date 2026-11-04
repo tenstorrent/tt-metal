@@ -17,6 +17,7 @@
 #include "generic_op_device_operation_types.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::generic {
@@ -34,6 +35,9 @@ struct GenericProgramSpecDeviceOperation {
         };
         std::vector<Program> programs;
         std::optional<uint64_t> custom_program_hash;
+        // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill
+        // it. It points at the caller's pipes without owning them.
+        ttnn::PrefetcherPipeList prefetcher_pipes;
 
         // Op logging and the profiler show the number of programs, not whole specs.
         static constexpr auto attribute_names = std::forward_as_tuple("num_programs");
