@@ -175,6 +175,17 @@ def _run(
     )
 
 
+def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    """The KDA layer's compute config (FP32 DST), which its QKV convolution call runs."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 @pytest.mark.parametrize(
     ("widths", "channel_chunk_size", "full_contract", "page_channels"),
     [
@@ -493,7 +504,7 @@ _K3_ROWS = 640
 _K3_WIDTHS = (3072, 3072, 3072)
 _K3_TRAILING_COLUMNS = 128 + 3072 + 32
 _K3_CHANNEL_CHUNK_SIZE = 64
-# Measured on a P150b with the production FP32-DST config and scaled by main's ratio to the CI reference.
+# P150b median under FP32 DST (70,516 ns), scaled by the BF16-DST CI/P150b ratio (54,100 / 51,534).
 _K3_EXPECTED_DURATION_NS = 74_000
 # Kimi-K3's channel-paged convolution tail: half a 128-channel head per page.
 _K3_PAGE_CHANNELS = 64
@@ -526,14 +537,7 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
         for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
     ]
 
-    # The KDA layer's compute config (FP32 DST), which the production call runs.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    compute_kernel_config = _production_compute_config(device)
 
     def run() -> tuple[ttnn.Tensor, ...]:
         return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
@@ -785,24 +789,21 @@ def test_qkv_causal_conv1d_silu_fp32_accumulation(
 ) -> None:
     """With fp32_dest_acc_en the four taps accumulate in FP32 destination registers, not rounded to BF16 per tap.
 
-    Contract: per element, |out - silu(sum x_j w_j)| <= 2^-8 |out| + 2^-10 S with S = sum_j |x_j w_j|: the output
-    rounding plus a few FP32 roundings of terms and sums of magnitude <= S. BF16 destination registers must breach the
-    bound on these inputs (the case is sensitive to the accumulation precision).
+    Contract: per element, |out - silu(sum x_j w_j)| <= 2^-8 |out| + 2^-12 S with S = sum_j |x_j w_j|. The relative
+    term covers the BF16 output rounding and the SiLU's relative error. The absolute term covers the accumulation:
+    FP32 roundings of partial sums of magnitude <= S cost about 2^-24 S, while one rounding of a ~S/2 partial sum
+    to a 10-bit mantissa (TF32) already costs about 2^-12 S, so the bound rejects accumulators of TF32 precision or
+    worse. BF16 destination registers must breach it on these inputs (the case is sensitive to the accumulation).
     """
     inputs, history, taps = _cancelling_tap_inputs(_SEQUENCE, widths, seed=519)
     window = torch.cat((history, inputs), dim=1).double()
     terms = torch.stack([window[:, j : j + _SEQUENCE] * taps[j].double() for j in range(4)])
     expected = F.silu(terms.sum(0))
-    bound = 2.0**-8 * expected.abs() + 2.0**-10 * terms.abs().sum(0)
+    bound = 2.0**-8 * expected.abs() + 2.0**-12 * terms.abs().sum(0)
     assert float(terms[:3].sum(0).abs().median()) > 8 * float(terms.sum(0).abs().median()), "taps must cancel"
 
-    config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=False,
-    )
+    # The BF16 arm runs the op default, which is BF16 DST.
+    config = _production_compute_config(device) if fp32_dest_acc_en else None
     outputs = _run(
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
         qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
@@ -825,7 +826,7 @@ def test_qkv_causal_conv1d_silu_fp32_accumulation(
         return
     assert float(ratio.max()) <= 1.0, (
         f"element {worst}: |out - ref| = {float((actual - expected).flatten()[worst].abs()):.4e} exceeds "
-        f"2^-8 |ref| + 2^-10 sum|terms| = {float(bound.flatten()[worst]):.4e} "
+        f"2^-8 |ref| + 2^-12 sum|terms| = {float(bound.flatten()[worst]):.4e} "
         f"({int((ratio > 1).sum())} of {ratio.numel()} elements over)"
     )
 
