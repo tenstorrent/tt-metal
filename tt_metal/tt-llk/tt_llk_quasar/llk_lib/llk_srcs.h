@@ -154,10 +154,9 @@ inline void _llk_unpack_srcs_binary_()
 /**
  * @brief Builds the MOP for unpacking three operands to the three SrcS slices of one bank through UNP_S.
  *
- * Experimental: slice 2 is the slice the SFPU writes and PACK1 reads. Operands 0 and 1 are the inner-loop
- * pair (1 x 1, as in @ref _llk_unpack_srcs_binary_mop_config_) and operand 2 is the end op. Only the last
- * instruction increments the L1 tile index and sets dvalid, so all three operands read the same slice of
- * their own L1 buffer.
+ * Operands 0 and 1 are the inner-loop pair (1 x 1, as in @ref _llk_unpack_srcs_binary_mop_config_) and
+ * operand 2 is the end op. Only the last instruction increments the L1 tile index and sets dvalid, so all
+ * three operands read the same slice of their own L1 buffer.
  *
  * @param buf_desc_id_0: Buffer descriptor id for L1 input 0 (SrcS slice 0)
  * @param buf_desc_id_1: Buffer descriptor id for L1 input 1 (SrcS slice 1)

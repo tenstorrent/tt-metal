@@ -162,7 +162,6 @@ inline void llk_sfpu_srcs_ternary_init(
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
-    // No auto-loop on either side: the tile loop drives UNP_S and PACK1 one slice at a time.
     _llk_unpack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_unpack_srcs_ternary_mop_config_(bfd_a, bfd_b, bfd_c);
     _llk_pack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();
