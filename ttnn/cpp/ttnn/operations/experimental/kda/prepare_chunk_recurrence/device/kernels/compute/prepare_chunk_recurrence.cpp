@@ -9,6 +9,11 @@
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
+// dl is computed in FP32, truncated to TF32 by the row-to-column transpose (source A), and stored in the output
+// format the caller selects; the model stores it in BF16. BF16 rounding is relative to |dl|, so for exp(G_last) < 0.5
+// a BF16 dl perturbs the decay 1+dl more than a BF16 exp(G_last) would (8x at exp(G_last) = 0.1); for exp(G_last)
+// near 1, where long memory lives, it is far finer. FP32 storage, leaving only the TF32 truncation, cost 2% of the
+// Kimi-K3 Galaxy SP8xTP4 layer time when measured.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
 #include <cstdint>

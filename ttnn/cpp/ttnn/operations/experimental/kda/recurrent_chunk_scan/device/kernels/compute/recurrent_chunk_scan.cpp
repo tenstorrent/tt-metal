@@ -169,7 +169,7 @@ FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
 // state whose first Vt columns hold B. Publish (A + B) - B, or copy B, PacketRows tile rows per packet, from the
-// FP32 carry (UnpackToDest) with an SFPU subtraction, so A is exact in FP32 before it is packed.
+// FP32 carry (UnpackToDest) with an SFPU subtraction, so A = (A + B) - B is formed in FP32 with no TF32 truncation.
 template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, typename DFBCarry, typename DFBOut>
 FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output) {
     static_assert(Kt % PacketRows == 0);

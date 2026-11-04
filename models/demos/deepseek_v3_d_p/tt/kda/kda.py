@@ -322,8 +322,8 @@ class ttKDA:
         self.decay_logits_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
-        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
-        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
+        # Experimental KDA operations reject packer_l1_acc=True: kernels that accumulate in L1 enable it
+        # themselves. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,

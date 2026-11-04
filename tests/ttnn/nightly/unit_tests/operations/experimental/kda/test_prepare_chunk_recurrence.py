@@ -803,6 +803,41 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
 
 
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20], ids=["fp32", "decay-bf16"])
+def test_prepare_chunk_recurrence_final_decay_keeps_small_decay(device: ttnn.Device, output_bf16_mask: int) -> None:
+    """A tiny G_last gives final_decay = expm1(G_last) to relative precision, not exp(G_last) - 1 or zero."""
+    num_heads, num_chunks, key_dim, value_dim = 2, 2, 64, 32
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim)
+    # Per-token gates exact in BF16, whose 32 tokens sum exactly: G_last = -2^-12 on channels 0 mod 4 and
+    # G_last = -2^-26 on channels 1 mod 4. The other channels keep their random gates.
+    g = g.reshape(1, num_chunks * CHUNK_SIZE, num_heads, key_dim)
+    g[..., 0::4] = -(2.0**-17)
+    g[..., 1::4] = -(2.0**-31)
+    g = g.reshape(1, num_chunks * CHUNK_SIZE, num_heads * key_dim)
+    outputs = _run(
+        _device_inputs((q, k, v, g, beta), device),
+        num_heads,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    final_decay = ttnn.to_torch(outputs[5]).float()[..., 0]
+    bf16 = bool(output_bf16_mask & (1 << 5))
+
+    # expm1(-2^-26) is -2^-26 in FP32 and BF16, while exp(-2^-26) rounds to 1 in FP32, so exp - 1 would give 0.
+    tiny = final_decay[:, :, 1::4]
+    torch.testing.assert_close(tiny, torch.full_like(tiny, -(2.0**-26)), rtol=0, atol=0)
+
+    # expm1(-2^-12) = -2.441108e-4. The kernel transposes final_decay from a row to a column through source A, which
+    # truncates it to TF32 (a 10-bit mantissa) before it is stored, so FP32 output is within 2^-10 of it relatively.
+    # In BF16 that truncated value still rounds to -2^-12, the BF16 rounding of expm1(-2^-12).
+    small = final_decay[:, :, 0::4]
+    expected = torch.expm1(torch.tensor(-(2.0**-12), dtype=torch.float64)).item()
+    if bf16:
+        torch.testing.assert_close(small, torch.full_like(small, -(2.0**-12)), rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(small, torch.full_like(small, expected), rtol=2.0**-10, atol=0)
+
+
 @pytest.mark.parametrize("work_items_per_core,short", [(4, 1), (8, 13), (32, 61)])
 @pytest.mark.parametrize("output_bf16_mask", [0x00, 0x26], ids=["all-fp32", "production"])
 def test_prepare_chunk_recurrence_uneven_split_inverse(

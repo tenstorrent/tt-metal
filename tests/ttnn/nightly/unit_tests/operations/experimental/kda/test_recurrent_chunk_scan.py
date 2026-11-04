@@ -112,7 +112,7 @@ def _recurrent_chunk_scan_ops(
         perf_model.FpuOps(
             matrix_flops=instances * (6 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
             multiply_ops=instances * key_dim * value_dim,
-            add_ops=instances * (2 * CHUNK_SIZE * value_dim + key_dim * value_dim),
+            add_ops=instances * 2 * CHUNK_SIZE * value_dim,
         ),
         perf_model.SfpuOps(),
     )
@@ -153,7 +153,7 @@ def test_recurrent_chunk_scan_work_golden() -> None:
         (torch.empty((1, 1, 32, 1)), torch.empty((1, 2, 1))),
     )
 
-    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=66)
+    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=64)
     assert sfpu == perf_model.SfpuOps()
 
 
