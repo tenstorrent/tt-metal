@@ -33,12 +33,35 @@ inline void scale_p(uint32_t m) {
     const sfpi::vFloat s2 = sfpi::dst_reg[7 * T + 4 * Z + 2];
     const sfpi::vFloat s3 = sfpi::dst_reg[7 * T + 4 * Z + 3];
     for (uint32_t r = 0; r < m; ++r) {
+#ifdef T2_SFPU_SERIAL
 #pragma GCC unroll 32
         for (uint32_t q = 0; q < T; ++q) {
             const uint32_t v = 2 * ((q / 8) & 1) + (q & 1);
             const sfpi::vFloat sv = v == 0 ? s0 : v == 1 ? s1 : v == 2 ? s2 : s3;
             sfpi::dst_reg[q] = sfpi::dst_reg[q] * sv;
         }
+#else
+        // four rows at a time (loads, then multiplies, then stores) so each multiply's latency is hidden; rows q and q
+        // + 2 share a scale vector (same face, same column parity)
+#pragma GCC unroll 8
+        for (uint32_t q = 0; q < T; q += 4) {
+            const uint32_t f = (q / 8) & 1;
+            const sfpi::vFloat se = f ? s2 : s0;  // even columns
+            const sfpi::vFloat so = f ? s3 : s1;  // odd columns
+            sfpi::vFloat a = sfpi::dst_reg[q];
+            sfpi::vFloat b = sfpi::dst_reg[q + 1];
+            sfpi::vFloat c = sfpi::dst_reg[q + 2];
+            sfpi::vFloat d = sfpi::dst_reg[q + 3];
+            a = a * se;
+            b = b * so;
+            c = c * se;
+            d = d * so;
+            sfpi::dst_reg[q] = a;
+            sfpi::dst_reg[q + 1] = b;
+            sfpi::dst_reg[q + 2] = c;
+            sfpi::dst_reg[q + 3] = d;
+        }
+#endif
         // next tile: the LLK's face step (_llk_math_eltwise_sfpu_inc_dst_face_addr_) is two inc_dst_addr<8> per face
 #pragma GCC unroll 8
         for (uint32_t f = 0; f < 8; ++f) {
@@ -93,6 +116,7 @@ ALWI void scale_tile_srca() {
 
 void kernel_main() {
     constexpr uint32_t NBLK = get_compile_time_arg_val(0);
+    constexpr uint32_t KPC = get_compile_time_arg_val(1);  // kbs per x' chunk (rows of 4 KPC tiles)
     const uint32_t KB = get_common_arg_val<uint32_t>(0);
     const uint32_t n_count = get_arg_val<uint32_t>(0);
     const uint32_t m = get_arg_val<uint32_t>(1);
@@ -107,29 +131,42 @@ void kernel_main() {
         const uint32_t c0 = blk * NBLK;
         const uint32_t nb = n_count > c0 ? (n_count - c0 < NBLK ? n_count - c0 : NBLK) : 0;
         if (nb == 0) {  // no columns left here: keep the row's multicast flowing
-            for (uint32_t kb = 0; kb < KB; ++kb) {
-                cb_wait_front(cb_x, m * 4);
-                cb_pop_front(cb_x, m * 4);
+            for (uint32_t kb = 0; kb < KB; kb += KPC) {
+                cb_wait_front(cb_x, m * 4 * KPC);
+                cb_pop_front(cb_x, m * 4 * KPC);
             }
             continue;
         }
         const uint32_t units = (nb + 7) / 8;
         cb_reserve_back(cb_acc, ACC);
         for (uint32_t kb = 0; kb < KB; ++kb) {
-            cb_wait_front(cb_x, m * 4);
+            if (kb % KPC == 0) {
+                cb_wait_front(cb_x, m * 4 * KPC);
+            }
+            const uint32_t x0 = (kb % KPC) * 4;
             cb_wait_front(cb_w, nb * 4);
             cb_wait_front(cb_s, units);
             for (uint32_t c = 0; c < nb; ++c) {
                 tile_regs_acquire();
+#ifndef T2_NOSCOPY
                 copy_init(cb_s);
                 scale_tile_srca();
                 copy_tile(cb_s, c / 8, 7);
                 reconfig_data_format_srca(cb_w);
-                matmul_block_init(cb_x, cb_w, 0, 1, m, 4);
+                matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
                 ternary_srca();
-                for (uint32_t i = 0; i < 4; ++i) {
-                    matmul_block(cb_x, cb_w, i, c * 4 + i, 0, 0, 1, m, 4);
+#else
+                if (c == 0 && kb == 0) {
+                    reconfig_data_format_srca(cb_w);
+                    matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
+                    ternary_srca();
                 }
+#endif
+#ifndef T2_NOMM
+                for (uint32_t i = 0; i < 4; ++i) {
+                    matmul_block(cb_x, cb_w, x0 + i, c * 4 + i, 0, 0, 1, m, 4 * KPC);
+                }
+#endif
 #ifndef T2_NOSCALE
                 addcmul_tile_init();
                 scale_col(c % 8, m);
@@ -138,12 +175,16 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_acc);
                 pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
+#ifndef T2_NOPACK
                 for (uint32_t r = 0; r < m; ++r) {
                     pack_tile<true>(r, cb_acc, r * NBLK + c);
                 }
+#endif
                 tile_regs_release();
             }
-            cb_pop_front(cb_x, m * 4);
+            if (kb % KPC == KPC - 1) {
+                cb_pop_front(cb_x, m * 4 * KPC);
+            }
             cb_pop_front(cb_w, nb * 4);
             cb_pop_front(cb_s, units);
         }

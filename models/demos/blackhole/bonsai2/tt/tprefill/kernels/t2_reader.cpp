@@ -18,11 +18,12 @@ void kernel_main() {
     const uint32_t nblk = get_arg_val<uint32_t>(5);
     const uint32_t ncores = get_arg_val<uint32_t>(6);  // cores of the row
     const uint32_t nrect = get_arg_val<uint32_t>(7);   // then per rectangle x0, y0, x1, y1, destinations
-    constexpr auto x_args = TensorAccessorArgs<0>();
+    constexpr uint32_t KPC = get_compile_time_arg_val(0);  // kbs per multicast chunk
+    constexpr auto x_args = TensorAccessorArgs<1>();
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t TB = 2048;
     const uint32_t KB = Kt / 4;
-    const uint32_t CHT = m_count * 4;  // tiles per chunk
+    const uint32_t CHT = m_count * 4 * KPC;  // tiles per chunk, laid out [row][k]
 
     const auto xs = TensorAccessor(x_args, x_addr, TB);
     const uint32_t ready = get_semaphore(0);
@@ -31,13 +32,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* valid_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid);
     const uint64_t ready_noc = get_noc_addr(s_x, s_y, ready);
     for (uint32_t b = 0; b < nblk; ++b) {
-        for (uint32_t kb = 0; kb < KB; ++kb) {
+        for (uint32_t kb = 0; kb < KB; kb += KPC) {
             cb_reserve_back(cb_x, CHT);
             const uint32_t dst = get_write_ptr(cb_x);
             if (is_sender) {
                 for (uint32_t r = 0; r < m_count; ++r) {
-                    for (uint32_t i = 0; i < 4; ++i) {
-                        noc_async_read(xs.get_noc_addr((m_first + r) * Kt + kb * 4 + i), dst + (r * 4 + i) * TB, TB);
+                    for (uint32_t i = 0; i < 4 * KPC; ++i) {
+                        noc_async_read(
+                            xs.get_noc_addr((m_first + r) * Kt + kb * 4 + i), dst + (r * 4 * KPC + i) * TB, TB);
                     }
                 }
                 noc_async_read_barrier();

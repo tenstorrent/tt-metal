@@ -65,6 +65,9 @@ class TernaryPrefillLinear2:
         Kt, Nt, KB, Mt = K // TILE, N // TILE, K // KBLOCK, T // TILE
         assert Nt % UNIT == 0, Nt
         Nt_out = Nt // 2 if glu else Nt
+        kpc = int(os.environ.get("BONSAI_T2_KPC", "1"))  # kbs per x' multicast chunk (2: no gain)
+        while KB % kpc:
+            kpc //= 2
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape(lead + [T, Nt_out * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
         )
@@ -111,8 +114,8 @@ class TernaryPrefillLinear2:
         # wraps it) holding at least two chunks (separate descriptors per row group gave wrong results)
         pages = 1
         for mm in set(m_of):
-            pages = math.lcm(pages, 4 * mm)
-        while pages < 8 * m_max:
+            pages = math.lcm(pages, 4 * kpc * mm)
+        while pages < 8 * kpc * m_max:
             pages *= 2
         x_cbs = [cb(0, ttnn.bfloat16, 2048, pages)]
         dm = [("GLU_PAIRS", "1")] if glu else []
@@ -122,7 +125,7 @@ class TernaryPrefillLinear2:
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "t2_reader.cpp",
                     core_ranges=crs,
-                    compile_time_args=ttnn.TensorAccessorArgs(x).get_compile_time_args(),
+                    compile_time_args=[kpc] + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
                     runtime_args=rd,
                     common_runtime_args=[x.buffer_address(), Kt],
                     config=ttnn.WriterConfigDescriptor(),  # BRISC, NOC 0
@@ -149,7 +152,7 @@ class TernaryPrefillLinear2:
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "t2_compute.cpp",
                     core_ranges=crs,
-                    compile_time_args=[NBLK],
+                    compile_time_args=[NBLK, kpc],
                     defines=dm + dbg,
                     runtime_args=cp,
                     common_runtime_args=[KB],
