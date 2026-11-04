@@ -542,12 +542,11 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-hardware-free-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
-            if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
 
             const managedLabels = new Set(["llk:wormhole", "llk:blackhole", "llk:common",
                                            "sfpi", "llk:ci", "llk:test-infra",
-                                           "llk:performance", "llk:quasar"]);
+                                           "llk:quasar"]);
 
             const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
               owner: context.repo.owner,

@@ -6,8 +6,7 @@
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
-# Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS,
-# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix). Defaults keep today's commands.
+# Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
@@ -47,15 +46,6 @@ case "${LLK_PERF_DEBUG_SYMBOLS:-true}" in
     ;;
 esac
 
-case "${LLK_PERF_EXITFIRST:-true}" in
-  true) EXITFIRST_ARGS=(-x) ;;
-  false) EXITFIRST_ARGS=() ;;
-  *)
-    echo "LLK_PERF_EXITFIRST must be 'true' or 'false', got '$LLK_PERF_EXITFIRST'" >&2
-    exit 2
-    ;;
-esac
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
@@ -63,7 +53,7 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-REPORT="pytest-report-wormhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
+REPORT="pytest-report-wormhole-${GROUP}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
@@ -74,7 +64,7 @@ if [[ "$PHASE" != run ]]; then
 fi
 [[ "$PHASE" == compile ]] && exit 0
 
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
   --junitxml="$RUN_XML" .
 if [[ -f "$COMPILE_XML" ]]; then
