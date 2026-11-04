@@ -98,6 +98,17 @@ def swap_in_ternary_mlp(model) -> None:
             ),
             os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
         )
+    if os.environ.get("BONSAI_TERNARY_ATTN") == "1":
+        from models.demos.blackhole.bonsai2.tt.ternary.attention import swap_in_ternary_attention
+
+        swap_in_ternary_attention(
+            model,
+            BonsaiGGUF(
+                os.environ.get("BONSAI_GGUF", "/local/ttuser/jerrywang/bonsai/gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf")
+            ),
+            rotations,
+            os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
+        )
     if os.environ.get("BONSAI_TERNARY_HEAD") == "1":
         model.ternary_lm_head = TernaryLMHead(device, pack_lm_head(), rotations[5120])
     print(f"BONSAI_TERNARY_MLP_SWAP_S={time.time() - t0:.1f}", flush=True)

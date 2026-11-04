@@ -4,6 +4,7 @@
 
 Branch B: paged decode — uses memory_config=mc and cur_pos_tensor=position_tensor.
 """
+import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention as _attn_mod
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
 
 
@@ -20,8 +21,22 @@ def decode_forward(
     page_table=None,
     paged_kv_cache_key=None,
     paged_kv_cache_value=None,
+    ternary=None,
 ):
     """Branch B — paged decode: paged_update_cache + paged_sdpa_decode via page_table."""
+    if ternary is not None:
+        # Bonsai: q/k/v/o in its own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/attention.py).
+        from models.demos.blackhole.bonsai2.tt.ternary.attention import TernaryAttentionTtnn
+
+        _orig = _attn_mod.ttnn
+        _attn_mod.ttnn = TernaryAttentionTtnn(weights, ternary)
+        try:
+            return decode_forward(
+                x, cos, sin, weights, config, device, ckc, mc, position_tensor, page_table,
+                paged_kv_cache_key, paged_kv_cache_value,
+            )  # fmt: skip
+        finally:
+            _attn_mod.ttnn = _orig
     output, _, _ = gated_attention_forward_ttnn(
         hidden_states=x,
         q_proj_weight=weights.q_proj,

@@ -114,3 +114,23 @@ def test_tdec3_inl(device, K, N):
         lin(act)
     ttnn.synchronize_device(device)
     assert rel < 0.02, rel
+
+
+# Load balance: 130 cores, N/32 output tiles. 4160 = 1 tile per core, 8320 = 2, 5120 = 1 or 2.
+BAL = [(17408, 4160), (17408, 5120), (17408, 8320), (6144, 4160), (6144, 5120), (6144, 8320)]
+
+
+@pytest.mark.parametrize("K, N", BAL, ids=[f"bk{k}n{n}" for k, n in BAL])
+def test_tdec3_bal(device, K, N):
+    rng = np.random.default_rng(0)
+    t = rng.integers(-1, 2, size=(K, N)).astype(np.int8)
+    s = (rng.random((N, K // 128)) * 0.02 + 0.005).astype(np.float16)
+    x = torch.randn(K).bfloat16()
+    lin = TernaryDecodeLinear3.from_host(device, t, s, inline_scales=True)
+    act = ttnn.from_torch(
+        x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    for _ in range(10):
+        lin(act)
+    ttnn.synchronize_device(device)
+    print(f"reinit=bal K={K} N={N}")
