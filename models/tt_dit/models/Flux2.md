@@ -17,14 +17,17 @@ and `models/vae/vae_flux2.py`.
 
 ## Performance
 
-Klein 4B, 4 steps, traced, steady state on a T3K (2x4):
+Klein 4B, 4 steps, traced, total time per image:
 
-| Case                         | Denoising | VAE    | Total  |
-| ---------------------------- | --------- | ------ | ------ |
-| 1024x1024                    | 0.98 s    | 0.47 s | 1.57 s |
-| 1024x1024, 1 reference image | 1.73 s    | 0.47 s | 2.61 s |
-| 2048x2048                    | 3.44 s    | 2.05 s | 5.81 s |
-| 2048x2048, 1 reference image | 4.37 s    | 2.02 s | 6.84 s |
+| Case                      | T3K (2x4 WH) | QuietBox 2 (2x2 BH) | Galaxy (4x8 BH) |
+| ------------------------- | ------------ | ------------------- | --------------- |
+| 1024x1024, no input image | 1.59 s\*     | 0.86 s\*            | 0.34 s\*        |
+| 1024x1024, 1 input image  | 2.84 s       | 1.40 s\*            | 0.61 s\*        |
+| 2048x2048, no input image | 5.68 s       | 3.35 s              | 1.15 s          |
+| 2048x2048, 1 input image  | 6.86 s       | 4.17 s\*            | 1.30 s          |
+
+\* Mean of runs 2 and 3, with a slow first run dropped. The other cells are the mean of all three
+runs, which had no outlier.
 
 ## Sizes and editing
 
