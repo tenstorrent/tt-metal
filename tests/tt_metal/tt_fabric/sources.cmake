@@ -38,6 +38,7 @@ set(UNIT_TESTS_FABRIC_SRC
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_manifest/test_fabric_manifest.cpp
     fabric_manifest/test_fabric_manifest_docs.cpp
+    fabric_manifest/test_fabric_manifest_kernel_inputs.cpp
     fabric_manifest/test_fabric_manifest_writer.cpp
     fabric_manifest/test_fabric_manifest_type_registry.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp

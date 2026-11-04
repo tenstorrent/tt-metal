@@ -37,12 +37,11 @@ ManifestFacts make_facts() {
             {.senders = {{SenderChannel{
                  .serviced_by = {0},
                  .producer = LocalWorker{},
-                 .credits = {.completed = std::optional<content::StreamReg>{}},
+                 .credits_by_erisc = {SenderChannelCredits{.completed = std::optional<content::StreamReg>{}}},
              }}},
-             .receivers = {{ReceiverChannel{.serviced_by = {0}, .forwards_on = 0}}}},
+             .receivers = {{ReceiverChannel{.serviced_by = {0}, .forwards_on_by_erisc = {0}}}}},
         .intra_chip_downstream_edges = {},
-        .fields =
-            {
+        .fields_by_erisc = {{
                 Field{
                     .key = "edm_status",
                     .category = FieldCategory::LIFECYCLE,
@@ -61,7 +60,7 @@ ManifestFacts make_facts() {
                     .category = FieldCategory::KERNEL_PARAMS,
                     .content = content::Enum{.type = "eth_chan_directions", .value = 0, .value_name = "EAST"}},
                 Field{.key = "perf_telemetry", .category = FieldCategory::DIAGNOSTICS, .content = std::nullopt},
-            },
+            }},
         .eriscs = {Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .physical_erisc = 0}},
         .leftover_l1 = std::nullopt,
     };
@@ -122,12 +121,12 @@ TEST(ManifestWriter, RemoteChipHasOnlyItsPlace) {
 TEST(ManifestWriter, UnallocatedIsNullAndInapplicableIsLeftOut) {
     const auto manifest = make_manifest_json(make_facts());
     const auto& router = router_e0(manifest);
-    EXPECT_TRUE(router.at("fields").at("perf_telemetry").is_null());
+    EXPECT_TRUE(router.at("fields").at("erisc0").at("perf_telemetry").is_null());
     EXPECT_TRUE(router.at("leftover_l1").is_null());
     const auto& sender = router.at("channels").at("senders").at("vc0").at("ch0");
     EXPECT_TRUE(sender.at("ring_buffer").is_null());
-    EXPECT_TRUE(sender.at("credits").at("completed").is_null());
-    EXPECT_FALSE(sender.at("credits").contains("acked"));
+    EXPECT_TRUE(sender.at("credits").at("erisc0").at("completed").is_null());
+    EXPECT_FALSE(sender.at("credits").at("erisc0").contains("acked"));
     EXPECT_FALSE(router.at("channels").at("senders").contains("vc1"));
     EXPECT_FALSE(router.at("intra_chip_downstream_edges").contains("vc0"));
     EXPECT_TRUE(manifest.at("fabric").contains("routing_1d_extension_words"));
@@ -148,7 +147,7 @@ TEST(ManifestWriter, ReferencesAndIds) {
 // enumerator. The manifest describes no type's members: decode gets the type back from its name.
 TEST(ManifestWriter, ContentsNameTheirType) {
     const auto manifest = make_manifest_json(make_facts());
-    const auto& fields = router_e0(manifest).at("fields");
+    const auto& fields = router_e0(manifest).at("fields").at("erisc0");
     EXPECT_EQ(
         fields.at("edm_status"),
         json({{"category", "lifecycle"},
@@ -179,10 +178,36 @@ TEST(ManifestWriter, ContentsNameTheirType) {
     EXPECT_FALSE(manifest.contains("types"));
 }
 
+// Each ERISC's values are written under its own key, as the builder gave them, even where two ERISCs differ.
+TEST(ManifestWriter, WritesEachEriscsValuesUnderItsOwnKey) {
+    auto facts = make_facts();
+    auto& router = facts.meshes.at(0).chips.at(0).routers.at(0);
+    router.shape.num_active_eriscs = 2;
+    router.eriscs.push_back(Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .physical_erisc = 1});
+    router.fields_by_erisc.push_back({Field{
+        .key = "speedy_vc0", .category = FieldCategory::KERNEL_PARAMS, .content = content::Flag{.value = true}}});
+    auto& sender = router.channels.senders.at(0).at(0);
+    sender.credits_by_erisc.push_back(SenderChannelCredits{
+        .acked = CounterRef{.array = CreditCounterArray::TO_SENDER_ACK, .index = 0},
+        .completed = CounterRef{.array = CreditCounterArray::TO_SENDER_COMPLETION, .index = 0}});
+    router.channels.receivers.at(0).at(0).forwards_on_by_erisc.emplace_back(std::nullopt);
+
+    const auto manifest = make_manifest_json(facts);
+    const auto& router_json = router_e0(manifest);
+    EXPECT_TRUE(router_json.at("fields").at("erisc0").contains("edm_status"));
+    EXPECT_EQ(router_json.at("fields").at("erisc1").at("speedy_vc0").at("value"), true);
+    const auto& credits = router_json.at("channels").at("senders").at("vc0").at("ch0").at("credits");
+    EXPECT_FALSE(credits.at("erisc0").contains("acked"));
+    EXPECT_EQ(credits.at("erisc1").at("acked").at("array"), "credit_counters/to_sender_ack");
+    const auto& forwards_on = router_json.at("channels").at("receivers").at("vc0").at("ch0").at("forwards_on");
+    EXPECT_EQ(forwards_on, json::parse(R"({"erisc0": "vc0", "erisc1": null})"));
+    EXPECT_FALSE(router_json.at("eriscs").at("erisc1").contains("fields"));
+}
+
 // Two fields with one key would leave readers one of them, so the writer refuses.
 TEST(ManifestWriter, FailsOnTwoFieldsWithOneKey) {
     auto facts = make_facts();
-    auto& fields = facts.meshes.at(0).chips.at(0).routers.at(0).fields;
+    auto& fields = facts.meshes.at(0).chips.at(0).routers.at(0).fields_by_erisc.at(0);
     fields.push_back(fields.front());
     EXPECT_ANY_THROW(make_manifest_json(facts));
 }

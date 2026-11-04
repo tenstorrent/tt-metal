@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
@@ -223,7 +223,6 @@ struct RouterShape {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receivers_per_vc = {};
     uint32_t num_active_eriscs = 0;
     bool channel_trimming_overrides_applied = false;
-    bool vc0_bubble_flow_control = false;
     bool has_tensix_extension = false;
 };
 
@@ -246,12 +245,15 @@ struct Field {
     std::optional<Content> content;
 };
 
-// The credits a sender channel receives back from the peer's receiver.
+// The credits a sender channel receives back from the peer's receiver, as one ERISC is told to read them.
 struct SenderChannelCredits {
-    // Only on VC0 with bubble flow control.
+    // Only on VC0, on an ERISC with bubble flow control.
     std::optional<CreditRef> acked;
     CreditRef completed;
 };
+
+// A field table's fields as each ERISC's arguments give them. Indexed by ERISC id.
+using FieldsByErisc = std::vector<std::vector<Field>>;
 
 // A sender channel that takes packets from its producer and sends them over Ethernet to the peer's receiver.
 struct SenderChannel {
@@ -262,9 +264,10 @@ struct SenderChannel {
     std::optional<SenderChannelProducer> producer;
     // Null when the channel has no slots.
     std::optional<content::L1> ring_buffer;
-    SenderChannelCredits credits;
+    // Indexed by ERISC id.
+    std::vector<SenderChannelCredits> credits_by_erisc;
     // Arguments the kernel is fed for the channel, read through the field table.
-    std::vector<Field> fields;
+    FieldsByErisc fields_by_erisc;
 };
 
 // A receiver channel that takes packets from the peer's senders over Ethernet, delivers them locally, and forwards
@@ -273,13 +276,13 @@ struct ReceiverChannel {
     ChannelStatus status = ChannelStatus::ACTIVE;
     // IDs of the ERISCs that run the channel's step.
     std::vector<uint32_t> serviced_by;
-    // The VC whose downstream edges the channel's step is given. Null when no ERISC runs the step, or when the step
-    // forwards to no sibling.
-    std::optional<uint32_t> forwards_on;
+    // The VC whose downstream edges each ERISC gives the channel's step, indexed by ERISC id. Null on an ERISC that
+    // doesn't run the step, or whose step forwards to no sibling.
+    std::vector<std::optional<uint32_t>> forwards_on_by_erisc;
     // Null when the channel has no slots.
     std::optional<content::L1> ring_buffer;
     // Arguments the kernel is fed for the channel, read through the field table.
-    std::vector<Field> fields;
+    FieldsByErisc fields_by_erisc;
 };
 
 // A router's channels.
@@ -301,7 +304,7 @@ struct DownstreamEdge {
     // The NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
     tt::tt_metal::CoreCoord core;
     bool through_tensix_mux = false;
-    std::vector<Field> fields;
+    FieldsByErisc fields_by_erisc;
 };
 
 // One RISC the router's kernel runs on.
@@ -310,8 +313,6 @@ struct Erisc {
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
     // The ERISC on the Ethernet core that the processor runs on, which indexes CoreRegisters::reset_masks.
     uint32_t physical_erisc = 0;
-    // Per-ERISC fields passed to the kernel.
-    std::vector<Field> fields;
 };
 
 // Information about a router.
@@ -324,8 +325,8 @@ struct Router {
     RouterChannels channels;
     // Indexed [vc], by edge.
     std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
-    // Router-wide fields passed to the kernel
-    std::vector<Field> fields;
+    // The router's fields passed to the kernel, per ERISC.
+    FieldsByErisc fields_by_erisc;
     // Indexed by ERISC id.
     std::vector<Erisc> eriscs;
     // The L1 past the channel buffers. Null when the router has no leftover L1.

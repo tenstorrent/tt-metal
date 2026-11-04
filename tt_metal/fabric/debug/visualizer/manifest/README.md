@@ -191,8 +191,8 @@ fails, naming what to update:
 | --- | --- | --- |
 | New named compile-time argument | The router pass: "... is fed to the router, but neither a field table nor the router pass reads it" | A field table entry in `fabric_manifest_fields.hpp`, or an entry with a reason in `k_unrecorded_args` |
 | New define | The router pass: "the define ... is fed to the router, but the router pass does not read it" | Read it in the router pass and list it in `k_router_pass_defines`, or add it to `k_unrecorded_defines` with a reason |
-| Removed argument | The router pass: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
-| Router pass code reads a new argument | `get_named_arg`: "the router pass reads ..., which no field table reads" | Add it to `k_router_pass_args` |
+| Removed argument | `RouterArgs`: "... reads ..., but ERISC<n> wasn't given it" | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
+| Router pass code reads a new argument | `check_arg_is_listed`: "the router pass reads ..., which no field table reads" | Add it to `k_router_pass_args` |
 | A new type in L1 or a stream register | The build: "The manifest names only registered types" | Add it to `RegisteredTypes` in `fabric_manifest_type_registry.hpp` |
 | A new packet header template | The build: "A packet header type fabric can pick isn't in PacketHeaderTypes" | `PacketHeaderTypes` in `fabric_manifest_type_registry.hpp` |
 | A registered template whose argument equals its default | The build: "A registered type's name lost a template argument that equals its default" | A `manifest_type_name` specialization next to the existing two |

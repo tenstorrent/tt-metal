@@ -341,14 +341,38 @@ void collect_regions(
 // The arch's L1 areas, which every router's core has.
 const json& arch_areas(const json& manifest) { return manifest.at("arch").at("l1_areas"); }
 
-// No two of a router's L1 regions overlap, counting the arch areas on its core.
+// A region's path with its ERISC left out, e.g. "fields/perf_telemetry" for "fields/erisc1/perf_telemetry".
+std::string remove_erisc_from_path(const std::string& path) {
+    std::string out;
+    std::string_view rest = path;
+    while (!rest.empty()) {
+        const size_t slash = rest.find('/');
+        const std::string_view part = rest.substr(0, slash);
+        if (!(part.starts_with("erisc") && part.size() > 5 &&
+              std::ranges::all_of(part.substr(5), [](char c) { return c >= '0' && c <= '9'; }))) {
+            out += out.empty() ? std::string(part) : "/" + std::string(part);
+        }
+        rest = slash == std::string_view::npos ? std::string_view{} : rest.substr(slash + 1);
+    }
+    return out;
+}
+
+// No two of a router's L1 regions overlap, counting the arch areas on its core. A field each ERISC is fed the same
+// region for is one region, so it counts once.
 void check_router_regions_disjoint(const json& manifest, const std::vector<RouterEntry>& routers) {
     std::vector<std::tuple<uint32_t, uint32_t, std::string>> areas;
     collect_regions(arch_areas(manifest), "l1_areas", areas);
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
+        std::vector<std::tuple<uint32_t, uint32_t, std::string>> router_regions;
+        collect_regions(*entry.router, "", router_regions);
         auto regions = areas;
-        collect_regions(*entry.router, "", regions);
+        std::set<std::tuple<uint32_t, uint32_t, std::string>> seen;
+        for (const auto& [address, size, path] : router_regions) {
+            if (seen.emplace(address, size, remove_erisc_from_path(path)).second) {
+                regions.emplace_back(address, size, path);
+            }
+        }
         std::ranges::sort(regions);
         for (size_t i = 1; i < regions.size(); ++i) {
             const auto& [address, size, name] = regions[i - 1];
@@ -439,26 +463,36 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     }
                 }
                 const bool worker_channel = producer == "worker" || producer == "tensix_mux";
-                EXPECT_EQ(sender.at("fields").at("buffer_index_sem").is_null(), !worker_channel);
+                for (const auto& [risc_key, fields] : sender.at("fields").items()) {
+                    EXPECT_EQ(fields.at("buffer_index_sem").is_null(), !worker_channel) << risc_key;
+                }
 
                 expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size);
-                const auto& credits = sender.at("credits");
-                if (credits.contains("acked")) {
+                // Each ERISC's credits: acked only on VC0, on an ERISC with bubble flow control.
+                const auto& credits_by_erisc = sender.at("credits");
+                EXPECT_EQ(keys_of(credits_by_erisc), keys_of(router.at("eriscs")));
+                for (const auto& [risc_key, credits] : credits_by_erisc.items()) {
+                    SCOPED_TRACE(risc_key);
+                    const bool bubble_flow_control =
+                        router.at("fields").at(risc_key).at("vc0_bubble_flow_control").at("value").get<bool>();
+                    EXPECT_EQ(credits.contains("acked"), vc == 0 && bubble_flow_control);
+                    if (credits.contains("acked")) {
+                        expect_credit(
+                            credits.at("acked"),
+                            router,
+                            manifest::CreditCounterArray::TO_SENDER_ACK,
+                            uses_counters,
+                            compact,
+                            serviced);
+                    }
                     expect_credit(
-                        credits.at("acked"),
+                        credits.at("completed"),
                         router,
-                        manifest::CreditCounterArray::TO_SENDER_ACK,
+                        manifest::CreditCounterArray::TO_SENDER_COMPLETION,
                         uses_counters,
                         compact,
                         serviced);
                 }
-                expect_credit(
-                    credits.at("completed"),
-                    router,
-                    manifest::CreditCounterArray::TO_SENDER_COMPLETION,
-                    uses_counters,
-                    compact,
-                    serviced);
             }
         }
         EXPECT_EQ(keys_of(senders), expected_vc_keys);
@@ -549,28 +583,39 @@ void expect_fields(const json& fields, std::span<const manifest::RouterField> ta
     EXPECT_EQ(keys_of(fields), expected_keys);
 }
 
-// Every fields object holds exactly its table's fields emitted on this fabric: the router's, each ERISC's, and each
-// channel's and edge's. The kernel's direction, a field, is the one ControlPlane gives the router's channel.
+// A fields object has one entry per ERISC of the router, each holding exactly `table`'s fields emitted on this fabric.
+void expect_fields_by_erisc(
+    const json& fields_by_erisc, const json& eriscs, std::span<const manifest::RouterField> table, bool is_2d) {
+    EXPECT_EQ(keys_of(fields_by_erisc), keys_of(eriscs));
+    for (const auto& [risc_key, fields] : fields_by_erisc.items()) {
+        SCOPED_TRACE(risc_key);
+        expect_fields(fields, table, is_2d);
+    }
+}
+
+// Every fields object holds each ERISC's fields, exactly its table's fields emitted on this fabric: the router's, and
+// each channel's and edge's. The kernel's direction, a field, is the one ControlPlane gives the router's channel on
+// every ERISC.
 void check_router_fields(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
-    const auto expect_channel_fields = [&](const json& channels, std::span<const manifest::RouterField> table) {
-        for (const auto& [vc_key, vc_channels] : channels.items()) {
-            for (const auto& [ch_key, channel] : vc_channels.items()) {
-                SCOPED_TRACE(fmt::format("{}/{}", vc_key, ch_key));
-                expect_fields(channel.at("fields"), table, is_2d);
-            }
-        }
-    };
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& router = *entry.router;
-        expect_fields(router.at("fields"), manifest::k_router_fields, is_2d);
-        EXPECT_EQ(
-            router.at("fields").at("my_direction").at("value").get<uint32_t>(),
-            static_cast<uint32_t>(control_plane().get_eth_chan_direction(entry.node, entry.eth_chan)));
-        for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
-            SCOPED_TRACE(risc_key);
-            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, is_2d);
+        const auto& eriscs = router.at("eriscs");
+        const auto expect_channel_fields = [&](const json& channels, std::span<const manifest::RouterField> table) {
+            for (const auto& [vc_key, vc_channels] : channels.items()) {
+                for (const auto& [ch_key, channel] : vc_channels.items()) {
+                    SCOPED_TRACE(fmt::format("{}/{}", vc_key, ch_key));
+                    expect_fields_by_erisc(channel.at("fields"), eriscs, table, is_2d);
+                }
+            }
+        };
+        expect_fields_by_erisc(router.at("fields"), eriscs, manifest::k_router_fields, is_2d);
+        for (const auto& [risc_key, fields] : router.at("fields").items()) {
+            EXPECT_EQ(
+                fields.at("my_direction").at("value").get<uint32_t>(),
+                static_cast<uint32_t>(control_plane().get_eth_chan_direction(entry.node, entry.eth_chan)))
+                << risc_key;
         }
         expect_channel_fields(router.at("channels").at("senders"), manifest::k_sender_channel_fields);
         expect_channel_fields(router.at("channels").at("receivers"), manifest::k_receiver_channel_fields);
@@ -608,13 +653,13 @@ void check_local_sync(const json& manifest) {
                 const auto eth_chan = channel_for_key(node, r_key);
                 ASSERT_TRUE(eth_chan.has_value()) << r_key;
                 mask |= 1u << *eth_chan;
-                // The kernel reads the local sync arguments only with wait_for_host_signal.
-                if (!router.at("fields").at("wait_for_host_signal").at("value").get<bool>()) {
-                    continue;
-                }
-                syncs = true;
-                for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
-                    if (erisc.at("fields").at("local_handshake_master").at("value").get<bool>()) {
+                // An ERISC reads the local sync arguments only with its wait_for_host_signal.
+                for (const auto& [risc_key, fields] : router.at("fields").items()) {
+                    if (!fields.at("wait_for_host_signal").at("value").get<bool>()) {
+                        continue;
+                    }
+                    syncs = true;
+                    if (fields.at("local_handshake_master").at("value").get<bool>()) {
                         EXPECT_EQ(chip_prefix + r_key, master) << risc_key;
                         ++num_masters;
                     }
@@ -647,21 +692,22 @@ void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
     const auto buffers = context.get_telemetry_and_metadata_buffer_map();
     const auto notify_address = context.get_fabric_router_config().notify_worker_of_read_counter_update_src_address;
     for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        const auto& fields = entry.router->at("fields");
-        expect_diagnostic_buffer(fields.at("perf_telemetry"), buffers.perf_telemetry);
-        expect_diagnostic_buffer(fields.at("code_profiling"), buffers.code_profiling);
-        const bool capture = buffers.channel_trimming_capture.is_enabled();
-        EXPECT_EQ(fields.at("channel_trimming_capture_enabled").at("value").get<bool>(), capture);
-        if (capture) {
-            expect_diagnostic_buffer(fields.at("channel_trimming_capture"), buffers.channel_trimming_capture);
-        }
-        const auto& notify = fields.at("notify_worker_src");
-        if (notify_address == 0) {
-            EXPECT_TRUE(notify.is_null()) << notify;
-        } else {
-            ASSERT_FALSE(notify.is_null());
-            EXPECT_EQ(notify.at("address").get<size_t>(), notify_address);
+        for (const auto& [risc_key, fields] : entry.router->at("fields").items()) {
+            SCOPED_TRACE(fmt::format("{} {}", entry.path, risc_key));
+            expect_diagnostic_buffer(fields.at("perf_telemetry"), buffers.perf_telemetry);
+            expect_diagnostic_buffer(fields.at("code_profiling"), buffers.code_profiling);
+            const bool capture = buffers.channel_trimming_capture.is_enabled();
+            EXPECT_EQ(fields.at("channel_trimming_capture_enabled").at("value").get<bool>(), capture);
+            if (capture) {
+                expect_diagnostic_buffer(fields.at("channel_trimming_capture"), buffers.channel_trimming_capture);
+            }
+            const auto& notify = fields.at("notify_worker_src");
+            if (notify_address == 0) {
+                EXPECT_TRUE(notify.is_null()) << notify;
+            } else {
+                ASSERT_FALSE(notify.is_null());
+                EXPECT_EQ(notify.at("address").get<size_t>(), notify_address);
+            }
         }
     }
 }
@@ -822,24 +868,29 @@ TEST(ManifestArgs, SameFamily) {
 
 // A router's inputs pass when each is read or listed as unrecorded, and fail on one that is neither.
 TEST(ManifestArgs, KernelInputsAccounted) {
-    const RouterKernelInputs kernel{
+    const std::vector<KernelInputs> kernel = {{
+        .kernel = 0,
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::NOC_0,
+        .compile_args = {},
+        .named_compile_args =
+            {
+                {"EDM_STATUS_PTR_ADDR", 0},
+                {"SENDER_CH_7_IS_INJECTION", 0},
+                {"NUM_ACTIVE_ERISCS", 1},
+                {"MAX_NUM_VCS", 3},
+            },
         .defines = {{"FABRIC_2D", ""}, {"FABRIC_2D_VC1_SERVICED", ""}},
-        .processors = {},
-        .named_ct_args = {{
-            {"EDM_STATUS_PTR_ADDR", 0},
-            {"SENDER_CH_7_IS_INJECTION", 0},
-            {"NUM_ACTIVE_ERISCS", 1},
-            {"MAX_NUM_VCS", 3},
-        }},
-    };
+        .runtime_args = {},
+    }};
     EXPECT_NO_THROW(check_kernel_inputs_accounted(kernel));
 
     auto new_arg = kernel;
-    new_arg.named_ct_args.front()["SOME_NEW_ARG"] = 0;
+    new_arg.front().named_compile_args["SOME_NEW_ARG"] = 0;
     EXPECT_THROW(check_kernel_inputs_accounted(new_arg), std::exception);
 
     auto new_define = kernel;
-    new_define.defines["SOME_NEW_DEFINE"] = "";
+    new_define.front().defines["SOME_NEW_DEFINE"] = "";
     EXPECT_THROW(check_kernel_inputs_accounted(new_define), std::exception);
 }
 

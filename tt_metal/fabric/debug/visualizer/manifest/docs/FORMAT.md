@@ -61,7 +61,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
               identity, link, shape, credit_counters,
               channels: { senders: { vc<v>: { ch<c>: { ... } } }, receivers: { ... } },
               intra_chip_downstream_edges: { vc<v>: { edge<n>: { ... } } },
-              fields: { ... }, eriscs: { erisc<n>: { ... } }, leftover_l1
+              fields: { erisc<r>: { ... } }, eriscs: { erisc<r>: { ... } }, leftover_l1
             }
           }
         }
@@ -97,8 +97,11 @@ without its namespaces, as the build that wrote the manifest spells it: `EDMStat
 `unsigned int` for `uint32_t`, `byte` for `std::byte`. Decode, built from the same commit, maps the name back to the
 type and reads the bytes into it. The manifest doesn't describe a type's members ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 
-**Field**: `{ category, kind, ... }`, keyed by the field's name. `category` is `lifecycle`, `kernel_params`,
-`flow_control`, `control_info` or `diagnostics`.
+**Fields**: a `fields` object is keyed by ERISC (`erisc<r>`), and each ERISC's entry holds that ERISC's fields, as the
+builder gave its compile-time arguments. ERISCs can differ, and nothing in the manifest checks that they agree.
+
+**Field**: `{ category, kind, ... }`, keyed by the field's name within an ERISC's fields. `category` is `lifecycle`,
+`kernel_params`, `flow_control`, `control_info` or `diagnostics`.
 
 | `kind` | Keys besides `category` and `kind` |
 | --- | --- |
@@ -211,12 +214,12 @@ An `enum` field isn't a label: it writes its enumerator's name next to its value
 | --- | --- |
 | `identity` | `eth_chan`, `logical_core` and `virtual_core`. The router's mesh and chip are in its path, and its direction and routing plane in its key |
 | `link` | `edge_capability`, `peer` (a router path, or null when the link reaches no active router), `cross_host`, `wrap` and `dispatch_link` |
-| `shape` | `num_vcs`, `senders_per_vc`, `receivers_per_vc`, `num_active_eriscs`, `channel_trimming_overrides_applied`, `vc0_bubble_flow_control` and `has_tensix_extension` (the router's tensix mux carries its VC0 senders other than the worker channel) |
+| `shape` | `num_vcs`, `senders_per_vc`, `receivers_per_vc`, `num_active_eriscs`, `channel_trimming_overrides_applied` and `has_tensix_extension` (the router's tensix mux carries its VC0 senders other than the worker channel) |
 | `credit_counters` | The four L1 credit counter arrays, `to_sender_ack`, `to_sender_completion`, `receiver_ack` and `receiver_completion`, each an L1 region plus `indexed_by`: `own_sender_channel` for the `to_sender` arrays, `peer_sender_channel` for the `receiver` arrays. Each element is one sender channel's, by its compact index |
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
-| `fields` | The router's fields |
-| `eriscs` | Keyed `erisc<n>`, in RISC order: each with its `processor`, `physical_erisc` and `fields` |
+| `fields` | The router's fields, keyed by ERISC |
+| `eriscs` | Keyed `erisc<r>`, in RISC order: each with its `processor` and `physical_erisc` |
 | `leftover_l1` | The L1 from the end of what the router places to the end of the L1 the router may load into, as `byte`, or null when there is none |
 
 ### Channels
@@ -226,22 +229,22 @@ Both kinds of channel have:
 | Key | Value |
 | --- | --- |
 | `status` | `active`, or why no ERISC runs it: `vc_not_serviced`, `mux` or `trimmed` |
-| `serviced_by` | The ERISCs that run it, as `erisc<n>` |
+| `serviced_by` | The ERISCs that run it, as `erisc<r>` |
 | `ring_buffer` | Its packet slots, as `byte` with one element per slot (`element_size` is the slot size), or null when it has none |
-| `fields` | Its fields |
+| `fields` | Its fields, keyed by ERISC |
 
 A sender channel also has:
 
 | Key | Value |
 | --- | --- |
 | `producer` | What feeds it: `"worker"`, `"tensix_mux"`, a sibling router's path, or null |
-| `credits` | `completed`, and on VC0 with bubble flow control `acked`. Each is a stream register, null when unallocated, or `{ array, index }` into the router's credit counters |
+| `credits` | Keyed by ERISC: `completed`, and on VC0, on an ERISC whose `vc0_bubble_flow_control` is set, `acked`. Each is a stream register, null when unallocated, or `{ array, index }` into the router's credit counters |
 
 A receiver channel also has:
 
 | Key | Value |
 | --- | --- |
-| `forwards_on` | The VC whose downstream edges it forwards on, as `vc<v>`, or null when it forwards to no sibling |
+| `forwards_on` | Keyed by ERISC: the VC whose downstream edges that ERISC gives the step, as `vc<v>`, or null when that ERISC doesn't run the step or forwards to no sibling |
 
 [ROUTER_PASS.md](ROUTER_PASS.md) covers how each is worked out.
 
@@ -251,7 +254,7 @@ A receiver channel also has:
 | --- | --- |
 | `downstream_channel` | The path of the sibling's sender channel the edge lands on |
 | `through_tensix_mux` | Whether the edge lands at the sibling's tensix mux rather than the sibling itself |
-| `fields` | The edge's fields: its free-slots stream and teardown semaphore |
+| `fields` | The edge's fields, keyed by ERISC: its free-slots stream and teardown semaphore |
 
 `edge<n>` is the kernel's `EDGE_<n>`.
 
@@ -265,8 +268,7 @@ One router from a Blackhole 2D mock manifest, trimmed:
   "link": { "edge_capability": "intramesh_cardinal", "peer": "M0/C1/W1", "cross_host": false, "wrap": false,
             "dispatch_link": false },
   "shape": { "num_vcs": 1, "senders_per_vc": [4, 0, 0], "receivers_per_vc": [1, 0, 0], "num_active_eriscs": 2,
-             "channel_trimming_overrides_applied": false, "vc0_bubble_flow_control": false,
-             "has_tensix_extension": false },
+             "channel_trimming_overrides_applied": false, "has_tensix_extension": false },
   "credit_counters": {
     "to_sender_ack": { "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int",
                        "cleared_by_host": true, "indexed_by": "own_sender_channel" },
@@ -277,16 +279,31 @@ One router from a Blackhole 2D mock manifest, trimmed:
       "status": "active", "serviced_by": ["erisc0"], "producer": "worker",
       "ring_buffer": { "address": 90912, "num_elements": 17, "element_size": 4448, "type": "byte",
                        "cleared_by_host": false },
-      "credits": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } },
-      "fields": { ... }
+      "credits": {
+        "erisc0": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } },
+        "erisc1": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } }
+      },
+      "fields": { "erisc0": { ... }, "erisc1": { ... } }
     }, ... } },
-    "receivers": { "vc0": { "ch0": { "status": "active", "serviced_by": ["erisc1"], "forwards_on": "vc0", ... } } }
+    "receivers": { "vc0": { "ch0": {
+      "status": "active", "serviced_by": ["erisc1"], "forwards_on": { "erisc0": null, "erisc1": "vc0" }, ...
+    } } }
   },
   "intra_chip_downstream_edges": { "vc0": { "edge3": {
     "downstream_channel": "M0/C0/S1/channels/senders/vc0/ch1", "through_tensix_mux": false,
-    "fields": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
-                                "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... }
+    "fields": {
+      "erisc0": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
+                                  "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... },
+      "erisc1": { ... }
+    }
   }, ... } },
+  "fields": {
+    "erisc0": { "local_handshake_master": { "category": "lifecycle", "kind": "flag", "value": false },
+                "vc0_bubble_flow_control": { "category": "kernel_params", "kind": "flag", "value": false }, ... },
+    "erisc1": { ... }
+  },
+  "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0 },
+              "erisc1": { "processor": "riscv_1", "physical_erisc": 1 } },
   "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte", "cleared_by_host": false },
   ...
 }

@@ -1004,14 +1004,14 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
     const auto& builder_context = fabric_context_.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
-    const RouterKernelInputs kernel = make_router_kernel_inputs(kernel_inputs_by_erisc_);
+    const manifest::RouterArgs args(kernel_inputs_by_erisc_);
     ManifestRouterInputs inputs{
         .erisc_builder = *erisc_builder_,
         .vc_shape = vc_shape_,
         .location = location_,
         .chip_facts = chip_facts,
         .addresses_to_clear = addresses_to_clear,
-        .kernel = kernel,
+        .args = args,
         .hal = fabric_context_.get_hal(),
     };
     return tt::tt_fabric::collect_manifest_router(inputs);

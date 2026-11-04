@@ -19,7 +19,7 @@ For that to work, a name has to meet three conditions:
 2. **A name means one type.** Two types with one name would leave decode unable to tell which bytes it has.
 3. **The type can be rebuilt from bytes.** Decode copies bytes into the type, so the type must be trivially copyable.
 
-The type registry is how the build guarantees all three. It's one compile-time list of types. The manifest can only name a  
+The type registry is how the build guarantees all three. It's one compile-time list of types. The manifest can only name a
 type through the registry, and now decode has a list of actual types that it can map the manifest-stated types to.
 
 ## What gets registered
