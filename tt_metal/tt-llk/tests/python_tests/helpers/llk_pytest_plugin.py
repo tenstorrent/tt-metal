@@ -844,6 +844,26 @@ def _restore_test_order(config, items):
     )
 
 
+def _shuffle_measure_order(config, items):
+    """Trial only: shuffle this shard's tests in the measuring pass (LLK_SHUFFLE_SEED)."""
+    seed = os.environ.get("LLK_SHUFFLE_SEED", "").strip()
+    if not seed or TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        return
+    import hashlib
+    import random
+
+    random.Random(int(seed)).shuffle(items)
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    if worker in ("gw0", "master"):
+        ids = [item.nodeid for item in items]
+        digest = hashlib.sha256("\n".join(ids).encode()).hexdigest()
+        out = TestConfig.perf_run_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"shuffle_order.{worker}.txt").write_text(
+            f"seed {seed} tests {len(ids)} sha256 {digest}\n" + "\n".join(ids[:40]) + "\n"
+        )
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
@@ -852,6 +872,7 @@ def pytest_collection_modifyitems(config, items):
     _select_node_list(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
+    _shuffle_measure_order(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(config, items)
