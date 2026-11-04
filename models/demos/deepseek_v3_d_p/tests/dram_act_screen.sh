@@ -6,6 +6,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../../../.." && pwd)
 TEST=models/demos/deepseek_v3_d_p/tests/test_dram_act_patterns.py
 SOCK=/run/ttop-ipmi/reset
+TTSMI_PY=${TTSMI_PY:-/opt/tenstorrent/tt-tools/tt-smi/.venv/bin/python}
 
 usage() {
   cat <<'EOF'
@@ -20,6 +21,7 @@ Options
   -n, --boots N         number of boots (default 1)
   -c, --ctrl N          DRAM controller for cafull and random (default 3)
   -s, --seconds S       seconds per target (default 120)
+      --chips N|all     chips expected after a reset (default all: the chips present at start)
   -p, --steps LIST      comma list of all8,cafull,random (default all three)
       --random-always   run random on every boot (default: only on a boot where an earlier step hit)
       --no-reset        skip the reset before the first boot (board was just reset)
@@ -60,7 +62,7 @@ Reset
   TTOP container (socket /run/ttop-ipmi/reset): IPMI reset via that socket. tt-smi -glx_reset_auto wedges all chips
   in this container, so it is never used there. Bare metal (/dev/ipmi0): tt-smi -glx_reset_auto. Neither: [WARN]
   and no reset; every boot then runs on the same power-up, so it repeats the test instead of sampling a new boot.
-  After the reset the script checks that 32 chips enumerate; enumeration alone does not prove the chips are usable,
+  After the reset the script checks that --chips chips enumerate; enumeration alone does not prove the chips are usable,
   so a bad reset can still show up as [FAIL] on the first step.
 
 Examples
@@ -70,13 +72,14 @@ Examples
 EOF
 }
 
-NB=1 CTRL=3 SECS=120 STEPS=all8,cafull,random RANDOM_ALWAYS=0 RESET_FIRST=1 OUT="" DRY=0
+NB=1 CTRL=3 SECS=120 CHIPS=all STEPS=all8,cafull,random RANDOM_ALWAYS=0 RESET_FIRST=1 OUT="" DRY=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     -h|--help) usage; exit 0 ;;
     -n|--boots) NB=$2; shift 2 ;;
     -c|--ctrl) CTRL=$2; shift 2 ;;
     -s|--seconds) SECS=$2; shift 2 ;;
+    --chips) CHIPS=$2; shift 2 ;;
     -p|--steps) STEPS=$2; shift 2 ;;
     --random-always) RANDOM_ALWAYS=1; shift ;;
     --no-reset) RESET_FIRST=0; shift ;;
@@ -86,6 +89,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $NB =~ ^[1-9][0-9]*$ ]] || { echo "-n needs a positive boot count, got $NB" >&2; exit 2; }
+count_chips() { ls /dev/tenstorrent 2>/dev/null | grep -c '^[0-9]'; }
+[[ $CHIPS == all ]] && CHIPS=$(count_chips)
+[[ $CHIPS =~ ^[1-9][0-9]*$ ]] || { echo "--chips needs a positive chip count or all, got $CHIPS" >&2; exit 2; }
 OUT=${OUT:-$REPO/repro_logs/act_screen/$(date +%Y%m%d_%H%M%S)}
 for s in ${STEPS//,/ }; do
   [[ $s =~ ^(all8|cafull|random)$ ]] || { echo "unknown step $s (see --help)" >&2; exit 2; }
@@ -124,7 +130,34 @@ sys.exit(codes[-1] if codes else 1)
 PY
       ;;
     # The venv and PYTHONPATH (repo root) break the host tt-smi import.
-    glx_reset_auto) env -u PYTHONPATH -u VIRTUAL_ENV tt-smi -glx_reset_auto ;;
+    glx_reset_auto)
+      if [[ $CHIPS -eq 32 ]]; then
+        env -u PYTHONPATH -u VIRTUAL_ENV tt-smi -glx_reset_auto
+      else
+        # tt-smi waits for exactly 32 chips after the IPMI reset and skips POST_RESET otherwise, so run its
+        # Galaxy reset with that wait replaced by one for $CHIPS chips.
+        env -u PYTHONPATH -u VIRTUAL_ENV "$TTSMI_PY" - "$CHIPS" <<'PY'
+import sys, time
+import tt_smi.reset as r
+from tt_umd import PCIDevice
+want = int(sys.argv[1])
+def wait_for_chips():
+    for t in range(100):
+        try:
+            n = len(PCIDevice.enumerate_devices())
+        except Exception:
+            n = 0
+        if n == want:
+            print(f"Driver loaded with {n} devices")
+            return
+        print(f"Waiting for driver load ... {t} seconds (found {n} devices)")
+        time.sleep(1)
+    raise Exception(f"Driver not loaded with {want} devices after 100 seconds")
+r.run_ubb_wait_for_driver_load = wait_for_chips
+r.glx_6u_trays_reset(reinit=True, print_status=False, use_umd=True)
+PY
+      fi
+      ;;
   esac
 }
 
@@ -137,15 +170,15 @@ do_reset() {  # do_reset <boot>
   say "${B}reset${N} ($RESET_MODE) ..."
   board_reset > "$log" 2>&1
   r=$?
-  n=$(ls /dev/tenstorrent 2>/dev/null | wc -l)
-  if [[ $r -ne 0 || $n -ne 32 ]]; then
-    say "${R}[STOP]${N} reset failed: exit $r, $n/32 chips. Last lines of $log:"
+  n=$(count_chips)
+  if [[ $r -ne 0 || $n -ne $CHIPS ]]; then
+    say "${R}[STOP]${N} reset failed: exit $r, $n/$CHIPS chips. Last lines of $log:"
     tail -5 "$log" | sed 's/^/         /'
     say "${R}[STOP]${N} loop ended at boot $1; check the board before restarting"
     summary
     exit 1
   fi
-  say "${G}reset ok${N}, 32 chips"
+  say "${G}reset ok${N}, $CHIPS chips"
 }
 
 PID=""
@@ -194,7 +227,7 @@ summary() {
   printf '  %s\n' "${SUMMARY[@]}"
 }
 
-echo "${B}DRAM ACT screen${N}: $NB boot(s), steps $STEPS, ctrl $CTRL, ${SECS}s per target, reset $RESET_MODE"
+echo "${B}DRAM ACT screen${N}: $NB boot(s), steps $STEPS, ctrl $CTRL, ${SECS}s per target, reset $RESET_MODE, $CHIPS chips"
 echo "  repo $REPO"
 echo "  out  $OUT"
 if [[ $DRY -eq 1 ]]; then
