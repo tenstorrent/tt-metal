@@ -2090,7 +2090,9 @@ class ttMLA:
         # sp==1 non-dedup route did produce a genuinely transient slice; with the SP-only gather gone
         # there is no transient buffer here any more.
         ttnn.deallocate(tt_q)
-        return self._apply_wkv_b2(attn_out, seq_len_local)
+        v = self._apply_wkv_b2(attn_out, seq_len_local)
+        ttnn.deallocate(attn_out)  # may be an L1 buffer (_sparse_mla): must not outlive wkv_b2
+        return v
 
     def _select_and_gather_overlapped(
         self,
@@ -2461,13 +2463,15 @@ class ttMLA:
 
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded
-            # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
+            # [1, H/tp, S/sp, v_dim] consumed by the epilogue. The result is wkv_b2's in0, so it goes where
+            # wkv_b2's tuned config wants it (L1 for GLM chunked: ~87 KB/core at 640 rows); the caller frees it
+            # right after wkv_b2.
             head_sharded = ttnn.experimental.all_to_all_async_generic(
                 ret,
                 in_dim=2,
                 out_dim=1,
                 num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self._get_act_mem_config("wkv_b2", seq_len_local),
                 cluster_axis=self.tp_axis,
             )
             ttnn.deallocate(ret)
