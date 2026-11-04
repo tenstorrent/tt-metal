@@ -8,6 +8,7 @@
 #pragma once
 struct LStream {
     uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, ns, sfree, u, i, sent;
+    uint32_t rit, c0, rbi;  // (router iterations: my "rit" word, router core 0's NoC, the router cores an iteration)
     void init(uint32_t a) {
         r0 = a;
         nu = get_arg_val<uint32_t>(a);
@@ -22,6 +23,9 @@ struct LStream {
         need = get_arg_val<uint32_t>(t + 6);  // (a sub-block's word when in: 1 hand-off, or et engine tiles)
         ns = get_arg_val<uint32_t>(t + 7);    // (sub-block slots a unit: core i in slot i % ns, then core i + ns told)
         sfree = get_arg_val<uint32_t>(t + 8);
+        rit = get_arg_val<uint32_t>(t + 9);
+        c0 = get_arg_val<uint32_t>(t + 10);
+        rbi = get_arg_val<uint32_t>(t + 11);
         u = 0;
         i = 0;
         sent = 0;
@@ -29,7 +33,7 @@ struct LStream {
     bool done() const { return u >= nu; }
     static uint32_t len(uint32_t a) {
         const uint32_t nu = get_arg_val<uint32_t>(a);
-        return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 9;
+        return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 12;
     }
     // send what is ready (unit u: an owner chip, multi-hop; core i of my link: its partial of that owner's rows);
     // blocking: until everything is sent
@@ -80,5 +84,13 @@ struct LStream {
         for (uint32_t c = 0; c < nu * nc; ++c) {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * c) = 0;
         }
+    }
+    bool active() const { return nu > 0 && nc > 0; }
+    // the next router iteration's sub-blocks (its slots and words reused: the matmul cores write them only once router
+    // core 0 told them go, past this iteration's count of mine)
+    void next_iteration() {
+        rearm();
+        u = 0;
+        i = 0;
     }
 };

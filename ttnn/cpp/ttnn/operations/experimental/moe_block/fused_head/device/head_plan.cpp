@@ -469,7 +469,7 @@ std::pair<double, Parts> head_cost(
 }
 
 std::vector<HeadPlanned> head_plan_layouts(
-    const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit, bool xdram) {
+    const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit, bool xdram, uint32_t min_router_iters) {
     const uint32_t GXe = engine_width(shape);
     // the router stage in one go (NIT 1) wherever a layout fits that way; router iterations only when none does
     auto pass = [&](uint32_t max_nit) {
@@ -477,7 +477,7 @@ std::vector<HeadPlanned> head_plan_layouts(
         for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
             for (uint32_t kb : k_steps(shape)) {
                 // (the fewest router iterations that fit, up to max_nit: NIT divides the row chunks)
-                for (uint32_t nit = 1; nit <= std::min(NCH, max_nit); ++nit) {
+                for (uint32_t nit = min_router_iters; nit <= std::min(NCH, max_nit); ++nit) {
                     if (NCH % nit) {
                         continue;
                     }
@@ -515,7 +515,7 @@ std::vector<HeadPlanned> head_plan_layouts(
         }
         return out;
     };
-    std::vector<HeadPlanned> out = pass(1);
+    std::vector<HeadPlanned> out = pass(min_router_iters);
     if (std::none_of(out.begin(), out.end(), [](const HeadPlanned& p) { return p.t != kInf; })) {
         out = pass(std::numeric_limits<uint32_t>::max());
     }
@@ -608,7 +608,7 @@ HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const H
                   " row tiles an owner: row chunks of whole owner blocks, MT <= 2, the router cores' cells)";
         return res;
     }
-    const auto ps = head_plan_layouts(shape, arena_max, true);
+    const auto ps = head_plan_layouts(shape, arena_max, true, false, options.min_router_iters);
     std::vector<HeadPlanned> ok;
     for (const auto& p : ps) {
         if (p.t != kInf) {
@@ -628,7 +628,7 @@ HeadFit head_plan_fit(const HeadShape& shape, const ArenaMax& arena_max, const H
         }
         std::string why = summary(unfit, arena_max);
         if (options.fallback) {
-            const auto pxa = head_plan_layouts(shape, arena_max, true, true);
+            const auto pxa = head_plan_layouts(shape, arena_max, true, true, options.min_router_iters);
             std::vector<HeadPlanned> px, ux;
             for (const auto& p : pxa) {
                 if (p.t != kInf) {

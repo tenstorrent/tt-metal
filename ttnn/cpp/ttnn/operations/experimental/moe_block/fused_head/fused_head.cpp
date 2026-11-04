@@ -141,6 +141,7 @@ const HeadFit& plan_fused_head(
         o.l1_free = l1;
         o.cb_floor = floor;
         o.fallback = resources.config().head_dram_fallback;
+        o.min_router_iters = std::max<uint32_t>(1, resources.config().head_router_iterations);
         return head_plan_fit(shape, o);
     });
 }

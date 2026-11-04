@@ -48,27 +48,33 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(BIAS, ET);
     cb_push_back(IDX, ET);
-    {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
-       // with an increment of this counter a tile): all G x ET in -> the compute (RDY)
-        DeviceZoneScopedN("SE-RENGWAIT");
-        volatile tt_l1_ptr uint32_t* ec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ENG);
-        noc_semaphore_wait_min(ec, ET);  // (my own block's tiles: the others' go straight to the ports)
-        noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - ET);  // (re-arm)
-        noc_async_atomic_barrier();
-        cb_reserve_back(RDY, 1);
-        cb_push_back(RDY, 1);
-        // (and word 112 for the compute's PACK thread: the RDY wait holds only UNPACK, and PACK's hand-off pushes
-        // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's
-        // planner overlay in it, K3's picks 99.10%)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
-    }
-    if (na) {  // the sources' partials as they land (a fused increment of the source slot's own word, 16 B apart): each
-               // slot to the compute (ARRB) in a fixed order - the order args, the predicted landing order - so the sum
-               // is the same every run at ~no wait (the head is always deterministic)
-        DeviceZoneScopedN("SE-RLWAIT");
-        for (uint32_t a = 0, seen = 0; a < na;) {
-            invalidate_l1_cache();
-            for (uint32_t s = 0; s < na; ++s) {
+#ifdef RT_NIT
+    constexpr uint32_t NIT = RT_NIT;  // (router iterations: my row tile of each)
+#else
+    constexpr uint32_t NIT = 1;
+#endif
+    for (uint32_t it = 0; it < NIT; ++it) {
+        {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
+           // with an increment of this counter a tile): all G x ET in -> the compute (RDY)
+            DeviceZoneScopedN("SE-RENGWAIT");
+            volatile tt_l1_ptr uint32_t* ec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ENG);
+            noc_semaphore_wait_min(ec, ET);  // (my own block's tiles: the others' go straight to the ports)
+            noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - ET);  // (re-arm)
+            noc_async_atomic_barrier();
+            cb_reserve_back(RDY, 1);
+            cb_push_back(RDY, 1);
+            // (and word 112 for the compute's PACK thread: the RDY wait holds only UNPACK, and PACK's hand-off pushes
+            // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's
+            // planner overlay in it, K3's picks 99.10%)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
+        }
+        if (na) {  // the sources' partials as they land (a fused increment of the source slot's own word, 16 B apart):
+                   // each slot to the compute (ARRB) in a fixed order - the order args, the predicted landing order -
+                   // so the sum is the same every run at ~no wait (the head is always deterministic)
+            DeviceZoneScopedN("SE-RLWAIT");
+            for (uint32_t a = 0, seen = 0; a < na;) {
+                invalidate_l1_cache();
+                for (uint32_t s = 0; s < na; ++s) {
                 if (s != get_arg_val<uint32_t>(ab0 + 2 + a)) {  // (the fixed order)
                     continue;
                 }
@@ -82,9 +88,9 @@ void kernel_main() {
                 cb_reserve_back(ARRB, 1);
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ARRB)) = s;
                 cb_push_back(ARRB, 1);
+                }
             }
         }
-    }
     {  // (my share of the joint rows - tokens 8 .. 15 - once the top-K is done)
         const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
         volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 64);
@@ -105,6 +111,7 @@ void kernel_main() {
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
+    }  // (router iterations)
 #ifdef RA_PLAN
     {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
         const uint32_t rr = ab0 + nab + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
