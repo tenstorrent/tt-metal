@@ -591,11 +591,12 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     // Lazy rescale. S2 computes every member's new row max (this piece merged with the stored max) into the
     // scratch. The step rescales (S3 alpha + S4) only when some initialized row's max grew by more than
     // kLazyThrRaw raw logit units; otherwise the stored max stays and S5 subtracts it, so the exp's input
-    // (score - stored max) * scale is <= 0.5: inside the approximate exp's safe range
-    // and with bf16 resolution <= 1/256 of the argument. A slot's first step (uninitialized) only copies its new
-    // max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained.
+    // (score - stored max) * scale is <= 16 ln 2, inside the shifted exp's range (see kExpOctaves). A rescale
+    // rounds every member's Float32 slots to bf16 (they pass through the 16-bit DEST), so the threshold makes it
+    // rare: in practice only a row's first steps move its max that far. A slot's first step (uninitialized) only
+    // copies its new max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained.
     constexpr float kScale = __builtin_bit_cast(float, scale_fp32);
-    constexpr float kLazyThrRaw = 0.5f / kScale;
+    constexpr float kLazyThrRaw = 16.0f * 0.69314718055994531f / kScale;
     constexpr uint16_t kLazyThrBits = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, kLazyThrRaw) >> 16);
     uint32_t n_init = 0;
     for (uint32_t g = 0; g < n_slots; ++g) {
@@ -803,8 +804,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 
-        // ---- S4 (rescale only): the Float32 slots pass through the 16-bit DEST, so a rescale rounds them to bf16
-        //      once (the lazy threshold keeps rescales rare); the accumulation between rescales stays Float32. ----
+        // ---- S4 (rescale only, see the lazy-rescale comment for its rounding). ----
         if (rescale) {
             sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
             sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
@@ -826,6 +826,18 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     //      UNPACK takes it before that batch's first P@V, so few tokens are outstanding (capacity 15). The MOPs and
     //      the unpacker's srcA format are re-issued on every stage switch. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    // Exp headroom: P = exp(scale * (s - m) - kExpOctaves ln 2). The fast exp computes 256 log2(e) scale x + (B - C)
+    // as INT16; lowering its constant (LREG13) by 256 per octave scales P by exactly 2^-kExpOctaves (the error
+    // pattern is unchanged, the scale cancels at normalization) and moves saturation from 0.72 to kExpOctaves ln 2 +
+    // 0.72 above the stored max, past the rescale threshold. Underflow moves up by as much (to -68 here): still 0.
+    PACK({
+        constexpr uint32_t kExpOctaves = 28;
+        constexpr float exp_c = 32500.818359375f - 256.0f * kExpOctaves;
+        constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
+        TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
+        TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
+        TTI_SFPCONFIG(0, 13, 0);
+    })
     CircularBuffer(cb_sum_identity).wait_front(1);
     {
         constexpr auto s5_flush =
