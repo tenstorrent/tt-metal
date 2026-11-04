@@ -49,6 +49,7 @@ public:
 
 private:
     friend constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token);
+    friend constexpr uint32_t get_tile_size(const ScratchpadBindingToken& token);
     friend constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token);
     friend constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token);
     friend constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token);
@@ -112,6 +113,16 @@ constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
  */
 constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
     return token.llk_metadata_.num_faces_c_dim;
+}
+
+// Returns the tile storage size in bytes.
+// precondition: The token has format metadata and a supported tile storage size.
+constexpr uint32_t get_tile_size(const ScratchpadBindingToken& token) {
+    (void)get_dataformat(token);
+    if (token.llk_metadata_.tile_size_bytes == 0) {
+        binding_details::tile_size_metadata_not_set();
+    }
+    return token.llk_metadata_.tile_size_bytes;
 }
 
 // Returns the tile height in elements.

@@ -161,6 +161,46 @@ struct MissingTileSizeCase {
     const char* declaration;
 };
 
+class BindingTokenTileSizeMetadata : public test_helpers::ProgramSpecTestBlackhole {
+protected:
+    distributed::MeshDevice& fixture_device() { return *mesh_device_; }
+};
+
+// A kernel's cache key includes the resolved byte count emitted into its resource token.
+TEST_F(BindingTokenTileSizeMetadata, StorageBytesAffectKernelHash) {
+    const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, "void kernel_main() {}");
+    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    Kernel& kernel = *program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto original_hash = kernel.compute_hash();
+    kernel.scratchpad_binding_handles()[0].llk_metadata->tile_size_bytes += 16;
+    EXPECT_NE(original_hash, kernel.compute_hash());
+}
+
+// A TF32 scratchpad can still expose its configured format when tile storage is unsupported.
+TEST_F(BindingTokenTileSizeMetadata, Tf32FormatQueryStillCompiles) {
+    const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(
+        size, "void kernel_main() { static_assert(get_dataformat(scratch::pad) == DataFormat::Tf32); }");
+    for (ScratchpadSpec& scratchpad : spec.scratchpads) {
+        scratchpad.data_format_metadata = tt::DataFormat::Tf32;
+    }
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// A TF32 scratchpad rejects a constant tile-size query because no Tile storage encoding exists.
+TEST_F(BindingTokenTileSizeMetadata, Tf32StorageSizeQueryFails) {
+    const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(
+        size, "void kernel_main() { static_assert(get_tile_size(scratch::pad) > 0); }");
+    for (ScratchpadSpec& scratchpad : spec.scratchpads) {
+        scratchpad.data_format_metadata = tt::DataFormat::Tf32;
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("tile_size_metadata_not_set")));
+}
+
 class BindingTokenTileSizeMissing : public test_helpers::ProgramSpecTestBlackhole,
                                     public ::testing::WithParamInterface<MissingTileSizeCase> {
 protected:

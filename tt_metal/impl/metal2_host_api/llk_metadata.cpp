@@ -11,8 +11,16 @@
 #include <tt-metalium/constants.hpp>
 
 #include "impl/data_format/hw_data_format.hpp"
+#include "impl/data_format/tile_size.hpp"
 
 namespace tt::tt_metal {
+
+LLKMetadata resolve_llk_metadata_tile_size(LLKMetadata metadata, uint32_t l1_alignment) {
+    // TF32 metadata is usable for format queries but has no supported Tile storage encoding.
+    metadata.tile_size_bytes =
+        metadata.format == DataFormat::Tf32 ? 0 : detail::tile_size_bytes(metadata.tile, metadata.format, l1_alignment);
+    return metadata;
+}
 
 std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch) {
     const Tile& tile = metadata.tile;
@@ -23,12 +31,13 @@ std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch) {
     const hw_format_t format = host_data_format_to_hw(metadata.format, arch);
     return fmt::format(
         "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
-        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u, .tile_size_bytes = {}u}}",
         format,
         face_r_dim,
         constants::FACE_WIDTH,
         num_faces_r_dim,
-        num_faces_c_dim);
+        num_faces_c_dim,
+        metadata.tile_size_bytes);
 }
 
 }  // namespace tt::tt_metal
