@@ -924,10 +924,7 @@ class TestTriage:
     ],
     indirect=True,
 )
-@pytest.mark.skipif(
-    bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason="Not supported on a simulator yet: the fixture cannot wait for a spinning kernel",
-)
+@pytest.mark.skipif(bool(os.environ.get("TT_METAL_SIMULATOR")), reason="Not supported on a simulator yet")
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestMeshSocketTriage:
     exalens_context: Context
@@ -970,11 +967,13 @@ class TestMeshSocketTriage:
         assert len(h2d) == 1, f"Expected 1 H2D receiver row, got {len(h2d)}"
         assert len(d2h) == 1, f"Expected 1 D2H sender row, got {len(d2h)}"
         assert h2d[0].sent_at_receiver == MESH_SOCKET_FIFO_SIZE, "Expected the host to have filled the H2D fifo"
-        # A D2H downstream is a host address, so Downstream Addr reads N/A. sent@snd and wr_off come from
-        # the kernel's locals, which triage cannot read for this kernel, so they are not checked.
+        assert h2d[0].acked_at_receiver == 0, "Expected no acks, since nothing on the chip reads the H2D fifo"
+        # A D2H downstream is a host address, so Downstream Addr reads N/A. wr_off comes from the kernel's
+        # locals, which triage cannot read for this kernel, so it is not checked.
         assert (d2h[0].downstream_config_addr, d2h[0].num_downstreams, d2h[0].downstream) == (None, 1, 0)
+        assert d2h[0].sent_at_sender == MESH_SOCKET_FIFO_SIZE, "Expected the D2H kernel to have filled the fifo"
         assert d2h[0].acked_at_sender == 0, "Expected no acks, since the host never reads"
-        # Those values are the host-initialised ones, so check the callstack that the kernel really wedged.
+        # The callstack shows the kernel is still waiting for fifo space.
         triage.CHECKS.clear()
         callstacks = run_script(
             script_path=os.path.join(triage_home, "dump_callstacks.py"),

@@ -21,14 +21,14 @@ Description:
 
     Counter columns, by source:
 
-      sent@snd    sender bytes_sent                                    kernel frame
+      sent@snd    sender bytes_sent                                    kernel frame, or L1 for D2H
       acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver (the host for D2H)
       wr_off      sender write_ptr, offset from downstream_fifo_addr   kernel frame
       sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender (the host for H2D)
-      acked@rcv   receiver bytes_acked                                 kernel frame
+      acked@rcv   receiver bytes_acked                                 kernel frame, or L1 for H2D
       rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
-    A kernel flushes its own counters to L1 only at exit, so live values are read from its
+    A D2D kernel flushes its own counters to L1 only at exit, so live values are read from its
     Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A kernel
     frame column reads N/A when no kernel was running on the core or the local was optimized out.
 
@@ -252,7 +252,7 @@ def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
         config_addr=core.config_addr,
         downstream_config_addr=None if core.peers[index].is_host else md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=core.interface.get("bytes_sent"),
+        sent_at_sender=core.interface.get("bytes_sent", md.bytes_sent if md.is_d2h else None),
         acked_at_sender=md.bytes_acked[index],
         write_ptr=core.interface.get("write_ptr"),
         sent_at_receiver=None,  # receiver's buffer
@@ -276,7 +276,7 @@ def receiver_row(core: SocketCore, md: ReceiverMd) -> SocketRow:
         acked_at_sender=None,  # sender's buffer
         write_ptr=None,  # sender's buffer
         sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=core.interface.get("bytes_acked"),
+        acked_at_receiver=core.interface.get("bytes_acked", md.bytes_acked if md.is_h2d else None),
         read_ptr=core.interface.get("read_ptr"),
         fifo_size=md.fifo_total_size,
         num_downstreams=None,  # sender's buffer
