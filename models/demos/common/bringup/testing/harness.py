@@ -88,10 +88,36 @@ def sources(layer: int, s=None) -> list[int]:
     return (s or spec()).state_sources(layer)
 
 
-def begin_chunk(model, tokens, start: int) -> None:
-    """F65: hand the device model the chunk's token ids before its first layer runs (optional hook)."""
-    if hasattr(model, "begin_chunk"):
+CHUNK_LAST_ENV = "BRINGUP_CHUNK_LAST"  # F248: "0" = time the chunk as one that is not the request's last
+
+
+def chunk_last() -> bool | None:
+    """F248: None (the model's default, every chunk the request's last) unless BRINGUP_CHUNK_LAST is set."""
+    v = os.environ.get(CHUNK_LAST_ENV)
+    return None if v in (None, "") else v not in ("0", "false", "False")
+
+
+def begin_chunk(model, tokens, start: int, last: bool | None = None) -> None:
+    """F65: hand the device model the chunk's token ids before its first layer runs (optional hook). F248: ``last``
+    (else BRINGUP_CHUNK_LAST) tells a model whose begin_chunk takes it whether the chunk is the request's last (e.g.
+    DeepSeek-V4.1's decoder skip); a model that does not take it refuses a non-last request instead of silently timing
+    the full chunk."""
+    last = chunk_last() if last is None else last
+    if not hasattr(model, "begin_chunk"):
+        if last is False:
+            raise RuntimeError("BRINGUP_CHUNK_LAST=0: the model has no begin_chunk(..., last=) hook")
+        return
+    if last is None:
         model.begin_chunk(tokens, start)
+        return
+    import inspect
+
+    if "last" not in inspect.signature(model.begin_chunk).parameters:
+        if last is False:
+            raise RuntimeError("BRINGUP_CHUNK_LAST=0: the model's begin_chunk takes no `last`")
+        model.begin_chunk(tokens, start)
+        return
+    model.begin_chunk(tokens, start, last=last)
 
 
 def reference_ctx(ref, layer: int, g: Golden, c: int, s=None):

@@ -280,12 +280,14 @@ def test_no_fork_case_carries_a_tolerance_of_its_own():
     assert not bad, f"{len(bad)} cases, e.g. {bad[:3]}"
 
 
-def test_a_volatile_cache_key_does_not_change_a_calls_signature():
+def test_a_volatile_cache_key_does_not_change_a_calls_signature(monkeypatch):
     """F179: DeepSeek-V4.1 O.1: a flat_routed_expert call carried extra_key (a program-cache key from buffer addresses)
     that changed between two runs, so its signature did too and no case could cover it. The signature leaves volatile
     arguments out; the pre-F179 signature is kept as sig_full so existing cases still match."""
     from models.demos.common.bringup.testing import fork_capture as FC
 
+    # F244: record() asks ttnn.get_fabric_config(), which opens every chip (a UMD cluster) under a running device job
+    monkeypatch.setattr(FC, "_device", lambda: None)
     FC._CALLS.clear()
     FC.record("ttnn.bringup.flat_routed_expert", [1, 2], {"extra_key": 9507296, "k": 3})
     FC.record("ttnn.bringup.flat_routed_expert", [1, 2], {"extra_key": 9582688, "k": 3})
