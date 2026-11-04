@@ -31,13 +31,13 @@ def to_device(torch_tensor, mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh),
     )
 
 
 def per_device(tensor, mesh):
     """The tensor's shard on each device of the mesh, in mesh order."""
-    stacked = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    stacked = ttnn.to_torch(tensor, mesh_composer=ttnn.concat_mesh_to_tensor_composer(mesh, dim=0))
     return list(stacked.split(SHAPE[0], dim=0))
 
 
