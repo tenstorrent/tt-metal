@@ -114,9 +114,10 @@
 // SFPLOADMACRO acceleration of the UNFUSED merge / rebuild bodies (TOPK_XL_UNFUSED_MACRO) and of the fused sort,
 // merge and rebuild step groups (TOPK_XL_FUSED_MACRO); see the "SFPLOADMACRO acceleration for the UNFUSED merge /
 // rebuild" section below for the unfused design, silicon validation, and the opt-out contract. DISABLE_TOPK_XL_SFPLOADMACRO
-// and TOPK_XL_BLAZE_COMPAT turn both off. Defined here (before `topk_mop_config`) because the merge MOP body length
-// keys on it.
-#if !defined(TOPK_XL_BLAZE_COMPAT) && !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
+// turns both off. Code that runs the fused step groups outside an entry point that programs them, such as
+// `canonical_big_block_with_replay` at row_scale_factor >= 2, runs `topk_xl_fused_macro::configure()` first. Defined
+// here (before `topk_mop_config`) because the merge MOP body length keys on it.
+#if !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
 #define TOPK_XL_UNFUSED_MACRO 1
 #define TOPK_XL_FUSED_MACRO   1
 #else
