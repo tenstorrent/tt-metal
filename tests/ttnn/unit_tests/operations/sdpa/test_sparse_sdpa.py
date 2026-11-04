@@ -77,6 +77,7 @@ def test_sparse_sdpa_runs(device):
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("kdeq_batch", ["1", "2"], ids=["kdeq_l1_only", "kdeq_forced"])
 @pytest.mark.parametrize(
     "S,T,TOPK,kc,all_valid,round_scale",
     [
@@ -96,8 +97,9 @@ def test_sparse_sdpa_runs(device):
         "scaled_e4m3_latent_bf16_rope",
     ],
 )
-def test_sparse_sdpa_scaled_fp8_kv(device, S, T, TOPK, kc, all_valid, round_scale):
+def test_sparse_sdpa_scaled_fp8_kv(device, monkeypatch, kdeq_batch, S, T, TOPK, kc, all_valid, round_scale):
     """Selected FP8 latent rows use per-token/block scales while RoPE remains BF16."""
+    monkeypatch.setenv("SPARSE_SDPA_KDEQ_BATCH", kdeq_batch)  # "2" forces the batched K reconstruct on DRAM KV
     H = 32
     q, _, indices = make_inputs(
         H, S, T, TOPK, K_DIM, (lambda s: TOPK) if all_valid else (lambda s: 1 + (s * 7) % TOPK), seed=41
