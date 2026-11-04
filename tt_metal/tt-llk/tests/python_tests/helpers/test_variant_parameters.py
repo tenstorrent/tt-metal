@@ -9,8 +9,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .format_config import DataFormat, is_dest_acc_needed
+from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -21,7 +20,6 @@ from .llk_params import (
     BroadcastType,
     CustomMmDestLayout,
     DataCopyType,
-    DestAccumulation,
     DestSync,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
@@ -97,48 +95,6 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 
 @dataclass
-class MATMUL_ROW_MOP(TemplateParameter):
-    """Blackhole matmul math with one MOP per reuse row."""
-
-    def convert_to_cpp(self) -> str:
-        return "#define MATMUL_ROW_MOP"
-
-
-# Operand formats of 8 bits per datum or less (_llk_unpack_AB_matmul_narrow_format_).
-MATMUL_NARROW_STREAM_FORMATS = (
-    DataFormat.Bfp8,
-    DataFormat.Bfp8_b,
-    DataFormat.Bfp4_b,
-    DataFormat.Bfp2_b,
-    DataFormat.Fp8_e4m3,
-    DataFormat.Int8,
-    DataFormat.UInt8,
-)
-
-
-@dataclass
-class MATMUL_STREAM_NARROW(TemplateParameter):
-    """Blackhole matmul unpack that streams an operand of 8 bits per datum or less into a 16-bit DEST."""
-
-    def convert_to_cpp(self) -> str:
-        return "#define MATMUL_STREAM_NARROW"
-
-    @staticmethod
-    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int) -> list:
-        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST), else []."""
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-            return []
-        if dest_sync != DestSync.Full:
-            return []
-        if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
-            return []
-        streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
-        return (
-            [MATMUL_STREAM_NARROW()] if streamed in MATMUL_NARROW_STREAM_FORMATS else []
-        )
-
-
-@dataclass
 class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
     pack_untilize_benchmark: PackUntilizeBenchmark
 
@@ -148,14 +104,6 @@ class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
             f"// pack_untilize benchmark: {self.pack_untilize_benchmark.value}\n"
             f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
         )
-
-
-@dataclass
-class MATMUL_UNPACK_TTSYNC(TemplateParameter):
-    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
-
-    def convert_to_cpp(self) -> str:
-        return "#define MATMUL_UNPACK_TTSYNC"
 
 
 @dataclass

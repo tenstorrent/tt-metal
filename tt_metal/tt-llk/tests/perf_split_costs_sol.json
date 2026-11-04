@@ -71,8 +71,6 @@
   "perf_unpack_a_bcast_eltwise": 0.0,
   "perf_unpack_tilize": 531.6,
   "perf_unpack_transpose": 4.4,
-  "perf_vif_targets": 0.0,
-  "perf_matmul_row_mop": 1.0,
-  "perf_matmul_unpack_ttsync": 1.0
+  "perf_vif_targets": 0.0
  }
 }

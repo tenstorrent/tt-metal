@@ -33,9 +33,7 @@
   "perf_unpack_a_bcast_eltwise": 1.2,
   "perf_unpack_tilize": 6.7,
   "perf_unpack_transpose": 0.7,
-  "perf_vif_targets": 3.6,
-  "perf_matmul_row_mop": 1.0,
-  "perf_matmul_unpack_ttsync": 1.0
+  "perf_vif_targets": 3.6
  },
  "blackhole": {
   "perf_eltwise_bcast_col_custom": 1.3,
@@ -71,8 +69,6 @@
   "perf_unpack_a_bcast_eltwise": 0.0,
   "perf_unpack_tilize": 20.5,
   "perf_unpack_transpose": 0.9,
-  "perf_vif_targets": 0.0,
-  "perf_matmul_row_mop": 1.0,
-  "perf_matmul_unpack_ttsync": 1.0
+  "perf_vif_targets": 0.0
  }
 }

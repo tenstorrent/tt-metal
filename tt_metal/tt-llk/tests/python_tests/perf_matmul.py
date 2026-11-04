@@ -34,7 +34,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_PACK_BLOCK,
-    MATMUL_STREAM_NARROW,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -152,9 +151,6 @@ def test_perf_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
-            *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim
-            ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
                     formats,
