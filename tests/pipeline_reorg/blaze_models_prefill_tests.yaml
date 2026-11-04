@@ -336,6 +336,8 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+        # Host-only KV chunk table walks: SP on either mesh axis, TP-deduped, at 5,120 (8x4) and 2,560 (4x4).
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py -k "stage_addresses"
       '
     )
 
