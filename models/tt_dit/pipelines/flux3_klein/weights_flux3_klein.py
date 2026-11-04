@@ -26,10 +26,15 @@ def resolve_weights_dir(model: str) -> Path:
         return Path(snapshot_download(REPO_IDS[model], ignore_patterns=IGNORE_PATTERNS))
 
 
-def checkpoint_id(path: Path) -> str:
-    """Names a weights file's content for the conversion cache: its Hugging Face blob hash, else its path, size and
-    modification time."""
-    if path.is_symlink():
-        return Path(os.path.realpath(path)).name[:16]
-    stat = path.stat()
-    return hashlib.sha256(f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+def checkpoint_id(*paths: Path) -> str:
+    """Names the content of a checkpoint's weights files for the conversion cache: per file, its Hugging Face blob
+    hash, else its path, size and modification time."""
+
+    def file_id(path: Path) -> str:
+        if path.is_symlink():
+            return Path(os.path.realpath(path)).name[:16]
+        stat = path.stat()
+        return hashlib.sha256(f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+
+    ids = [file_id(path) for path in paths]
+    return ids[0] if len(ids) == 1 else hashlib.sha256(":".join(ids).encode()).hexdigest()[:16]

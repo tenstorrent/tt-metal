@@ -35,7 +35,7 @@ from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
 from .vae_flux3_klein import Flux3KleinVae
-from .weights_flux3_klein import resolve_weights_dir
+from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
 # The first release serves fixed square sizes, all warmed up at startup, and at most one reference image,
 # center-cropped and resized to 1 MP as in BFL's multi-reference sizing.
@@ -173,7 +173,7 @@ class Flux3KleinPipeline:
             )
             cache.load_model(
                 transformer,
-                model_name=f"flux3_klein_{model}_{Path(snapshot).name}",
+                model_name=f"flux3_klein_{model}_{checkpoint_id(Path(snapshot) / 'model.safetensors')}",
                 subfolder=f"transformer_D{EARLY_DEPTH}_S{SINGLE_DEPTH}{'_flowmap' if transformer.flow_map else ''}",
                 parallel_config=parallel,
                 mesh_shape=mesh_shape,

@@ -88,10 +88,10 @@ def build_flux3_klein_text_encoder(
         is_fsdp=is_fsdp,
         high_fidelity_linears=True,
     )
-    shard = Path(snapshot) / SUBFOLDER / "model-00001-of-00002.safetensors"
+    shards = sorted((Path(snapshot) / SUBFOLDER).glob("model-*.safetensors"))
     cache.load_model(
         encoder,
-        model_name=f"flux3_klein_text_encoder_{checkpoint_id(shard)}",
+        model_name=f"flux3_klein_text_encoder_{checkpoint_id(*shards)}",
         subfolder=f"text_encoder_L{NUM_LAYERS}",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),

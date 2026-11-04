@@ -195,6 +195,8 @@ class Flux3KleinUpsampler:
     def close(self) -> None:
         self.generator.release_persistent_capture()
         self.model.free_kv_caches()
+        # the model's weights and persistent buffers are freed with it
+        self.generator = self.model = None
 
 
 def _hold(device: ttnn.MeshDevice, buffer_type: ttnn.BufferType, banks: int, page: int, pages: int) -> ttnn.Tensor:
