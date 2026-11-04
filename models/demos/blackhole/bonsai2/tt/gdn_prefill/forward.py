@@ -230,12 +230,16 @@ def supported(gdn, x, valid_len):
         list(x.shape)[0] == 1
         and T % C == 0
         and (valid_len is None or valid_len >= T)
-        and gdn.weights.mega_fused_weight is not None
+        and (gdn.weights.mega_fused_weight is not None or _ternary_prefill(gdn))
         and gdn.weights.fused_conv_bias_dev is None
         and gdn.head_k_dim == 128
         and gdn.head_v_dim == 128
         and os.environ.get("QWEN_GDN_INV_DOUBLING", "0") == "0"
     )
+
+
+def _ternary_prefill(gdn):
+    return getattr(getattr(gdn, "ternary", None), "pre_qkvz", None) is not None
 
 
 def _to_bht(t, B, T, H):
@@ -258,9 +262,24 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     ckc = gdn.compute_kernel_config
     device = gdn.device
 
-    mega = linear_shim.linear(x, w.mega_fused_weight, memory_config=None, compute_kernel_config=ckc)
-    a_raw = ttnn.to_layout(mega[:, :, dq : dq + da], ttnn.TILE_LAYOUT)
-    b_raw = ttnn.to_layout(mega[:, :, dq + da : dq + da + db], ttnn.TILE_LAYOUT)
+    tern = gdn.ternary if _ternary_prefill(gdn) else None
+    if tern is not None:
+        # exact ternary in_proj: [qkv | z] on the rotated input; a and b (bf16 weights) at HiFi4
+        xr = tern.prot_in(x)
+        mega = tern.pre_qkvz(xr)  # [1, T, qkv | z]
+        ttnn.deallocate(xr)
+        ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc)
+        na = tern.na
+        a_raw = ttnn.slice(ab, [0, 0, 0], [B, T, na])
+        b_raw = ttnn.slice(ab, [0, 0, na], [B, T, 2 * na])
+        ttnn.deallocate(ab)
+        z_off = tern.split // 32
+    else:
+        mega = linear_shim.linear(x, w.mega_fused_weight, memory_config=None, compute_kernel_config=ckc)
+        a_raw = ttnn.to_layout(mega[:, :, dq : dq + da], ttnn.TILE_LAYOUT)
+        b_raw = ttnn.to_layout(mega[:, :, dq + da : dq + da + db], ttnn.TILE_LAYOUT)
+        z_off = (dq + da + db) // 32
+        assert (dq + da + db) % 32 == 0, "z must start on a tile column of the in_proj output"
 
     qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
 
@@ -299,12 +318,16 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     if fin is None:
         norm_w = ttnn.to_torch(w.o_norm_weight).float().reshape(-1)[:V]
         fin = gdn._bonsai_finish = OutputFinish(device, norm_w, gdn.norm_eps)
-    z_off = (dq + da + db) // 32
-    assert (dq + da + db) % 32 == 0, "z must start on a tile column of the in_proj output"
     o = fin(o_bh, mega, T, z_off)  # z read straight from the in_proj output
     ttnn.deallocate(o_bh)
     ttnn.deallocate(mega)
-    out = linear_shim.linear(o, w.o_proj_weight, memory_config=None, compute_kernel_config=ckc)
+    if tern is not None:
+        orr = tern.prot_out(o)
+        ttnn.deallocate(o)
+        out = tern.pre_out(orr)
+        ttnn.deallocate(orr)
+    else:
+        out = linear_shim.linear(o, w.o_proj_weight, memory_config=None, compute_kernel_config=ckc)
 
     new_state = ttnn.typecast(ttnn.reshape(final_state, [B, H, K, V]), ttnn.bfloat16)
     ttnn.copy(new_state, gdn.recurrent_state)

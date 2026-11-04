@@ -84,6 +84,12 @@ def build_model(device, n_layers=None):
         prepare_ternary_mlp(
             model, os.environ.get("BONSAI_GGUF", "/local/ttuser/jerrywang/bonsai/gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf")
         )
+        if os.environ.get("BONSAI_TERNARY_PREFILL") == "1":
+            # Prefill in the exact ternary weights too (bonsai2/tt/tprefill): every ternary swap happens now, the
+            # dense projection weights are never used.
+            from models.demos.blackhole.bonsai2.tt.ternary.mlp import swap_in_ternary_mlp
+
+            swap_in_ternary_mlp(model)
     page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
     return model, page_table
 

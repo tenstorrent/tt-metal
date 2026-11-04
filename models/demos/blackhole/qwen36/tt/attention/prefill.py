@@ -69,14 +69,17 @@ def _q_proj_program_config(x, q_w):
 def prefill_forward(x, cos, sin, weights, config, device, ckc, *args, **kwargs):
     with _q_proj_program_config(x, weights.q_proj):
         from models.demos.blackhole.bonsai2.tt.attn_qg import QGSplitTtnn, is_reordered
+        from models.demos.blackhole.bonsai2.tt.ternary.attention import prefill_stand_in
 
-        if not is_reordered(weights):
+        # Bonsai: q, k, v, o in the exact ternary weights (models/demos/blackhole/bonsai2/tt/ternary/attention.py)
+        stand_in = prefill_stand_in(weights, config.num_heads, config.head_dim)
+        if stand_in is None and not is_reordered(weights):
             return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
         # Bonsai: q_proj stored as [q heads | gate heads] (models/demos/blackhole/bonsai2/tt/attn_qg.py)
         import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention as _attn_mod
 
         _orig = _attn_mod.ttnn
-        _attn_mod.ttnn = QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        _attn_mod.ttnn = stand_in if stand_in is not None else QGSplitTtnn(weights, config.num_heads, config.head_dim)
         try:
             return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
         finally:

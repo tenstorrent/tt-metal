@@ -29,10 +29,22 @@ def pack_attention(gguf, layer_num):
     }
 
 
+def qg_records(rec, ppr, heads, head_tiles):
+    """q_proj records reordered from per head [q | gate] to [all q heads | all gate heads] (whole output tile columns
+    move: attn_qg.reorder_q_proj's layout, for the prefill's q/gate split)."""
+    r = rec.reshape(heads, 2, head_tiles, ppr * rec.shape[1])
+    return np.ascontiguousarray(r.transpose(1, 0, 2, 3)).reshape(-1, rec.shape[1])
+
+
+_PREFILL = {}  # id(dense weights) -> TernaryAttention with prefill ops (attention/prefill.py looks it up)
+
+
 class TernaryAttention:
     """Called in the order gated_attention_forward_ttnn calls its linears: q, k, v, o."""
 
-    def __init__(self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation):
+    def __init__(
+        self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, prefill_rotations=None, heads=None
+    ):
         self.q = TernaryDecodeLinear3.from_packed(device, *packed["q"])
         rec, ppr, K, N, split = packed["kv"]
         self.kv = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
@@ -41,6 +53,18 @@ class TernaryAttention:
         self.rot_in, self.rot_out = rot_in, rot_out
         self._xr = None
         self._v = None
+        self.pre_q = None
+        if prefill_rotations is not None:
+            # exact ternary prefill (bonsai2/tt/tprefill): q with its columns as [q heads | gate heads]
+            from models.demos.blackhole.bonsai2.tt.tprefill.linear import TernaryPrefillLinear
+
+            rq, pq, Kq, Nq = packed["q"]
+            hd_tiles = Nq // heads // 2 // 32
+            q_qg = TernaryDecodeLinear3.from_packed(device, qg_records(rq, pq, heads, hd_tiles), pq, Kq, Nq)
+            self.pre_q = TernaryPrefillLinear.from_decode(q_qg)
+            self.pre_kv = TernaryPrefillLinear.from_decode(self.kv)
+            self.pre_o = TernaryPrefillLinear.from_decode(self.o)
+            self.prot_in, self.prot_out = prefill_rotations[Kq], prefill_rotations[self.o.K]
 
     def project_q(self, x):
         lead = tuple(list(x.shape)[:-1])
@@ -68,6 +92,52 @@ class TernaryAttention:
         return y
 
 
+class TernaryAttentionPrefillTtnn:
+    """ttnn stand-in for the prefill attention (inside attn_qg.QGSplitTtnn): q, k, v, o in the exact ternary weights.
+    q comes out as [q heads | gate heads], as the reordered dense q_proj did."""
+
+    def __init__(self, weights, ternary: TernaryAttention):
+        self._w, self._t = weights, ternary
+        self._xr = self._v = None
+
+    def __getattr__(self, name):
+        return getattr(ttnn, name)
+
+    def linear(self, a, b, *args, **kwargs):
+        w, t = self._w, self._t
+        if b is w.q_proj:
+            self._xr = t.prot_in(a)
+            return t.pre_q(self._xr)
+        if b is w.k_proj:
+            kv = t.pre_kv(self._xr)
+            ttnn.deallocate(self._xr)
+            self._xr = None
+            s, n = t.kv_split, list(kv.shape)
+            k = ttnn.slice(kv, [0] * (len(n) - 1) + [0], n[:-1] + [s])
+            self._v = ttnn.slice(kv, [0] * (len(n) - 1) + [s], n)
+            ttnn.deallocate(kv)
+            return k
+        if b is w.v_proj:
+            v, self._v = self._v, None
+            return v
+        if b is w.o_proj:
+            ar = t.prot_out(a)
+            y = t.pre_o(ar)
+            ttnn.deallocate(ar)
+            return y
+        return ttnn.linear(a, b, *args, **kwargs)
+
+
+def prefill_stand_in(weights, num_heads, head_dim):
+    """The prefill ttnn stand-in for these attention weights, or None (no exact ternary prefill)."""
+    t = _PREFILL.get(id(weights))
+    if t is None:
+        return None
+    from models.demos.blackhole.bonsai2.tt.attn_qg import QGSplitTtnn
+
+    return QGSplitTtnn(weights, num_heads, head_dim, inner=TernaryAttentionPrefillTtnn(weights, t))
+
+
 class TernaryAttentionTtnn:
     """ttnn stand-in for gated_attention_forward_ttnn's module (decode only): its four projections go to the
     TernaryAttention, everything else is ttnn."""
@@ -91,7 +161,7 @@ class TernaryAttentionTtnn:
         return ttnn.linear(a, b, *args, **kwargs)
 
 
-def swap_in_ternary_attention(model, gguf, rotations, cache_dir=None) -> None:
+def swap_in_ternary_attention(model, gguf, rotations, cache_dir=None, prefill_rotations=None) -> None:
     """Free each full-attention layer's dense q/k/v/o and give it a TernaryAttention (attention/decode.py)."""
     from pathlib import Path
 
@@ -121,4 +191,9 @@ def swap_in_ternary_attention(model, gguf, rotations, cache_dir=None) -> None:
         w = attn.weights
         for t in (w.q_proj, w.k_proj, w.v_proj, w.o_proj):
             ttnn.deallocate(t)
-        attn.ternary = TernaryAttention(device, packed, rotations[packed["q"][2]], rotations[packed["o"][2]])
+        attn.ternary = TernaryAttention(
+            device, packed, rotations[packed["q"][2]], rotations[packed["o"][2]],
+            prefill_rotations=prefill_rotations, heads=attn.config.num_heads,
+        )  # fmt: skip
+        if prefill_rotations is not None:
+            _PREFILL[id(w)] = attn.ternary

@@ -204,6 +204,9 @@ class Qwen36MLP:
         if getattr(self, "ternary", None) is not None and x.shape[-2] <= ttnn.TILE_SIZE:
             # One-token decode in Bonsai's own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/mlp.py).
             return self.ternary.forward_decode(x)
+        if getattr(getattr(self, "ternary", None), "pre_down", None) is not None:
+            # Prefill in the exact ternary weights of Bonsai (bonsai2/tt/tprefill, BONSAI_TERNARY_PREFILL=1).
+            return self.ternary.forward_prefill(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config

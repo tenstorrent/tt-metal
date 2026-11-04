@@ -223,3 +223,82 @@ def test_stock_same_params(device, cores):
     rel = ((got - reference(x, t, s)).norm() / reference(x, t, s).norm()).item()
     print(f"stock cores={cores} rel={rel:.5f}")
     assert rel < 0.02
+
+
+def _spin(crs, n):
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source="models/demos/blackhole/bonsai2/tt/prefetch/kernels/spin.cpp",
+                core_ranges=crs,
+                compile_time_args=[],
+                common_runtime_args=[n],
+                config=ttnn.ReaderConfigDescriptor(),
+            )
+        ],
+        semaphores=[],
+        cbs=[],
+    )
+    return program
+
+
+def _timed(device, fn, R):
+    fn()
+    ttnn.synchronize_device(device)
+    tr = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(R):
+        fn()
+    ttnn.end_trace_capture(device, tr, cq_id=0)
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, tr, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    dt = (time.perf_counter() - t0) / R
+    ttnn.release_trace(device, tr)
+    return dt
+
+
+@pytest.mark.parametrize("device_params", PARAMS, indirect=True)
+@pytest.mark.parametrize("spin", [0, 4000, 12000])
+def test_gcb_overlap(device, spin):
+    """L ternary ops each followed by a spin op (a stand-in for the non-weight ops between weight ops): does the
+    prefetcher keep streaming during the spin? Prints us/round prefetched vs DRAM-reading, and the spins alone."""
+    L, K, N, R = 8, 5120, 8192, 10
+    wl = _weights(L, K, N)
+    x = torch.randn(K).bfloat16()
+    act = ttnn.from_torch(
+        x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    dummy = ttnn.from_torch(torch.zeros(1, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    pf = Prefetch(device)
+    try:
+        lins, chunks, tail = _build(device, wl, N)
+        sp = _spin(pf.receiver_crs, spin)
+        pf.launch(chunks, layers=R + 1)  # _timed runs the round 1 + R times
+
+        def rnd():
+            for lin in lins:
+                lin(act, pf)
+                if spin:
+                    ttnn.generic_op([dummy], sp)
+            pf.drain(tail)
+
+        t_pf = _timed(device, rnd, R)
+        t_spin = _timed(device, lambda: [ttnn.generic_op([dummy], sp) for _ in range(L)], R) if spin else 0.0
+    finally:
+        pf.close()
+    grid = device.compute_with_storage_grid_size()
+    allc = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    sp_all = _spin(allc, spin)
+    base = [TernaryDecodeLinear3.from_host(device, t, s, inline_scales=True) for t, s in wl]
+
+    def rnd_base():
+        for b in base:
+            b(act)
+            if spin:
+                ttnn.generic_op([dummy], sp_all)
+
+    t_base = _timed(device, rnd_base, R)
+    print(
+        f"OVERLAP spin={spin}: spins alone {t_spin * 1e6:.1f} us/round; prefetched+spin {t_pf * 1e6:.1f}, "
+        f"DRAM-read+spin {t_base * 1e6:.1f} us/round"
+    )

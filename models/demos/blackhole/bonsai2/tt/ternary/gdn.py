@@ -61,7 +61,9 @@ def out_chunk_src(gguf) -> np.ndarray:
 
 
 class TernaryGDN:
-    def __init__(self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, ab_w, step=None):
+    def __init__(
+        self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, ab_w, step=None, prefill_rotations=None
+    ):
         rec, ppr, K, N, split = packed["qkvz"]
         self.qkvz = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
         self.split = split
@@ -73,6 +75,18 @@ class TernaryGDN:
         # 3 cores with in0_block_w=8 take 21 us (tests/test_ab_bench.py).
         self.ab_w = ab_w
         self.na = ab_w.shape[-1] // 2
+        # a and b are bf16 weights (not ternary): HiFi4 uses all of their mantissa
+        self.ab_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        self.pre_qkvz = self.pre_out = None
+        if prefill_rotations is not None:
+            # exact ternary prefill on the same records (bonsai2/tt/tprefill, gdn_prefill/forward.py)
+            from models.demos.blackhole.bonsai2.tt.tprefill.linear import TernaryPrefillLinear
+
+            self.pre_qkvz = TernaryPrefillLinear.from_decode(self.qkvz)
+            self.pre_out = TernaryPrefillLinear.from_decode(self.out)
+            self.prot_in, self.prot_out = prefill_rotations[self.qkvz.K], prefill_rotations[self.out.K]
         self.ab_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(ab_w.shape[-1] // 32, 1),
             in0_block_w=8,
@@ -93,7 +107,7 @@ class TernaryGDN:
         xr = self.rot_in(x)
         qkv, z = self.qkvz(xr, lead=lead, split=self.split)
         ttnn.deallocate(xr)
-        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=compute_kernel_config, program_config=self.ab_pc)
+        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=self.ab_ckc, program_config=self.ab_pc)
         a = ttnn.slice(ab, [0] * (len(lead)) + [0], list(lead) + [self.na])
         b = ttnn.slice(ab, [0] * (len(lead)) + [self.na], list(lead) + [2 * self.na])
         ttnn.deallocate(ab)
@@ -108,7 +122,7 @@ class TernaryGDN:
             xr = self.rot_in(x)
         qkv, z = self.qkvz(xr, lead=lead, split=self.split)
         ttnn.deallocate(xr)
-        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=compute_kernel_config, program_config=self.ab_pc)
+        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=self.ab_ckc, program_config=self.ab_pc)
         o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state)
         for t in (qkv, z, ab):
             ttnn.deallocate(t)
@@ -148,7 +162,7 @@ def make_gdn_step(gdn, nk, hk) -> GDNStep:
     return GDNStep(gdn.device, taps, dt_bias, a_neg, norm_w, nk, hk, gdn.head_v_dim, eps_o=gdn.norm_eps)
 
 
-def swap_in_ternary_gdn(model, gguf, cache_dir=None) -> None:
+def swap_in_ternary_gdn(model, gguf, cache_dir=None, prefill_rotations=None) -> None:
     """Free each GDN layer's dense in_proj/out_proj weights and give it a TernaryGDN (gdn/decode.py uses it)."""
     from pathlib import Path
 
@@ -176,4 +190,7 @@ def swap_in_ternary_gdn(model, gguf, cache_dir=None) -> None:
         for t in (w.mega_fused_weight, w.o_proj_weight, w.qkv_proj_weight, w.g_proj_weight):
             if t is not None:
                 ttnn.deallocate(t)
-        gdn.ternary = TernaryGDN(device, packed, rot_in, rot_out, w.ab_proj_weight, step=make_gdn_step(gdn, nk, hk))
+        gdn.ternary = TernaryGDN(
+            device, packed, rot_in, rot_out, w.ab_proj_weight, step=make_gdn_step(gdn, nk, hk),
+            prefill_rotations=prefill_rotations,
+        )  # fmt: skip
