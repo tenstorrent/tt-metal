@@ -201,6 +201,29 @@ FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output) {
     }
 }
 
+// EXPERIMENT (local, never push): main's A extraction. (A + B) - B through the FPU's source registers, which hold
+// TF32, so an A below the TF32 resolution of B cancels to exactly zero, as on main.
+template <uint32_t Kt, uint32_t Vt, typename DFBRing, typename DFBOut>
+FORCE_INLINE void extract_difference_tf32(DFBRing& ring, DFBOut& output) {
+    const uint32_t ring_id = ring.get_id();
+    const uint32_t output_id = output.get_id();
+    reconfig_data_format(ring_id, ring_id);
+    sub_init(ring_id, ring_id);
+    for (uint32_t row = 0; row < Kt; ++row) {
+        output.reserve_back(Vt);
+        for (uint32_t value = 0; value < Vt; ++value) {
+            const uint32_t b_tile = row * 2 * Vt + value;
+            tile_regs_acquire();
+            sub_tiles(ring_id, ring_id, b_tile + Vt, b_tile, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, output_id, value);
+            tile_regs_release();
+        }
+        output.push_back(Vt);
+    }
+}
+
 // Copy an UnpackToDest source exactly into each FP32 destination, releasing the source: the seeds into the ring (the
 // matmul view of the state) and the FP32 carry, and the carry into the final state.
 template <uint32_t Count, typename DFBIn, typename DFBOut, typename... DFBMore>
@@ -369,7 +392,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_carry.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output);
+            state_ring.wait_front(key_pair_tiles);
+            extract_difference_tf32<Kt, Vt>(state_ring, summary_head_output);
             extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
@@ -384,7 +408,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     state_ring.wait_front(key_pair_tiles);
     state_carry.wait_front(key_pair_tiles);
     pack_reconfig_data_format(output.get_id());
-    extract_paths<true, Kt, Vt, Kt>(state_carry, output);
+    extract_difference_tf32<Kt, Vt>(state_ring, output);
     extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state);
     state_ring.pop_front(key_pair_tiles);
     state_carry.pop_front(key_pair_tiles);
