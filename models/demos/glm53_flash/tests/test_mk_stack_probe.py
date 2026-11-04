@@ -137,6 +137,29 @@ def test_mk_stack_probe(mesh_device):
                 )
             except Exception as e:  # noqa: BLE001
                 logger.info(f"MK_STACK_SHARED: {i} unreadable: {e}")
+        if fin:  # where the stack differs: per stream, and the worst column tiles (summed over streams)
+            d = (o_stk - o_seq).abs().reshape(T, 4, H)
+            per_stream = [
+                round(
+                    float(
+                        torch.corrcoef(
+                            torch.stack(
+                                [o_stk.reshape(T, 4, H)[:, s_].reshape(-1), o_seq.reshape(T, 4, H)[:, s_].reshape(-1)]
+                            )
+                        )[0, 1]
+                    ),
+                    6,
+                )
+                for s_ in range(4)
+            ]
+            col = d.sum(dim=(0, 1))  # [H]
+            tiles = col.reshape(-1, 32).sum(1)
+            top = torch.topk(tiles, 8)
+            logger.info(
+                f"MK_STACK_DIFF: per stream pcc {per_stream}; worst column tiles (of {H // 32}) "
+                f"{[(int(i), round(float(v), 4)) for v, i in zip(top.values, top.indices)]}; max |diff| "
+                f"{float(d.max()):.4g} at {tuple(int(v) for v in (d == d.max()).nonzero()[0])}"
+            )
         logger.info(
             f"MK_STACK_CHECK: mesh {MESH} vtp {VTP} layers {LAYERS} t {T}: stack vs sequential layer programs pcc "
             f"{p_:.6f}; stack finite {fin} absmax {float(a.nan_to_num(0).abs().max()):.3g}; sequential absmax "
