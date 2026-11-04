@@ -77,9 +77,9 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    # K3 does not opt into the routed expert / combine overlap; 6.31 ms is its Oct 16 baseline, from before
-    # the overlap existed (#60928's runs: 6.304 / 6.316 / 6.308 ms).
-    expected_ns=6_310_000,
+    # K3 does not opt into the routed expert / combine overlap. Recentred after #63018 (eight-core masked
+    # bincount) took the replay from 6.31 ms to 6.022 / 6.025 / 6.033 ms on three Blaze runs at 9406a58.
+    expected_ns=6_030_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
