@@ -107,6 +107,7 @@ UNPACK_FUNCTIONS = (
     "_llk_unpack_A_mop_config_",
     "_llk_unpack_AB_reduce_init_",
     "_llk_unpack_reduce_init_",
+    "_llk_unpack_reduce_mop_config_",
     "_llk_unpack_AB_reduce_mop_config_",
     "_llk_unpack_AB_matmul_init_",
     "_llk_unpack_AB_matmul_mop_config_",
