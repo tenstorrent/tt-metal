@@ -279,10 +279,10 @@ class Qwen36MLP:
                 mcast_in0=True,
             )
         elif down_pc is None and hidden.shape[-2] == 2048 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
-            # prefill 2048 rows: Blackhole sweep measured 2D mcast 13x10 in0_block_w=8 at 2246 vs 10472 us/call for the default
+            # prefill 2048 rows: Blackhole sweep measured 2D mcast 13x10 in0_block_w=17 at 1507 vs 2176 us/call for in0_block_w=8
             down_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
-                in0_block_w=8,
+                in0_block_w=17,
                 out_subblock_h=1,
                 out_subblock_w=1,
                 out_block_h=7,
