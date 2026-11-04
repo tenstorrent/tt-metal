@@ -283,7 +283,7 @@ def test_gather_reads_padded_tile_shards_as_their_values(tp_mesh, dtype):
     device = ttml.autograd.AutoContext.get_instance().get_device()
     tp = tp_mesh.axis_size("tp")
     values = np.random.default_rng(5).standard_normal((1, 1, 37, 70 * tp), dtype=np.float32)
-    # from_numpy reads an array's buffer as C-contiguous, so the replicated input is a copy, not a strided view.
+    # The replicated input is a contiguous copy of the first shard; from_numpy also accepts the strided view.
     one_copy = np.ascontiguousarray(values[..., :70])
     sharded = ttml.autograd.Tensor.from_numpy(
         values, ttnn.Layout.TILE, dtype, ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3)
