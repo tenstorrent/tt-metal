@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/data_format/tile_size.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include <tt_stl/reflection.hpp>
@@ -133,9 +134,9 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
     validate_transpose_height(this->tile_shape[0], transpose_tile);
 }
 
-uint32_t Tile::get_tile_size(const DataFormat& format) const {
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
+uint32_t detail::tile_size_bytes(const Tile& tile, DataFormat format, uint32_t l1_alignment) {
+    const uint32_t tile_hw = tile.get_tile_hw();
+    const uint32_t aligned_exp_size = tt::round_up(tile.get_face_shape()[0] * tile.get_num_faces(), l1_alignment);
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size;
@@ -183,6 +184,10 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
     }
+}
+
+uint32_t Tile::get_tile_size(const DataFormat& format) const {
+    return detail::tile_size_bytes(*this, format, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
 bool Tile::operator==(const Tile& other) const {

@@ -74,6 +74,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/update_program_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/update_tensor_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/spec_type_properties.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tile_size.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
