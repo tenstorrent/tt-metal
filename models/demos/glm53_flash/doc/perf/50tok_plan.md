@@ -79,14 +79,19 @@ The 357 / 598 us of "overhead" per layer is inside under-utilised or sync-bound 
 Projection for one (1, 8) instance at 4 users, from the rows: KDA layer 958 - 188 (row CCL) - ~135 (half the
 weight bytes) = ~635 us; DSA layer 1360 - 174 - ~150 = ~1035 us; step ~33 ms = 30 tok/s/u. Then, in order:
 
-| step | saving per step | step | tok/s/u |
-|---|---|---|---|
-| (1, 8) instance, DP4 on the Galaxy | -11 ms | 33 ms | 30 |
-| `mhc.pre_block_fused` 82 -> ~20 us (90 calls) | -5.4 ms | 27.6 | 36 |
-| bfp4 routed experts (accuracy-gated) | -4 ms | 23.6 | 42 |
-| DSA glue: `state_composite` + views + `pool_gather` as 1-2 programs | -2.8 ms | 20.8 | 48 |
-| `kda.decode` to its DRAM floor | -1.7 ms | 19 | 52 |
-| MTP (K = 2-3) on top | | | 80-100 |
+| step ((8, 4) hybrid, 32 users at 4 per row, bfp8) | saving per step | step | tok/s/u | status |
+|---|---|---|---|---|
+| frozen tip 4d98abdb1d3 | | 44.2 ms | 22.6 | released |
+| dest-resident Sinkhorn in the pre-block (default) | -2.6 | 41.7 | 24.0 | measured, chain pcc 0.955 (base 0.947) |
+| fabric row gather (`GLM53_HYBRID_GATHER=fabric`) | -2.2 | 39.5 | 25.3 | measured, bit-identical ids |
+| fabric combine + TP all-reduces (`GLM53_HYBRID_COMBINE=fabric`, `GLM53_TP_ALLREDUCE=fabric`) | -1.8 | 37.7 | 26.5 | measured; decode pcc gate rerunning on the zero-fill fix; served smoke PASS at 19.5 tok/s/u (tip 16-17) |
+| mHC: post-mix merged into the next pre-block, fan-in, round-2 scalars | ~-2.2 | ~35.5 | ~28 | next |
+| KDA: the two 288-wide projections into the qkv matmul, decode op input prefetch | ~-1.5 | ~34 | ~29.5 | |
+| DSA glue (fused decode state, views, pool gather) | ~-1.6 | ~32.4 | ~31 | `GLM53_DSA_DECODE_STATE=1` exists (-0.7 ms, decode-gate pending) |
+| router + shared expert as one program with the gather | ~-1 | ~31.4 | ~32 | |
+| 8 users (1 per row): the expert op at ~150 us | ~-2 | ~29.4 | ~34 | the user's compromise option |
+| the persistent per-layer program (the reference's design) or bfp4 under an accuracy gate | the remaining ~10 ms | ~20 | 50 | the only route to 50 at bfp8 x 32 users |
+| MTP (K = 2-3) on top | | | 80-100 | after the above |
 
 Every row is a per-op change behind the existing PCC / decode-id gates; no megakernel is required for the 50 band.
 The reference's persistent-stack design stays the lever for the 100 band without MTP (it removes the remaining
