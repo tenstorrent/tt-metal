@@ -58,7 +58,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     discovered across both axes in full-mesh mode. An explicit value
                     must be greater than zero and cannot exceed that discovered count;
                     use ``2`` to keep the same link count across QuietBox, LoudBox, and
-                    Galaxy.
+                    Galaxy. It counts links per neighbour hop: on a 4x4 cylinder, where
+                    two Hamiltonian cycles share a hop, each gets half of them, and
+                    fewer than two selects the snake.
                 subdevice_id: Subdevice containing the worker cores.
                 sub_core_grids: Optional worker-core restriction.
                 input_batch_index: Optional batch slot selected from a persistent input cache.
