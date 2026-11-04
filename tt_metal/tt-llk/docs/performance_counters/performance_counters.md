@@ -140,8 +140,8 @@ Because both wall-clock cycles (NC build, `ZONE_SCOPED` start/end timestamps fro
 The LLK test suite uses a two-phase pytest flow: a compile-producer phase that builds every variant in parallel and a compile-consumer phase that runs them on hardware.
 
 ```bash
-./setup_testing_env.sh        # installs the SFPI toolchain; run it, do not source it (it calls exit)
 cd tt_metal/tt-llk/tests     # LLK_HOME is defaulted by conftest.py; you do not need to set it
+./setup_testing_env.sh        # installs the SFPI toolchain; run it, do not source it (it calls exit)
 export CHIP_ARCH=blackhole   # or wormhole or quasar
 
 # Phase 1: build all variants (no HW access)

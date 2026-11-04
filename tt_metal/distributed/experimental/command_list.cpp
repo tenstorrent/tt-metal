@@ -10,7 +10,6 @@
 #include <functional>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 

@@ -8,7 +8,6 @@
 
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class SystemMemoryManager;

@@ -12,7 +12,6 @@
 #include <mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -25,12 +24,10 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/data_collection.hpp"
 #include "dispatch/device_command.hpp"
@@ -44,7 +41,6 @@
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
-#include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
@@ -61,7 +57,6 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <internal/mesh_device.hpp>
-#include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
@@ -650,7 +645,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     TTZoneScopedD(DISPATCH);
 
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
-    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||

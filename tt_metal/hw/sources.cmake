@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/gddr_mc.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
+    inc/api/buffer_types.hpp
     inc/api/compile_time_args.h
     inc/api/circular_buffer_constants.h
     inc/api/tile_constants.h
@@ -226,6 +227,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
     inc/api/dataflow/prefetcher_pipe.h
+    inc/api/dataflow/tensor_prefetcher_signal.h
     inc/api/dataflow/dataflow_buffer.h
     inc/api/dataflow/dfb_access.h
     inc/api/dataflow/dfb_binding_token.h
@@ -291,6 +293,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
+    inc/internal/debug/sanitize_multicast_destination.h
     inc/internal/debug/shared_noc_cmd_buf.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
