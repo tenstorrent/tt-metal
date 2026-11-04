@@ -192,6 +192,10 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
     mode = os.environ.get("GLM53_STACK_KNOBS", "s7a283")
     prof = KNOBS_TP if tp > 1 and mode in ("s14", "s7a283") else KNOBS
     os.environ.update(prof[key])
+    if prof is KNOBS_TP and key is False and tp > 8:
+        # the 32-chip replica: the dense MLP's down K shard is 12288 / 32 = 384 = 12 tiles, which the TP8 K block of 8
+        # does not divide (and 2 x the largest block must be a multiple of every block): 4
+        os.environ["GLM53_MK_KB_O"] = "4"
     if tp > 1 and mode == "s7a283" and key is True:
         os.environ.update(KNOBS_7A283)
         if t > 4:

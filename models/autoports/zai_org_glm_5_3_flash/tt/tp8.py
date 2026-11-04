@@ -25,6 +25,8 @@ megakernel programs (MkStepB step D, MkFFN) on the shard objects, the fabric all
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -131,17 +133,26 @@ class TPShards:
             intermediate=ir,
         )
 
-    def shared_tensors(self) -> dict:
+    def shared_tensors(self, group: int | None = None) -> dict:
         """Stage 14 (GLM53_TP_SHARED): the MoE layer's shared expert TP-sharded like the dense MLP — gate / up output
-        columns and down input rows of chip r = intermediate slice r (the down output is a partial sum)."""
+        columns and down input rows of chip r = intermediate slice r (the down output is a partial sum) — over a GROUP
+        of `group` chips (default min(tp, 8); GLM53_TP_SHARED_GROUP): chip r holds slice r % group. On a wider mesh
+        (the 32-chip replica: 2048 / 32 = 64 columns = 2 tiles per chip, below the 8-bank DS shard and the down K
+        block) the tp / group chip groups hold the same slices, so the down weights carry group / tp (a power of 2:
+        exact in bfp8) and the all-reduce over all tp chips sums to ONE shared output."""
         i_full = int(self.host("mlp.shared_experts.gate_proj.weight").shape[-1])
-        assert i_full % (self.tp * TILE) == 0, i_full
-        ir = i_full // self.tp
-        isl = lambda r: slice(ir * r, ir * (r + 1))  # noqa: E731
+        g = int(group or int(os.environ.get("GLM53_TP_SHARED_GROUP", "0")) or min(self.tp, 8))
+        assert self.tp % g == 0 and i_full % (g * TILE) == 0, (self.tp, g, i_full)
+        ir = i_full // g
+        isl = lambda r: slice(ir * (r % g), ir * (r % g + 1))  # noqa: E731
+        scale = g / self.tp
+        down = self.host("mlp.shared_experts.down_proj.weight")
         return dict(
             gate=self.col("mlp.shared_experts.gate_proj.weight", isl, ttnn.bfloat8_b),
             up=self.col("mlp.shared_experts.up_proj.weight", isl, ttnn.bfloat8_b),
-            down=self.row("mlp.shared_experts.down_proj.weight", isl, ttnn.bfloat8_b),
+            down=self.sharded(
+                [down[isl(r)] * scale if scale != 1 else down[isl(r)] for r in range(self.ndev)], ttnn.bfloat8_b, dim=0
+            ),  # fmt: skip
             intermediate=ir,
         )
 
