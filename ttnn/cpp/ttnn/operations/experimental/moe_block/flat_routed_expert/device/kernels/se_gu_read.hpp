@@ -2,21 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Gate/up weights read by the gate/up core itself (on NOC0 from its NCRISC, or on NOC1 from the receiver loop on its
-// BRISC: FlatGuSource), through a grant / landing-slot protocol with the receiver. Chunk c of the call (load
+// Gate/up weights read by the gate/up core itself (on NOC0 from its NCRISC, se5_xfwd.cpp), through a grant /
+// landing-slot protocol with the receiver. Chunk c of the call (load
 // l = c / PER_E, chunk ce = c % PER_E) is read from this core's slot bank once the receiver has granted it (the
 // receiver's grant counter >= c + 1) into landing slot (region of l) x PER_E + ce, DEPTH reads in flight (transaction
 // ids TRID0 ..), and the receiver's DATA count is set as chunks land, in order: the receiver loop (se5_recv.cpp) and
 // the compute publish blocks by that count.
 //
-// Runtime args (SE_GU_RT_ARGS from A0): 0 mode (0: none on this RISC, 1: NCRISC reads, 2: BRISC reads), 1 gate/up
-// weights address (bank-local), 2 bank id, 3 this core's first block in the bank (slot region + block j / G), 4 chunk
-// bytes (RG blocks), 5 landing ring address
+// Runtime args (SE_GU_RT_ARGS from A0): 0 gate/up weights address (bank-local), 1 bank id, 2 this core's first block
+// in the bank (slot region + block j), 3 chunk bytes (RG blocks), 4 landing ring address
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-constexpr uint32_t SE_GU_RT_ARGS = 6;
+constexpr uint32_t SE_GU_RT_ARGS = 5;
 constexpr uint32_t SE_GU_TRID0 = 8;  // (x forwarding writes use ids 1..; the h writes id 0)
 
 // The loads list a BRISC hands its NCRISC: [n_load, load l's expert | region << 8 ..] in the NCRISC's half of CB 7,
@@ -26,7 +25,8 @@ struct SeGuRead {
     uint32_t total = 0, iss = 0, done = 0, ri = 0, rd = 0, l = 0, ce = 0;
     // a block read as PIECES reads of blk / PIECES (DEPTH counts pieces in flight); iss / done count pieces, pc the
     // next piece of the block being issued
-    uint32_t pieces = 1, pbytes = 0, pc = 0;
+    static constexpr uint32_t pieces = SE_GU_PIECES;
+    uint32_t pbytes = 0, pc = 0;
     volatile tt_l1_ptr uint32_t* grant = nullptr;
     volatile tt_l1_ptr uint32_t* data = nullptr;
     const volatile tt_l1_ptr uint32_t* loads = nullptr;  // expert | region << 8 a load
@@ -40,16 +40,13 @@ struct SeGuRead {
         const volatile tt_l1_ptr uint32_t* loads_,
         volatile tt_l1_ptr uint32_t* grant_,
         volatile tt_l1_ptr uint32_t* data_) {
-        base = get_arg_val<uint32_t>(a0 + 1) + get_arg_val<uint32_t>(a0 + 3);
-        bank = get_arg_val<uint32_t>(a0 + 2);
-        chunk = get_arg_val<uint32_t>(a0 + 4);
-        land = get_arg_val<uint32_t>(a0 + 5);
+        base = get_arg_val<uint32_t>(a0) + get_arg_val<uint32_t>(a0 + 2);
+        bank = get_arg_val<uint32_t>(a0 + 1);
+        chunk = get_arg_val<uint32_t>(a0 + 3);
+        land = get_arg_val<uint32_t>(a0 + 4);
         blk = blk_bytes;
         per_e = per_e_;
         depth = depth_;
-#ifdef SE_GU_PIECES
-        pieces = SE_GU_PIECES;
-#endif
         pbytes = blk / pieces;
         total = n_load * per_e * pieces;
         loads = loads_;

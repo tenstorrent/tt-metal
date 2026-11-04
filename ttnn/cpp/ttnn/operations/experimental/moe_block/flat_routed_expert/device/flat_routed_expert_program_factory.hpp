@@ -11,9 +11,8 @@
 
 namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
-// The plain op: one program per chip (the flat fragment alone; the auto gate/up placements differ per chip,
-// flat_routed_expert_chip_plan). Cache hits re-apply the buffer addresses (the arena / words are per-call buffers, so
-// they move between calls).
+// The plain op: one program per chip (the flat fragment alone). Cache hits re-apply the buffer addresses (the arena /
+// words are per-call buffers, so they move between calls).
 struct FlatRoutedExpertProgramFactory {
     using shared_variables_t = FlatProgramHandles;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

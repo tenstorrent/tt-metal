@@ -179,14 +179,14 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
     r.plan = flat_routed_expert_plan(mesh_device, config);
     r.done_words = resources.persistent_words(
         "flat_routed_expert/done", rect_ranges(r.plan->coords), host_detail::done_words_per_core(*r.plan));
-    // (the relays' words hold the gate/up cores' freed words and the x-ready word at X_READY_OFF)
+    // (the relays' words hold the gate/up cores' freed words)
     r.relay_words =
-        resources.persistent_words("flat_routed_expert/relay_words", rect_ranges(r.plan->relays), X_READY_OFF / 4 + 1);
+        resources.persistent_words("flat_routed_expert/relay_words", rect_ranges(r.plan->relays), kRelayWordsBytes / 4);
     TT_FATAL(
-        4 * r.plan->gu.size() <= X_READY_OFF,
-        "flat_routed_expert: {} gate/up cores' freed words overrun the x-ready word at {}",
+        4 * r.plan->gu.size() <= kRelayWordsBytes,
+        "flat_routed_expert: {} gate/up cores' freed words overrun the relays' {} B of words",
         r.plan->gu.size(),
-        X_READY_OFF);
+        kRelayWordsBytes);
     return r;
 }
 

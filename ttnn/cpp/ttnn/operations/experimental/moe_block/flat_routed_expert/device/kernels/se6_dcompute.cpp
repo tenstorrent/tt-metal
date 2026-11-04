@@ -4,12 +4,12 @@
 //
 // Spatially pipelined expert: down projection on its own cores (TRISC). Per virtual expert v (a 128-row sub-block of
 // expert e = v / S): y[rows, PCD columns] = h_all(v) @ Wd[:, columns], accumulated in DST over all KT_D K-tiles, one
-// row tile at a time (PCD <= 8 accumulators). h_all holds both M-groups' h K-tile-major: [G][KT_D][MTG rows], so a
+// row tile at a time (PCD <= 8 accumulators). h_all holds h K-tile-major: [KT_D][MT rows], so a
 // gate/up core's slice (its NP K-tiles, all MTG rows) is one contiguous run.
 // The expert's down weights stay resident in the in1 ring (RING blocks of [KBLK_D x PCD], filled by se6_dw.cpp) for
 // its S sub-blocks and are popped after the last one.
 //
-// CT: 0 MTG (row tiles per M-group), 1 G, 2 KT_D, 3 KBLK_D, 4 PCD, 5 NUM_EXPERTS, 6 S, 7 SLOT_TILES, 8 RING
+// CT: 0 MT, 1 KT_D, 2 KBLK_D, 3 PCD, 4 NUM_EXPERTS, 5 S, 6 SLOT_TILES, 7 RING
 #include "se_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -24,30 +24,22 @@ constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
 
-constexpr uint32_t mtg = get_compile_time_arg_val(0);
-constexpr uint32_t groups = get_compile_time_arg_val(1);
-constexpr uint32_t kt_d = get_compile_time_arg_val(2);
-constexpr uint32_t kblk_d = get_compile_time_arg_val(3);
-constexpr uint32_t pcd = get_compile_time_arg_val(4);
-constexpr uint32_t num_experts = get_compile_time_arg_val(5);
-constexpr uint32_t sub = get_compile_time_arg_val(6);
-constexpr uint32_t slot = get_compile_time_arg_val(7);
-constexpr uint32_t ring = get_compile_time_arg_val(8);
+constexpr uint32_t mt = get_compile_time_arg_val(0);
+constexpr uint32_t kt_d = get_compile_time_arg_val(1);
+constexpr uint32_t kblk_d = get_compile_time_arg_val(2);
+constexpr uint32_t pcd = get_compile_time_arg_val(3);
+constexpr uint32_t num_experts = get_compile_time_arg_val(4);
+constexpr uint32_t sub = get_compile_time_arg_val(5);
+constexpr uint32_t slot = get_compile_time_arg_val(6);
+constexpr uint32_t ring = get_compile_time_arg_val(7);
 constexpr uint32_t nblk = kt_d / kblk_d;
 constexpr uint32_t hk = 8;
-constexpr uint32_t group_tiles = kt_d * mtg;
-constexpr uint32_t h_all_tiles = groups * group_tiles;
-constexpr uint32_t mt = groups * mtg;
+constexpr uint32_t h_all_tiles = kt_d * mt;
 // PCD > DST output columns (small-I subgrids have few down cores): column passes of <= 8 bf16 / 4 fp32 (SE_DN_FP32:
 // fp32 DEST accumulation over K, the host sets fp32_dest_acc_en) DST tiles, each re-running the row's K loop over the
 // same h and resident weights
-#if defined(SE_DN_FP32) && defined(SE_DN_FULL_SYNC)
-constexpr uint32_t dst_cols = 8;  // full-sync DST: 16 bf16 / 8 fp32 tiles (math and pack no longer overlap)
-#elif defined(SE_DN_FP32)
-constexpr uint32_t dst_cols = 4;
-#else
+// (SE_DN_FP32 comes with a full-sync DST: 16 bf16 / 8 fp32 tiles, math and pack no longer overlap)
 constexpr uint32_t dst_cols = 8;
-#endif
 #ifdef SE_Y_RM
 // pack_untilize places column block c at c * block width, so every pass has the same width: the largest divisor of
 // PCD that fits DST
@@ -93,7 +85,7 @@ void kernel_main() {
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
     matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
-#if defined(SE_Y_RM) && !defined(SE_YRM_PACKTILE)
+#ifdef SE_Y_RM
     pack_untilize_dest_init<cpw, pcd>(out_cb);
 #endif
     // Dynamic counts: CB 6 holds [n_act, num_v, subs of each active expert] (from the down core's data movement); the
@@ -124,7 +116,6 @@ void kernel_main() {
         }
 #endif
         for (uint32_t r = 0; r < rows; ++r) {
-            const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
 #ifdef SE_Y_RM
             {
                 cb_reserve_back(out_cb, pcd);
@@ -146,7 +137,7 @@ void kernel_main() {
                         w = wblock(e * nblk + kk / kblk_d);
 #endif
                     }
-                    matmul_block(h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
+                    matmul_block(h_all_cb, in1_cb, r + kk * mt, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
                     // The expert's last row (final column pass): each weight block goes as soon as it is used, so
                     // the next expert's blocks stream into the ring while this row still runs.
                     if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {

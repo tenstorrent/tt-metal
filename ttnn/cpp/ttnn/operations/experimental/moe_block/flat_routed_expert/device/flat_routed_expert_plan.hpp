@@ -40,7 +40,7 @@ struct FlatRoutedExpertPlan {
     uint32_t banks = 0;
     // gate/up split, sub-blocks
     uint32_t n_rd_sg = 16;
-    uint32_t np = 1, g = 1, mt = 1, mtg = 1, x_slots = 24, dst_tiles = 8;
+    uint32_t np = 1, mt = 1, x_slots = 24, dst_tiles = 8;
     bool gu_rp = false;
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
     // half-width gate / up tiles (16-column units): a unit's weight tile holds [gate | up] of 16 columns (the
@@ -68,16 +68,9 @@ struct FlatRoutedExpertPlan {
     Core leader{0, 0};
     // weight slots (one per reader cell, slot r in bank r % banks)
     uint32_t n_slots = 0;
-    // who reads which gate/up weight blocks (layout.gu_source) and how many reads in flight a gate/up core
-    FlatGuSource gu_source = FlatGuSource::tensix;
-    uint32_t gu_depth = 2;
+    // weight reads in flight a gate/up core (pieces), and the pieces a weight block is read as (layout.gu_read_pieces)
+    static constexpr uint32_t gu_depth = 2;
     uint32_t gu_pieces = 1;
-    // per gate/up core (p.gu order): the NoC its weight reads take (FlatGuPlace::tensix_noc0 / tensix_noc1)
-    std::vector<uint32_t> gu_how;
-    // the expected rows per expert the plan was made for (layout.rows_hint; -1 unknown): the placement's x weight
-    int32_t rows_hint = -1;
-    // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
-    uint32_t ti_off = 0;
     // down
     uint32_t d_ch = 7, rem_cols = 0, h_tiles = 0, hbuf = 3;
     float dring = 2.0f;
@@ -102,18 +95,6 @@ struct FlatRoutedExpertPlan {
     static uint32_t kd_of(uint32_t pcd, uint32_t it);
 };
 
-struct FlatGuGeom;
-struct FlatGuAssign;
-struct FlatGuTraffic;
-// the link-load placement search's iterations (plan time, per distinct chip geometry)
-inline constexpr uint32_t kFlatGuIters = 20000;
-// Sets the plan's gate/up cores (slot order) and their reads' NoC from FlatLayoutOptions.gu_place words (one per
-// gate/up cell)
-void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words);
-// The auto_tensix placement for one chip's geometry, and the traffic the search weighs
-FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g);
-FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p);
-
 // Builds the plan for the mesh device's chips (all of them laid out as its first local chip, as the program is).
 FlatRoutedExpertPlan make_flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
@@ -122,14 +103,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
 // config fields the plan depends on): what the program factory, the weight layout and the done words use.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
-
-// Chip `coord`'s plan: the mesh plan, with the gate/up placement of that chip's own geometry for gu_source
-// auto_tensix (harvesting differs per chip); else the mesh plan itself. Cached per distinct geometry. Only the
-// gate/up cores' order and their reads' NoC differ from the mesh plan (same cells, same weight layout).
-std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const FlatRoutedExpertConfig& cfg,
-    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 // Greedy maximal rectangles over a core list (one range per core makes every dispatch write a unicast).
 tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<tt::tt_metal::CoreCoord>& cores);

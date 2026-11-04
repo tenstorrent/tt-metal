@@ -39,13 +39,12 @@ void kernel_main() {
     const uint64_t prim_land = get_noc_addr(pxy >> 16, pxy & 0xFFFF, land);
     const uint64_t prim_data = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(data_sem));
     volatile tt_l1_ptr uint32_t* credit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credit_sem));
-    // x read once by the helpers (SE_XDUAL): every super-block also goes into the second primary's landing ring
-    // (same ring, same arrival semaphore there; RT after the X2 args: its xy), its freed slots counted on semaphore
-    // SE_XDUAL here
+    // x read once by the helpers: every super-block also goes into the second primary's landing ring (same ring, same
+    // arrival semaphore there; RT after the X2 args: its xy), its freed slots counted on semaphore 6 here
     const uint32_t p2xy = get_arg_val<uint32_t>(7 + SE_DYN_NARGS);
     const uint64_t prim2_land = get_noc_addr(p2xy >> 16, p2xy & 0xFFFF, land);
     const uint64_t prim2_data = get_noc_addr(p2xy >> 16, p2xy & 0xFFFF, get_semaphore(data_sem));
-    volatile tt_l1_ptr uint32_t* credit2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_XDUAL));
+    volatile tt_l1_ptr uint32_t* credit2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6));
     for (uint32_t b = 0; b < num_sb; ++b) {
         cb_wait_front(sb_cb, sb_tiles);
         if (b >= land_slots) {

@@ -15,12 +15,10 @@
 //    least the plan's arena cores). The flat expert's static CBs take at most plan.static_l1_bytes a core below it.
 //    The caller may lay its own buffers in the same arena on its own cells (e.g. a persistent arena the caller owns).
 //  * Combine overlap (config.cmb_rt > 0, see with_combine_overlap): every y writer (y_writers, in program order) has 4
-//    report args at config.cmb_rt (collector x, y, counts address, go address) and, with config.y_l1, kFlatYL1Args
+//    report args at config.cmb_rt (collector x, y, counts address, unused) and, with config.y_l1, kFlatYL1Args
 //    L1 hand-off args after them (se_yrm.hpp SE_Y_L1); set_flat_combine_report fills them. Each writer then adds 1
 //    to counts[e] on the collector once local expert e's rows have landed (cumulative across calls, slot order, no
 //    go handshake), so the collector waits for calls x writers.
-//  * Schedule: a caller kernel that walks this chip's experts in the flat expert's order rebuilds the schedule from
-//    the counts (se_dyn.hpp se_dyn_from_counts) with flat_schedule_defines.
 //  * Hash: everything the fragment depends on is in the config (hash it), the plan (a function of the mesh device and
 //    the config) and the tensors' specs. No buffer address is baked in except through the returned patch list.
 
@@ -110,7 +108,7 @@ void set_flat_combine_report(
     const FlatCombineReport& report);
 
 // The defines that decide the dynamic schedule (se_dyn.hpp: sub-block rows, expert capacity, gate/up ring regions,
-// pinning): a kernel of another op built with them rebuilds the same schedule from the counts (se_dyn_from_counts).
+// pinning): every kernel of the program is built with them, so every core builds the same schedule.
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& config, const FlatRoutedExpertPlan& plan);
 

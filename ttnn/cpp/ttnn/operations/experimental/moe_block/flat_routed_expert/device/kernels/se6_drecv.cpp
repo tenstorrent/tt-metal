@@ -85,16 +85,9 @@ void kernel_main() {
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t num_v = dyn.num_v;
     uint32_t y_a = 0, y_s = 0;  // (active expert, sub-block) of output out_done
-#ifdef SE_CMB_DONE_RT
-    SeCmbDone cmb;
-    cmb.init(dyn, num_e_dyn, true);
-#endif
     const uint32_t sxy_e = sxy;
     constexpr uint32_t n_down_e = n_down;
     const uint32_t col0 = get_arg_val<uint32_t>(7);
-#if defined(SE_Y_RM) && !defined(SE_Y_NC)
-    SeYRmWriter<out_cb, pcd, mt, ht> yw(get_arg_val<uint32_t>(6), col0);
-#endif
     const uint32_t done_words = get_arg_val<uint32_t>(8);
     const uint32_t my_index = get_arg_val<uint32_t>(9);
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
@@ -161,18 +154,8 @@ void kernel_main() {
             done_sent = freed;
         }
         constexpr bool x_ready = true;
-#if defined(SE_Y_RM) && defined(SE_Y_NC)
+#ifdef SE_Y_RM
         out_done = num_v;  // (the y writes are se6_dw.cpp's)
-#elif defined(SE_Y_RM)
-        yw.issue(dyn);
-        if (yw.retire(dyn)) {
-            ++out_done;
-#ifdef SE_CMB_DONE_RT
-            cmb.wrote(dyn.eid[yw.done_a]);
-            cmb.wrote_entry(dyn, yw.done_a);
-            cmb.report(false);
-#endif
-        }
 #else
         if (!y_pending && out_done < num_v && x_ready && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);
@@ -190,17 +173,10 @@ void kernel_main() {
         if (y_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
             cb_pop_front(out_cb, out_tiles);
             ++out_done;
-#ifdef SE_CMB_DONE_RT
-            const uint32_t e_done = dyn.eid[y_a];
-#endif
             if (++y_s == dyn.subs[y_a]) {
                 y_s = 0;
                 ++y_a;
             }
-#ifdef SE_CMB_DONE_RT
-            cmb.wrote(e_done);
-            cmb.report();
-#endif
             y_pending = false;
         }
 #endif
@@ -216,9 +192,6 @@ void kernel_main() {
             ++go_sent;
         }
     }
-#ifdef SE_CMB_DONE_RT
-    cmb.report();  // the experts this core writes nothing of
-#endif
     if (is_coord) {  // every core's last report is in once all words reach NUM_V; leave them zeroed for the next run
         for (uint32_t d = 0; d < n_down_e; ++d) {
             while (true) {

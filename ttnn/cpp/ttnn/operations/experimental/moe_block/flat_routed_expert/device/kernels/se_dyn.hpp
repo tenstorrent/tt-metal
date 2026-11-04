@@ -30,7 +30,7 @@ constexpr uint32_t SE_DYN_NARGS = 7;
 
 // The schedule is a list of entries, each a run of sub-blocks of one expert (its rows off.. off + cnt). Without
 // pinning an entry is a whole active expert. With SE_PIN_MIN (sub-blocks), the expert with the most sub-blocks (B)
-// is cut into K chunks of >= SE_PIN_MIN sub-blocks interleaved with the small (<= SE_PIN_SMALL sub-blocks) experts,
+// is cut into K chunks of >= SE_PIN_MIN sub-blocks interleaved with the small (<= kPinSmall sub-blocks) experts,
 // B1 s1 B2 s2 .. BK sK sK+1 .. then the larger experts,
 // and its gate/up weights stay in ring region 0 until BK (one load, several entries) while the others cycle
 // through the other region: each small expert's weights stream in during a compute-bound chunk of B instead of the
@@ -54,7 +54,6 @@ struct SeDyn {
     uint8_t region[SE_MAX_E];  // ring region of load l
     uint32_t max_cnt = 0;      // the largest active count
     uint32_t rps = 0;          // rows per sub-block
-    bool small = false;        // (always false: the meta page's SE_META_SMALL word)
 };
 
 // Ring regions from the retirement order; false if some load would wait on a retirement that comes after its use.
@@ -88,9 +87,7 @@ inline bool se_dyn_regions(SeDyn& d) {
 }
 
 #ifdef SE_PIN_MIN
-#ifndef SE_PIN_SMALL
-#define SE_PIN_SMALL 2  // sub-blocks: an expert this small runs weight-bound, so it is worth hiding under B
-#endif
+constexpr uint32_t kPinSmall = 2;  // sub-blocks: an expert this small runs weight-bound, so it is worth hiding under B
 inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     if (d.n_act < 2 || d.n_act > SE_MAX_E) {
         return;
@@ -120,7 +117,7 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     uint32_t n_small = 0, n_o = 0;
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t a = 0; a < d.n_act; ++a) {
-            if (a != b && (d.subs[a] <= SE_PIN_SMALL) == (pass == 0)) {
+            if (a != b && (d.subs[a] <= kPinSmall) == (pass == 0)) {
                 order[n_o++] = a;
                 n_small += pass == 0;
             }
@@ -220,7 +217,7 @@ inline void se_dyn_build(
     // the experts by sub-blocks, most first (ties: slot order): the last expert's sub-blocks after its weights have
     // landed are the call's tail, so the one with the fewest goes last (the biggest of a reversed zipf last: GLM-5.3 /
     // GLM-Flash / K3 / K2.7 560 / 412 / 1316 / 849 -> 527 / 398 / 1295 / 825 us; uniform unchanged). Every role and
-    // every op that rebuilds the schedule (se_dyn_from_counts) gets the same order.
+    // gets the same order.
     for (uint32_t a = 1; a < d.n_act; ++a) {
         for (uint32_t b = a; b > 0 && d.subs[b] > d.subs[b - 1]; --b) {
             const uint32_t o = d.off[b], c = d.cnt[b];
@@ -238,40 +235,6 @@ inline void se_dyn_build(
             d.load_eid[b - 1] = e;
         }
     }
-}
-
-// The order the local experts finish in (order[0..num_e)): experts with no entry first (they are done at once), in
-// slot order, then by the position of each expert's last entry (a pinned expert finishes at its last chunk).
-inline void se_dyn_completion_order(const SeDyn& d, uint32_t num_e, uint8_t* order) {
-    uint8_t last[SE_MAX_E];
-    for (uint32_t e = 0; e < num_e; ++e) {
-        last[e] = 0xFF;
-    }
-    for (uint32_t a = 0; a < d.n_act; ++a) {
-        last[d.eid[a]] = static_cast<uint8_t>(a);
-    }
-    uint32_t n = 0;
-    for (uint32_t e = 0; e < num_e; ++e) {
-        if (last[e] == 0xFF) {
-            order[n++] = static_cast<uint8_t>(e);
-        }
-    }
-    for (uint32_t a = 0; a < d.n_act; ++a) {
-        if (last[d.eid[a]] == a) {
-            order[n++] = d.eid[a];
-        }
-    }
-}
-
-// The full schedule from the counts (se_dyn_build + pinning + ring regions, as se_dyn_load), for a kernel of another
-// op: no subgrids, no small-M role split (the overlapped plans have neither).
-template <typename CountOf>
-inline void se_dyn_from_counts(SeDyn& d, uint32_t num_e, uint32_t rows_per_sub, CountOf count_of) {
-    se_dyn_build(d, num_e, rows_per_sub, 1, 1000000000, count_of, [](uint32_t) { return 0u; });
-#ifdef SE_PIN_MIN
-    se_dyn_pin(d, rows_per_sub);
-#endif
-    se_dyn_regions(d);
 }
 
 // Reads the counts / regions rows and the global expert id table into SCRATCH (two SE_DYN_HALF halves of L1 this RISC
@@ -349,9 +312,7 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
         [&](uint32_t e) { return regions[ids[e]]; });
 #endif
 #ifdef SE_PIN_MIN
-    if (!d.small) {
-        se_dyn_pin(d, rows_per_sub);
-    }
+    se_dyn_pin(d, rows_per_sub);
 #endif
     se_dyn_regions(d);  // plain order: always consistent (region l % NREG)
 }
@@ -374,6 +335,5 @@ inline void se_dyn_publish(const SeDyn& d, uint32_t meta_cb, bool empty = false)
         p[SE_META_GU + a] = d.ld[a] | (d.region[d.ld[a]] << 8) | (uint32_t(d.last[a]) << 16);
         p[SE_META_LMT + a] = (d.cnt[a] - (d.subs[a] - 1u) * se_dyn_rps(d) + 31) / 32;
     }
-    p[SE_META_SMALL] = d.small;
     cb_push_back(meta_cb, 1);
 }

@@ -2,17 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Combine overlap (flat_with_program): every y writer (down core) reports its progress to the combine's collector as
-// its rows land, so combine takes rows while the flat expert still computes the next ones. Step s is local expert s
-// (slot order, SE_CMB_SLOT_ORDER: the host sets it with SE_CMB_DONE_RT); the collector counts per step and releases
-// step s once every writer has reported it.
+// Combine overlap: every y writer (down core) reports its progress to the combine's collector as its rows land, so
+// combine takes rows while the flat expert still computes the next ones. Step s is local expert s (slot order); the
+// collector counts per step (cumulative counts) and releases step s once every writer has reported it.
 //
 // A writer reports the longest finished prefix of steps: it counts the blocks it still owes per local expert; the
-// caller guarantees the rows have landed (`barrier`: or this waits for its writes). With SE_CMB_NO_GO the counts are
-// cumulative and there is no go handshake; else the collector zeroes its counts at launch and then multicasts `go`, and
-// a writer waits for `go` before its first report.
+// caller guarantees the rows have landed (`barrier`: or this waits for its writes).
 //
-// Runtime args at SE_CMB_DONE_RT: collector noc x, collector noc y, the collector's count array address, go address.
+// Runtime args at SE_CMB_DONE_RT: collector noc x, collector noc y, the collector's count array address, (unused).
 #pragma once
 
 #ifdef SE_CMB_DONE_RT
@@ -23,23 +20,6 @@
 struct SeCmbDone {
     uint16_t left[SE_MAX_E];  // blocks this core still writes, per local expert (step = local expert)
     uint32_t num_steps = 0, next = 0;
-    bool go_seen = false;
-
-    void wait_go() {
-#ifdef SE_CMB_NO_GO  // (flat_with_program: cumulative counts, nothing to wait for)
-        go_seen = true;
-#endif
-        if (go_seen) {
-            return;
-        }
-        volatile tt_l1_ptr uint32_t* go =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(SE_CMB_DONE_RT + 3));
-        while (*go == 0) {
-            invalidate_l1_cache();
-        }
-        *go = 0;  // the collector sets it once per launch
-        go_seen = true;
-    }
 
     // `writes`: this core writes y blocks for the schedule's entries (false: it reports every step at once)
     void init(const SeDyn& d, uint32_t ne, bool writes) {
@@ -51,12 +31,8 @@ struct SeCmbDone {
             left[d.eid[a]] += d.subs[a];
         }
     }
-    // One block of local expert e / one sub-block of schedule entry a written (each mode uses its own).
+    // One block of local expert e written.
     void wrote(uint32_t e) { --left[e]; }
-    void wrote_entry(const SeDyn& d, uint32_t a) {
-        (void)d;
-        (void)a;
-    }
     bool step_done(uint32_t s) const { return left[s] == 0; }
     // Report every finished step not reported yet (all earlier ones too). `barrier`: wait for this core's writes to
     // land first (false: the caller knows they have, the row-major y writer's flushed transaction ids).
@@ -64,7 +40,6 @@ struct SeCmbDone {
         if (next >= num_steps || !step_done(next)) {
             return;
         }
-        wait_go();
         if (barrier) {
             noc_async_write_barrier();  // the rows have landed
         }

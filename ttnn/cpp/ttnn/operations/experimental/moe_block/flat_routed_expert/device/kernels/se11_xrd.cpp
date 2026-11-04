@@ -62,10 +62,6 @@ void kernel_main() {
     // tilizer gets this relay's super-block count in CB 6.
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7), mt * 32);
-#ifdef XRD_HELP_ALL_PRIM  // (x read once by the helper relays: the primary reads none)
-    dyn.n_act = 0;
-    dyn.num_v = 0;
-#endif
     {
         const uint32_t tot = dyn.num_v * nsb;
         cb_reserve_back(tt::CBIndex::c_6, 1);
@@ -73,16 +69,6 @@ void kernel_main() {
             tot > soff ? (tot - soff + stride - 1) / stride : 0;
         cb_push_back(tt::CBIndex::c_6, 1);
     }
-#if defined(XRD_READY) && defined(XRD_INDEXED)
-    {  // x lands during this program (the caller's dispatch): its ports count in here once their rows are in DRAM
-        volatile tt_l1_ptr uint32_t* rdy =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(get_compile_time_arg_val(7) + 1));
-        while (*rdy < XRD_READY) {
-            invalidate_l1_cache();
-        }
-        *rdy = *rdy - XRD_READY;  // (re-armed: every increment of this call is in)
-    }
-#endif
     for (uint32_t a = 0; a < dyn.n_act; ++a) {
         const uint32_t off = dyn.off[a], count = dyn.cnt[a];
         const uint32_t subs = (count + mt * 32 - 1) / (mt * 32);

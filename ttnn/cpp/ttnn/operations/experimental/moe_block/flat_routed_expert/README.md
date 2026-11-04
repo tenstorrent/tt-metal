@@ -11,7 +11,6 @@ device, so one cached program serves every routing.
 | | Use |
 |---|---|
 | `ttnn.experimental.moe_block.flat_routed_expert` | The plain op: y as bfp8 / bf16 tiles or row-major bf16 in DRAM. |
-| `flat_routed_expert_chip_plan` (C++) | One chip's plan: the mesh plan with that chip's gate/up placement (`auto_tensix`). The plain op and routed_experts_combine build one program per chip from it. |
 | `device/flat_program.hpp` (C++) | The program-building form: `add_flat_routed_expert_program` adds the flat expert's kernels, CBs and semaphores to a caller's per-chip `Program` (routed_experts_combine composes flat + combine in one program); `override_flat_routed_expert_addresses` patches its buffer addresses on cache hits; `with_combine_overlap` / `set_flat_combine_report` wire the y writers' reports to the combine. The header documents the contract (cores, semaphores, CB ids, arena, hash). |
 | `ensure_flat_routed_expert_resources(MoEBlockResources&, config)` (C++) | The plan and persistent done / relay words, owned by the MoE block's resources. |
 | `flat_routed_expert_plan`, `create_flat_routed_expert_done_words`, `FlatLayoutOptions` | The plan's layout facts (`as_dict()`), the done words, the layout choices. |
@@ -28,9 +27,10 @@ words) is re-applied on a cache hit by `override_runtime_arguments`; plans are c
 
 Every gate/up core reads its own weight blocks from its weight slot's bank (`se_gu_read.hpp`): the receiver loop
 (`se5_recv.cpp`) grants free landing slots by count, the reads fill granted slots in order and publish a landed-blocks
-count the receiver and the compute consume. Slot r lives in bank r % banks (two slots a bank). Which core reads on
-which NoC (the NCRISC on NOC0 beside the x forwarder, or the receiver BRISC on NOC1) and which cells serve which slot
-is `FlatLayoutOptions.gu_source`; every source gives the same weight layout, schedule and bit-identical y.
+count the receiver and the compute consume, two reads in flight. Slot r lives in bank r % banks (two slots a bank).
+The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cells fewest NOC0
+hops from the bank's NOC0 endpoint tile (all (slot, core) pairs taken nearest first; the bank tiles from
+`tt-metalium/experimental/dram_geometry.hpp`).
 
 ## Roles and kernels (`device/kernels`)
 
@@ -60,15 +60,9 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `rows_hint` | -1 | expected rows per expert (the MoE block: `round(chunk * top_k / experts)`) |
-| `x_helpers` | -1 (1) | x helper relays per rectangle; only 1 |
-| `x_ready` | -1 | > 0: the relays wait for the dispatch ports' count in their x-ready word (dispatch in the same program) |
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
-| `gu_source` | `tensix` | which gate/up core reads which weight blocks, on which NoC: `tensix` (each gate/up core's NCRISC reads its own blocks on NOC0), `tensix_split` (a bank's first slot's cores read on NOC1 from the receiver BRISC, the second slot's on NOC0), `tensix_noc1` (all on NOC1), `placed` (`gu_place`), `auto_tensix` (below); same layout, schedule and bit-identical y. Without per-core words each slot's gate/up cores are placed by hops from the bank's NoC endpoint the reads go through |
-| `gu_read_depth` | -1 (2) | weight reads in flight a gate/up core, 1..6 |
+| `rows_hint` | -1 | expected rows per expert (the MoE block: `round(chunk * top_k / experts)`) |
 | `gu_read_pieces` | -1 (1) | each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op on GLM shapes; K3 in the MoE block takes 2) |
-| `gu_place` | [] | `gu_source` `placed`: per gate/up cell `x << 24 \| y << 16 \| bank << 8 \| how` (1 NOC0, 2 NOC1); 2 x RG cores a bank |
-| `gu_source` `auto_tensix` | | the gate/up placement chosen per chip at plan time by a NoC link-load search (`device/flat_gu_place.hpp`) over that chip's own geometry (harvested columns, DRAM tiles: `tt-metalium/experimental/dram_geometry.hpp`): `flat_routed_expert_chip_plan`; chips of one geometry share it, and a chip takes the mesh's compromise placement when that loads its busiest link less. Same weight layout on every chip. `flat_gu_placement_report` (host only, also on a mock cluster) shows the per-chip / reference / compromise model |
 
 ## Tests
 

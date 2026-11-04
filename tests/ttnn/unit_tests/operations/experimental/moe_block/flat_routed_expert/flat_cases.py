@@ -83,5 +83,5 @@ def case_inputs(model, chunk, seed=1):
 
 
 # The plan fields the reference records and the test compares (the layout the weights and the program follow).
-PLAN_KEYS = ("n_rd", "np", "nu", "rg", "mt", "nk_gu", "nd", "pcds", "col0s", "banks", "wd_rot_tiles", "arena_tiles")
+PLAN_KEYS = ("n_rd", "np", "nu", "rg", "mt", "nk_gu", "nd", "pcds", "col0s", "banks", "wd_rot_tiles")
 PLAN_CORE_KEYS = ("gu", "down", "relays", "coords")

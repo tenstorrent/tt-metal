@@ -4,7 +4,6 @@
 
 #include "flat_routed_expert_plan.hpp"
 #include "flat_geometry.hpp"
-#include "flat_gu_place.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -165,73 +164,6 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
     return tt::tt_metal::CoreRangeSet(rects);
 }
 
-void flat_apply_gu_place(FlatRoutedExpertPlan& p, const std::vector<uint32_t>& words) {
-    const auto cells = flat_gu_cells(p);
-    const uint32_t n_rd = p.n_slots;
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> cell;
-    for (uint32_t ci = 0; ci < cells.size(); ++ci) {
-        cell[{cells[ci].x, cells[ci].y}] = ci;
-    }
-    TT_FATAL(
-        words.size() == cells.size(),
-        "flat layout gu_place: {} words for {} gate/up cells (one per cell)",
-        words.size(),
-        cells.size());
-    std::vector<std::vector<uint32_t>> per_reader(n_rd);
-    std::vector<uint32_t> how_of(cells.size(), 0);
-    std::vector<bool> placed(cells.size(), false);
-    // per bank: its cores fill slot b, then slot b + banks
-    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> tw(p.banks);  // (ci, how)
-    for (const uint32_t w : words) {
-        const uint32_t x = w >> 24, y = (w >> 16) & 0xFF, b = (w >> 8) & 0xFF, how = w & 0xFF;
-        TT_FATAL(cell.contains({x, y}), "flat layout gu_place: ({}, {}) is no gate/up cell", x, y);
-        TT_FATAL(
-            b < p.banks && (how == FlatGuPlace::tensix_noc0 || how == FlatGuPlace::tensix_noc1),
-            "flat layout gu_place word {:#x}",
-            w);
-        const uint32_t ci = cell.at({x, y});
-        TT_FATAL(!placed[ci], "flat layout gu_place: ({}, {}) twice", x, y);
-        placed[ci] = true;
-        tw[b].emplace_back(ci, how);
-    }
-    for (uint32_t b = 0; b < p.banks; ++b) {
-        for (const auto& [ci, how] : tw[b]) {
-            const uint32_t r = per_reader[b].size() < p.r_ ? b : b + p.banks;
-            per_reader[r].push_back(ci);
-            how_of[ci] = how;
-        }
-    }
-    for (uint32_t r = 0; r < n_rd; ++r) {
-        TT_FATAL(
-            per_reader[r].size() == p.r_,
-            "flat layout gu_place: slot {} (bank {}) has {} cores; each bank's two slots take {} each",
-            r,
-            r % p.banks,
-            per_reader[r].size(),
-            p.r_);
-    }
-    p.gu.clear();
-    p.gu_how.clear();
-    p.gu_idle.clear();
-    for (uint32_t r = 0; r < n_rd; ++r) {
-        for (uint32_t ci : per_reader[r]) {
-            p.gu.push_back(cells[ci]);
-            p.gu_how.push_back(how_of[ci]);
-        }
-    }
-}
-
-FlatGuAssign flat_gu_auto(const FlatRoutedExpertPlan& p, const FlatGuGeom& g) {
-    return flat_gu_search({&g}, flat_gu_traffic(p), p.rg, kFlatGuIters);
-}
-
-FlatGuTraffic flat_gu_traffic(const FlatRoutedExpertPlan& p) {
-    // per expert: one gate/up core's share of 2 H I weights, the x rows (rows_hint, else the capacity), H I down
-    const double wb = p.w_tile / 1024.0, H = p.H, I = p.I;
-    const double rows = p.rows_hint > 0 ? p.rows_hint : p.m;
-    return FlatGuTraffic{2.0 * H * I * wb / flat_gu_cells(p).size(), rows * H * 2.0, H * I * wb};
-}
-
 FlatRoutedExpertPlan make_flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg) {
     auto* device = &mesh_device;
@@ -242,14 +174,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.E = cfg.experts_per_chip;
     p.NG = cfg.num_global_experts;
     p.m = cfg.max_tokens;
-    p.rows_hint = cfg.layout.rows_hint;
     TT_FATAL(p.H % 256 == 0 && p.I % 32 == 0 && p.m % 32 == 0, "flat_routed_expert: H % 256, I % 32, m % 32");
     TT_FATAL(p.m >= 256, "flat_routed_expert: the op is built for >= 256 tokens per expert (helper relays)");
     TT_FATAL(p.E >= 1 && p.E <= 64, "flat_routed_expert: 1..64 local experts");
-    TT_FATAL(
-        lo.x_helpers < 0 || lo.x_helpers == 1,
-        "flat layout x_helpers {}: one helper relay per rectangle",
-        lo.x_helpers);
     p.Ht = p.H / 32;
     p.It = p.I / 32;
     p.w_tile = cfg.weights_bf8 ? kBf8Tile : 576;
@@ -300,7 +227,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
                 p.np = pairs ? np : 0;
                 p.nu = pairs ? 0 : per;
                 p.hg = !pairs;
-                p.g = 1;
                 p.x_slots = xs;
                 found = true;
                 break;
@@ -344,41 +270,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
                 }
             }
         }
-        if (!shaped && p.nu) {  // (no exact pair: the smallest pair covering the split, extra cells idle)
-            int best_cells = 1 << 30;
-            for (uint32_t aw = 4; aw <= aw_max; ++aw) {
-                for (uint32_t bw = 1; bw <= bw_cap; ++bw) {
-                    for (uint32_t hb = 1; hb <= hb_max; ++hb) {
-                        for (uint32_t ha = 1; ha <= nrows; ++ha) {
-                            const int cells = int(aw * ha + bw * hb);
-                            if (cells < int(want) || cells > best_cells ||
-                                (cells == best_cells && std::abs(int(aw * ha) - int(bw * hb)) >= best)) {
-                                continue;
-                            }
-                            best_cells = cells;
-                            best = std::abs(int(aw * ha) - int(bw * hb));
-                            p.rects = {
-                                {east0 - aw, east0 - 1, row0, row0 + ha - 1},
-                                {b_x0 - (east0 - 6), b_x0 - (east0 - 6) + bw - 1, row0, row0 + hb - 1}};
-                            shaped = true;
-                        }
-                    }
-                }
-            }
-        }
         TT_FATAL(shaped, "flat_routed_expert: no rectangle pair of {} gate/up cores in {} rows", want, nrows);
     }
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst((p.gwt + 1) / 2, p.Ht, p.x_slots, p.nu != 0);
     const uint32_t mt_cap = std::min(p.dst_tiles / p.gwt, MT_MAX);
     p.mt = std::min(mt_cap, std::max(1u, p.m / 32));
-    p.gu_source = lo.gu_source;
-    TT_FATAL(
-        lo.gu_read_depth < 0 || (lo.gu_read_depth >= 1 && lo.gu_read_depth <= 6),
-        "flat layout gu_read_depth {}: 1..6",
-        lo.gu_read_depth);
-    if (lo.gu_read_depth > 0) {
-        p.gu_depth = lo.gu_read_depth;
-    }
     TT_FATAL(
         lo.gu_read_pieces < 0 || lo.gu_read_pieces == 1 || lo.gu_read_pieces == 2 || lo.gu_read_pieces == 4,
         "flat layout gu_read_pieces {}: 1, 2 or 4",
@@ -388,7 +284,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     }
     // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
     // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
-    // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)
+    // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us); the
+    // smaller x / h buffers are also what fits the MoE block's flat arena next to the combine's (GLM-5.3 8x4 chunk
+    // 5120)
     if (lo.rows_hint > 0 && lo.rows_hint <= 320 && p.gu_rp && p.mt == 4) {
         p.mt = 2;
     }
@@ -400,7 +298,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     if (p.gu_rp && !p.gu_full_sync) {
         p.gu_kg = std::min(2u, p.Ht / kKBlk);
     }
-    p.mtg = p.mt;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = 1;
     p.land_slots = 2;  // (two landing rings a primary: the helpers feed both)
@@ -525,7 +422,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.nk_gu = p.Ht / kKBlk;
     p.slot = kKBlk * p.gwt;
     p.rg = p.ngrp / p.n_rd_sg;
-    p.r_ = p.rg * p.g;
+    p.r_ = p.rg;
     TT_FATAL(p.ngrp % p.n_rd_sg == 0 && p.r_ <= 4u, "flat_routed_expert: gate/up pair-sets per reader");
     // gate/up weight ring: 2 expert slices (with pinning: the pinned expert's and one cycling)
     p.ring_g = 2 * p.nk_gu;
@@ -579,19 +476,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.h_tiles = p.It * p.mt;  // one down h buffer: a sub-block
     const uint32_t out_tiles = p.mt * pcd;
 
-    // gate/up cores per weight slot: each slot's cores by the hops from the bank's NoC endpoint tile its reads go
-    // through (their responses' injection point), on that NoC; all pairs (slot, core) taken nearest first rather than
-    // round-robin nearest (which left the last slots 15-21 hops)
-    const bool by_words = p.gu_source == FlatGuSource::placed || p.gu_source == FlatGuSource::auto_tensix;
-    // the NoC slot r's cores read on (sources without per-core words)
-    const auto slot_noc = [&](uint32_t r) -> uint32_t {
-        return p.gu_source == FlatGuSource::tensix_noc1 || (p.gu_source == FlatGuSource::tensix_split && r < p.banks)
-                   ? 1u
-                   : 0u;
-    };
+    // gate/up cores per weight slot (every gate/up core reads its own blocks on NOC0): each slot's cores by the NOC0
+    // hops from the bank's NOC0 endpoint tile (its reads' responses' injection point); all pairs (slot, core) taken
+    // nearest first rather than round-robin nearest (which left the last slots 15-21 hops)
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
-    std::vector<bool> placed(gu_all.size(), by_words);
-    if (!by_words) {
+    std::vector<bool> placed(gu_all.size(), false);
+    {
         const FlatDramGeometry dram = FlatDramGeometry::of(mesh_device);
         std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         std::vector<Core> worker_noc0;
@@ -599,10 +489,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             worker_noc0.push_back(flat_worker_noc0(mesh_device, c));
         }
         for (uint32_t r = 0; r < n_rd; ++r) {
-            const uint32_t noc = slot_noc(r);
-            const Core src = dram.endpoint(r % p.banks, noc);
+            const Core src = dram.endpoint(r % p.banks, 0);
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                pairs.emplace_back(noc_hops(src, worker_noc0[ci], int(noc)), r, ci);
+                pairs.emplace_back(noc_hops(src, worker_noc0[ci], 0), r, ci);
             }
         }
         std::sort(pairs.begin(), pairs.end());
@@ -616,23 +505,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     for (uint32_t r = 0; r < n_rd; ++r) {
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
-            p.gu_how.push_back(slot_noc(r) ? FlatGuPlace::tensix_noc1 : FlatGuPlace::tensix_noc0);
         }
     }
     for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
         if (!placed[ci]) {
             p.gu_idle.push_back(gu_all[ci]);
         }
-    }
-    if (by_words) {  // the caller's placement, or the link-load search's on this (the reference) chip
-        TT_FATAL(
-            p.gu_source == FlatGuSource::placed || lo.gu_place.empty(),
-            "flat layout: gu_place is for gu_source placed (auto_tensix searches its own)");
-        flat_apply_gu_place(
-            p,
-            p.gu_source == FlatGuSource::placed
-                ? lo.gu_place
-                : flat_gu_words(p, flat_gu_auto(p, flat_gu_geom(mesh_device, p, flat_reference_coord(mesh_device)))));
     }
 
     // ---- arena (per-role layout, 2 KB aligned) ----
@@ -658,7 +536,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
         const uint32_t meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
         const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
-        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 1024 + 2048 + a64(p.hbuf * p.mtg * p.hpc * kBf8Tile);
+        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 1024 + 2048 + a64(p.hbuf * p.mt * p.hpc * kBf8Tile);
     }
     TT_FATAL(gu_bytes <= L1_BANK_BYTES, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
@@ -689,8 +567,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             n,
             (x1 - x0 + 1) * (y1 - y0 + 1));
     }
-    p.ti_off = p.land_off + al(2 * p.land_slots * p.mt * p.sbt * kBf8Tile);
-    const uint32_t relay_bytes = p.ti_off;
+    const uint32_t relay_bytes = p.land_off + al(2 * p.land_slots * p.mt * p.sbt * kBf8Tile);
     TT_FATAL(relay_bytes <= L1_BANK_BYTES, "flat_routed_expert: relay arena does not fit");
     p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes}) + 2047) / 2048;
     p.gu_bytes = gu_bytes;
@@ -758,60 +635,6 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
             plan->gu_kg,
             plan->mt * 32);
         it = cache.emplace(key, std::move(plan)).first;
-    }
-    return it->second;
-}
-
-std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_chip_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const FlatRoutedExpertConfig& c,
-    const tt::tt_metal::distributed::MeshCoordinate& coord) {
-    auto base = flat_routed_expert_plan(mesh_device, c);
-    if (base->gu_source != FlatGuSource::auto_tensix) {
-        return base;
-    }
-    // (chips of one geometry share the placement: the key is the mesh plan and the geometry's positions)
-    const FlatGuGeom g = flat_gu_geom(mesh_device, *base, coord);
-    static std::mutex mu;
-    static std::map<std::pair<const FlatRoutedExpertPlan*, std::vector<uint32_t>>, std::shared_ptr<const FlatRoutedExpertPlan>>
-        cache;
-    const auto key = std::make_pair(base.get(), g.key());
-    std::lock_guard<std::mutex> lock(mu);
-    auto it = cache.find(key);
-    if (it == cache.end()) {
-        // this chip's own search, or the mesh's compromise placement (one search over every distinct geometry of
-        // the mesh) when that loads this chip's busiest link less (the local search stops in local minima)
-        static std::map<const FlatRoutedExpertPlan*, std::optional<FlatGuAssign>> compromise;
-        auto cit = compromise.find(base.get());
-        if (cit == compromise.end()) {
-            std::vector<FlatGuGeom> geoms;
-            for (const auto id : mesh_device.get_device_ids()) {
-                FlatGuGeom gg = flat_gu_geom(mesh_device, *base, mesh_device.get_view().find_device(id));
-                if (std::find(geoms.begin(), geoms.end(), gg) == geoms.end()) {
-                    geoms.push_back(std::move(gg));
-                }
-            }
-            std::optional<FlatGuAssign> comp;
-            if (geoms.size() > 1) {
-                std::vector<const FlatGuGeom*> gp;
-                for (const auto& gg : geoms) {
-                    gp.push_back(&gg);
-                }
-                comp =
-                    flat_gu_search(gp, flat_gu_traffic(*base), base->rg, kFlatGuIters, kFlatGuCompromiseRestarts);
-            }
-            cit = compromise.emplace(base.get(), std::move(comp)).first;
-        }
-        FlatGuAssign a = flat_gu_auto(*base, g);
-        if (cit->second) {
-            const auto t = flat_gu_traffic(*base);
-            if (flat_gu_load(g, *cit->second, t).max_link < flat_gu_load(g, a, t).max_link) {
-                a = *cit->second;
-            }
-        }
-        auto chip = std::make_shared<FlatRoutedExpertPlan>(*base);
-        flat_apply_gu_place(*chip, flat_gu_words(*chip, a));
-        it = cache.emplace(key, std::move(chip)).first;
     }
     return it->second;
 }

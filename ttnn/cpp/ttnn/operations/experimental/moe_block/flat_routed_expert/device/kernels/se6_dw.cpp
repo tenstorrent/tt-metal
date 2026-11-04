@@ -7,14 +7,14 @@
 // which holds two experts so the next expert loads while the current one is still in use. Up to BATCH blocks per read
 // barrier.
 //
-// CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 IS_BFP8, 6 NUM_E, 7-9 (unused)
+// CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 NUM_E
 // RT: 0 weight bank base address, 1 bank id, 2 byte offset of this core's region in the bank, 3.. se_dyn.hpp args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "se_dyn.hpp"
 #ifdef SE_Y_NC
 // Row-major y written from here (NOC0) instead of the down core's BRISC (NOC1, the h chain's network): the weight
-// reads' waits poll the y writer (CT 10 Y_MT: row tiles per virtual expert, 11 PCD, 12 HT; RT after the se_dyn.hpp
+// reads' waits poll the y writer (CT 6 Y_MT: row tiles per virtual expert, 7 PCD, 8 HT; RT after the se_dyn.hpp
 // args: y address, first y tile column)
 #include "se_yrm.hpp"
 #include "se_cmb_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
@@ -26,7 +26,6 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t blocks = get_compile_time_arg_val(3);
     constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr bool is_bfp8 = get_compile_time_arg_val(5) != 0;
     const uint64_t src =
         get_noc_addr_from_bank_id<true>(get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2));
     // block k of this core's sequence sits in bank (bank + k) % SE_DW_ROT at offset + (k / SE_DW_ROT) blocks (the host
@@ -36,8 +35,8 @@ void kernel_main() {
         return get_noc_addr_from_bank_id<true>(
             (rot_bank + k) % SE_DW_ROT, rot_addr + (k / SE_DW_ROT) * slot * tile_bytes);
     };
-    // only the active experts' blocks (CT 6 NUM_E: BLOCKS / NUM_E per expert; RT 3.. se_dyn.hpp args, CB 7 scratch)
-    constexpr uint32_t num_e = get_compile_time_arg_val(6);
+    // only the active experts' blocks (CT 5 NUM_E: BLOCKS / NUM_E per expert; RT 3.. se_dyn.hpp args, CB 7 scratch)
+    constexpr uint32_t num_e = get_compile_time_arg_val(5);
     constexpr uint32_t per_e = blocks / num_e;
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
@@ -61,13 +60,13 @@ void kernel_main() {
 #endif
     };
 #ifdef SE_Y_NC
-    static_assert(get_compile_time_arg_val(10) >= 1);
+    static_assert(get_compile_time_arg_val(6) >= 1);
     const uint32_t ya = 3 + SE_DYN_NARGS;
     SeYRmWriter<
         tt::CBIndex::c_16,
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(12)>
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(8)>
         yw(get_arg_val<uint32_t>(ya), get_arg_val<uint32_t>(ya + 1));
     uint32_t y_done = 0;
 #ifdef SE_CMB_DONE_RT
@@ -80,7 +79,6 @@ void kernel_main() {
             ++y_done;
 #ifdef SE_CMB_DONE_RT
             cmb.wrote(dyn.eid[yw.done_a]);
-            cmb.wrote_entry(dyn, yw.done_a);
             cmb.report(false);
 #endif
         }

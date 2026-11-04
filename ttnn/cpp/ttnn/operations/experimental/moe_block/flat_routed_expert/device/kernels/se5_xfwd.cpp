@@ -37,11 +37,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
     volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
     uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
-    // gate/up weights read from here (se_gu_read.hpp, RT 6..: mode 1), into the landing slots the receiver (BRISC)
-    // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
+    // gate/up weights read from here (se_gu_read.hpp, RT 6..), into the landing slots the receiver (BRISC) grants;
+    // the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
     SeGuRead gr;
     bool g_done = true;
-    if (get_arg_val<uint32_t>(6) == 1) {
+    {
         volatile tt_l1_ptr uint32_t* mbox = sem(SE_GU_MBOX_SEM);
         while (*mbox == 0) {
             invalidate_l1_cache();

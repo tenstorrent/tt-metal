@@ -172,16 +172,7 @@ def flat_weight_shapes(H, I, E, lay):
     return {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
 
 
-FLAT_LAYOUT_FIELDS = (
-    "x_helpers",
-    "pin_ratio",
-    "rows_hint",
-    "x_ready",
-    "gu_source",
-    "gu_read_depth",
-    "gu_place",
-    "gu_read_pieces",
-)
+FLAT_LAYOUT_FIELDS = ("pin_ratio", "rows_hint", "gu_read_pieces")
 
 
 def flat_layout(layout=None, **kw):

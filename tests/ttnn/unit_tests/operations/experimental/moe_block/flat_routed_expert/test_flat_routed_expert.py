@@ -139,7 +139,8 @@ def test_flat_routed_expert_bit_exact(device, case):
         n_global=cfg["NG"],
         act=cfg["act"],
         pin=cfg["pin"],
-        layout=cfg["layout"],
+        # (the saved case's layout fields the op still has)
+        layout={k: v for k, v in (cfg["layout"] or {}).items() if k in weights_py.FLAT_LAYOUT_FIELDS},
     )
     lay = op.lay
     for k in cases.PLAN_KEYS:
