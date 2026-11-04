@@ -56,7 +56,7 @@ public:
         Scratchpad(
             pointer{get_common_arg_val<uint32_t>(token.crta_offset_)},
             token.size_in_bytes_,
-            static_cast<DataFormat>(token.llk_metadata_.format)) {}
+            token.dataformat_or_invalid()) {}
 
     /** @brief Get the element at the given index
      *
