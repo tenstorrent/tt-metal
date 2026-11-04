@@ -1,0 +1,3 @@
+# The extension is built on the machine that serves, so it may use every instruction that CPU has.
+[build]
+rustflags = ["-C", "target-cpu=native"]

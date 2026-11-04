@@ -80,6 +80,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepS
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
+from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     EngramHostLookup,
     engram_ram_needed,
@@ -491,6 +492,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # Outputs of dispatched steps nobody wants (a streamed round's rows past its first reject), read and
         # dropped ahead of the next read_decoded_output.
         self._stale_outputs = 0
+        # The Rust host runtime (start_host_runtime), and its index of each trace variant.
+        self._host = None
+        self._host_variants: dict = {}
 
     def _engram_ids(self) -> list[int]:
         return [i for i in self.config.engram_layer_ids if i < self.num_layers]
@@ -803,10 +807,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"Engram tables of layers {ids} read: {total / 1e9:.0f} GB in {seconds:.0f}s "
                 f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
             )
-            self._engram_lookup = EngramHostLookup(
+            lookup_cls = host_rs.RustEngramLookup if host_rs.enabled() else EngramHostLookup
+            self._engram_lookup = lookup_cls(
                 cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq, sessions=num_sessions
             )
-            logger.info(f"Engram host lookup: layers {ids}")
+            logger.info(f"Engram host lookup ({lookup_cls.__name__}): layers {ids}")
 
     def _allocate_shared_caches(self) -> None:
         """Per-stage KV. A group is aliased inside a stage and handed over across a pipeline edge.
@@ -1048,6 +1053,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if sid is None:
             sid = self._resident[0] if self._resident and self._resident[0] is not None else None
         self._packet_slot = self._slot_of.get(sid, 0)
+        if self._host is not None:
+            # The host runtime's packet thread builds the same page, then its Engram threads write the rows.
+            self._host.write_step(self._step_tokens(token_id), int(pos), self._packet_slot)
+            return
         DeepSeekV4Model._write_packet(self, token_id, pos)
         self._write_engram_rows(token_id, pos, self._packet_slot)
 
@@ -1160,6 +1169,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         paged = self._require_paged()
         with self._cq_lock:
+            if self._host is not None:
+                # Every replay posted so far must be on the queues before the write that follows them.
+                self._host.drain()
             for ratio, group in self._paged_ratios.items():
                 if groups is not None and group.layer_type not in groups:
                     continue
@@ -1371,8 +1383,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             return
         if not self._traced_captured:
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
-        self._ensure_replay_thread()
         self._packet_sids.append((sid, image))
+        if self._host is not None:
+            # Book-keeping here; the host runtime's stage threads issue the replays.
+            self._execute_traces((pos, sid, self._spec_hold_writes, image))
+            return
+        self._ensure_replay_thread()
         self._replay_queue.put((pos, sid, self._spec_hold_writes, image))
 
     def write_step_packet(self, token_id, pos: int) -> None:
@@ -1400,6 +1416,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         variant = self._variant_key(pos, image)
         if self._eager_decode:
             self._run_eager_step(variant)
+            return
+        if self._host is not None:
+            self._host.dispatch(self._host_variants[variant])
             return
         with self._cq_lock:
             for sm in self.submeshes_io:
@@ -2390,12 +2409,82 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """Read and drop the outputs :meth:`spec_discard_outputs` marked, so no step is left waiting on the host."""
         while self._stale_outputs:
             self._stale_outputs -= 1
-            super().read_decoded_output()
+            self._read_step_output()
 
     def read_decoded_output(self) -> torch.Tensor:
         """V4's :meth:`~DeepSeekV4Model.read_decoded_output`, past the stale outputs (:meth:`drain_stale_outputs`)."""
         self.drain_stale_outputs()
-        return super().read_decoded_output()
+        return self._read_step_output()
+
+    def _read_step_output(self) -> torch.Tensor:
+        if self._host is None:
+            return super().read_decoded_output()
+        out = torch.frombuffer(self._host.read_output(), dtype=self._out_torch_dtype)
+        return out.reshape(self._decode_batch, 1, -1)
+
+    def start_host_runtime(self, cpus=(), counters_path: Optional[str] = None) -> None:
+        """Hand the traced decode step's host work to the Rust host runtime (:mod:`.host_rs`): from now on every
+        step's trace replays are issued by one thread per stage, and its packet, Engram rows and output move on
+        threads of their own, none holding the GIL. The submeshes and sockets stay this model's, handed over by
+        address. Call once the decode traces are captured and with no step in flight; Python then only writes
+        the packet and Engram sockets (or reads the output socket) with no step in flight, as prefill and the
+        vision row writes already do. ``cpus`` pins the threads (output, packet, Engram layers, stages);
+        ``counters_path`` is a file the runtime keeps its counters in, for the web monitor (``demo/monitor.py``)."""
+        if self._host is not None:
+            return
+        if self._eager_decode or not self._traced_captured:
+            raise RuntimeError("the host runtime replays the decode traces: capture them first")
+        if self.dspark is not None:
+            raise NotImplementedError("the host runtime does not run speculative decode")
+        if not isinstance(self._engram_lookup, (host_rs.RustEngramLookup, type(None))):
+            raise RuntimeError("the host runtime needs the Rust Engram lookup: set DEEPSEEK_V41_RUST_HOST=1")
+        self._wait_replays_dispatched()
+        keys = list(self.submeshes_io[0]["tids"])
+        if any(set(sm["tids"]) != set(keys) for sm in self.submeshes_io):
+            raise RuntimeError("the stages captured different trace variants")
+        rows, cols = self._out_plan
+        self._host = host_rs.module().DecodeHost(
+            stages=[host_rs.native_handle(sm["device"]) for sm in self.submeshes_io],
+            variants=[[int(sm["tids"][key]) for sm in self.submeshes_io] for key in keys],
+            packet_socket=host_rs.native_handle(self._pkt_socket),
+            batch=self._decode_batch,
+            sliding_window=self.sliding_window,
+            win_slot_rows=_WIN_SLOT_ROWS,
+            output_socket=host_rs.native_handle(self._out_socket),
+            output_step_bytes=rows * cols * self._out_torch_dtype.itemsize,
+            engram=self._engram_lookup.rust if self._engram_lookup is not None else None,
+            engram_sockets=[
+                (layer_idx, [host_rs.native_handle(s) for s in engram.sockets], engram.local_kin)
+                for layer_idx, engram in self._engram_layers
+            ],
+            cpus=list(cpus),
+            counters_path=counters_path,
+        )
+        self._host_variants = {key: i for i, key in enumerate(keys)}
+        logger.info(
+            f"host runtime: {len(self.submeshes_io)} stage dispatch threads, {len(keys)} trace variants, "
+            f"{len(self._engram_layers)} Engram writers"
+        )
+
+    @property
+    def host_runtime_running(self) -> bool:
+        return self._host is not None
+
+    def host_runtime_stats(self) -> Optional[dict]:
+        """``{name: (count, mean us)}`` of the host runtime's threads, or None without one."""
+        return None if self._host is None else self._host.stats()
+
+    def _wait_replays_dispatched(self) -> None:
+        if self._host is not None:
+            self._host.drain()
+            return
+        super()._wait_replays_dispatched()
+
+    def shutdown(self) -> None:
+        host, self._host = self._host, None
+        if host is not None:
+            host.close()
+        super().shutdown()
 
     def _send_step_row(self, tapped: dict, taps: dict, pkt: ttnn.Tensor) -> None:
         """On the output stage, inside a decode step: send the step's target-layer means ``[1, 1, 1, targets * D]``
