@@ -144,8 +144,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // sdpa_bcast_col_srca_srcb_reuse_tiles_init() touches the MATH thread only (sdpa.h:75-78).
         _llk_unpack_A_init_<BroadcastType::NONE>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-        _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
-        _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -158,6 +156,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // DEST-to-DEST: one dummy SrcA + one dummy SrcB per execute (no operand stream).
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _perf_unpack_loop_set_valid<true, true>(num_faces);
+                _perf_unpack_loop_set_valid<true, true>(num_faces);
                 _perf_unpack_set_valid(ckernel::SrcB);
                 _perf_unpack_set_valid(ckernel::SrcA);
             }
@@ -166,6 +166,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
                 // Step 2: satisfy the preamble's STALLWAIT(WAIT_SFPU | SRCA_VLD | SRCB_VLD) without pretending SrcA carries an
                 // operand. This is the SrcA+SrcB helper (3 instructions), not the SrcB-only _llk_unpack_A_sdpa_set_srcb_dummy_valid_
                 // (2 instructions) -- this variant's preamble waits on SRCA_VLD too, so the SrcB-only helper would leave MATH
@@ -201,20 +203,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_wait_for_dest_available_<DST_SYNC>();
-
         // Step 1: copy the two seeds (unpacked into SrcA by unpack step 1, in this order) into DEST. X goes to
         // DEST[DST_TILE] (the op scales it in place) and the column source P to DEST[SRC_TILE].
-        const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, tensor_shape);
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, tensor_shape);
-
         // Step 2: SDPA column-broadcast SrcA+SrcB-reuse eltwise.
         //   init     -> program addr_mods + the [MOVD2A, MOVD2A, ELWMUL] SRCB_BCAST_COL MOP.
         //   preamble -> STALLWAIT(WAIT_SFPU|SRCA_VLD|SRCB_VLD) on the unpacker's dummy SrcA+SrcB valids, point DEST at
@@ -225,12 +221,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         //               clear_dest stays false: X in DEST is an INPUT here, not stale state to be cleared.
         //               The trailing SETRWC CLR_AB releases SrcA/SrcB (this variant has no separate postamble).
         //
-        // The promoted execute runs the output_granularity loop unconditionally; the demo copy gated it behind a
-        // `fused_signalling` template arg in position 8, which is gone here. OUTPUT_GRANULARITY == 1 keeps the per-tile
-        // FPU_SFPU cadence either way, and the golden ignores signalling cadence.
-        // Nothing consumes FPU_SFPU; ttsim rejects a SEMPOST at value >= max.
-        t6_semaphore_init(semaphore::FPU_SFPU, 0 /* min_value */, NUM_TILES / OUTPUT_GRANULARITY /* max_value */);
-        _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
+        // This standalone driver has no downstream SFPU consumer. Suppress the
+        // production FPU_SFPU notification so repeated perf loops cannot leave
+        // the semaphore saturated.
         PROFILER_SYNC();
     }
     {
@@ -242,14 +235,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_math_clear_valid(ckernel::SrcA);
+                _perf_math_loop_clear_valid<true, true>(num_faces);
+                _perf_math_loop_clear_valid<true, true>(num_faces);
                 _perf_math_clear_valid(ckernel::SrcB);
+                _perf_math_clear_valid(ckernel::SrcA);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, tensor_shape);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, tensor_shape);
+                _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
                 _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
                 _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
                     SDPA_OP,
@@ -258,7 +261,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     MATH_FIDELITY,
                     false /* clear_dest */,
-                    false /* skip_signalling */,
+                    true /* skip_signalling */,
                     OUTPUT_GRANULARITY>(DST_ROW);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {

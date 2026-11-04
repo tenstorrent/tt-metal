@@ -6,8 +6,9 @@ from conftest import blackhole_only, skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, ReducePool
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sdpa_reduce_row import FILL_CONSTANTS, test_sdpa_reduce_row
+from helpers.perf.blaze import PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE
+from test_sdpa_reduce_row import FILL_CONSTANTS
+from test_sdpa_reduce_row import test_sdpa_reduce_row as _test_sdpa_reduce_row
 
 pytestmark = blackhole_only
 
@@ -20,10 +21,10 @@ pytestmark = blackhole_only
         same=True,
     ),
     dest_acc=[DestAccumulation.No],
-    reduce_pool=[ReducePool.Max, ReducePool.Sum],
+    reduce_pool=[ReducePool.Max],
     # fill_constant is stimulus-only; reduce_pool is the recorded axis.
     fill_constant=[FILL_CONSTANTS[0]],
-    **PERF_MEASUREMENT_AXES,
+    **PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE,
 )
 def test_perf_sdpa_reduce_row(
     perf_report,
@@ -35,7 +36,7 @@ def test_perf_sdpa_reduce_row(
     loop_factor,
     is_perf,
 ):
-    test_sdpa_reduce_row(
+    _test_sdpa_reduce_row(
         formats,
         dest_acc,
         reduce_pool,

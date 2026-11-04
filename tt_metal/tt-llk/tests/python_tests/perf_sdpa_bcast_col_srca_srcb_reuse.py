@@ -8,7 +8,9 @@ from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_sdpa_bcast_col_srca_srcb_reuse import (
     SDPA_FORMATS,
-    test_sdpa_bcast_col_srca_srcb_reuse,
+)
+from test_sdpa_bcast_col_srca_srcb_reuse import (
+    test_sdpa_bcast_col_srca_srcb_reuse as _test_sdpa_bcast_col_srca_srcb_reuse,
 )
 
 
@@ -23,7 +25,7 @@ def test_perf_sdpa_bcast_col_srca_srcb_reuse(
     perf_report, formats, math_fidelity, run_types, loop_factor, is_perf
 ):
     # cancellation only rewrites stimuli, so it is not a second kernel measurement.
-    test_sdpa_bcast_col_srca_srcb_reuse(
+    _test_sdpa_bcast_col_srca_srcb_reuse(
         formats,
         math_fidelity,
         False,

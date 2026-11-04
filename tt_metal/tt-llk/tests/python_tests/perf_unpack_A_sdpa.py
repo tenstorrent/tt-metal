@@ -5,7 +5,8 @@ import pytest
 from conftest import blackhole_only
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_unpack_A_sdpa import all_params, param_ids, test_unpack_A_sdpa
+from test_unpack_A_sdpa import all_params, param_ids
+from test_unpack_A_sdpa import test_unpack_A_sdpa as _test_unpack_A_sdpa
 
 
 @pytest.mark.perf
@@ -27,7 +28,7 @@ def test_perf_unpack_A_sdpa(
     loop_factor,
     is_perf,
 ):
-    test_unpack_A_sdpa(
+    _test_unpack_A_sdpa(
         testname,
         formats,
         num_faces,

@@ -638,3 +638,24 @@ def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag
         f"tiny normal scalar 2^-100 product mismatch (fidelity={math_fidelity.name}) under "
         "the keep-flag sequence"
     )
+
+
+def test_rmsnorm_bcast_scalar_dest_reuse_repeat_state():
+    formats = FORMATS[0]
+    device, seen_A, _seed, scalar = _run(
+        formats,
+        DestAccumulation.No,
+        MathOperation.Elwmul,
+        MathFidelity.LoFi,
+        1,
+        clear_dest=True,
+        loop_factor=2,
+    )
+    golden = _expected(
+        seen_A,
+        scalar,
+        MathOperation.Elwmul,
+        MathFidelity.LoFi,
+        formats.output_format,
+    )
+    assert passed_test(golden, device, formats.output_format)

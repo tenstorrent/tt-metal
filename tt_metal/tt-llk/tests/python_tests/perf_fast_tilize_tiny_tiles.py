@@ -7,7 +7,12 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_fast_tilize_tiny_tiles import WIDTHS, test_fast_tilize_tiny_tiles
+from test_fast_tilize_tiny_tiles import (
+    WIDTHS,
+)
+from test_fast_tilize_tiny_tiles import (
+    test_fast_tilize_tiny_tiles as _test_fast_tilize_tiny_tiles,
+)
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
@@ -30,7 +35,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 def test_perf_fast_tilize_tiny_tiles(
     perf_report, formats, dest_acc, dimensions, run_types, loop_factor, is_perf
 ):
-    test_fast_tilize_tiny_tiles(
+    _test_fast_tilize_tiny_tiles(
         formats,
         dest_acc,
         dimensions,

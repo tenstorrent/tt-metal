@@ -162,6 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    _llk_math_reconfig_remap_(false);
 }
 
 #endif

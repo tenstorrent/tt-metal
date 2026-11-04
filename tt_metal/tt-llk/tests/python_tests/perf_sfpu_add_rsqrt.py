@@ -10,8 +10,10 @@ from test_sfpu_add_rsqrt import (
     ADDENDS,
     FORMATS,
     INPUT_SCALES,
-    test_sfpu_add_rsqrt,
-    test_sfpu_add_rsqrt_input_scale,
+)
+from test_sfpu_add_rsqrt import test_sfpu_add_rsqrt as _test_sfpu_add_rsqrt
+from test_sfpu_add_rsqrt import (
+    test_sfpu_add_rsqrt_input_scale as _test_sfpu_add_rsqrt_input_scale,
 )
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -37,7 +39,7 @@ def test_perf_sfpu_add_rsqrt(
     loop_factor,
     is_perf,
 ):
-    test_sfpu_add_rsqrt(
+    _test_sfpu_add_rsqrt(
         formats,
         dest_acc,
         addend,
@@ -68,7 +70,7 @@ def test_perf_sfpu_add_rsqrt_input_scale(
     loop_factor,
     is_perf,
 ):
-    test_sfpu_add_rsqrt_input_scale(
+    _test_sfpu_add_rsqrt_input_scale(
         formats,
         dest_acc,
         input_scale,

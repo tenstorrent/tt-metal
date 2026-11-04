@@ -10,6 +10,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     LOOP_FACTOR,
@@ -82,6 +83,21 @@ def test_fast_tilize_tiny_tiles(
         .to(format_dict[formats.output])
     )
 
+    variant_stimuli = StimuliConfig(
+        src_A,
+        formats.input_format,
+        src_B,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        tile_dimensions=TILE_DIMENSIONS,
+        use_dense_tile_dimensions=True,
+        operand_res_tile_size=format_tile_sizes[formats.output_format],
+    )
     outcome = execute_llk(
         is_perf=is_perf,
         perf_report=perf_report,
@@ -102,21 +118,7 @@ def test_fast_tilize_tiny_tiles(
                 LOOP_FACTOR(1),
                 NUM_FACES(num_faces),
             ],
-            variant_stimuli=StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=tile_cnt_A,
-                tile_count_B=tile_cnt_B,
-                tile_count_res=tile_cnt_A,
-                num_faces=num_faces,
-                face_r_dim=face_r_dim,
-                tile_dimensions=TILE_DIMENSIONS,
-                use_dense_tile_dimensions=True,
-                operand_res_tile_size=format_tile_sizes[formats.output_format],
-            ),
+            variant_stimuli=variant_stimuli,
             dest_acc=dest_acc,
             compile_time_formats=True,
         ),
@@ -135,7 +137,7 @@ def test_fast_tilize_tiny_tiles(
     expected_bytes = tile_size_actual * tile_cnt_A
     raw_res = read_from_device(
         TestConfig.TENSIX_LOCATION,
-        configuration.variant_stimuli.buf_res_addr,
+        variant_stimuli.buf_res_addr,
         num_bytes=expected_bytes,
     )
     assert (

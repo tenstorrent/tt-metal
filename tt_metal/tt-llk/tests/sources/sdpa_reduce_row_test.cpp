@@ -175,28 +175,47 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            if constexpr (!unpack_to_dest)
+            if constexpr (unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            tile, formats.math, formats.math);
+                    }
+                }
+            }
+            else
             {
                 _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * params.TILE_CNT * 4);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (!unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            tile, formats.math, formats.math);
+                    }
+                }
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                }
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
                 {
                     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                         tile, formats.math, formats.math);
                 }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                }
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -229,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
         else
@@ -264,13 +283,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 _llk_math_eltwise_sfpu_done_();
 
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
-                }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    {
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

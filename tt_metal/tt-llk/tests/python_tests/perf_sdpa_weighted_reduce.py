@@ -7,7 +7,12 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sdpa_weighted_reduce import FILL_CONSTANTS, test_sdpa_weighted_reduce
+from test_sdpa_weighted_reduce import (
+    FILL_CONSTANTS,
+)
+from test_sdpa_weighted_reduce import (
+    test_sdpa_weighted_reduce as _test_sdpa_weighted_reduce,
+)
 
 pytestmark = blackhole_only
 
@@ -27,7 +32,7 @@ pytestmark = blackhole_only
 def test_perf_sdpa_weighted_reduce(
     perf_report, formats, dest_acc, fill_constants, run_types, loop_factor, is_perf
 ):
-    test_sdpa_weighted_reduce(
+    _test_sdpa_weighted_reduce(
         formats,
         dest_acc,
         fill_constants,

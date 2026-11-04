@@ -10,7 +10,9 @@ from test_mul_reduce_scalar_chunked import (
     FORMATS,
     TILE_DIMENSIONS,
     _num_tiles_for_format,
-    test_mul_reduce_scalar_chunked,
+)
+from test_mul_reduce_scalar_chunked import (
+    test_mul_reduce_scalar_chunked as _test_mul_reduce_scalar_chunked,
 )
 
 
@@ -33,7 +35,7 @@ def test_perf_mul_reduce_scalar_chunked(
     loop_factor,
     is_perf,
 ):
-    test_mul_reduce_scalar_chunked(
+    _test_mul_reduce_scalar_chunked(
         formats,
         math_fidelity,
         num_tiles,

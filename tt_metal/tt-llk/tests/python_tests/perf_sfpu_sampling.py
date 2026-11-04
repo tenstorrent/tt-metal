@@ -6,7 +6,8 @@ from conftest import skip_for_wormhole
 from helpers.llk_params import DestAccumulation, VectorMode
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sfpu_sampling import FORMATS, SAMPLING_OPS, test_sfpu_sampling
+from test_sfpu_sampling import FORMATS, SAMPLING_OPS
+from test_sfpu_sampling import test_sfpu_sampling as _test_sfpu_sampling
 
 
 @pytest.mark.perf
@@ -21,7 +22,7 @@ from test_sfpu_sampling import FORMATS, SAMPLING_OPS, test_sfpu_sampling
 def test_perf_sfpu_sampling(
     perf_report, formats, dest_acc, op, vector_mode, run_types, loop_factor, is_perf
 ):
-    test_sfpu_sampling(
+    _test_sfpu_sampling(
         formats,
         dest_acc,
         op,

@@ -263,17 +263,16 @@ def _run(
     run() raises the compile-producer skip, so a test that builds inside the run loop never reaches
     its later variants and the consumer pass then looks for an ELF nobody produced.
     """
+    perf_config_index = 0
     if _ACTIVE_PERF is not None:
-        is_perf, perf_report, run_types, loop_factor = _ACTIVE_PERF
+        is_perf, perf_report, run_types, loop_factor, perf_config_index = _ACTIVE_PERF
     if is_perf:
-        # Later configurations exist for the golden compare. They repeat a recorded
-        # key (or a key another wrapper already emits) and are not a separate measurement.
         execute_llk(
             is_perf=True,
             perf_report=perf_report,
             run_types=run_types,
             loop_factor=loop_factor,
-            test_config_kwargs=configurations[0],
+            test_config_kwargs=configurations[perf_config_index],
         )
         raise _PerfFinished
     if len(configurations) == 1:
@@ -1713,10 +1712,25 @@ def test_generalized_moe_gate_idx_offset():
         ), f"idx_offset also wrote region {region}"
 
 
-def invoke_with_perf(fn, *args, is_perf, perf_report, run_types, loop_factor, **kwargs):
+def invoke_with_perf(
+    fn,
+    *args,
+    is_perf,
+    perf_report,
+    run_types,
+    loop_factor,
+    perf_config_index=0,
+    **kwargs,
+):
     """Run a functional test under perf, skipping golden after execute_llk."""
     global _ACTIVE_PERF
-    _ACTIVE_PERF = (is_perf, perf_report, run_types, loop_factor)
+    _ACTIVE_PERF = (
+        is_perf,
+        perf_report,
+        run_types,
+        loop_factor,
+        perf_config_index,
+    )
     try:
         fn(*args, **kwargs)
     except _PerfFinished:

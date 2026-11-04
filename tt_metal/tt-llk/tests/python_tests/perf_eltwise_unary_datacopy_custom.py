@@ -7,7 +7,9 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_eltwise_unary_datacopy_custom import test_unary_datacopy_custom
+from test_eltwise_unary_datacopy_custom import (
+    test_unary_datacopy_custom as _test_unary_datacopy_custom,
+)
 
 
 @pytest.mark.perf
@@ -20,7 +22,7 @@ from test_eltwise_unary_datacopy_custom import test_unary_datacopy_custom
 def test_perf_unary_datacopy_custom(
     perf_report, formats, dest_acc, run_types, loop_factor, is_perf
 ):
-    test_unary_datacopy_custom(
+    _test_unary_datacopy_custom(
         formats,
         dest_acc,
         is_perf=is_perf,

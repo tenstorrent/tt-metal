@@ -207,6 +207,8 @@ def _finish_add_rsqrt(
             return None, None
         res_from_L1 = outcome.result[:ELEMENTS_PER_TILE]
     else:
+        if is_perf:
+            raise ValueError("prepared TestConfig instances are functional-only")
         res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
     torch_format = format_dict[formats.output_format]
     device = torch.tensor(res_from_L1, dtype=torch_format).flatten().to(torch.float32)

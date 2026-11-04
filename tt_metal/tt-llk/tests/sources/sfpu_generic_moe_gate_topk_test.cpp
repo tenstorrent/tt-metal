@@ -288,6 +288,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(index_format);
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_INDICES_DST_TILE, L1_ADDRESS(params.buffer_Res[1]));
 
+                // The UInt16 index configuration persists in PACK. Restore the
+                // score format before the next repeated iteration.
+                _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
+                    formats.pack_src,
+                    formats.pack_dst,
+                    TILE_SIZE,
+                    FACE_R_DIM,
+                    TILE_C_DIM,
+                    TILE_NUM_FACES,
+                    false /* partial_face */,
+                    false /* narrow_tile */,
+                    1 /* num_tiles */);
+                _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+
                 if constexpr (sync_with_math)
                 {
                     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

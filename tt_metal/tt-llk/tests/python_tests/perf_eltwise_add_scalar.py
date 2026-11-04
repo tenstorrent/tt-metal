@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_eltwise_add_scalar import test_eltwise_add_scalar
+from test_eltwise_add_scalar import test_eltwise_add_scalar as _test_eltwise_add_scalar
+
+pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 
 @pytest.mark.perf
@@ -32,7 +35,7 @@ def test_perf_eltwise_add_scalar(
     loop_factor,
     is_perf,
 ):
-    test_eltwise_add_scalar(
+    _test_eltwise_add_scalar(
         formats,
         math_fidelity,
         tile_dimensions,

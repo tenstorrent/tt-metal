@@ -25,6 +25,7 @@ PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE = {
     ],
 }
 
+
 def with_functional_defaults(test_config_kwargs):
     """Copy templates and runtimes, appending the functional perf symbols when absent.
 

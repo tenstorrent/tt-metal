@@ -11,13 +11,13 @@ from test_rope import (
     TILE_SLOT_STRIDE,
     _heads,
     invoke_with_perf,
-    test_rope,
-    test_rope_fused_cos_sin,
-    test_rope_fused_dest_precision,
-    test_rope_nonzero_x_base,
-    test_rope_scale,
-    test_rope_zero_scale,
 )
+from test_rope import test_rope as _test_rope
+from test_rope import test_rope_fused_cos_sin as _test_rope_fused_cos_sin
+from test_rope import test_rope_fused_dest_precision as _test_rope_fused_dest_precision
+from test_rope import test_rope_nonzero_x_base as _test_rope_nonzero_x_base
+from test_rope import test_rope_scale as _test_rope_scale
+from test_rope import test_rope_zero_scale as _test_rope_zero_scale
 
 pytestmark = blackhole_only
 
@@ -36,7 +36,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_rope(perf_report, stride, wt, ht, run_types, loop_factor, is_perf):
     invoke_with_perf(
-        test_rope,
+        _test_rope,
         stride,
         wt,
         ht,
@@ -48,7 +48,7 @@ def test_perf_rope(perf_report, stride, wt, ht, run_types, loop_factor, is_perf)
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_rope_nonzero_x_base(perf_report, run_types, loop_factor, is_perf):
     invoke_with_perf(
-        test_rope_nonzero_x_base,
+        _test_rope_nonzero_x_base,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 
@@ -57,7 +57,7 @@ def test_perf_rope_nonzero_x_base(perf_report, run_types, loop_factor, is_perf):
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_rope_scale(perf_report, run_types, loop_factor, is_perf):
     invoke_with_perf(
-        test_rope_scale, **_perf_kwargs(perf_report, run_types, loop_factor, is_perf)
+        _test_rope_scale, **_perf_kwargs(perf_report, run_types, loop_factor, is_perf)
     )
 
 
@@ -65,7 +65,7 @@ def test_perf_rope_scale(perf_report, run_types, loop_factor, is_perf):
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_rope_zero_scale(perf_report, run_types, loop_factor, is_perf):
     invoke_with_perf(
-        test_rope_zero_scale,
+        _test_rope_zero_scale,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 
@@ -85,7 +85,7 @@ def test_perf_rope_fused_cos_sin(
     perf_report, tile_h, x_stride, per_row, scale, run_types, loop_factor, is_perf
 ):
     invoke_with_perf(
-        test_rope_fused_cos_sin,
+        _test_rope_fused_cos_sin,
         tile_h,
         x_stride,
         per_row,
@@ -114,7 +114,7 @@ def test_perf_rope_fused_dest_precision(
     perf_report, case, dest_acc, run_types, loop_factor, is_perf
 ):
     invoke_with_perf(
-        test_rope_fused_dest_precision,
+        _test_rope_fused_dest_precision,
         case,
         dest_acc,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),

@@ -5,7 +5,8 @@ import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_unpack_A_custom import UNPACK_A_CUSTOM_FORMATS, test_unpack_A_custom
+from test_unpack_A_custom import UNPACK_A_CUSTOM_FORMATS
+from test_unpack_A_custom import test_unpack_A_custom as _test_unpack_A_custom
 
 
 @pytest.mark.perf
@@ -19,7 +20,7 @@ from test_unpack_A_custom import UNPACK_A_CUSTOM_FORMATS, test_unpack_A_custom
 def test_perf_unpack_A_custom(
     perf_report, formats, input_dimensions, run_types, loop_factor, is_perf
 ):
-    test_unpack_A_custom(
+    _test_unpack_A_custom(
         formats,
         input_dimensions,
         is_perf=is_perf,

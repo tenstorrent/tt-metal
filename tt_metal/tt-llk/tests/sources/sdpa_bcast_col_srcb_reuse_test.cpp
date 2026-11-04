@@ -138,14 +138,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // 8 rows of the next 32x32 DEST tile, into SrcB rows 8-15).
         _llk_unpack_A_init_<BroadcastType::NONE>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-        _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
-        _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[1]), formats.unpack_A_src, formats.unpack_A_dst);
-
-        // Step 2: SDPA SrcA-only unpack init programs the MOP; the base unpack_A execute then streams the operand tiles
-        // into SrcA. set_srcb_dummy_valid injects the stall + SrcB SET_DVALID (no real data) that the math preamble
-        // STALLWAIT(SRCB_VLD) waits on before it MOVD2Bs DEST into SrcB.
-        _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
-            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, params.in0_face_r_dim, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -158,6 +150,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // One dummy SrcB for the preamble MOVD2B, then 2 * NUM_TILES * num_faces SrcA (MOP runs twice, CLR_A per face).
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _perf_unpack_loop_set_valid<true, true>(num_faces);
+                _perf_unpack_loop_set_valid<true, true>(num_faces);
                 _perf_unpack_set_valid(ckernel::SrcB);
                 _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(2 * NUM_TILES * num_faces);
             }
@@ -166,6 +160,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                _llk_unpack_A_init_<BroadcastType::NONE>(
+                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[1]), formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
+                    0 /* transpose_of_faces */,
+                    0 /* within_face_16x16_transpose */,
+                    params.in0_face_r_dim,
+                    num_faces,
+                    formats.unpack_A_src,
+                    formats.unpack_A_dst);
                 // The dummy SrcB valid MUST be issued BEFORE the operand unpacks, matching the demo call order
                 // (sdpa.h: sdpa_bcast_col_reuse_preamble() runs before sdpa_bcast_col_reuse_tiles()). Its leading
                 // STALLWAIT(STALL_UNPACK, UNPACK) drains the unpacker, and the two operand unpacks below fill both
@@ -224,21 +229,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_wait_for_dest_available_<DST_SYNC>();
-
         // Step 1: copy the two column sources (unpacked into SrcA by unpack step 1) into DEST[SRC_INDEX] and
         // DEST[SRC_INDEX + 1]. The preamble's four MOVD2Bs read DEST rows 0-7 and 64-71, i.e. the first 8 rows
         // of each of these two 32x32 DEST tiles, into SrcB rows 0-7 (P1) and 8-15 (P2).
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, tensor_shape);
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, tensor_shape);
-
         // Step 2: SDPA column-broadcast SrcB-reuse eltwise.
         //   init      -> program addr_mods + the SRCB_BCAST_COL eltwise MOP for SDPA_OP.
         //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
         //   execute   -> DEST[DST_INDEX] = SrcA(operand) op broadcast_col(scale), accumulated over the two passes.
         //   postamble -> SETRWC CLR_B (release the reused SrcB).
-        _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces);
         PROFILER_SYNC();
     }
     {
@@ -250,14 +248,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(2 * NUM_TILES * num_faces);
+                _perf_math_loop_clear_valid<true, true>(num_faces);
+                _perf_math_loop_clear_valid<true, true>(num_faces);
                 _perf_math_clear_valid(ckernel::SrcB);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(2 * NUM_TILES * num_faces);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, tensor_shape);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, tensor_shape);
+                _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces);
                 _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
                 _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
                 _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();

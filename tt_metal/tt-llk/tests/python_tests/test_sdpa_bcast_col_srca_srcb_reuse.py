@@ -188,3 +188,12 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+def test_sdpa_bcast_col_srca_srcb_reuse_repeat_state():
+    test_sdpa_bcast_col_srca_srcb_reuse(
+        SDPA_FORMATS[0],
+        MathFidelity.LoFi,
+        False,
+        loop_factor=2,
+    )

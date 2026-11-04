@@ -53,9 +53,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, VectorMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.blaze import execute_llk, with_functional_defaults
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     SAMPLING_OP,
@@ -435,30 +434,28 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
         VECTOR_MODE(vector_mode=VectorMode.None_),
         SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
     ]
-    configuration = TestConfig(
-        **with_functional_defaults(
-            dict(
-                test_name="sources/sfpu_sampling_test.cpp",
-                formats=formats,
-                templates=hazard_params,
-                runtimes=[LOOP_FACTOR(1)],
-                variant_stimuli=StimuliConfig(
-                    src_A,
-                    formats.input_format,
-                    src_B,
-                    formats.input_format,
-                    formats.output_format,
-                    tile_count_A=NUM_TILES,
-                    tile_count_B=1,
-                    tile_count_res=NUM_TILES,
-                ),
-                dest_acc=dest_acc,
-                unpack_to_dest=formats.input_format.is_32_bit(),
-            )
+    outcome = execute_llk(
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_sampling_test.cpp",
+            formats=formats,
+            templates=hazard_params,
+            runtimes=[LOOP_FACTOR(1)],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=NUM_TILES,
+                tile_count_B=1,
+                tile_count_res=NUM_TILES,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         )
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     out_face = untilize_block(
         res_tensor[:ELEMENTS_PER_TILE],

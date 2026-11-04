@@ -10,8 +10,8 @@ from test_sum_reduce_scalar import (
     FORMATS,
     TILE_DIMENSIONS,
     _num_tiles_for_format,
-    test_sum_reduce_scalar,
 )
+from test_sum_reduce_scalar import test_sum_reduce_scalar as _test_sum_reduce_scalar
 
 
 @blackhole_only
@@ -33,7 +33,7 @@ def test_perf_sum_reduce_scalar(
     loop_factor,
     is_perf,
 ):
-    test_sum_reduce_scalar(
+    _test_sum_reduce_scalar(
         formats,
         math_fidelity,
         num_tiles,

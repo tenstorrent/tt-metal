@@ -69,6 +69,50 @@ constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 constexpr auto GATE_UNPACK_TRANSPOSE =
     (GMG_MODE == MODE_GATE) ? (GMG_TRANSPOSE_OF_FACES ? ckernel::Transpose::Both : ckernel::Transpose::IntraFace) : ckernel::Transpose::None;
 
+static inline void gmg_perf_unpack_datacopy_mock(const std::uint32_t num_faces)
+{
+    _perf_unpack_loop_set_valid<true, true>(num_faces);
+}
+
+static inline void gmg_perf_unpack_mock(const std::uint32_t loop_factor, const std::uint32_t num_faces)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t section = 0; section < GMG_SECTIONS; ++section)
+        {
+            if constexpr (GMG_MODE == MODE_GATE)
+            {
+                gmg_perf_unpack_datacopy_mock(num_faces); // id datacopy
+                if constexpr (GMG_SIGMOID)
+                {
+                    gmg_perf_unpack_datacopy_mock(num_faces); // transposed score datacopy
+                }
+                _perf_unpack_loop_set_valid<true, true>(num_faces); // binary inputs
+            }
+            else if constexpr (GMG_MODE == MODE_BINARY)
+            {
+                gmg_perf_unpack_datacopy_mock(num_faces); // score seed
+                gmg_perf_unpack_datacopy_mock(num_faces); // key seed
+                _perf_unpack_loop_set_valid<true, true>(num_faces);
+            }
+            else
+            {
+                for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+                {
+                    gmg_perf_unpack_datacopy_mock(num_faces);
+                }
+            }
+
+            if constexpr (GMG_MODE != MODE_BINARY)
+            {
+                // Match _llk_unpack_set_srcb_dummy_valid_: SrcB then SrcA.
+                _perf_unpack_set_valid(ckernel::SrcB);
+                _perf_unpack_set_valid(ckernel::SrcA);
+            }
+        }
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -89,6 +133,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            gmg_perf_unpack_mock(LOOP_FACTOR, params.num_faces);
         }
         else
         {
@@ -277,6 +325,45 @@ static inline void gmg_sanitize_scratch()
         }
         v_endif;
         sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>() = v;
+    }
+}
+
+static inline void gmg_perf_math_drain(const std::uint32_t loop_factor, const std::uint32_t num_faces)
+{
+    const auto drain_datacopy = [num_faces]() { _perf_math_loop_clear_valid<true, true>(num_faces); };
+
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t section = 0; section < GMG_SECTIONS; ++section)
+        {
+            if constexpr (GMG_MODE == MODE_GATE)
+            {
+                drain_datacopy(); // id datacopy
+                if constexpr (GMG_SIGMOID)
+                {
+                    drain_datacopy(); // transposed score datacopy
+                }
+                _perf_math_loop_clear_valid<true, true>(num_faces); // binary inputs
+            }
+            else if constexpr (GMG_MODE == MODE_BINARY)
+            {
+                drain_datacopy(); // score seed
+                drain_datacopy(); // key seed
+                _perf_math_loop_clear_valid<true, true>(num_faces);
+            }
+            else
+            {
+                for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+                {
+                    drain_datacopy();
+                }
+            }
+
+            if constexpr (GMG_MODE != MODE_BINARY)
+            {
+                _perf_math_loop_clear_valid<true, true>(1); // dummy transpose inputs
+            }
+        }
     }
 }
 
@@ -473,6 +560,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            gmg_perf_math_drain(LOOP_FACTOR, params.num_faces);
         }
         else
         {
