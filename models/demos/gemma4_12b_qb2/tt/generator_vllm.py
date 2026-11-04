@@ -478,6 +478,9 @@ class Gemma4_12BQB2ForCausalLM:
                     {"k": "p", "t0": t0, "t1": t1, "rows": [list(r) for r in zip(starts, ends, slots)], "dev": False}
                 )
             self._report()
+            # vLLM samples these logits itself and does not apply generation_config.suppress_tokens (its GPU Gemma 4
+            # masks them in compute_logits): mask <image|> / <audio|> here as the device sampler does
+            out[..., g.suppress_ids] = float("-inf")
             return out
         out = g.prefill_forward(
             toks,
@@ -560,6 +563,7 @@ class Gemma4_12BQB2ForCausalLM:
                 t1 = time.perf_counter()
                 self.timeline.add({"k": "d", "i": step, "t0": t0, "t1": t1, "b": rows, "pos": active_pos, "host": True})
                 self.timeline.add({"k": "c", "i": step, "t": t1})
+            logits[..., g.suppress_ids] = float("-inf")  # suppress_tokens, as in the prefill host path
             return logits[:, None, :]
         if reload_sampling_params:
             g.set_sampling_params(self._params(sampling_params, rows), rows, reseed=False)
