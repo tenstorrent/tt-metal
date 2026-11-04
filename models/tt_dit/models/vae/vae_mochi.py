@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -1305,4 +1306,11 @@ class MochiVAEDecoderAdapter:
         tt_latents = self._decoder.prepare_input(latents)
         forward = self._tracer if traced else self._decoder.forward
         tt_output = forward(tt_latents)
-        return self._decoder.postprocess_output(tt_output, latents.shape)
+        video = self._decoder.postprocess_output(tt_output, latents.shape)
+
+        # Match AutoencoderKLMochi._decode (drop_last_temporal_frames=True): drop the first
+        # temporal_compression_ratio - 1 causal warm-up frames, giving (T - 1) * ratio + 1 frames.
+        ratio = math.prod(self._decoder.temporal_expansions)
+        if video.shape[2] >= ratio:
+            video = video[:, :, ratio - 1 :]
+        return video
