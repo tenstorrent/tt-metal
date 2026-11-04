@@ -51,7 +51,7 @@ jobs:
             # Kernel builds include headers from across the tree (tt_metal/hw,
             # hostdevcommon, ttnn), so copy the whole checkout minus .git to the
             # guest's local disk and time it: the copy-in cost for torrentci#2327.
-            - mkdir -p /tmp/ws && time tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
+            - mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
             - du -sh /tmp/ws
             - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: group-1
