@@ -402,6 +402,25 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
     }
 }
 
+TEST_F(MeshTensorTest2x4, CombineOneDeviceTensorTakesTheRequestedShardLabel) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor device_tensor = tt::tt_metal::to_device(
+        Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec), mesh_device_.get());
+    const auto label = device_tensor.tensor_topology();
+    auto device_tensors = get_device_tensors(device_tensor);
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    // A device tensor carries a one-device label of its own: the combined tensor takes the label combine asks for, and
+    // the mesh tensor the device tensor was taken from keeps its own.
+    auto combined = combine_device_tensors(std::vector<Tensor>{device_tensors[1]}, /*shard_dim=*/3);
+
+    EXPECT_EQ(
+        combined.tensor_topology(), tt::tt_metal::TensorTopology::create_sharded_tensor_topology(MeshShape(1), 3));
+    EXPECT_EQ(device_tensor.tensor_topology(), label);
+}
+
 TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
     ttnn::DeviceStorage storage;
 
