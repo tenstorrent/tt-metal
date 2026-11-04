@@ -198,7 +198,12 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
     assert step_us > 0
-    prompt = os.environ.get("GLM53_MK_PROMPT", "")
+    prompt = os.environ.get(
+        "GLM53_MK_PROMPT", ""
+    )  # the text, or @path of a file holding it (launchers split on spaces)
+    if prompt.startswith("@"):
+        with open(prompt[1:]) as f:
+            prompt = f.read().strip()
     if prompt:  # coherence: the chat prompt fed token by token on every slot (fresh state), then greedy decode
         from models.autoports.zai_org_glm_5_3_flash.tt.tokenizer_chat import load_tokenizer
 
