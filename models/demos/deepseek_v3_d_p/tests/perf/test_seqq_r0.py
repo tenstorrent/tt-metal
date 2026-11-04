@@ -281,26 +281,19 @@ def test_seqq_r0(mesh_device, variant, config_only):
         g_q = torch.rand(Q_LORA) + 0.5
         tw_qa = mk(mesh, w_qa, ttnn.bfloat8_b, dims=(None, 0))
         tg_q = mk(mesh, g_q.reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
-        qa_cfg = glm_cfg("q_a_proj")
         qb_act = glm_cfg("q_b_proj")["act_mem_config"]
         buf_q = tt_ccl.get_mla_high_bw_all_gather_buffer(
             name="q_a_latent", shape=[1, 1, S, Q_LORA], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
-        def qa_mm():
-            return ttnn.linear(
-                x_l1,
-                tw_qa,
-                program_config=qa_cfg["program_config"],
-                memory_config=qa_cfg["out_mem_config"],
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=hifi2,
+        # q_a runs fused with its TP reduce-scatter, as in the model (#63488 removed the q_a_proj matmul config).
+        def qa_mm_rs(scatter_dim, mem=DRAM):
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                x_l1, tw_qa, cluster_axis=1, scatter_dim=scatter_dim, topology=topo, num_links=2, memory_config=mem
             )
 
         def base_q(partition=False):
-            q = qa_mm()
-            q2 = rs(q)
-            ttnn.deallocate(q)
+            q2 = qa_mm_rs(-1)
             q3 = hbag(q2, buf_q)
             ttnn.deallocate(q2)
             qn = ttnn.rms_norm(q3, weight=tg_q, epsilon=EPS, memory_config=qb_act, compute_kernel_config=hifi2)
@@ -311,9 +304,7 @@ def test_seqq_r0(mesh_device, variant, config_only):
             return ql
 
         def seq_q(norm_mem=DRAM, rs_mem=DRAM):
-            q = qa_mm()
-            q2 = rs(q, dim=2, mem=rs_mem)
-            ttnn.deallocate(q)
+            q2 = qa_mm_rs(-2, rs_mem)
             qn = ttnn.rms_norm(q2, weight=tg_q, epsilon=EPS, memory_config=norm_mem, compute_kernel_config=hifi2)
             ttnn.deallocate(q2)
             return qn
@@ -329,12 +320,12 @@ def test_seqq_r0(mesh_device, variant, config_only):
                 log(f"FAIL A seq_q[{tag}]: {type(e).__name__}: {str(e)[:400]}")
                 traceback.print_exc()
         _free(ref)
-        timer("A0 base q_a stem (mm,RS3,AG,norm640)", base_q)
+        timer("A0 base q_a stem (mm+RS3,AG,norm640)", base_q)
         timer("A1 base q_a stem + mesh_partition", lambda: base_q(True))
-        timer("A2 seq q_a stem (mm,RS2,norm160) dram", seq_q)
+        timer("A2 seq q_a stem (mm+RS2,norm160) dram", seq_q)
         timer("A3 seq q_a stem norm->L1", lambda: seq_q(norm_mem=L1))
         timer("A4 seq q_a stem RS->L1 norm->L1", lambda: seq_q(rs_mem=L1, norm_mem=L1))
-        q_mm = qa_mm()
+        q_mm = ttnn.linear(x_l1, tw_qa, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
         timer("A5 RS dim3 [640,2048]", lambda: rs(q_mm))
         timer("A6 RS dim2 [640,2048]", lambda: rs(q_mm, dim=2))
         _free([q_mm, x_l1, tw_qa])
@@ -566,7 +557,7 @@ def test_seqq_r0(mesh_device, variant, config_only):
 
     # ======================= O. output chain =======================
     if want("o"):
-        b2_cfg, o_cfg = glm_cfg("wkv_b2"), glm_cfg("o_proj")
+        b2_cfg = glm_cfg("wkv_b2")
         attn_full = torch.randn(1, NH, S * SP, KV_LORA)
         attn_sp = mk(mesh, attn_full, dims=(2, None))
         attn_tile = ttnn.mesh_partition(attn_sp, dim=2, cluster_axis=1)  # [1,64,160,512] rows of TP quarter
@@ -587,18 +578,10 @@ def test_seqq_r0(mesh_device, variant, config_only):
             per_core_N=8,
         )
 
-        def oproj_rs(v):
-            o = ttnn.linear(
-                v,
-                tw_o,
-                program_config=o_cfg["program_config"],
-                memory_config=o_cfg["out_mem_config"],
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=hifi2,
+        def oproj_rs(v):  # fused o_proj + TP reduce-scatter, as in the model's _o_proj_epilogue
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                v, tw_o, cluster_axis=1, scatter_dim=-1, topology=topo, num_links=2
             )
-            out = rs(o)
-            ttnn.deallocate(o)
-            return out
 
         def base_out(full=True):
             t = ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT)
