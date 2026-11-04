@@ -305,7 +305,6 @@ jobs:
           EXTRA_ARGS: ${{ matrix.extra_args }}
           MODEL_ENV_JSON: ${{ matrix.env_json }}
           SKU: ${{ needs.validate-inputs.outputs.sku }}
-          WEIGHTS_MODE: ${{ needs.validate-inputs.outputs.weights-cache-mode }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
@@ -331,9 +330,9 @@ jobs:
                 echo "::error::local HF_MODEL path not found: $HF_MODEL"
                 exit 1
               fi
-            elif [[ "$WEIGHTS_MODE" == "lfc" ]]; then
-              # CIv2: model code fetches from the large-file cache itself (TT_GH_CI_INFRA) and
-              # ignores the HF cache, so a download here would be wasted.
+            elif [[ -n "${TT_GH_CI_INFRA+set}" ]]; then
+              # CIv2 runners, with or without a weights-cache-mode: model code sees TT_GH_CI_INFRA
+              # (conftest.is_ci_v2_env), fetches from the large-file cache and ignores the HF cache.
               echo "CIv2: $HF_MODEL comes from the large-file cache; it fails there if the cache lacks it"
             elif [[ "$HF_HUB_OFFLINE" == "0" ]]; then
               # Model code passes local_files_only=True whenever CI=true, so it never downloads
