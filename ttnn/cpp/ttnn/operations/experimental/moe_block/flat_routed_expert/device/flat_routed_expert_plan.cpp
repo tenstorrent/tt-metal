@@ -31,7 +31,9 @@ namespace plan_detail {
 using Core = tt::tt_metal::CoreCoord;
 
 constexpr uint32_t MT_MAX = 4;
-constexpr uint32_t D_CHAINS = 7;
+// the down cores' h chains: 4 on every shape (flat us at Galaxy loads: GLM-5.3 4 / 7 / 10 chains 533.2 / 532.0 / 531.2,
+// K3 3 / 4 / 7 1294.1 / 1294.1 / 1294.3, V4.1-Flash 4 / 7 634.6 / 639.0)
+constexpr uint32_t D_CHAINS = 4;
 constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
 uint32_t al(uint32_t b) { return (b + 2047) / 2048 * 2048; }
@@ -256,7 +258,7 @@ FlatRoutedExpertPlan make_plan(
     p.hpc = p.nu ? (p.nu + 1) / 2 : p.np;
     p.ngrp = p.nu ? 2 * p.It / p.nu : p.It / p.np;
     // A split of fewer gate/up cores than the fixed rectangles' 64 (V4.1-Flash: 48), or units not exactly 64: shape the
-    // rectangles to the split, so the cells left over do down work (the down cores are trimmed below)
+    // rectangles to the split, so the cells left over do down work
     const bool auto_shape = p.ngrp < 64 || (p.nu && p.ngrp != 64);
     if (auto_shape) {  // rectangles of exactly the split's cores (aw columns x hA + bw columns x hB)
         const uint32_t aw_max = east0 - a_x0, bw_cap = std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0);
@@ -442,33 +444,17 @@ FlatRoutedExpertPlan make_plan(
     TT_FATAL(p.ngrp % p.n_rd_sg == 0 && p.r_ <= 4u, "flat_routed_expert: gate/up pair-sets per reader");
     // gate/up weight ring: 2 expert slices (with pinning: the pinned expert's and one cycling)
     p.ring_g = 2 * p.nk_gu;
-    // 16-column units (40 down cores on V4.1-Flash): 4 chains. Each gate/up core writes its h slice to every chain
-    // head, the chains forward it; at E 24 M 1024 bfp8 h 3 / 4 / 5 / 7 / 10 chains: 211.7 / 211.6 / 213.4 / 226.6 /
-    // 236.1 us per expert (h writes off: 210.3), M 80 / 256 flat
-    p.d_ch = p.nu ? 4 : D_CHAINS;
+    // each gate/up core writes its h slice to every chain head, the chains forward it
+    p.d_ch = D_CHAINS;
     p.rem_cols = p.Ht;
     // even split: the output tile columns over at most 32 down cores, the fewest cores with the fewest columns a core
-    // (GLM-5.3 / M3 32 x 6, K2.7 32 x 7, GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5, K3 28 x 4); the rest of the cells are
-    // left to the combine
-    {
-        // with shaped rectangles, down cores under the east rectangle (its columns, below it) are slow (far from the
-        // h relays, in the east gate/up's traffic): drop them, then keep the fewest cores with the same most tile
-        // columns per core (K3 at M 2048, us per expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400, 34
-        // / 42 into columns 8+ 443 / 408)
-        const uint32_t east_x0 = b_x0 - (east0 - 6);
-        std::vector<Core> kept;
-        for (const auto& c : p.down) {
-            if (!auto_shape || c.x < east_x0) {
-                kept.push_back(c);
-            }
-        }
-        if (!kept.empty()) {
-            const uint32_t n = std::min<uint32_t>(32u, kept.size());
-            const uint32_t per = (p.rem_cols + n - 1) / n;
-            kept.resize(std::min<size_t>(kept.size(), (p.rem_cols + per - 1) / per));
-            p.down = kept;
-            ND = p.down.size();
-        }
+    // (GLM-5.3 / M3 32 x 6, K2.7 32 x 7, GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5, K3 28 x 4; K3 at M 2048, us per
+    // expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400); the rest of the cells are left to the combine
+    if (!p.down.empty()) {
+        const uint32_t n = std::min<uint32_t>(32u, p.down.size());
+        const uint32_t per = (p.rem_cols + n - 1) / n;
+        p.down.resize(std::min<size_t>(p.down.size(), (p.rem_cols + per - 1) / per));
+        ND = p.down.size();
     }
     if (ND > p.rem_cols) {
         // more down cores than output tile columns (small H on a wide grid): keep the first rem_cols (ordered nearest
