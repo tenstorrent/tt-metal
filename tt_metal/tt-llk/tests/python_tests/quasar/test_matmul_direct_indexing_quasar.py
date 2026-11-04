@@ -4,12 +4,11 @@
 import pytest
 from helpers.constraints import get_valid_math_fidelities
 from helpers.llk_params import DestSync, PerfRunType
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
     NON_MX_MATMUL_FORMATS,
     matmul_dest_acc_modes,
-    matmul_dest_sync_modes,
     matmul_tile_dimensions,
     matmul_transpose_modes,
 )
@@ -38,7 +37,7 @@ def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=NON_MX_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
     register_format_hint=[None],
