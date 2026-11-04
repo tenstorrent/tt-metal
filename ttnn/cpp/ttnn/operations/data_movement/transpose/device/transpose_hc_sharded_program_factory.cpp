@@ -83,8 +83,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded_special_case(
-    const Tensor& input_tensor, const std::vector<CoreCoord>& shard_cores) {
-    const uint32_t num_cores = shard_cores.size();
+    const Tensor& input_tensor, const std::vector<CoreCoord>& shard_noc_cores) {
+    const uint32_t num_cores = shard_noc_cores.size();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -93,8 +93,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
 
-    MeshDevice* device = input_tensor.device();
-
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
     uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
@@ -102,8 +100,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     const uint32_t num_sticks_per_core = shard_height;
 
-    // Scratch buffers reused by every core: each stick contributes at most one entry, and entries are dropped only
-    // for out-of-grid workers, so num_sticks_per_core covers the worst case for the whole loop.
+    // Scratch buffers reused by every core: each stick contributes one entry, so num_sticks_per_core sizes them.
     std::vector<uint32_t> stick_ids_per_core;
     std::vector<uint32_t> read_cores_indices;
     std::vector<uint32_t> read_cores_noc_x;
@@ -149,14 +146,17 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             uint32_t shard_id = stick_id / num_sticks_per_core;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core);
 
-            if (shard_id < num_cores) {
-                auto core_physical = device->worker_core_from_logical_core(shard_cores[shard_id]);
-
-                read_cores_indices.push_back(shard_id);
-                read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
-                read_cores_noc_x.push_back(core_physical.x);
-                read_cores_noc_y.push_back(core_physical.y);
-            }
+            // Every core here holds a shard, so its sticks all come from the tensor's shards.
+            TT_FATAL(
+                shard_id < num_cores,
+                "Stick {} is in shard {}, but the tensor has {} shards",
+                stick_id,
+                shard_id,
+                num_cores);
+            read_cores_indices.push_back(shard_id);
+            read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
+            read_cores_noc_x.push_back(shard_noc_cores[shard_id].x);
+            read_cores_noc_y.push_back(shard_noc_cores[shard_id].y);
         }
 
         non_repeat_stick_offset_values.clear();
@@ -312,7 +312,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     bool is_special_case = hc_rm_sharded_is_special_case(shard_height, H, C);
 
     auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = shard_spec.num_cores();
+    // The grid can have more cores than the tensor has shards. Only the cores that hold a shard run the kernels:
+    // the others would read sticks past the end of the tensor.
+    const auto& padded_shape = input_tensor.padded_shape();
+    const uint64_t num_sticks = uint64_t{padded_shape[0]} * padded_shape[1] * padded_shape[2];
+    const uint32_t num_cores =
+        std::min<uint64_t>(shard_spec.num_cores(), (num_sticks + shard_height - 1) / shard_height);
 
     log_debug(tt::LogOp, "all_cores: {}", all_cores);
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
@@ -320,6 +325,14 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     // Shard i lives on shard_cores[i]: the grid's own cores in shard order, which need not start at
     // core (0, 0) or form one rectangle.
     const std::vector<CoreCoord> shard_cores = corerange_to_cores(all_cores, num_cores, row_major_orientation);
+    const CoreRangeSet worker_cores =
+        num_cores == shard_spec.num_cores() ? all_cores : CoreRangeSet(ttsl::Span<const CoreCoord>(shard_cores));
+    // The NoC coordinates of shard i's core. Both paths read every shard through this one table.
+    std::vector<CoreCoord> shard_noc_cores;
+    shard_noc_cores.reserve(num_cores);
+    for (const CoreCoord& core : shard_cores) {
+        shard_noc_cores.push_back(input_tensor.device()->worker_core_from_logical_core(core));
+    }
 
     ProgramSpec spec{.name = "transpose_hc_sharded"};
 
@@ -350,7 +363,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     // are empty, matching the legacy `KernelHandle writer_kernel_id{}` behavior).
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> all_runtime_args;
     if (is_special_case) {
-        all_runtime_args = get_runtime_args_hc_rm_sharded_special_case(input_tensor, shard_cores);
+        all_runtime_args = get_runtime_args_hc_rm_sharded_special_case(input_tensor, shard_noc_cores);
     } else {
         all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores);
     }
@@ -472,7 +485,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     spec.work_units.push_back(WorkUnitSpec{
         .name = "main",
         .kernels = is_special_case ? Group<KernelSpecName>{READER, WRITER} : Group<KernelSpecName>{READER},
-        .target_nodes = all_cores,
+        .target_nodes = worker_cores,
     });
 
     // ---- run args ----
@@ -528,13 +541,11 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     }
 
     if (!is_special_case) {
-        MeshDevice* device = input_tensor.device();
         auto& shard_noc_xy = reader_run_args.advanced_options.common_runtime_varargs;
         shard_noc_xy.resize(2 * num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
-            const CoreCoord physical_core = device->worker_core_from_logical_core(shard_cores[i]);
-            shard_noc_xy[i] = physical_core.x;
-            shard_noc_xy[num_cores + i] = physical_core.y;
+            shard_noc_xy[i] = shard_noc_cores[i].x;
+            shard_noc_xy[num_cores + i] = shard_noc_cores[i].y;
         }
     }
 
