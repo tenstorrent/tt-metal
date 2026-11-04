@@ -22,9 +22,9 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import (
     ATTENTION_CI_GRIDS,
-    MAX_REL_L2,
     assert_close,
     grid_name,
+    max_rel_l2,
     parametrize_vision_grids,
     rows_to_device,
     to_host,
@@ -47,4 +47,6 @@ def test_vision_attention_vs_ref(mesh_device, device_params, grid_thw, vision_re
     cos_tt, sin_tt = rope_tensors(mesh_device, acts["grid_thw"], config, padded_head_dim)
     out = to_host(tt_attn(rows_to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
 
-    assert_close(f"attention {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, MAX_REL_L2["attention"])
+    assert_close(
+        f"attention {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, max_rel_l2("attention", grid_thw)
+    )

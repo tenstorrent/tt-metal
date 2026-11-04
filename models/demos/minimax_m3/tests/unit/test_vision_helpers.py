@@ -13,7 +13,15 @@ from __future__ import annotations
 
 import torch
 
-from .vision_helpers import ATTENTION_CI_GRIDS, CI_GRIDS, VISION_GRIDS, check_close, parametrize_vision_grids
+from .vision_helpers import (
+    ATTENTION_CI_GRIDS,
+    CI_GRIDS,
+    MAX_REL_L2_AT_GRID,
+    VISION_GRIDS,
+    check_close,
+    max_rel_l2,
+    parametrize_vision_grids,
+)
 
 MAX_REL_L2 = 0.004  # a bound of the size of the tightest ones in vision_helpers.MAX_REL_L2
 
@@ -55,3 +63,12 @@ def test_vision_parametrize_rejects_unknown_grid(expect_error):
         parametrize_vision_grids(ci_grids)
     with expect_error(ValueError, r"grid ids \['h40w45'\] of ci_grids are not in VISION_GRIDS"):
         parametrize_vision_grids(("h16w16", "h40w45"))
+
+
+def test_vision_max_rel_l2_at_grid():
+    """Each per-grid bound names a grid of VISION_GRIDS and a check, loosens that check's bound, and only at its grid."""
+    for (check, grid), bound in MAX_REL_L2_AT_GRID.items():
+        others = [thw for name, thw in VISION_GRIDS.items() if (check, name) not in MAX_REL_L2_AT_GRID]
+        default = max_rel_l2(check, others[0])  # KeyError for a check that MAX_REL_L2 lacks
+        assert max_rel_l2(check, VISION_GRIDS[grid]) == bound > default, (check, grid)
+        assert all(max_rel_l2(check, thw) == default for thw in others), (check, grid)
