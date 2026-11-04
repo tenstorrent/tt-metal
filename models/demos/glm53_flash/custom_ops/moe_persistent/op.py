@@ -35,6 +35,27 @@ def _with_defines(k: ttnn.KernelDescriptor, extra: list[tuple[str, str]]) -> ttn
     return k
 
 
+def persistent_fused_groups(device, E_loc: int, I_loc: int, H: int, *, down_readers=None, cap: int = 12) -> int:
+    """The fused expert op's gate|up group count that leaves the persistent block its cores: the largest choice
+    (today's cap of 12) whose placement keeps ``1 + the gather's chunks`` cores free on this device's grid
+    (12x10 at E_loc = 72, H = 4096: 11 groups = 88 + 16 cores, 16 free; 12 would leave 8 for the 10 needed)."""
+    from models.demos.glm53_flash.custom_ops.expert_stream.plan import fused_core_plan, fused_group_choices
+
+    grid = device.compute_with_storage_grid_size()
+    banks = device.dram_grid_size().x
+    need = 1 + -(-H // (TILE * CT_MAX)) + -(-E_loc // (TILE * CT_MAX))
+    for g in sorted(fused_group_choices(E_loc), reverse=True):
+        if g > cap:
+            continue
+        try:
+            plan = fused_core_plan((grid.x, grid.y), E_loc, I_loc, H, banks=banks, groups=g, down_readers=down_readers)
+        except AssertionError:
+            continue
+        if grid.x * grid.y - plan["gate_up_cores"] - plan["down_cores"] >= need:
+            return g
+    raise ValueError(f"no fused group count leaves {need} cores on {grid.x}x{grid.y} (E_loc {E_loc}, H {H})")
+
+
 class MoePersistent:
     """``experts``: the model's ``ExpertStreamFused`` (its placement decides the free cores); ``T`` users per row;
     ``H`` the hidden width, ``E`` the routing width (the full routing matrix: ``routing_fold``)."""

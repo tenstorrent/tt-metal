@@ -1238,11 +1238,21 @@ class TtRoutedExperts(LightweightModule):
             routing_fold=self.stream_fold,
             scan_words=self.stream_scan_words,
             fused=self.stream_fused,
-            fused_groups=int(os.environ["GLM53_STREAM_FUSED_GROUPS"])
-            if os.environ.get("GLM53_STREAM_FUSED_GROUPS")
-            else None,
+            fused_groups=self._fused_groups(down_readers),
             fused_down_readers=down_readers,
         )
+
+    def _fused_groups(self, down_readers):
+        """``GLM53_STREAM_FUSED_GROUPS`` when set; else the persistent MoE block (``GLM53_MOE_PERSIST=1``) takes
+        the largest group count whose placement leaves its exchange cores free (``persistent_fused_groups``); else
+        the fused plan's own choice."""
+        if os.environ.get("GLM53_STREAM_FUSED_GROUPS"):
+            return int(os.environ["GLM53_STREAM_FUSED_GROUPS"])
+        if os.environ.get("GLM53_MOE_PERSIST", "0") != "1":
+            return None
+        from models.demos.glm53_flash.custom_ops.moe_persistent.op import persistent_fused_groups
+
+        return persistent_fused_groups(self.mesh.device, self.E_local, self.I_local, self.H, down_readers=down_readers)
 
     def _init_regions_source(self):
         """The regions lists (``_build_dispatch_path``) as a ``RegionsSource`` for the REGIONS_SRC stream / dispatch
