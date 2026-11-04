@@ -1097,7 +1097,7 @@ FORCE_INLINE void update_telemetry(
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
     if constexpr (FABRIC_TELEMETRY_ROUTER_STATE) {
         const auto* routing_table_l1 =
-            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
         auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
         fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = state_manager_l1->state;
     }
@@ -1837,11 +1837,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
-    auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
+    auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(router_l1(MEM_AERISC_FABRIC_TELEMETRY_BASE));
 
     // Read the routing table in place
     const auto& routing_table =
-        *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table.state_manager);
 
     // Keep hot routing coordinates in address-untaken scalars so they remain in registers across the
@@ -2663,11 +2663,12 @@ __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sende
 // This must be called early in kernel_main to ensure telemetry is properly initialized
 void initialize_fabric_telemetry() {
     // Get pointer to telemetry structure in L1
-    volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
-        reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+    volatile tt_l1_ptr FabricTelemetry* fabric_telemetry = reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+        router_l1(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR));
 
     // Get pointer to routing table, which contains some information we need to re-export
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const auto* routing_table_l1 =
+        reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
 
     // Zero the entire telemetry structure to clear any garbage values
     memset(const_cast<FabricTelemetry*>(fabric_telemetry), 0, sizeof(FabricTelemetry));
@@ -2709,7 +2710,8 @@ void kernel_main() {
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const auto* routing_table_l1 =
+        reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     state_manager_l1->state = RouterState::INITIALIZING;
 
@@ -2816,12 +2818,12 @@ void kernel_main() {
     // Read the fixed maximum sender-channel connection semaphore array.
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
+        local_sender_channel_connection_semaphore_addrs[i] = router_l1(get_arg_val<uint32_t>(arg_idx++));
     }
     // Read the fixed maximum sender-channel connection buffer-index array.
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_connection_buffer_index_ids[i] = get_arg_val<uint32_t>(arg_idx++);
+        local_sender_channel_connection_buffer_index_ids[i] = router_l1(get_arg_val<uint32_t>(arg_idx++));
     }
 
     // downstream EDM VC0 connection info
@@ -3322,7 +3324,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
             volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
                 reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
-                    eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+                    router_l1(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR));
             fabric_telemetry->static_info.neighbor_mesh_id = handshake_info->neighbor_mesh_id;
             fabric_telemetry->static_info.neighbor_device_id = handshake_info->neighbor_device_id;
         }
@@ -3502,7 +3504,7 @@ void kernel_main() {
 #endif
     if constexpr (MY_ERISC_ID == 0) {
         const auto* routing_table_l1 =
-            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
         auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
         state_manager_l1->state = RouterState::INITIALIZING;
     }
