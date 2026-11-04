@@ -92,9 +92,12 @@ class TT_MoonViT_Vision_Tower(Module):
     def forward(
         self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor
     ) -> ttnn.Tensor:
-        x = self.patch_embed(patches, pos_emb)
-        x = self.encoder(x, rope, logical_n)
-        return self.merger(x)
+        embedded = self.patch_embed(patches, pos_emb)
+        encoded = self.encoder(embedded, rope, logical_n)
+        ttnn.deallocate(embedded)
+        merged = self.merger(encoded)
+        ttnn.deallocate(encoded)
+        return merged
 
 
 class TT_MoonViT_Vision_Model(Module):

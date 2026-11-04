@@ -25,5 +25,7 @@ class TT_Patch_Merger(Module):
         self.config = config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """[1, 1, S/sp, hidden] in window order -> [1, 1, S/(4*sp), 4*hidden]."""
-        raise NotImplementedError("TT_Patch_Merger.forward")
+        """[1, 1, S/sp, hidden] in window order -> [1, 1, S/(4*sp), 4*hidden]. `x` is left allocated:
+        the caller owns it."""
+        *batch, rows, _ = x.shape
+        return ttnn.reshape(x, (*batch, rows // self.config.merge_area, self.config.merged_dim))
