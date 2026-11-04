@@ -99,7 +99,7 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
         // are relaxed, and the sharded distribution geometry is load-bearing either way -- see
         // shard_distribution.
         return PertinentFields{
-            .alignment = !relaxation.relax_tensor_alignment,
+            .alignment = !relaxation.relax_tensor_layout_alignment,
             .logical_rank = !relaxation.relax_logical_rank,
             .page_size = relaxation.match_page_size,
             .shard_distribution = true,
@@ -115,7 +115,7 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     // ordinary case -- while already tolerating, with nobody opting in, the rank changes the padding
     // absorbs below it (with TILE's rank-2 default alignment, rank 1 against rank 2).
     //
-    // relax_tensor_alignment is inert on its own too, by choice. Under strict matching, a freed alignment
+    // relax_tensor_layout_alignment is inert on its own too, by choice. Under strict matching, a freed alignment
     // could change the padded shape, and with it the page count, which a strict-mode op is entitled
     // to bake. Padded-shape matching could tolerate two alignments that pad to the same shape, but no
     // op has asked for that.
