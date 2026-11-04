@@ -8,10 +8,16 @@ user its own random token sequence, one token per step. Every user's logits at e
 reference logits at that position.
 
 Meshes: 1x4 at TP=4 (QuietBox 2), 1x2 at TP=2 (one P300 board), and data parallel on a QuietBox 2: the 1x4 mesh split
-into two 1x2 submeshes (one per board), one model on each, both decoding their own 32 users.
+into two 1x2 submeshes (one per board), one model on each, both decoding their own 32 users. The single-model test opens
+the whole system as its mesh (a 1x2 mesh opened with all four QuietBox 2 chips visible fails at fabric init).
 
-Run on a QuietBox 2 (Blackhole 1x4) or one P300 board (1x2):
+Run on a QuietBox 2 (1x4 and data parallel), or on one P300 board (1x2; on a QuietBox 2, TT_VISIBLE_DEVICES=0,1 exposes
+one board):
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_batched_decode.py
+
+CI (the GPT-OSS 20B unit job, which runs this directory) runs the data-parallel test on bh_quietbox_2: it is the TP=2
+batched decode on each board. The single-model test is skipped there (its 1x4 case is the TP=4 path, and no CI runner
+has one P300 board on its own).
 """
 
 import os
@@ -22,8 +28,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
-from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
@@ -37,6 +43,9 @@ BLOCKS_PER_USER = 4  # 256 tokens per user: decode SDPA reads keys in chunks of 
 # 0.873, every position's mean 0.965 or more). A wrong row, expert or shard drops a user far below these bars.
 MIN_USER_PCC = 0.85
 MIN_MEAN_PCC = 0.95
+
+# Read at collection, so other systems open no mesh: the data-parallel test needs two P300 boards.
+QUIETBOX_2 = is_blackhole() and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P300_X2
 
 
 def _reference(config):
@@ -56,8 +65,22 @@ def _reference(config):
     return reference, input_ids, logits
 
 
-def _batched_model(mesh_device, config, state_dict):
+def _mesh_config(mesh_device):
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+
+    mesh_shape = tuple(mesh_device.shape)
+    return MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
+
+
+def _batched_decode_supported(mesh_device, config):
+    """Whether a model on this mesh takes the batched decode (checked before anything is built: the gpt-oss-120b unit
+    job runs this directory too)."""
+    from models.demos.gpt_oss.tt.fused_decode.config import dense_moe_decode_supported
+
+    return dense_moe_decode_supported(mesh_device, _mesh_config(mesh_device), config, False, USERS)
+
+
+def _batched_model(mesh_device, config, state_dict):
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.utils.general_utils import get_default_num_links
@@ -71,12 +94,11 @@ def _batched_model(mesh_device, config, state_dict):
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         paged_attention_config=PagedAttentionConfig(block_size=PAGE_BLOCK, max_num_blocks=USERS * BLOCKS_PER_USER),
-        mesh_config=MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0])),
+        mesh_config=_mesh_config(mesh_device),
         create_kv_cache=True,
         max_local_batch_size=USERS,
     )
-    if not all(layer.batched_decode for layer in model.layers):
-        pytest.skip(f"The batched decode path is not supported on this device / mesh {mesh_shape}")
+    assert all(layer.batched_decode for layer in model.layers), f"mesh {mesh_shape}: a layer left the batched decode"
     # The batched decode keeps its own copies of the attention projections; prefill still needs the originals.
     for layer in model.layers:
         weights = layer.self_attn.weights
@@ -117,32 +139,34 @@ def _decode_and_compare(models, input_ids, reference_logits, vocab_size):
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true",
-    reason="A 2-layer model per mesh shape; run locally on Blackhole 1x2 or 1x4.",
+    reason="1x4 is the TP=4 path and no CI runner has one P300 board alone; CI runs the data-parallel test (TP=2).",
 )
-@parametrize_mesh_with_fabric([(1, 2), (1, 4)])
+@parametrize_mesh_with_fabric([s for s in [(1, 2), (1, 4)] if s[0] * s[1] == ttnn.get_num_devices()])
 def test_batched_decode_matches_reference(mesh_device, device_params, reset_seeds):
     if not is_blackhole():
         pytest.skip("The batched decode path runs on Blackhole only")
     config = TestFactory.setup_test(mesh_device, use_real_weights=False)["config"]
+    if not _batched_decode_supported(mesh_device, config):
+        pytest.skip(f"The batched decode does not serve this model / system (mesh {tuple(mesh_device.shape)})")
     reference, input_ids, reference_logits = _reference(config)
     state_dict = convert_hf_qkv_to_meta_format(reference.state_dict(), config.head_dim)
     model = _batched_model(mesh_device, config, state_dict)
     _decode_and_compare([model], input_ids, reference_logits, config.vocab_size)
 
 
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="Two 2-layer models on a QuietBox 2; run locally on Blackhole 1x4.",
-)
+@pytest.mark.skipif(not QUIETBOX_2, reason="Data parallel over the two P300 boards of a QuietBox 2")
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_data_parallel_batched_decode_matches_reference(mesh_device, device_params, reset_seeds):
     """Data parallel on a QuietBox 2: one TP=2 model per P300 board (1x2 submeshes of the 1x4 mesh), as the vLLM
     integration builds them for --data-parallel-size 2."""
-    if not is_blackhole():
-        pytest.skip("The batched decode path runs on Blackhole only")
     # No device work on the parent mesh: its command queue would stay claimed by the parent while the submeshes close.
     submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 2))
     config = TestFactory.setup_test(submeshes[0], use_real_weights=False)["config"]
+    if config.num_local_experts != 32:
+        pytest.skip("The batched decode serves gpt-oss-20b only")
+    assert all(
+        _batched_decode_supported(submesh, config) for submesh in submeshes
+    ), "a QuietBox 2 half left the envelope"
     reference, input_ids, reference_logits = _reference(config)
     state_dict = convert_hf_qkv_to_meta_format(reference.state_dict(), config.head_dim)
     models = [_batched_model(submesh, config, state_dict) for submesh in submeshes]
