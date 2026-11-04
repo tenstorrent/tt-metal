@@ -660,6 +660,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecShardedTypecastOnBorrowedB
 
 // The binary add case of test_generic_op.cpp: out = a + b on [11, 9, 32, 32] over the full grid.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecBinaryAdd) {
+    if (this->device_->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "ttnn::add, which these checks compare with, does not run on Quasar";
+    }
     const ttnn::Shape shape{11, 9, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     const auto make_input = [&] {
         return ttnn::random::random(shape).to_layout(Layout::TILE).to_device(this->device_);
@@ -674,6 +677,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecBinaryAdd) {
 
 // Varargs are C++ only. A later call writes its vararg values into the program the first call compiled.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecVarargs) {
+    if (this->device_->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "ttnn::add, which these checks compare with, does not run on Quasar";
+    }
     const auto [a, b, out] = make_add_tensors(this->device_, 4);
     const auto program = make_add_program(a, b, out, /*varargs=*/true);
     ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args);
@@ -736,6 +742,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksVarargCountsOnEveryC
 // compiled for two varargs per core must not run with three: under the same custom hash, the second call compiles a
 // program of its own.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecCustomHashStillKeysOnVarargCounts) {
+    if (this->device_->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "ttnn::add, which these checks compare with, does not run on Quasar";
+    }
     const auto [a, b, out] = make_add_tensors(this->device_, 4);
     const auto program = make_add_program(a, b, out, /*varargs=*/true);
     const auto entries = this->device_->num_program_cache_entries();
