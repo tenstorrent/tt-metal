@@ -217,7 +217,7 @@ class Qwen36MLP:
                     compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
                     in0_block_w=10,
                     out_subblock_h=1,
-                    out_subblock_w=3,
+                    out_subblock_w=7,
                     out_block_h=7,
                     out_block_w=21,
                     per_core_M=7,
@@ -226,16 +226,23 @@ class Qwen36MLP:
                     fused_activation=act,
                 )
 
+            # prefill 2048 gate/up: bf16 dest (allows 1x7 subblock) + packer L1 accumulation across the 16 K-blocks
+            gu_ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
             w1_out = ttnn.linear(
                 x,
                 w.w1,
                 program_config=_gu_pc(None),
-                compute_kernel_config=ckc,
+                compute_kernel_config=gu_ckc,
                 memory_config=mc,
                 dtype=ttnn.bfloat8_b,
             )
             w3_out = ttnn.linear(
-                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=ckc, memory_config=mc, dtype=ttnn.bfloat8_b
+                x, w.w3, program_config=_gu_pc(None), compute_kernel_config=gu_ckc, memory_config=mc, dtype=ttnn.bfloat8_b
             )
             # prefill 2048: SiLU moved from the gate matmul epilogue (~227 us/call extra on Blackhole) into the
             # memory-bound SwiGLU mul as an lhs activation
