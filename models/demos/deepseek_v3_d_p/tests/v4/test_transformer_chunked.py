@@ -19,8 +19,7 @@ chunk that attends the wrong request's state entirely still lands within ~0.002 
 far above the floors. Isolation is checked on device instead, where a rerun of the same chunks is
 exact. The third request replays the first one's opening chunk on the reused slot, and once the
 schedule is done the second request runs again alone on slot 0, whose index key rows still hold the
-first request's keys. Both must reproduce the interleaved outputs to ``REPLAY_FLOOR``, which a full leak
-misses on every layer of both models.
+first request's keys. Both must reproduce the interleaved outputs bit for bit.
 """
 
 import pytest

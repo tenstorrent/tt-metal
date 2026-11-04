@@ -12,16 +12,12 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 # How far below its model's floor a CSA layer is graded: with production top-k, bf16 can swap
 # near-tied candidates at the selection boundary, which no other attention kind is exposed to, and
 # the swaps compound with the error the layer inherits.
 CSA_LAYER_MARGIN = 0.01
-
-# Device-to-device agreement for a rerun chunk: same weights, tokens and programs over the same state. Reruns
-# measure 1.000000; a chunk that attends another request's state entirely measures at most 0.99993 (Flash's
-# sliding layers) and lower everywhere else. The floor sits between the two, so it cannot drop to 0.99993.
-REPLAY_FLOOR = 0.99999
 
 # The multi-user prefill schedule, keyed by user-slot count.
 # (slot, chunks, replays) per request: ``replays`` names an earlier request whose opening tokens this one
@@ -120,11 +116,10 @@ def assert_layers_and_output(config, per_layer, ref_layers, out, ref_out, floor,
 
 
 def assert_same_on_device(label, first, again):
-    """Two device runs of the same chunks, each ``(per_layer, outs)``, agree to ``REPLAY_FLOOR``."""
+    """Two device runs of the same chunks, each ``(per_layer, outs)``, are bit-identical: same weights, tokens
+    and programs over the same state leave no tolerance to spend."""
     (first_layers, first_outs), (again_layers, again_outs) = first, again
     for c in range(len(again_outs)):
         taps = [(f"layer {i}", first_layers[i][c], again_layers[i][c]) for i in range(len(again_layers))]
         for name, a, b in [*taps, ("output", first_outs[c], again_outs[c])]:
-            _, pcc = comp_pcc(a.float(), b.float())
-            logger.info(f"[{label}] chunk {c} {name}: PCC {pcc:.6f}")
-            assert pcc >= REPLAY_FLOOR, f"[{label}] chunk {c} {name} {pcc:.6f} < {REPLAY_FLOOR}"
+            assert_bit_identical(a, b, name=f"[{label}] chunk {c} {name}")
