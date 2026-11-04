@@ -48,11 +48,15 @@ class PrefillRotation:
         self.htiles = ttnn.from_torch(tiles.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self.device = device
 
-    def __call__(self, x):
-        """x [..., T, K] bf16 TILE -> x' (same shape), one op (kernels/hrot_*.cpp)."""
+    def __call__(self, x, gate=None):
+        """x [..., T, K] bf16 TILE -> x' (same shape), one op (kernels/hrot_*.cpp).
+        gate: rotate x * sigmoid(gate) instead, with x the head-major attention output [1, H, T, D] (H D = K) and gate
+        token-major [..., T, K] (the shared attention code's concatenate_heads, sigmoid and multiply in one pass)."""
         device, K, nb = self.device, self.K, self.nb
-        shape = list(x.shape)
+        shape = list(x.shape) if gate is None else list(gate.shape)
         T = shape[-2]
+        if gate is not None:
+            assert list(x.shape)[1] * list(x.shape)[3] == K and list(x.shape)[2] == T, (x.shape, gate.shape)
         Mt, Kt = T // 32, K // 32
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         grid = device.compute_with_storage_grid_size()
@@ -83,15 +87,19 @@ class PrefillRotation:
                 ],
             )
 
+        gdef = [("GATE", "1")] if gate is not None else []
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "hrot_reader.cpp",
                     core_ranges=crs,
                     compile_time_args=ttnn.TensorAccessorArgs(x).get_compile_time_args()
-                    + ttnn.TensorAccessorArgs(self.htiles).get_compile_time_args(),
+                    + ttnn.TensorAccessorArgs(self.htiles).get_compile_time_args()
+                    + (ttnn.TensorAccessorArgs(gate).get_compile_time_args() if gate is not None else []),
                     runtime_args=rd,
-                    common_runtime_args=[x.buffer_address(), self.htiles.buffer_address(), Kt],
+                    defines=gdef,
+                    common_runtime_args=[x.buffer_address(), self.htiles.buffer_address(), Kt]
+                    + ([gate.buffer_address(), Mt, list(x.shape)[3] // 32] if gate is not None else []),
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -107,15 +115,17 @@ class PrefillRotation:
                     core_ranges=crs,
                     compile_time_args=[],
                     runtime_args=cp,
-                    defines=[("HROT_DENSE", "1")] if os.environ.get("BONSAI_HROT_DENSE") == "1" else [],
+                    defines=([("HROT_DENSE", "1")] if os.environ.get("BONSAI_HROT_DENSE") == "1" else []) + gdef,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=True, dst_full_sync_en=True
                     ),
                 ),
             ],
             semaphores=[],
-            cbs=[cb(0, 64), cb(1, 64), cb(16, 4)],
+            cbs=[cb(0, 64), cb(1, 64), cb(16, 4)] + ([cb(2, 32), cb(3, 64)] if gate is not None else []),
         )
+        if gate is not None:
+            return ttnn.generic_op([x, self.htiles, gate, out], program)  # the output goes last
         return ttnn.generic_op([x, self.htiles, out], program)
 
     def call_ttnn(self, x):

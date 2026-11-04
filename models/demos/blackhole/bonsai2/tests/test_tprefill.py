@@ -396,3 +396,23 @@ def test_tprefill2_residual(device):
     )
     print("bad tiles", (e > 0.05).sum().item(), "of", e.numel(), "first", (e > 0.05).nonzero()[:8].tolist())
     assert rel < 0.02, rel
+
+
+def test_prefill_rotation_gate(device):
+    """PrefillRotation(x_hm, gate=g) == PrefillRotation(concat_heads(x_hm) * sigmoid(g))."""
+    from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import fwht_blocks
+    from models.demos.blackhole.bonsai2.tt.tprefill.rotate import PrefillRotation
+
+    T, H, D = 2048, 24, 256
+    K = H * D
+    signs = np.random.default_rng(4).choice([-1.0, 1.0], size=K).astype(np.float32)
+    att = torch.randn(1, H, T, D).bfloat16()
+    g = (torch.randn(1, T, K) * 2).bfloat16()
+    rot = PrefillRotation(device, signs)
+    tt = lambda v: ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y = ttnn.to_torch(rot(tt(att), gate=tt(g))).float().reshape(T, K)
+    xg = att.float().permute(0, 2, 1, 3).reshape(T, K) * torch.sigmoid(g.float().reshape(T, K))
+    ref = torch.from_numpy(fwht_blocks(xg.bfloat16().float().numpy() * signs, 1024)).float()
+    rel = ((y - ref).norm() / ref.norm()).item()
+    print(f"ROTGATE rel {rel:.5f}")
+    assert rel < 0.01, rel

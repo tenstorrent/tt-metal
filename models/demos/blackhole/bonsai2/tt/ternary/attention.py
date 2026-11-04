@@ -9,7 +9,7 @@ import os
 import numpy as np
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.attn_qg import HeadMajor, QGHeads
+from models.demos.blackhole.bonsai2.tt.attn_qg import GatedAttn, HeadMajor, HeadsOut, QGHeads, SigGate
 from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
@@ -98,6 +98,16 @@ class TernaryAttention:
         return y
 
 
+class _HeadsOutTransformer:
+    """ttnn.transformer whose concatenate_heads defers (attn_qg.HeadsOut)."""
+
+    def __getattr__(self, name):
+        return getattr(ttnn.transformer, name)
+
+    def concatenate_heads(self, x, *args, **kwargs):
+        return HeadsOut(x) if not args and not kwargs else ttnn.transformer.concatenate_heads(x, *args, **kwargs)
+
+
 class TernaryAttentionPrefillTtnn:
     """ttnn stand-in for the prefill attention (inside attn_qg.QGSplitTtnn): q, k, v, o in the exact ternary weights.
     q comes out as [q heads | gate heads], as the reordered dense q_proj did."""
@@ -105,6 +115,24 @@ class TernaryAttentionPrefillTtnn:
     def __init__(self, weights, ternary: TernaryAttention):
         self._w, self._t = weights, ternary
         self._xr = self._v = None
+
+    # concatenate_heads(attn) * sigmoid(gate) -> o_proj: the three ops become markers and the o projection's input
+    # rotation computes them (tprefill/rotate.py gate=), BONSAI_PREFILL_GATEROT=0 turns it off
+    @property
+    def transformer(self):
+        if os.environ.get("BONSAI_PREFILL_GATEROT", "1") != "1":
+            return ttnn.transformer
+        return _HeadsOutTransformer()
+
+    def sigmoid(self, x, *args, **kwargs):
+        if os.environ.get("BONSAI_PREFILL_GATEROT", "1") == "1" and not args and not kwargs:
+            return SigGate(x)
+        return ttnn.sigmoid(x, *args, **kwargs)
+
+    def multiply(self, a, b, *args, **kwargs):
+        if isinstance(a, HeadsOut) and isinstance(b, SigGate):
+            return GatedAttn(a.t, b.t)
+        return ttnn.multiply(a, b, *args, **kwargs)
 
     @property
     def qkr(self):
@@ -133,7 +161,12 @@ class TernaryAttentionPrefillTtnn:
             v, self._v = self._v, None
             return v
         if b is w.o_proj:
-            ar = t.prot_out(a)
+            if isinstance(a, GatedAttn):
+                ar = t.prot_out(a.attn, gate=a.gate)
+                ttnn.deallocate(a.attn)
+                ttnn.deallocate(a.gate)
+            else:
+                ar = t.prot_out(a)
             y = t.pre_o(ar)
             ttnn.deallocate(ar)
             return y

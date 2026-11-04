@@ -53,6 +53,27 @@ class HeadMajor:
         self.pending = pending  # a deferred per-head norm (+ RoPE): tprefill/qk_rope.QKNormRope, applied by apply_rope
 
 
+class HeadsOut:
+    """The SDPA output (head-major) standing in for concatenate_heads' [B, T, H D] (attention.py stand-in)."""
+
+    def __init__(self, t):
+        self.t = t
+
+
+class SigGate:
+    """sigmoid(gate), not computed yet."""
+
+    def __init__(self, t):
+        self.t = t
+
+
+class GatedAttn:
+    """concatenate_heads(attn) * sigmoid(gate), computed with the o projection's input rotation (rotate.py gate=)."""
+
+    def __init__(self, attn, gate):
+        self.attn, self.gate = attn, gate
+
+
 class QGHeads:
     """The q projection as head-major q heads and the token-major gate (instead of one [q | gate] tensor)."""
 
@@ -123,4 +144,6 @@ class QGSplitTtnn:
             return ttnn.deallocate(t.t)
         if isinstance(t, HeadMajor):
             return ttnn.deallocate(t.t)
+        if isinstance(t, (HeadsOut, SigGate, GatedAttn)):
+            return None  # consumed (and freed) by the fused gated rotation
         return ttnn.deallocate(t, *args, **kwargs)
