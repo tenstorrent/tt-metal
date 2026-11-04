@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -98,6 +99,20 @@ ttnn::Tensor tilize(
         fixed_staging_bytes,
         pending_l1_output_bytes);
 
+    auto block_split_cores = [&](uint32_t rows, uint32_t limit, size_t grid_area) -> uint32_t {
+        if (limit == 0) {
+            return 0;
+        }
+        const uint32_t height_tiles = rows / input_tile_height;
+        const uint32_t nblocks = num_tiles_per_row * height_tiles;
+        const auto split = ttnn::compute_ncores_wh(grid_area, nblocks, num_tiles_per_row, height_tiles);
+        if (split.single_block_size <= limit) {
+            return split.ncores;
+        }
+        const auto limited = ttnn::try_compute_ncores_wh_sb(grid_area, nblocks, num_tiles_per_row, height_tiles, limit);
+        return limited.has_value() ? limited->ncores : 0;
+    };
+
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:
         // ttnn::prim::tilize routes wide width-sharded input to
@@ -120,6 +135,39 @@ ttnn::Tensor tilize(
                 tile,
                 sub_core_grids);
             return ttnn::to_memory_config(interleaved_tile, target_memory_config);
+        }
+        const auto& shape = input_tensor.logical_shape();
+        if (!enough_space_height && use_multicore && !use_low_perf && shape.rank() >= 3 &&
+            input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && input_tensor.layout() == Layout::ROW_MAJOR &&
+            input_tensor.dtype() == DataType::BFLOAT16 && input_tile_height == tt::constants::TILE_HEIGHT &&
+            input_tile_width == tt::constants::TILE_WIDTH &&
+            input_tensor.memory_config().buffer_type() == BufferType::L1 &&
+            !memory_config.value_or(input_tensor.memory_config()).is_sharded() &&
+            shape == input_tensor.padded_shape() && shape[-2] % input_tile_height == 0 &&
+            shape[-1] % input_tile_width == 0 && shape.volume() / (static_cast<uint64_t>(shape[-2]) * shape[-1]) > 1) {
+            const uint32_t max_l1 = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+            const uint32_t budget = max_l1 > pending_l1_output_bytes + fixed_staging_bytes
+                                        ? max_l1 - pending_l1_output_bytes - fixed_staging_bytes
+                                        : 0;
+            const uint32_t limit = budget / (input_single_tile_size + output_single_tile_size + staging_bytes_per_tile);
+            const auto grid_size = input_tensor.device()->compute_with_storage_grid_size();
+            const size_t grid_area =
+                sub_core_grids.has_value() ? sub_core_grids->num_cores() : grid_size.x * grid_size.y;
+            const uint32_t rows = shape.volume() / shape[-1];
+            if (block_split_cores(rows, limit, grid_area) > block_split_cores(shape[-2], limit, grid_area)) {
+                const ttnn::Shape folded_shape({1, 1, rows, shape[-1]});
+                auto folded = ttnn::reshape(input_tensor, folded_shape, folded_shape);
+                auto output = ttnn::prim::tilize(
+                    folded,
+                    memory_config,
+                    output_dtype,
+                    use_multicore,
+                    /*enough_space_height=*/false,
+                    use_low_perf,
+                    tile,
+                    sub_core_grids);
+                return ttnn::reshape(output, shape, shape);
+            }
         }
         return ttnn::prim::tilize(
             input_tensor,
