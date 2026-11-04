@@ -337,3 +337,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   in0_mcast_end)` when the kernel's NOC is NOC_1); a mis-oriented rect is a torus wrap-around multicast that reaches
   the grid's edges only. Fix 62da7b05527 / f31e1f1fec1: the kernels swap the corners when `noc_index == 1`. Reset #2
   (same procedure), the unit test `unit_moe_persistent` now runs first; `chain_persist_g11c` re-gates on a pass.
+- 2026-11-04 06:22 `gate84_B1_fabar_r2` (8 users = 1 per row, today's fabric path, 11 groups): traced decode step
+  32.95 ms = 30.4 tok/s per user (32 users: 37.3 ms = 26.8). Four times fewer users save only 4.4 ms: the step is
+  launch / latency bound, not bandwidth bound. The 50 tok/s/u floor (20 ms) needs 13 ms off the 8-user step: the
+  persistent layer's whole budget (launches, the exchanges' round trips, the attention half's ~20 small ops per layer).
