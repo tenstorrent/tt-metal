@@ -48,8 +48,9 @@ jobs:
               --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
             # The guest's /workspace is a 9p share, slow for the many small
             # reads of kernel compiles: run from a local copy (torrentci#2327).
-            # tests/sfpi-info.sh links to ../../sfpi-info.sh (tt_metal/), so copy both.
-            - mkdir -p /tmp/tm && cp -a tt_metal/tt-llk /tmp/tm/ && cp -a tt_metal/sfpi-info.sh /tmp/tm/
+            # tests/sfpi-info.sh links to ../../sfpi-info.sh, which reads ./sfpi-version
+            # (both in tt_metal/), so copy tt-llk with every tt_metal/sfpi-* file.
+            - mkdir -p /tmp/tm && cp -a tt_metal/tt-llk tt_metal/sfpi-* /tmp/tm/
             - . /tmp/venv/bin/activate && cd /tmp/tm/tt-llk/tests && ./setup_testing_env.sh
       - id: group-1
         kind: shell
