@@ -1293,14 +1293,12 @@ class Model:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159). A traced
-        # prefill uses the max_seq_len slice made with the model (bound at capture, reused by every replay, so a
-        # replay's host call allocates nothing); an eager prefill slices per call. Caching the eager slice would
-        # create a long-lived tensor while a decode trace may already be live (see __init__).
+        # prefill uses the max_seq_len slice made with the model by create_transformer_compatible, which also sets
+        # self.args (bound at capture, reused by every replay, so a replay's host call allocates nothing); an eager
+        # prefill slices per call. Caching the eager slice would create a long-lived tensor while a decode trace may
+        # already be live (see __init__).
         if trace_enabled:
-            rot_mats_global = self._prefill_rope_slices.get(self.args.max_seq_len)
-            if rot_mats_global is None:  # a Model built without create_transformer_compatible
-                rot_mats_global = self._prefill_rope_slice(self.args.max_seq_len)
-                self._prefill_rope_slices[self.args.max_seq_len] = rot_mats_global
+            rot_mats_global = self._prefill_rope_slices[self.args.max_seq_len]
         else:
             rot_mats_global = self._prefill_rope_slice(tokens_embd.shape[-2])
         rot_mats_local = None
