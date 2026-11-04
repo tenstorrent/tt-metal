@@ -48,7 +48,7 @@ pytest models/demos/vision/detection/rtdetr/tests/latency.py::test_rtdetr_v2_bat
 ```
 - `test_rtdetr_batch_1_e2e_latency` also counts input transfer, output transfer and
   postprocessing.
-- [VALIDATION.md](VALIDATION.md) records P150a latency, video throughput and detection
+- [VALIDATION.md](VALIDATION.md) records P100a PCC, latency and detection
   agreement, with its base commit.
 
 ## Testing
@@ -120,7 +120,7 @@ models/demos/vision/detection/rtdetr/
 │   ├── latency.py         # Trace and end-to-end latency
 │   └── validate_detection.py  # Detection agreement on COCO val2017
 ├── tt/                    # TTNN implementation
-└── VALIDATION.md          # Recorded P150a results
+└── VALIDATION.md          # Recorded P100a results
 ```
 
 ## Model Structure
