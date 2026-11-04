@@ -16,7 +16,7 @@ from ....utils.test import ring_params_8k
 
 REQUESTS = [
     ("A man walking his dog in the snow", None),
-    ("Make it a night scene with street lights", Image.new("RGB", (1024, 1024), (120, 140, 90))),
+    ("Make it a night scene with street lights", Image.new("RGB", (1600, 900), (120, 140, 90))),
 ]
 
 

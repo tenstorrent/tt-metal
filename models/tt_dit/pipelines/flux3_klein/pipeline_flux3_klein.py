@@ -227,6 +227,7 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
+            reference = prepare_reference(reference, REFERENCE_SIZE)
         timings = {}
 
         t0 = time.time()
@@ -241,7 +242,6 @@ class Flux3KleinPipeline:
         t0 = time.time()
         image_cond = None
         if reference is not None:
-            reference = prepare_reference(reference, REFERENCE_SIZE)
             h, w = latent_shape(*reference.size)
             image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
@@ -387,6 +387,8 @@ class Flux3KleinPipeline:
     def close(self) -> None:
         if self._upsampler is not None:
             self._upsampler.close()
+            for t in self._upsampler_ranges:
+                ttnn.deallocate(t)
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()

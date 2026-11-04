@@ -154,6 +154,8 @@ class Flux3KleinUpsampler:
         from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, prime_decode_trace
 
         input_ids, pixel_values, grid, task = self._inputs(prompt, image)
+        if input_ids.shape[1] >= MAX_SEQ_LEN:
+            raise ValueError(f"the prompt is {input_ids.shape[1]} tokens, the upsampler's limit is {MAX_SEQ_LEN - 1}")
         penalty = PRESENCE_PENALTY[task]
         vision_tokens = self.model.get_image_features(pixel_values, grid) if pixel_values is not None else None
         position = int(input_ids.shape[1])
@@ -288,4 +290,8 @@ class Flux3KleinSharedUpsampler:
     def close(self) -> None:
         self._to_submesh()
         self._upsampler.close()
+        for t in (self._dit_l1, self._submesh_probe):
+            if t is not None:
+                ttnn.deallocate(t)
         self._to_mesh()
+        ttnn.deallocate(self._mesh_probe)
