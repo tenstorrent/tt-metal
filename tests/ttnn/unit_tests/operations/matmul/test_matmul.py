@@ -5480,3 +5480,37 @@ def test_matmul_accepts_valid_biases(device, config_kind, m, bias_h):
         ttnn.linear(a_t, b_t, bias=bias_t, program_config=_bias_logical_h_program_config(config_kind, m, n, k))
     )
     assert_with_pcc(a.float() @ b.float() + bias.float(), out.float(), pcc=0.99)
+
+
+@pytest.mark.parametrize("nd_operand", ["a", "b"])
+@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=1, x=2)])
+@pytest.mark.parametrize("batch", [1, 2])
+def test_matmul_nd_sharded_without_2d_shard_spec(device, nd_operand, core_grid, batch):
+    # [1, 1, 32, 32] shards of a [batch, 1, 64, 64] tensor form 2 shard columns, which cannot block-shard
+    # a grid of 4 cores in a row, so the ND spec has no 2D shard spec.
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 32]),
+        cores,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    nd_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_spec)
+
+    torch.manual_seed(0)
+    torch_a = torch.randint(-1, 2, (batch, 1, 64, 64)).bfloat16()
+    torch_b = torch.randint(-1, 2, (batch, 1, 64, 64)).bfloat16()
+
+    def upload(t, operand):
+        memory_config = nd_memory_config if operand == nd_operand else ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    a = upload(torch_a, "a")
+    b = upload(torch_b, "b")
+    assert (a if nd_operand == "a" else b).memory_config().shard_spec is None
+
+    output = ttnn.matmul(a, b, core_grid=core_grid)
+
+    assert_equal(torch_a @ torch_b, ttnn.to_torch(output))

@@ -231,3 +231,32 @@ def test_roll_cache_hit_larger_shape(device, first_shape, second_shape, shifts, 
         ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
         actual = ttnn.to_torch(ttnn.roll(ttnn_input, shifts, dims))
         assert_with_pcc(expected, actual)
+
+
+def _nd_sharded_l1_without_2d_spec(num_cores):
+    # [1, 1, 32, 32] shards of a [1, 1, 64, 64] tensor form 2 shard columns, which cannot block-shard a grid
+    # of 4 cores in a row, so the ND spec has no 2D shard spec.
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 32]),
+        cores,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, nd_spec)
+
+
+@pytest.mark.parametrize("shift", [5, 32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_roll_nd_sharded_without_2d_shard_spec(device, shift, layout):
+    memory_config = _nd_sharded_l1_without_2d_spec(4)
+    torch_input = torch.arange(64 * 64, dtype=torch.float32).reshape(1, 1, 64, 64).bfloat16()
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+    )
+    assert ttnn_input.memory_config().shard_spec is None
+
+    ttnn_output = ttnn.roll(ttnn_input, shift, -2)
+
+    assert ttnn_output.memory_config() == memory_config
+    assert_equal(torch.roll(torch_input, shift, -2), ttnn.to_torch(ttnn_output))

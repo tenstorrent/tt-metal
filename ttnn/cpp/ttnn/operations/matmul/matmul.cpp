@@ -14,6 +14,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -233,6 +234,19 @@ static ttnn::Tensor bound_matmul(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
             input_tensor_a.logical_shape(),
             input_tensor_b.logical_shape());
+    }
+
+    // Auto-generated program configs read a sharded operand's 2D shard spec, which an ND shard spec
+    // only has when its shards flatten to a height-, width- or block-sharded layout.
+    if (!parameters.program_config.has_value()) {
+        const auto lacks_2d_shard_spec = [](const Tensor& t) { return t.is_sharded() && !t.shard_spec().has_value(); };
+        if (lacks_2d_shard_spec(input_tensor_a) || lacks_2d_shard_spec(input_tensor_b)) {
+            const auto to_dram = [&](const Tensor& t) {
+                return lacks_2d_shard_spec(t) ? ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG, std::nullopt) : t;
+            };
+            return bound_matmul(
+                to_dram(input_tensor_a), to_dram(input_tensor_b), bias, parameters, optional_output_tensor);
+        }
     }
 
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
