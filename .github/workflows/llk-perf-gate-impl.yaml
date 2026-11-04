@@ -222,7 +222,7 @@ jobs:
         run: |
           python3 ${{ env.LLK_PATH }}/perf/gate.py compare --gate "$GATE" --arch "$ARCH" \
             --current current_perf --baseline baseline_perf \
-            --baseline-commit "$BASELINE_COMMIT" --baseline-run "$BASELINE_RUN" --stage2 'stage2/**/stage2.json' \
+            --baseline-commit "$BASELINE_COMMIT" --baseline-run "$BASELINE_RUN" --stage2 "${{ inputs.gate == 'merge' && 'stage2/**/stage2.json' || '' }}" \
             --current-sha "$CURRENT_SHA" --current-label "$CURRENT_LABEL"
           cat perf_gate_report.md 2>/dev/null || true
 

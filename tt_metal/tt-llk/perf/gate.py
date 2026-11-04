@@ -186,14 +186,15 @@ def _short_baseline(p, result):
     shared = modules(result["records"])
     if len(shared) < p["baseline_coverage"] * len(current):
         return (
-            f"The baseline holds {len(shared)} of the {len(current)} test modules measured now. "
-            "A partly uploaded or loaded run is no baseline."
+            f"The baseline holds points of {len(shared)} of the {len(current)} test modules measured now: "
+            "a partly uploaded or loaded run, or tests whose parameters changed since the baseline "
+            "(move the pin in gate_policy.yaml)."
         )
     new = sum(r[rc.MODULE_COL] in shared for r in result["new_points"])
     if new > (1 - p["baseline_coverage"]) * (len(result["records"]) + new):
         return (
-            f"{new} points of modules the baseline has are missing from it. "
-            "A partly uploaded or loaded run is no baseline."
+            f"{new} points of modules the baseline has are missing from it: a partly uploaded or "
+            "loaded run, or tests whose parameters changed since the baseline (move the pin in gate_policy.yaml)."
         )
     return ""
 
@@ -400,7 +401,7 @@ def compare(a):
         rc._write_points_csv(result["records"], out / "perf_gate_report.points.csv")
         regressions_csv = out / "perf_gate_report.regressions.csv"
         rc._write_points_csv(result["regressions"], regressions_csv)
-        if a.stage2:
+        if a.stage2 and p["stage2"]:
             section, stage2 = _stage2(
                 a, current, regressions_csv, baseline.get("commit_sha", "")
             )
