@@ -30,6 +30,7 @@ populates the visualizer comparison tables.
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -254,7 +255,7 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 
 
 # String so we can follow semver-like bumps (was int on an older branch).
-# Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
+# Bump when the visualizer schema changes. Each import writes a fresh DB, so there is no migration path to maintain.
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
@@ -273,28 +274,6 @@ _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
 # stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
 # this many devices in one rank's local mesh.
 _EXECUTION_ID_STRIDE_PER_OPERATION = 1024
-
-
-def _schema_version_tuple(ver: str) -> tuple[int, ...]:
-    """Parse ``schema_version`` metadata for ordering (e.g. ``2.1``, ``3`` → comparable tuples)."""
-    s = str(ver).strip()
-    if not s:
-        return (0,)
-    parts: list[int] = []
-    for p in s.split("."):
-        if p.isdigit():
-            parts.append(int(p))
-    return tuple(parts) if parts else (0,)
-
-
-def _schema_is_older(stored: str | None, current: str) -> bool:
-    if stored is None:
-        return True
-    a, b = _schema_version_tuple(stored), _schema_version_tuple(current)
-    n = max(len(a), len(b))
-    aa = a + (0,) * (n - len(a))
-    bb = b + (0,) * (n - len(b))
-    return aa < bb
 
 
 def _report_rank(report, path: Path) -> int:
@@ -423,25 +402,6 @@ def _check_rank_captures_complete(report_path: Path, rank_captures: list[_Report
 def _unchanged_database_note(db_path: Path, db_existed: bool) -> str:
     """Tail for an import error message: an earlier import's database is still there, and this one did not change it."""
     return f". {db_path} was not updated" if db_existed else ""
-
-
-def _remove_stale_database_if_needed(db_path: Path) -> None:
-    """Remove DB file if it was built with an older schema (no migration path)."""
-    if not db_path.exists():
-        return
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'")
-            row = cur.fetchone()
-            stored = row[0] if row else None
-        finally:
-            conn.close()
-        if _schema_is_older(stored, DATABASE_SCHEMA_VERSION):
-            db_path.unlink()
-    except (sqlite3.Error, OSError, ValueError):
-        db_path.unlink(missing_ok=True)
 
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
@@ -2424,10 +2384,14 @@ def import_report(
         ValueError: If the ``graph_capture_<r>_of_<N>.json`` captures in a directory don't hold every rank of one
             run exactly once (a rank missing, ranks from runs of different sizes, a rank outside 1..N, or a rank
             named twice), if a capture's metadata rank or world size disagrees with its file name, or if one of
-            those captures has an unsupported version. No database is created, and one with the current schema that
-            was already in ``output_dir`` is left as it was. When the error comes after the import has started, files
-            written beside the database for the captures already read (``*.tensor_lifetime.json``, the cluster
-            descriptor and mesh mapping YAMLs, SVGs) are kept.
+            those captures has an unsupported version. No database is created, and one that was already in
+            ``output_dir`` is left as it was. When the error comes after the import has started, files written beside
+            the database for the captures already read (``*.tensor_lifetime.json``, the cluster descriptor and mesh
+            mapping YAMLs, SVGs) are kept.
+
+    Each import writes a new database, built beside the target and moved over it only once the import succeeds: a
+    finished import holds only these captures, never rows left from an earlier import into the same directory, and a
+    failed one leaves whatever database ``output_dir`` already held as it was.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
@@ -2440,8 +2404,10 @@ def import_report(
     except ValueError as e:
         raise ValueError(f"{e}{_unchanged_database_note(db_path, db_path.exists())}") from e
 
-    _remove_stale_database_if_needed(db_path)
     db_existed = db_path.exists()
+    # Built under a temporary name and moved over db_path at the end, so a reader never sees a partial database.
+    importing_db_path = db_path.with_name(f".{db_name}.importing-{os.getpid()}")
+    importing_db_path.unlink(missing_ok=True)
 
     # Create graphs directory if generating SVGs
     graphs_dir = None
@@ -2449,7 +2415,7 @@ def import_report(
         graphs_dir = output_dir / "graphs"
         graphs_dir.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(importing_db_path)
     cursor = conn.cursor()
     imported = False
 
@@ -2798,11 +2764,10 @@ def import_report(
         sys.settrace(_prev_trace)
         sys.setprofile(_prev_profile)
         conn.close()
-        # A failed import commits no rows (sqlite3 commits the CREATE TABLE IF NOT EXISTS statements at once, but the
-        # rows wait for the commit), so a DB with the current schema is left as it was; one this call created holds
-        # only the schema and would pass for a report, so remove it.
-        if not imported and not db_existed:
-            db_path.unlink(missing_ok=True)
+        if imported:
+            os.replace(importing_db_path, db_path)
+        else:
+            importing_db_path.unlink(missing_ok=True)
 
     return db_path
 
