@@ -302,3 +302,26 @@ def test_prefill_norm_rot(device, add, want_n):
         assert rel(h, href) < 1e-6, "h must equal ttnn.add bit for bit"
     if want_n:
         assert rel(n, nref) < 0.01
+
+
+@pytest.mark.parametrize("N, na, ha, hb", [(12288, 192, 8, 0), (2048, 32, 8, 8)], ids=["q_gate", "k_v"])
+def test_tprefill2_split(device, N, na, ha, hb):
+    """split outputs (head-major / token-major) are the unsplit output's columns, relaid."""
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+    T, K = 2048, 5120
+    t, s = _weights(K, N, seed=2)
+    lin = TernaryPrefillLinear2.from_host(device, t, s)
+    xt = ttnn.from_torch(
+        torch.randn(1, 1, T, K).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    full = ttnn.to_torch(lin(xt)).float().reshape(T, N)
+    a, b = lin(xt, split=(na, ha, hb))
+
+    def relay(cols, h):
+        return cols.reshape(T, -1, h * 32).permute(1, 0, 2) if h else cols
+
+    ea = (ttnn.to_torch(a).float().reshape(relay(full[:, : na * 32], ha).shape) - relay(full[:, : na * 32], ha)).abs()
+    eb = (ttnn.to_torch(b).float().reshape(relay(full[:, na * 32 :], hb).shape) - relay(full[:, na * 32 :], hb)).abs()
+    print(f"SPLIT N={N} max diff a {ea.max().item()} b {eb.max().item()} shapes {list(a.shape)} {list(b.shape)}")
+    assert ea.max().item() == 0 and eb.max().item() == 0

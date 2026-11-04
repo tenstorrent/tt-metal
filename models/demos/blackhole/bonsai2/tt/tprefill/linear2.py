@@ -65,17 +65,25 @@ class TernaryPrefillLinear2:
         glu = getattr(lin, "glu", False)
         return cls.from_records(lin.w.device(), lin.w, rec_host, lin.ppr, lin.K, lin.N, glu=glu)
 
-    def __call__(self, x):
-        """x: [..., T, K] bf16 TILE (T a multiple of 32) -> [..., T, N (or N / 2 with glu)] bf16 TILE."""
+    def __call__(self, x, split=None):
+        """x: [..., T, K] bf16 TILE (T a multiple of 32) -> [..., T, N (or N / 2 with glu)] bf16 TILE.
+        split = (na, ha, hb) (tile columns): two outputs instead, columns < na and the rest, each head-major
+        [1, heads, T, h * 32] when its head size h (ha / hb) > 0, else token-major [..., T, columns]."""
         device, K, N, glu = self.device, self.K, self.N, self.glu
         lead, T = list(x.shape)[:-2], list(x.shape)[-2]
         assert list(x.shape)[-1] == K and T % TILE == 0, (x.shape, K)
         Kt, Nt, KB, Mt = K // TILE, N // TILE, K // KBLOCK, T // TILE
         Nt_out = Nt // 2 if glu else Nt
         kpc = self.J  # kbs per DEST pass and per x' multicast chunk
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(lead + [T, Nt_out * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
-        )
+        na, ha, hb = split if split is not None else (Nt_out, 0, 0)
+        assert not (glu and split), "GLU outputs are not split"
+
+        def part(cols, h):
+            shape = [1, cols // h, T, h * TILE] if h else lead + [T, cols * TILE]
+            return ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+
+        out = part(na, ha)
+        out_b = part(Nt_out - na, hb) if split is not None else out
         grid = device.compute_with_storage_grid_size()
         GX, GY = grid.x, grid.y
         mb, me = divmod(Mt, GY)
@@ -150,7 +158,8 @@ class TernaryPrefillLinear2:
                     compile_time_args=[NBLK, kpc]
                     + ttnn.TensorAccessorArgs(self.rec).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(self.sbc).get_compile_time_args()
-                    + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                    + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+                    + ttnn.TensorAccessorArgs(out_b).get_compile_time_args(),
                     defines=dm + dbg,
                     runtime_args=wr,
                     common_runtime_args=[
@@ -160,6 +169,11 @@ class TernaryPrefillLinear2:
                         out.buffer_address(),
                         Nt_out,
                         KB,
+                        out_b.buffer_address(),
+                        na,
+                        ha,
+                        hb,
+                        Mt,
                     ],
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
@@ -186,4 +200,7 @@ class TernaryPrefillLinear2:
                 cb(16, ttnn.bfloat16, 2048, 4),
             ],
         )
-        return ttnn.generic_op([x, self.rec, self.sbc, out], program)
+        if split is None:
+            return ttnn.generic_op([x, self.rec, self.sbc, out], program)
+        ttnn.generic_op([x, self.rec, self.sbc, out, out_b], program)
+        return out, out_b

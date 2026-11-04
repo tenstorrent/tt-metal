@@ -43,6 +43,22 @@ class _QG:
         self.t = t
 
 
+class HeadMajor:
+    """A projection output written head-major [1, heads, T, D] (tprefill/linear2.py split=), standing in for the shared
+    code's reshaped [B, T, heads, D] tensor: its reshape and transpose(1, 2) become no-ops and its per-head rms_norm
+    runs on the head-major tensor (the same rows)."""
+
+    def __init__(self, t):
+        self.t = t
+
+
+class QGHeads:
+    """The q projection as head-major q heads and the token-major gate (instead of one [q | gate] tensor)."""
+
+    def __init__(self, q, gate):
+        self.q, self.gate = q, gate
+
+
 class QGSplitTtnn:
     def __init__(self, weights, num_heads, head_dim, inner=None):
         self._w, self._H, self._D = weights, num_heads, head_dim
@@ -58,13 +74,27 @@ class QGSplitTtnn:
         return lin(a, b, *args, **kwargs)
 
     def reshape(self, t, shape, *args, **kwargs):
-        if isinstance(t, _QG):
+        if isinstance(t, (_QG, HeadMajor)):
             return t
         return ttnn.reshape(t, shape, *args, **kwargs)
+
+    def rms_norm(self, t, *args, **kwargs):
+        if isinstance(t, HeadMajor):
+            y = ttnn.rms_norm(t.t, *args, **kwargs)
+            ttnn.deallocate(t.t)
+            return HeadMajor(y)
+        return ttnn.rms_norm(t, *args, **kwargs)
+
+    def transpose(self, t, *args, **kwargs):
+        if isinstance(t, HeadMajor):
+            return t.t  # already [B, heads, T, D]
+        return ttnn.transpose(t, *args, **kwargs)
 
     def chunk(self, t, n, dim=-1):
         if not isinstance(t, _QG):
             return ttnn.chunk(t, n, dim=dim)
+        if isinstance(t.t, QGHeads):
+            return HeadMajor(t.t.q), t.t.gate
         x = t.t
         B, T, W = list(x.shape)
         half = W // 2
@@ -74,5 +104,9 @@ class QGSplitTtnn:
 
     def deallocate(self, t, *args, **kwargs):
         if isinstance(t, _QG):
+            if isinstance(t.t, QGHeads):  # its q and gate live on as the chunk outputs
+                return None
+            return ttnn.deallocate(t.t)
+        if isinstance(t, HeadMajor):
             return ttnn.deallocate(t.t)
         return ttnn.deallocate(t, *args, **kwargs)

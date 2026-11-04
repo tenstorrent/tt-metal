@@ -7,6 +7,7 @@ The converter kept every attention weight as is (no row or column reorder)."""
 import numpy as np
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.attn_qg import HeadMajor, QGHeads
 from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
@@ -63,6 +64,8 @@ class TernaryAttention:
             rq_qg = qg_records(rq, pq, heads, hd_tiles)
             q_qg = TernaryDecodeLinear3.from_packed(device, rq_qg, pq, Kq, Nq)
             self.pre_q = prefill_linear(q_qg, rq_qg)
+            self.pre_hd = hd_tiles  # head size in tiles
+            self.pre_q_tiles = Nq // 2 // 32  # q heads' tile columns (then the gate's)
             self.pre_kv = prefill_linear(self.kv, packed["kv"][0])
             self.pre_o = prefill_linear(self.o, packed["o"][0])
             self.prot_in, self.prot_out = prefill_rotations[Kq], prefill_rotations[self.o.K]
@@ -110,16 +113,15 @@ class TernaryAttentionPrefillTtnn:
             self._xr = prerot.take(a)  # the layer's fused norm + rotation (tprefill/norm_rot.py), else rotate here
             if self._xr is None:
                 self._xr = t.prot_in(a)
-            return t.pre_q(self._xr)
+            # q heads written head-major, the gate token-major (attn_qg.QGHeads; no reshape / transpose of q)
+            q, gate = t.pre_q(self._xr, split=(t.pre_q_tiles, t.pre_hd, 0))
+            return QGHeads(q, gate)
         if b is w.k_proj:
-            kv = t.pre_kv(self._xr)
+            k, v = t.pre_kv(self._xr, split=(t.kv_split // 32, t.pre_hd, t.pre_hd))  # both head-major
             ttnn.deallocate(self._xr)
             self._xr = None
-            s, n = t.kv_split, list(kv.shape)
-            k = ttnn.slice(kv, [0] * (len(n) - 1) + [0], n[:-1] + [s])
-            self._v = ttnn.slice(kv, [0] * (len(n) - 1) + [s], n)
-            ttnn.deallocate(kv)
-            return k
+            self._v = HeadMajor(v)
+            return HeadMajor(k)
         if b is w.v_proj:
             v, self._v = self._v, None
             return v

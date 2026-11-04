@@ -14,6 +14,12 @@ void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t Nt_out = get_common_arg_val<uint32_t>(4);
     const uint32_t KB = get_common_arg_val<uint32_t>(5);
+    // split output (linear2.py split=): tile columns n < NA go to out, the rest to out_b; each head-major
+    // ([heads, T, HA (HB) tiles]) when HA (HB) > 0, else token-major. Unsplit: NA = Nt_out, HA = 0.
+    const uint32_t ob_addr = get_common_arg_val<uint32_t>(6);
+    const uint32_t NA = get_common_arg_val<uint32_t>(7);
+    const uint32_t HA = get_common_arg_val<uint32_t>(8), HB = get_common_arg_val<uint32_t>(9);
+    const uint32_t Mt = get_common_arg_val<uint32_t>(10);
     const uint32_t n_first = get_arg_val<uint32_t>(0), n_count = get_arg_val<uint32_t>(1);
     const uint32_t m_first = get_arg_val<uint32_t>(2), m_count = get_arg_val<uint32_t>(3);
     // weight multicast down the core column: the column's first core reads each group's weights and ratio tiles and
@@ -29,6 +35,7 @@ void kernel_main() {
     constexpr auto w_args = TensorAccessorArgs<2>();
     constexpr auto s_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto ob_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_w = tt::CBIndex::c_1;
     constexpr uint32_t cb_s = tt::CBIndex::c_3;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
@@ -45,6 +52,15 @@ void kernel_main() {
     const auto sb = TensorAccessor(s_args, sb_addr, 2048);
     const uint32_t obytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(o_args, out_addr, obytes);
+    const auto outb = TensorAccessor(ob_args, ob_addr, obytes);
+    const uint32_t NB = Nt_out - NA;
+    auto dest = [&](uint32_t row, uint32_t n) -> uint64_t {
+        if (n < NA) {
+            return out.get_noc_addr(HA ? ((n / HA) * Mt + row) * HA + n % HA : row * NA + n);
+        }
+        const uint32_t nn = n - NA;
+        return outb.get_noc_addr(HB ? ((nn / HB) * Mt + row) * HB + nn % HB : row * NB + nn);
+    };
     const uint32_t wready = get_semaphore(2);
     const uint32_t wvalid = get_semaphore(3);
     volatile tt_l1_ptr uint32_t* wready_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wready);
@@ -101,10 +117,7 @@ void kernel_main() {
         for (uint32_t r = 0; r < m_count; ++r) {
             for (uint32_t c = 0; c < nb / OUT_DIV; ++c) {
                 cb_wait_front(cb_out, 1);
-                noc_async_write(
-                    get_read_ptr(cb_out),
-                    out.get_noc_addr((m_first + r) * Nt_out + (n_first + c0) / OUT_DIV + c),
-                    obytes);
+                noc_async_write(get_read_ptr(cb_out), dest(m_first + r, (n_first + c0) / OUT_DIV + c), obytes);
                 noc_async_write_barrier();
                 cb_pop_front(cb_out, 1);
             }
