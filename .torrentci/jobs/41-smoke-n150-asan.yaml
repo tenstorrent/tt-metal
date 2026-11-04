@@ -15,6 +15,7 @@
 # Run it by hand. asan-build is an implicit dependency.
 jobs:
   - id: smoke-n150-asan
+    checkout: false
     description: "Run the PR Gate runtime validation smoke test (non-CPU cases) on one n150 with the ASan packages"
     timeout: 1h30m
     runs-on:
