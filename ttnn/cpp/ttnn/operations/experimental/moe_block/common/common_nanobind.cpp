@@ -124,8 +124,7 @@ void bind_config(nb::module_& mod) {
         The MoE block's options. Defaults are today's production defaults.
     )doc");
     def_kwargs_init(cfg);
-    cfg.def_rw("deterministic", &MoEBlockConfig::deterministic)
-        .def_rw("combine_snap", &MoEBlockConfig::combine_snap)
+    cfg.def_rw("combine_snap", &MoEBlockConfig::combine_snap)
         .def_rw("head_dram_fallback", &MoEBlockConfig::head_dram_fallback)
         .def_rw("num_links", &MoEBlockConfig::num_links)
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)

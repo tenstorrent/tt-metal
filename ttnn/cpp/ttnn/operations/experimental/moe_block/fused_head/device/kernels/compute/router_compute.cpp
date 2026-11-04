@@ -83,9 +83,9 @@ void kernel_main() {
         cb_reserve_back(SC, ET);
         cb_wait_front(IDX, ET);
         pack_reconfig_data_format(HOLD);
-        // the sources' partials in landing order (ARRB: the slot): all but the last summed into my block's HOLD as they
-        // land (fp32 on the SFPU, packed back in place), the last in the passes below - after the last arrival only its
-        // add is left
+        // the sources' partials in ARRB's order (the slot - the reader's fixed order, so the same sum every run): all
+        // but the last summed into my block's HOLD as they come (fp32 on the SFPU, packed back in place), the last in
+        // the passes below - after the last arrival only its add is left
         uint32_t last = 0;
         for (uint32_t a = 0; a < na; ++a) {
             cb_wait_front(ARRB, 1);

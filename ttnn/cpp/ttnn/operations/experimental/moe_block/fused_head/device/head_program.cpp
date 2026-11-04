@@ -2442,9 +2442,6 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
     auto eng_defs = [&](KernelDescriptor& k) {
         define(k, "RT_MSYNC_OFF", uv(region_of_router("msync")));
         define(k, "RT_FOLD", uv(h.cfg.shape.fold));
-        if (h.cfg.ordered) {
-            define(k, "RT_ARR_ORDERED");
-        }
     };
     const SpanTables spans = span_subs(h.R, h.C, h.ring, h.wrap_y);
     auto join = [](const auto& v) {

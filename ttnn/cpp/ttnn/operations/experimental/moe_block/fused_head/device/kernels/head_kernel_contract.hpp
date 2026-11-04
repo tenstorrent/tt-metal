@@ -196,8 +196,8 @@ enum RouterCommonArg : uint32_t {
     RT_CRTA_VALID_COUNT,
 };
 // Defines:
-//   NCRISC and compute (`eng`): RT_MSYNC_OFF (off["msync"], `u`; RT_MSYNC = arena base + it), RT_FOLD (fold, `u`),
-//     RT_ARR_ORDERED (RouterSpec.ordered = MoEBlockConfig.deterministic);
+//   NCRISC and compute (`eng`): RT_MSYNC_OFF (off["msync"], `u`; RT_MSYNC = arena base + it), RT_FOLD (fold, `u`);
+//     the router's partials always go to compute in a fixed order (deterministic);
 //   compute: RT_SQRTSOFTPLUS + INP_FLOAT32 1 (score_func sqrtsoftplus); RT_ROUTE + the
 //     route-word defines RW_R, RW_C, RW_ME (r C + c), RW_K, RW_RW (route_words(N): 1, 2 past 16 chips), RW_E
 //     (ET 32 / fold), RW_WRAPX / RW_WRAPY (true / false: torus and the axis > 2), RW_XRING_INIT / RW_YRING_INIT

@@ -81,7 +81,6 @@ struct MoEDtypes {
 // The block's options. Geometry (mesh shape, torus) is derived from the mesh and the fabric config by
 // MoEBlockResources, never passed in.
 struct MoEBlockConfig {
-    bool deterministic = true;          // the router's fin in a fixed order (RT_ARR_ORDERED)
     std::optional<float> combine_snap;  // power of two q: every routed term rounded to a multiple of q
     bool head_dram_fallback = true;     // the head planner may take its DRAM fallback
 

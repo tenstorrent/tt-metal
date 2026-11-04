@@ -63,18 +63,15 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
     }
     if (na) {  // the sources' partials as they land (a fused increment of the source slot's own word, 16 B apart): each
-               // slot to the compute in a fixed order (RT_ARR_ORDERED: the order args - the predicted landing order, so
-               // the same sum every run at ~no wait), else in landing order (ARRB) - it sums the early ones while the
-               // last is on its way
+               // slot to the compute (ARRB) in a fixed order - the order args, the predicted landing order - so the sum
+               // is the same every run at ~no wait (the head is always deterministic)
         DeviceZoneScopedN("SE-RLWAIT");
         for (uint32_t a = 0, seen = 0; a < na;) {
             invalidate_l1_cache();
             for (uint32_t s = 0; s < na; ++s) {
-#ifdef RT_ARR_ORDERED
                 if (s != get_arg_val<uint32_t>(ab0 + 2 + a)) {  // (the fixed order)
                     continue;
                 }
-#endif
                 if ((seen >> s & 1) || ctr[4 * s] == 0) {
                     continue;
                 }
