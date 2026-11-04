@@ -40,7 +40,7 @@ from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, Mini
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
 
-from .test_vision_loader import _checkpoint_name
+from .vision_checkpoint import checkpoint_name
 
 # The image code's patch geometry (the defaults) with small widths, so the reference is built in milliseconds.
 CONFIG = MiniMaxM3VisionConfig(
@@ -227,7 +227,7 @@ def test_vision_encoder_checks_patch_geometry(field, monkeypatch, expect_error):
 def test_vision_encoder_rejects_checkpoint_names(monkeypatch, expect_error):
     """Weights under the checkpoint's own (transformers 4.52.4) names raise ValueError naming load_vision_state_dict,
     which renames them."""
-    state_dict = {_checkpoint_name(name): value for name, value in SOURCE.hf_state_dict().items()}
+    state_dict = {checkpoint_name(name): value for name, value in SOURCE.hf_state_dict().items()}
     assert any(name.startswith("patch_merge_mlp.") for name in state_dict)
     with expect_error(ValueError, "weights under the checkpoint's own names.*load_vision_state_dict"):
         _build(monkeypatch, state_dict=state_dict)
@@ -265,7 +265,7 @@ def test_vision_encoder_from_weights_path(monkeypatch, expect_error, tmp_path):
     """from_weights_path builds the model from the vision weights of a checkpoint written as MiniMax-M3's is (the
     checkpoint's names, an index, a config.json): with no config, by its config.json; with one, by that config. An
     empty weights_path raises ValueError instead of reading the current directory."""
-    weights = {_checkpoint_name(name): value for name, value in SOURCE.hf_state_dict().items()}
+    weights = {checkpoint_name(name): value for name, value in SOURCE.hf_state_dict().items()}
     weights["language_model.model.embed_tokens.weight"] = torch.zeros(8, 40)
     shard = "model-00001-of-00001.safetensors"
     save_file(weights, str(tmp_path / shard))
