@@ -102,7 +102,6 @@ def cluster(tmp_path_factory):
             segment_bytes=segment_bytes,
             metadata=f"http://127.0.0.1:{http}/metadata",
             protocol="tcp",
-            read_buffer_bytes=1 << 20,  # smaller than one image, so reads from the other host grow it
         )
 
     store = MooncakeEmbeddingReader.open(config("127.0.0.1", 64 << 20))
@@ -128,10 +127,10 @@ class SimpleCluster:
         self._buffers = []
         self._n = 0
 
-    def put(self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True) -> tuple[bytes, np.ndarray]:
+    def put(self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True) -> tuple[str, np.ndarray]:
         """The encoder service's write: put_from a registered buffer into segment, soft-pinned. Returns (key, value)."""
         self._n += 1
-        media_key = f"test-media-key-{self._n:017d}".encode()  # 32 ASCII bytes
+        media_key = f"test-media-key-{self._n}"
         value = np.random.default_rng(self._n).integers(0, 256, nbytes, dtype=np.uint8)
         assert self.writer.register_buffer(value.ctypes.data, nbytes) == 0
         self._buffers.append(value)
@@ -143,14 +142,14 @@ class SimpleCluster:
         assert self.writer.put_from(media_key, value.ctypes.data, nbytes, config) == 0  # the media key itself
         return media_key, value
 
-    def _descriptor(self, media_key: bytes):
+    def _descriptor(self, media_key: str):
         (replica,) = self.writer.get_replica_desc(media_key)
         return replica.get_memory_descriptor().buffer_descriptor
 
-    def placed_on(self, media_key: bytes) -> str:
+    def placed_on(self, media_key: str) -> str:
         return self._descriptor(media_key).transport_endpoint
 
-    def address(self, media_key: bytes) -> int:
+    def address(self, media_key: str) -> int:
         return self._descriptor(media_key).buffer_address
 
     def master_lookups(self) -> int:
@@ -187,7 +186,7 @@ def test_round_trip_from_another_hosts_store(cluster):
     assert bytes(cluster.store.fetch(media_key)) == value.tobytes()
     after = cluster.store.stats.snapshot()
     assert after["remote_hits"] == before["remote_hits"] + 1
-    assert after["read_buffer_bytes"] >= IMAGE_BYTES  # grew from 1 MB to hold the value
+    assert after["read_buffer_bytes"] >= IMAGE_BYTES  # grew from empty to hold the value
 
 
 @pytest.mark.parametrize("where", ["this_host", "other_host"])
@@ -203,12 +202,12 @@ def test_range_read(cluster, where):
 
 
 def test_missing_key(cluster):
-    absent = b"no-such-media-key".ljust(32, b"-")
+    absent = "no-such-media-key"
     before = cluster.store.stats.snapshot()
     with pytest.raises(Missing):
         cluster.store.fetch(absent)
-    (result,) = cluster.store.fetch_batch([FetchRequest(absent, 0, 64)])
-    assert isinstance(result, Missing)
+    with pytest.raises(Missing):
+        cluster.store.fetch_batch([FetchRequest(absent, 0, 64)])
     with pytest.raises(Missing):
         cluster.store.size(absent)
     after = cluster.store.stats.snapshot()
@@ -216,23 +215,23 @@ def test_missing_key(cluster):
 
 
 def test_batch_of_several_requests(cluster):
-    """A forward's batch: ranges of values on this host and another, and a missing key, in one lookup at the master
-    and one batched read from the other host."""
+    """A forward's batch: ranges of values on this host and another in one lookup at the master and one batched read
+    from the other host. One missing key fails the whole batch."""
     here = [cluster.put(cluster.store.segment) for _ in range(3)]
     there = [cluster.put(cluster.other.segment) for _ in range(2)]
-    absent = b"absent-media-key".ljust(32, b"-")
-    requests = [FetchRequest(k, 64 + 1000 * i, 4096) for i, (k, _) in enumerate(here + there)] + [FetchRequest(absent)]
+    requests = [FetchRequest(k, 64 + 1000 * i, 4096) for i, (k, _) in enumerate(here + there)]
     lookups = cluster.master_lookups()
     got = cluster.store.fetch_batch(requests)
-    # Ours: one batched lookup for all six keys. Mooncake's get_into_ranges then looks the other host's keys up
+    # Ours: one batched lookup for all five keys. Mooncake's get_into_ranges then looks the other host's keys up
     # again: one batched lookup plus one per key.
     assert cluster.master_lookups() - lookups == 1 + 1 + len(there)
     for i, ((_, value), result) in enumerate(zip(here + there, got)):
         assert bytes(result) == value[64 + 1000 * i : 64 + 1000 * i + 4096].tobytes()
-    assert isinstance(got[-1], Missing)
     lookups = cluster.master_lookups()
     cluster.store.fetch_batch([FetchRequest(k) for k, _ in here])  # all on this host: in place
     assert cluster.master_lookups() - lookups == 1
+    with pytest.raises(Missing):
+        cluster.store.fetch_batch(requests + [FetchRequest("absent-media-key")])
 
 
 def test_many_values_from_both_stores(cluster):

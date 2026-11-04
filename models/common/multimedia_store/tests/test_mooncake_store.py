@@ -84,27 +84,26 @@ class FakeClient:
         return 0
 
 
-def _key(i: int) -> bytes:
-    return f"{i:032d}".encode()
+def _key(i: int) -> str:
+    return f"media-{i}"
 
 
 @pytest.fixture
 def setup():
     client = FakeClient()
-    reader = MooncakeEmbeddingReader(client, ME, read_buffer_bytes=1 << 20)
+    reader = MooncakeEmbeddingReader(client, ME)
     rng = np.random.default_rng(0)
     local = rng.integers(0, 256, 300_000, dtype=np.uint8)
     remote = rng.integers(0, 256, 200_000, dtype=np.uint8)
-    client.put(_key(1).decode(), ME, local)
-    client.put(_key(2).decode(), OTHER, remote)
+    client.put(_key(1), ME, local)
+    client.put(_key(2), OTHER, remote)
     return client, reader, local, remote
 
 
-def test_key_must_be_32_ascii_bytes(setup):
+def test_key_must_be_ascii(setup):
     _, reader, _, _ = setup
-    for bad in (b"short", b"\xff" * 32):
-        with pytest.raises(ValueError):
-            reader.fetch(bad)
+    with pytest.raises(ValueError, match="not ASCII"):
+        reader.fetch("media-\u00e9")
 
 
 @pytest.mark.parametrize(
@@ -127,7 +126,7 @@ def test_config_from_env():
     }
     c = MediaEmbeddingStoreConfig.from_env(env)
     assert (c.master, c.segment, c.segment_bytes, c.device) == ("10.0.0.9:50051", ME, 50 << 30, "rocep201s0f0")
-    assert (c.metadata, c.protocol, c.read_buffer_bytes) == ("http://10.0.0.9:8080/metadata", "rdma", 10 << 20)
+    assert (c.metadata, c.protocol) == ("http://10.0.0.9:8080/metadata", "rdma")
 
 
 def test_config_needs_segment_and_size():
@@ -155,12 +154,11 @@ def test_remote_value_is_copied(setup):
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (0, 1, remote.nbytes)
 
 
-def test_batch_mixes_local_remote_and_missing_in_one_lookup(setup):
+def test_batch_mixes_local_and_remote_in_one_lookup(setup):
     client, reader, local, remote = setup
     requests = [
         FetchRequest(_key(1), 1000, 5000),
         FetchRequest(_key(2), 64, 2000),
-        FetchRequest(_key(9)),
         FetchRequest(_key(2), remote.nbytes - 100),
         FetchRequest(_key(1), 10, 0),
         FetchRequest(_key(2), 10, 0),
@@ -169,13 +167,20 @@ def test_batch_mixes_local_remote_and_missing_in_one_lookup(setup):
     got = reader.fetch_batch(requests)
     assert bytes(got[0]) == local[1000:6000].tobytes()
     assert bytes(got[1]) == remote[64:2064].tobytes()
-    assert isinstance(got[2], Missing)
-    assert bytes(got[3]) == remote[-100:].tobytes()
-    assert bytes(got[4]) == bytes(got[5]) == b""
-    assert bytes(got[6]) == local.tobytes()
+    assert bytes(got[2]) == remote[-100:].tobytes()
+    assert bytes(got[3]) == bytes(got[4]) == b""
+    assert bytes(got[5]) == local.tobytes()
     assert client.lookups == 3  # one batched lookup for all keys, then one remote read of one key
     s = reader.stats.snapshot()
-    assert (s["local_hits"], s["remote_hits"], s["misses"], s["fetch_calls"]) == (3, 3, 1, 1)
+    assert (s["local_hits"], s["remote_hits"], s["fetch_calls"]) == (3, 3, 1)
+
+
+def test_one_missing_key_fails_the_batch(setup):
+    _, reader, _, _ = setup
+    with pytest.raises(Missing):
+        reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(9)), FetchRequest(_key(2))])
+    s = reader.stats.snapshot()
+    assert (s["misses"], s["hits"]) == (1, 0)
 
 
 def test_range_outside_value(setup):
@@ -184,10 +189,15 @@ def test_range_outside_value(setup):
         reader.fetch_batch([FetchRequest(_key(1), local.nbytes - 1, 2)])
 
 
-def test_read_buffer_grows_on_demand(setup):
-    client, reader, _, _ = setup
+def test_read_buffer_starts_empty_and_grows_on_demand(setup):
+    client, reader, _, remote = setup
+    assert reader.stats.snapshot()["read_buffer_bytes"] == 0 and not client.registered
+    reader.fetch(_key(1))  # in place: no buffer needed
+    assert not client.registered
+    reader.fetch(_key(2))
+    assert list(client.registered.values()) == [remote.nbytes]
     big = np.random.default_rng(1).integers(0, 256, 3 << 20, dtype=np.uint8)
-    client.put(_key(3).decode(), OTHER, big)
+    client.put(_key(3), OTHER, big)
     assert bytes(reader.fetch(_key(3))) == big.tobytes()
     grown = reader.stats.snapshot()["read_buffer_bytes"]
     assert grown >= big.nbytes and list(client.registered.values()) == [grown]  # the old buffer was unregistered
@@ -206,24 +216,24 @@ def test_missing_key(setup):
 
 def test_unfinished_put_reads_as_missing(setup):
     client, reader, local, _ = setup
-    client.put(_key(4).decode(), ME, local, status="PROCESSING")
+    client.put(_key(4), ME, local, status="PROCESSING")
     with pytest.raises(Missing):
         reader.fetch(_key(4))
 
 
 def test_replicated_value_is_unavailable(setup):
     client, reader, local, _ = setup
-    client.put(_key(5).decode(), ME, local, replicas=2)
-    got = reader.fetch_batch([FetchRequest(_key(5)), FetchRequest(_key(1), 0, 8)])
-    assert isinstance(got[0], StoreUnavailable) and bytes(got[1]) == local[:8].tobytes()
+    client.put(_key(5), ME, local, replicas=2)
+    with pytest.raises(StoreUnavailable, match="2 replicas"):
+        reader.fetch(_key(5))
 
 
-def test_unreachable_master_fails_every_request(setup):
+def test_unreachable_master_is_unavailable(setup):
     client, reader, _, _ = setup
     client.master_up = False
-    got = reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
-    assert all(isinstance(r, StoreUnavailable) for r in got)
-    assert reader.stats.snapshot()["errors"] == 2
+    with pytest.raises(StoreUnavailable):
+        reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
+    assert reader.stats.snapshot()["errors"] == 1
 
 
 def test_closed_reader_is_unavailable(setup):
@@ -250,12 +260,12 @@ def test_plain_tuples_and_an_empty_batch(setup):
     assert reader.fetch_batch([]) == [] and client.lookups == lookups
 
 
-def test_failed_remote_read_fails_only_remote_requests(setup):
-    client, reader, local, _ = setup
+def test_failed_remote_read_is_unavailable(setup):
+    client, reader, _, _ = setup
 
     def broken(*args):
         raise RuntimeError("transfer failed")
 
     client.get_into_ranges = broken
-    got = reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])
-    assert bytes(got[0]) == local[:8].tobytes() and isinstance(got[1], StoreUnavailable)
+    with pytest.raises(StoreUnavailable, match="transfer failed"):
+        reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])

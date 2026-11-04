@@ -3,7 +3,7 @@
 
 """How prefill reads the media embeddings the encoder service stored for this host."""
 
-from typing import NamedTuple, Protocol, Sequence, Union
+from typing import NamedTuple, Protocol, Sequence
 
 
 class Missing(KeyError):
@@ -17,19 +17,16 @@ class StoreUnavailable(RuntimeError):
 class FetchRequest(NamedTuple):
     """Bytes [offset, offset + length) of the value under media_key; length -1 runs to the end of the value."""
 
-    media_key: bytes
+    media_key: str
+    """ASCII; the module that generates media keys guarantees it."""
     offset: int = 0
     length: int = -1
 
 
-FetchResult = Union[memoryview, Missing, StoreUnavailable]
-
-
 class EmbeddingReader(Protocol):
-    def fetch(self, media_key: bytes) -> memoryview:
+    def fetch(self, media_key: str) -> memoryview:
         """The stored value under media_key, in the model's format. Raises Missing or StoreUnavailable."""
 
-    def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[FetchResult]:
-        """One result per request, in order: the requested bytes, or the Missing or StoreUnavailable error for that
-        request alone, so the caller can fail just the requests it belongs to. For a forward that holds several
-        requests' media."""
+    def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
+        """The requested bytes for each request, in order, for a forward that holds several requests' media. Raises
+        Missing or StoreUnavailable for the first request that fails, failing the whole batch."""
