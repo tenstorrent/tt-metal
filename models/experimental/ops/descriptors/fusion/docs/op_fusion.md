@@ -2657,7 +2657,7 @@ Fused dispatch uses a **four-level caching architecture**:
 | Level | Key | Stores | Avoids | Eviction |
 |-------|-----|--------|--------|----------|
 | **Program Key** (per-factory `_program_key_cache`) | cheap arg fingerprint (`id()` / `hash(spec)`) | `(program_cache_key, input_name_map, input_names)` | Full factory body on repeated inline calls | LRU (default 128, `TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES`) |
-| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup | LRU (default 256, `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`) |
+| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id + explicit output specs | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup | LRU (default 256, `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`) |
 | **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor | — |
 | **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots | — |
 
@@ -2693,7 +2693,7 @@ before using the cached entry.
 
 ```python
 class OpDescriptor:
-    program_cache_key: int | None  # None for persistent until first update()
+    program_cache_key: Hashable | None  # None for persistent until first update()
 
     @property
     def descriptor(self):
@@ -2748,13 +2748,18 @@ Each factory's cache is registered in `_PROGRAM_KEY_CACHE_REGISTRY` so that
 
 ### Cache Key
 
-The cache key is a single integer — the hash of three components:
+The cache key is a tuple with four components:
 
 ```python
-def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
-    surface = _build_cache_surface_key(items, container_prefix)
-    return (surface, tuple(_branch_program_cache_key(op) for op in ops), device_id)
+(surface, tuple(op.program_cache_key for op in ops), device_id, bound_specs)
 ```
+
+A factory that materializes against caller-bound outputs includes their full
+TensorSpecs and both tile transpose flags in its program key. Unbound factories
+therefore keep their own default output specs. Binding after materialization
+does not change the program key. Freed bindings (including views of freed roots)
+do not select a different cached entry.
+
 
 1. **Topology fingerprint** (`surface`): Encodes the tree shape and container
    kind as a string — `"S(O,O,O)"` for a three-op `Sequential`,
@@ -2771,6 +2776,12 @@ def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
    id), else Python `id(device)`, else `0` when no device is known.  This
    prevents cross-mesh cache collisions — the device program cache behind
    `fusion_dispatch_op` is tied to a specific mesh.
+
+4. **Bound output specs**: normally an empty tuple. With no base entry, the
+   cold build uses the base key without reading binding specs. When a base
+   entry exists, only its returned outputs are checked. Matching bindings
+   reuse it; a different spec or tile transpose flag uses a variant key for
+   the returned bindings. This lookup does not materialize factory outputs.
 
 Two builds with the same key have identical fused kernel source, CB layout,
 barrier configuration, and semaphore structure.  Only runtime args (tensor
@@ -2791,17 +2802,75 @@ hit without re-running codegen:
 | `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
 | `merged_input_len` | `int` or `None` | Length of deduped input list; enables preallocated list on cache hit |
 | `address_slots` | `AddressSlots` (opaque C++) | Maps descriptor CB/runtime-arg positions to IO tensors and logical semaphore indices |
-| `output_specs` | `list[TensorSpec]` or `None` | Cached output tensor metadata (output_sources order) for ephemeral allocation on the hot path |
+| `output_specs` | `list[TensorSpec]` or `None` | Cached metadata for checking explicit bindings and allocating unbound outputs |
 | `shared_output_map` | `list[int]` | Maps shared outputs to their canonical index (empty = all unique) |
 | `result_reorder` | `tuple[int, ...]` or `None` | Reorders outputs from output_sources order to default_results order |
 | `dispatch_state` | `FusionDispatchState` | Caches descriptor/output metadata and semaphore-bank configuration for C++ warm/hot dispatch |
 
 **No IO or semaphore tensors are stored.** The cache holds only the
-descriptor, specs, index mappings, and C++ dispatch metadata. Output tensors
-and the semaphore bank are allocated fresh per call. This avoids pinning
+descriptor, specs, index mappings, and C++ dispatch metadata. Unbound output tensors
+and the semaphore bank are allocated fresh per cached `run()` call. This avoids pinning
 device buffers in the cache and prevents stale-buffer bugs when activations
 are reallocated between forward passes.
 
+
+Caller assignment to a `LazyOutputList` slot supplies an output binding for cached
+`run()`. Plain-list eager descriptor outputs are also caller bindings. Deferred plain lists
+keep their backing list, but initial tensors and later factory writes are
+unbound. Only explicit caller assignments through the lazy wrapper bind slots. Factory
+allocations and outputs retained from an earlier run are not bindings. A freed
+binding (including a view whose root was freed) is treated as an unbound slot and
+allocated from the cached output spec. A binding that covers only part of the
+mesh is also treated as unbound on cached runs, so a cached binding cannot
+restrict other branches to fewer coordinates. Cold runs keep main's behavior:
+a coordinate-restricted output can narrow the whole dispatch to its coordinates.
+This does not change the direct
+`build()`/`launch()` allocation model.
+
+`LazyOutputList([tensor])` starts unbound; assigning a tensor explicitly binds it.
+Assigning `None` removes the binding.
+An undecorated eager descriptor's plain `[tensor]` starts bound. Binding one
+lazy slot preserves allocation of the other slots, without replacing the binding.
+The allocator callback receives a copy when some slots are bound; callbacks
+that allocate every slot may create temporary outputs for bound slots. Once all
+slots have values, the callback is released so it no longer retains its inputs.
+
+Rebinding applies only to outputs returned by the fused program that were not
+compiled in place over an input. Non-final Sequential outputs and in-place
+aliases still write their compiled buffers. A cached call can return the bound
+tensor without writing it; the unmodified path returns an unwritten fresh tensor
+for these outputs. A cold run writes
+the tensors the descriptor was built with. Rebinding takes effect on cached
+runs. If a cold build or direct `OpDescriptor.launch()` sees a different output
+buffer, bind the output before the op materializes, or construct a new descriptor.
+Bindings made before materialization are forwarded into pending lazy slots
+before the factory allocates them, including cached factory shells and the
+first persistent update. If the factory has already allocated different outputs,
+materialization raises and leaves the op available for retry; a new list
+containing the same bound tensors is allowed. For a factory that allocates its
+own outputs (such as slice), bind after the op's first run.
+
+A binding changed after its descriptor was built works only while a compatible
+entry is cached. After `clear_build_cache()` or LRU eviction, the cold build
+raises; bind before materialization or construct a new descriptor for a cold
+run. A binding made before materialization survives successful materialization.
+Changing an input buffer with `update()` after its descriptor was built is
+supported by cached `run()`, but not by a cold rebuild or direct `launch()`;
+construct a new descriptor for those paths. The first update that materializes
+a deferred op records its inputs normally.
+Outputs compiled over the same buffer as another output cannot be rebound
+independently: both writes go to the first output.
+
+Explicit bindings survive persistent cleanup. Unbound lazy slots keep their
+length but become `None`; a later cold rebuild raises a clear error requiring
+new descriptors. An unbound `None` slot with no allocator has the same cold-path
+error. Cold launches also reject a freed binding or a view whose root
+was freed. Cached `run()` continues to allocate in place of freed bindings.
+
+A new container with matching bound specs reuses the base entry. Different specs
+select a separate entry, but its cold build must still use the outputs its branch
+descriptors were constructed with. Rebinding within the same persistent
+container must match its cached output spec and tile transpose flags.
 
 ### Cache Hit: Two Fast Paths
 
@@ -2815,13 +2884,13 @@ constructs a `FusedOp`, and the `.descriptor` property of deferred branch
 
 Used by inline containers (new each call) and on the first `run()` of a
 persistent container. The eagerly-created `FusionDispatchState` allocates
-ephemeral outputs and a fresh semaphore bank:
+unbound outputs and a fresh semaphore bank, and uses explicit live output bindings:
 
 ```python
 entry = _build_cache_get(cache_key)     # promotes key to MRU on hit
 if entry is not None:
     inputs = <identity-deduplicated branch input_tensors>
-    outputs = entry.dispatch_state.dispatch(inputs)
+    outputs = entry.dispatch_state.dispatch(inputs, output_bindings)
 ```
 
 After dispatch, `_container_run` sets `_cached_entry` on the container so
@@ -2830,7 +2899,8 @@ subsequent calls take the hot path without recomputing the cache key.
 #### Persistent hot path (call 2+ on the same container)
 
 Bypasses cache-key computation entirely.  `FusionDispatchState.dispatch`
-allocates ephemeral output tensors from cached `TensorSpec` metadata, patches
+uses explicit live output bindings and allocates unbound outputs from cached
+`TensorSpec` metadata, patches
 the descriptor, and dispatches — all in a single C++ call:
 
 ```python
@@ -2839,7 +2909,7 @@ if getattr(container, "_cached_entry_gen", -1) != _BUILD_CACHE_GEN:
     # Stale — fall through to cache lookup / cold path
     ...
 inputs = <identity-deduplicated from container._cached_ops>
-outputs = entry.dispatch_state.dispatch(inputs)
+outputs = entry.dispatch_state.dispatch(inputs, output_bindings)
 ```
 
 The generation guard prevents a persistent container from using a stale
@@ -2901,7 +2971,8 @@ fusion_dispatch_op(
 **`FusionDispatchState` (warm and persistent-hot paths):** A C++ class that caches
 output `TensorSpec` metadata, `shared_output_map`, `result_reorder`, and
 the `MeshProgramDescriptor` plus semaphore-bank configuration. Its
-`dispatch(inputs)` method allocates ephemeral outputs and a fresh bank,
+`dispatch(inputs, output_bindings)` method uses explicit live bindings,
+allocates unbound outputs and a fresh bank,
 patches the descriptor, dispatches, and applies result reordering—all in one
 C++ call with no per-semaphore Python round trips.
 Created once per `_CacheEntry` and shared across all containers with the
@@ -2914,7 +2985,7 @@ entry.dispatch_state = FusionDispatchState(
     descriptor, address_slots, mesh_device,
     semaphore_core_ranges, semaphore_initial_values,
 )
-outputs = entry.dispatch_state.dispatch(inputs)
+outputs = entry.dispatch_state.dispatch(inputs, output_bindings)
 ```
 
 On the C++ side, `FusionDispatchMeshProgramFactory` implements a two-phase
@@ -2971,9 +3042,9 @@ if `clear_build_cache()` was called in between, the generation mismatch
 forces a fall-through to the warm/cold path.  Otherwise, cache-key
 computation is bypassed entirely and dispatch goes through the C++ hot path.
 
-No `FusedOp` is retained on the container between calls. Output tensors and
-the semaphore bank are ephemeral—zero fusion-owned L1 retention between
-forward passes.
+No `FusedOp` is retained on the container between calls. Unbound outputs and
+the semaphore bank are allocated per cached dispatch. Caller-supplied outputs
+remain owned by the caller and stay bound through persistent cleanup.
 
 See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
 at the top of this document for usage examples.
@@ -2982,9 +3053,10 @@ at the top of this document for usage examples.
 ### Cache Invalidation
 
 The fusion build cache key incorporates the topology fingerprint, all branch
-`program_cache_key` values, and the mesh device id.  If any of these change
-— different op structure, different kernel config, different device — the
-hash changes and a full rebuild occurs.
+`program_cache_key` values and the mesh device id. It splits on returned
+binding specs only when a base entry exists and a returned binding differs
+from that entry's compiled spec or tile transpose flags. Changes to topology,
+kernel configuration or device select a different base key.
 
 `clear_build_cache()` performs three operations:
 

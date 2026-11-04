@@ -16,7 +16,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include <internal/cluster_noc_helpers.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
