@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
@@ -27,14 +28,15 @@ def resolve_weights_dir(model: str) -> Path:
 
 
 def checkpoint_id(*paths: Path) -> str:
-    """Names the content of a checkpoint's weights files for the conversion cache: per file, its Hugging Face blob
-    hash, else its path, size and modification time."""
+    """Names the content of a checkpoint's weights files for the conversion cache: per file, the Hugging Face blob hash
+    it resolves to, else the resolved file's path, size and modification time."""
 
     def file_id(path: Path) -> str:
-        if path.is_symlink():
-            return Path(os.path.realpath(path)).name[:16]
-        stat = path.stat()
-        return hashlib.sha256(f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+        real = Path(os.path.realpath(path))
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", real.name):
+            return real.name[:16]
+        stat = real.stat()
+        return hashlib.sha256(f"{real}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
 
     ids = [file_id(path) for path in paths]
     return ids[0] if len(ids) == 1 else hashlib.sha256(":".join(ids).encode()).hexdigest()[:16]
