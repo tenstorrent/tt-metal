@@ -91,6 +91,30 @@ def test_mk_stack_probe(mesh_device):
         for L in range(len(tps)):
             _, marks = stack.probe_marks(L)
             logger.info(f"MK_STACK_PROBE marks layer {LAYERS[L]}: {marks}")
+    if os.environ.get("GLM53_MK_CHECK", "0") == "1":
+        # self-consistency of the STACK against the single-layer programs run in sequence (the same shards, the same
+        # partial sums on this mesh: no HF golden needed, so a TP-vtp-sized geometry on fewer chips is checkable):
+        # fresh states, the stack's input residual x -> layer programs one after another -> compare with the stack's
+        # residual after its launch
+        H = cfg.hidden_size
+        res_stack = ttnn.to_torch(ttnn.get_device_tensors(res)[0]).float()
+        states2 = [tp.attn.allocate_state(B) for tp in tps]
+        xr = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()  # the stack's input (replicated)
+        cur = tps[0].replicated(xr.reshape(1, 1, T, 4 * H).contiguous(), ttnn.float32)
+        for tp, st in zip(tps, states2):
+            s1, out, _, _ = tp(cur, st.C, active, st.S, t=T)
+            ttnn.synchronize_device(mesh_device)
+            cur = out
+        o_seq = ttnn.to_torch(ttnn.get_device_tensors(cur)[0]).float().reshape(T, 4, H)
+        o_stk = res_stack.reshape(-1, H)[: 4 * T].reshape(T, 4, H) if res_stack.numel() >= 4 * T * H else res_stack
+        a, b = o_stk.reshape(-1), o_seq.reshape(-1)
+        fin = bool(torch.isfinite(a).all())
+        p_ = float(torch.corrcoef(torch.stack([a.nan_to_num(0, 1e9, -1e9), b]))[0, 1]) if fin else 0.0
+        logger.info(
+            f"MK_STACK_CHECK: mesh {MESH} vtp {VTP} layers {LAYERS} t {T}: stack vs sequential layer programs pcc "
+            f"{p_:.6f}; stack finite {fin} absmax {float(a.nan_to_num(0).abs().max()):.3g}; sequential absmax "
+            f"{float(b.abs().max()):.3g}; res shape {tuple(res_stack.shape)}"
+        )
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for _ in range(N_TRACE):
         stack(hists, active, ss)
