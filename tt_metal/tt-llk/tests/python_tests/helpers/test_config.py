@@ -2278,6 +2278,18 @@ class TestConfig:
         self.generate_variant_hash()
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             self.build_elfs()
+        elif (
+            os.environ.get("LLK_SHUFFLE_SEED")
+            and not (
+                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / ".build_complete"
+            ).exists()
+        ):
+            # Trial: a shuffled measuring order can ask for a variant id the producer did not build.
+            out = TestConfig.perf_run_dir()
+            out.mkdir(parents=True, exist_ok=True)
+            with open(out / f"shuffle_rebuilt.{os.getpid()}.txt", "a") as f:
+                f.write(f"{self.test_name} {self.variant_id}\n")
+            self.build_elfs()
         self._prepared = True
 
     def run(self, poll_callback=None):
