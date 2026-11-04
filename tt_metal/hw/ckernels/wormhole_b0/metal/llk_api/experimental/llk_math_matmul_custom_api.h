@@ -34,7 +34,11 @@ inline void llk_math_matmul_init_no_mop(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL = 0,
+    int PHASES = get_math_num_fidelity_phases(to_underlying(math_fidelity)),
+    bool INNER_HALF = false>
 inline void llk_math_matmul_no_mop(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -55,7 +59,7 @@ inline void llk_math_matmul_no_mop(
 
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
-    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL>(
+    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL, PHASES, INNER_HALF>(
         dst_index, ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }
 

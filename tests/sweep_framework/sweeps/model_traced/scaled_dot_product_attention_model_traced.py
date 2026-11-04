@@ -276,7 +276,6 @@ def run(
                 qm = re.search(r"q_chunk_size=(\d+)", val)
                 km = re.search(r"k_chunk_size=(\d+)", val)
                 em = re.search(r"exp_approx_mode=(\w+)", val)
-                mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
                 # sub_core_grids keeps kernels off dispatch cores; preserve it.
                 sub_core_grids = None
                 if "sub_core_grids=std::nullopt" not in val:
@@ -313,8 +312,6 @@ def run(
                     )
                     if em:
                         pc_kwargs["exp_approx_mode"] = em.group(1).lower() == "true"
-                    if mcm:
-                        pc_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
                     if sub_core_grids is not None:
                         pc_kwargs["sub_core_grids"] = sub_core_grids
                     op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**pc_kwargs)

@@ -382,7 +382,7 @@ The callstack clearly points to the compute kernel (``compute_pool_2d.cpp``) as 
 Addressed LLK assert failures in SDPA/MLA kernels caused by unpacker configuration mismatches. The fixes were entirely in kernel code:
 
 1. **Fixed operand ordering** — ``reconfig_data_format(in0, in1)`` in ``sdpa_flash_decode.cpp`` was reordered to ``reconfig_data_format(in1, in0)`` to match the ``state_configure(in1, in0)`` call used by the matmul path.
-2. **Added missing reconfigure calls** — ``reconfig_data_format`` and ``pack_reconfig_data_format`` calls were added in ``compute_common.hpp`` to keep unpacker/packer configuration consistent before matmul init and execution in the SDPA inner loop.
+2. **Added missing reconfigure calls** — ``reconfig_data_format`` and ``pack_reconfig_data_format`` calls were added in ``compute_common.hpp`` (now ``sdpa_block_ops.hpp``) to keep unpacker/packer configuration consistent before matmul init and execution in the SDPA inner loop.
 
 After the kernel fixes, all ``skip_with_llk_assert`` decorators were removed from the SDPA/MLA test files.
 

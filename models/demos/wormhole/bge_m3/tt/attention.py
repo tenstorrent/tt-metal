@@ -590,14 +590,9 @@ def _sdpa_program_config(seq_len, mesh_device, batch_size=None, data_parallel=Fa
         "k_chunk_size": k_chunk,
         "exp_approx_mode": _sdpa_exp_approx(seq_len, mesh_device),
     }
-    if seq_len == 512 and batch_size in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
-        kwargs["max_cores_per_head_batch"] = 8
-        # NOTE: B16 max_cores_per_head_batch swept {2,4,8,16,none} — all within
-        # 0.06ms noise; kept 8 (B8/B32 value).
-    # NOTE: swept B8 SDPA grid {8x8, 10x10, 11x10} x max_cores {none,4,8} at the
-    # 256x256 chunk: 11x10 + max_cores=8 is optimal (24.28ms). 8x8=64 cores
-    # regresses to ~24.89ms (B8's 128 head-batch pairs want more cores, unlike
-    # B1 where 8x8 wins). Exhausted.
+    # NOTE: swept B8 SDPA grid {8x8, 10x10, 11x10} at the 256x256 chunk: 11x10 is
+    # optimal (24.28ms). 8x8=64 cores regresses to ~24.89ms (B8's 128 head-batch
+    # pairs want more cores, unlike B1 where 8x8 wins). Exhausted.
     return ttnn.SDPAProgramConfig(**kwargs)
 
 

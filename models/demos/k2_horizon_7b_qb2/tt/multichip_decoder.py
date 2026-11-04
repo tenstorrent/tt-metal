@@ -21,8 +21,9 @@ from .optimized_decoder import MatmulGeometry, OptimizedDecoder, PrecisionPolicy
 class MultichipDecoder(OptimizedDecoder):
     prefill_q_chunk = 128
     prefill_k_chunk = 256
-    accurate_attention_batch_size = 32
-    accurate_attention_transport = "packed_gqa_rows_v1"
+    # The chunked decode fallback runs one request per ACCURATE-recipe call (accurate_attention).
+    accurate_attention_batch_size = 1
+    accurate_attention_transport = "per_row_v1"
     # Beyond the stock decode bound: split-K flash decode with FP32 recurrence
     # (accurate_flash_decode). "chunked" restores the chunked-prefill fallback.
     accurate_decode_kernel = "flash"
@@ -584,41 +585,16 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
     def _accurate_decode_attention(self, q, kv_cache, page_table, current_pos):
-        """Pack the four query heads sharing each KV head into independent rows."""
+        """Each request's eight query heads as one 32-row Q chunk at its own aligned position (ACCURATE recipe)."""
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        batch = q.shape[1]
-        per_group = []
-        start = 0
-        while start < batch:
-            count = 1 << (min(self.accurate_attention_batch_size, batch - start).bit_length() - 1)
-            if count == 1:
-                # Retain the original scalar path and its eight separate Q heads.
-                pos = ttnn.to_layout(ttnn.reshape(current_pos[start : start + 1], (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
-                pos = ttnn.maximum(pos, 0)
-                offset = ttnn.reshape(ttnn.to_layout(ttnn.bitwise_and(pos, -32), ttnn.ROW_MAJOR_LAYOUT), (1,))
-                index = ttnn.repeat(ttnn.typecast(ttnn.bitwise_and(pos, 31), ttnn.uint32), (1, 8, 1, 128))
-                query = ttnn.repeat(ttnn.permute(q[:, start : start + 1, :, :], (0, 2, 1, 3)), (1, 1, 32, 1))
-                offset_args = {"chunk_start_idx_tensor": offset}
-            else:
-                if q.dtype != ttnn.bfloat16:
-                    raise ValueError("Packed accurate attention requires the selected BF16 queries without a cast")
-                # The unchanged reader/compute use floor(position / 32) for the K
-                # extent. The private writer also needs position % 32, so retain
-                # each full clamped position in its distinct scalar buffer owner.
-                pos = ttnn.to_layout(
-                    ttnn.reshape(current_pos[start : start + count], (1, 1, 1, count)), ttnn.TILE_LAYOUT
-                )
-                pos = ttnn.maximum(pos, 0)
-                positions = ttnn.reshape(ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT), (count,))
-                offsets = [positions[row : row + 1] for row in range(count)]
-                offset_args = {"chunk_start_idx_tensors": offsets, "packed_gqa": True}
-                # Local heads 0..3 share KV head 0 and heads 4..7 share KV head 1.
-                # Explicit row-major reshapes and padding preserve every BF16 bit.
-                query = ttnn.to_layout(q[:, start : start + count, :, :], ttnn.ROW_MAJOR_LAYOUT)
-                query = ttnn.reshape(query, (count, 2, 4, 128))
-                query = ttnn.pad(query, [(0, 0), (0, 0), (0, 28), (0, 0)], 0)
-                query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-            table = page_table[start : start + count, :]
+        per_request = []
+        for row in range(q.shape[1]):
+            pos = ttnn.to_layout(ttnn.reshape(current_pos[row : row + 1], (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
+            pos = ttnn.maximum(pos, 0)
+            offset = ttnn.reshape(ttnn.to_layout(ttnn.bitwise_and(pos, -32), ttnn.ROW_MAJOR_LAYOUT), (1,))
+            index = ttnn.repeat(ttnn.typecast(ttnn.bitwise_and(pos, 31), ttnn.uint32), (1, 8, 1, 128))
+            query = ttnn.repeat(ttnn.permute(q[:, row : row + 1, :, :], (0, 2, 1, 3)), (1, 1, 32, 1))
+            table = page_table[row : row + 1, :]
             padding = (-table.shape[1]) % 8
             if padding:
                 table = ttnn.concat([table, ttnn.repeat(table[:, -1:], (1, padding))], dim=1)
@@ -627,21 +603,12 @@ class MultichipDecoder(OptimizedDecoder):
                 kv_cache[0],
                 kv_cache[1],
                 table,
+                chunk_start_idx_tensor=offset,
                 q_chunk_size=32,
                 k_chunk_size=128,
-                **offset_args,
             )
-            if count == 1:
-                output = ttnn.permute(ttnn.gather(attended, 2, index), (0, 2, 1, 3))
-            else:
-                # Discard zero-query rows and restore KV-major, query-head-major
-                # order before the existing output projection sees its eight heads.
-                output = ttnn.to_layout(attended[:, :, :4, :], ttnn.ROW_MAJOR_LAYOUT)
-                output = ttnn.reshape(output, (1, count, 8, 128))
-                output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-            per_group.append(output)
-            start += count
-        return ttnn.concat(per_group, dim=1) if len(per_group) > 1 else per_group[0]
+            per_request.append(ttnn.permute(ttnn.gather(attended, 2, index), (0, 2, 1, 3)))
+        return ttnn.concat(per_request, dim=1) if len(per_request) > 1 else per_request[0]
 
     def _prefill_chunk(self, x, *, rope, kv_cache, page_table, start_pos):
         logical = x.shape[2]
