@@ -164,7 +164,10 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 void BuildEnvManager::add_build_env(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    auto& dev_build_env = device_id_to_build_env_[device_id];
+    // A new object every time: whoever still holds the previous one (get_device_build_env_ptr) keeps it intact.
+    auto& dev_build_env_ptr = device_id_to_build_env_[device_id];
+    dev_build_env_ptr = std::make_shared<DeviceBuildEnv>();
+    auto& dev_build_env = *dev_build_env_ptr;
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
@@ -188,6 +191,12 @@ void BuildEnvManager::add_build_env(
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
     TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
+    return *device_id_to_build_env_[device_id];
+}
+
+std::shared_ptr<const DeviceBuildEnv> BuildEnvManager::get_device_build_env_ptr(ChipId device_id) {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
 
@@ -209,15 +218,25 @@ const JitBuildState& BuildEnvManager::get_firmware_build_state(
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    const uint32_t state_idx =
-        get_kernel_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
-    return get_device_build_env(device_id).kernel_build_states[state_idx];
+    return get_kernel_build_state(get_device_build_env(device_id), programmable_core, processor_class, processor_id);
 }
 
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
+    return get_kernel_build_states(get_device_build_env(device_id), programmable_core, processor_class);
+}
+
+const JitBuildState& BuildEnvManager::get_kernel_build_state(
+    const DeviceBuildEnv& build_env, uint32_t programmable_core, uint32_t processor_class, int processor_id) const {
+    const uint32_t state_idx =
+        get_kernel_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    return build_env.kernel_build_states[state_idx];
+}
+
+JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
+    const DeviceBuildEnv& build_env, uint32_t programmable_core, uint32_t processor_class) const {
     auto [b_id, count] = get_kernel_build_index_and_state_count(programmable_core, processor_class);
-    const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
+    const auto& kernel_build_states = build_env.kernel_build_states;
     return {kernel_build_states.begin() + b_id, static_cast<size_t>(count)};
 }
 
@@ -327,7 +346,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_firmware_binary_root());
+        build_env_info.emplace_back(device_id, build_env->build_key(), build_env->build_env.get_firmware_binary_root());
     }
     return build_env_info;
 }

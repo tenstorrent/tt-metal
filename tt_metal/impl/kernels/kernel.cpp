@@ -1136,51 +1136,66 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
+void Kernel::generate_binaries_detached(
+    BuildEnvManager& /*build_env_manager*/, const DeviceBuildEnv& /*build_env*/) const {
+    TT_THROW("Kernel {} cannot be built without a device", this->name());
+}
+
 void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    generate_binaries_detached(build_env_manager_for(*device), device_build_env_for(*device));
+}
+
+void DataMovementKernel::generate_binaries_detached(
+    BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const {
+    jit_build_genfiles_kernel_include(build_env.build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
                                     .hal()
                                     .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
-        this);
+    jit_build(build_env_manager.get_kernel_build_state(build_env, tensix_core_type, dm_class_idx, riscv_id), this);
 }
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    generate_binaries_detached(build_env_manager_for(*device), device_build_env_for(*device));
+}
+
+void EthernetKernel::generate_binaries_detached(
+    BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const {
+    jit_build_genfiles_kernel_include(build_env.build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type = MetalContext::instance(this->get_context_id())
                                    .hal()
                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(
-            device->build_id(), erisc_core_type, dm_class_idx, erisc_id),
-        this);
+    jit_build(build_env_manager.get_kernel_build_state(build_env, erisc_core_type, dm_class_idx, erisc_id), this);
 }
 
 void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    generate_binaries_detached(build_env_manager_for(*device), device_build_env_for(*device));
+}
+
+void DramKernel::generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const {
+    jit_build_genfiles_kernel_include(build_env.build_env, *this, this->kernel_src_);
     uint32_t dram_core_type = MetalContext::instance(this->get_context_id())
                                   .hal()
                                   .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(device->build_id(), dram_core_type, dm_class_idx, 0),
-        this);
+    jit_build(build_env_manager.get_kernel_build_state(build_env, dram_core_type, dm_class_idx, 0), this);
 }
 
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_triscs_src(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    generate_binaries_detached(build_env_manager_for(*device), device_build_env_for(*device));
+}
+
+void ComputeKernel::generate_binaries_detached(
+    BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const {
+    jit_build_genfiles_triscs_src(build_env.build_env, *this, this->kernel_src_);
     const auto& hal = MetalContext::instance(this->get_context_id()).hal();
     const auto core_type = this->get_kernel_programmable_core_type();
     uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    auto build_states =
-        build_env_manager_for(*device).get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
+    auto build_states = build_env_manager.get_kernel_build_states(build_env, tensix_core_type, compute_class_idx);
     validate_rvv_opt_in(
         *this, std::ranges::any_of(std::views::iota(0u, static_cast<uint32_t>(build_states.size())), [&](uint32_t id) {
             return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, id);

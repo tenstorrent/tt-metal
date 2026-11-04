@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/compile_session.hpp>
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
@@ -43,7 +44,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
 Program MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     Program program = BuildProgramFromSpec(mesh_device, spec, skip_validation);
-    program.impl().compile_and_allocate(&mesh_device, false);
+    // A CompileSession deferring on this thread builds the kernels instead; the program stays uncompiled
+    // and is compiled and allocated on its first enqueue as usual.
+    if (CompileSession::deferring_session() == nullptr) {
+        program.impl().compile_and_allocate(&mesh_device, false);
+    }
     return program;
 }
 
@@ -62,7 +67,9 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
             mesh_device.shape());
         workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
     }
-    workload.impl().compile(&mesh_device);
+    if (CompileSession::deferring_session() == nullptr) {
+        workload.impl().compile(&mesh_device);
+    }
     return workload;
 }
 
@@ -72,7 +79,9 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
     workload.impl().add_program(
         distributed::MeshCoordinateRange(mesh_device.shape()),
         BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
-    workload.impl().compile(&mesh_device);
+    if (CompileSession::deferring_session() == nullptr) {
+        workload.impl().compile(&mesh_device);
+    }
     return workload;
 }
 

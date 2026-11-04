@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -53,6 +54,10 @@ public:
 
     // Getter functions for build envs/keys/states
     const DeviceBuildEnv& get_device_build_env(ChipId device_id);
+    // The same build env, kept alive and unchanged for as long as the caller holds it. add_build_env() replaces a
+    // device's build env with a new object rather than reinitializing it in place, so work that outlives a device
+    // reopen (experimental::CompileSession) keeps building against the configuration it was prepared for.
+    std::shared_ptr<const DeviceBuildEnv> get_device_build_env_ptr(ChipId device_id);
 
     // Helper functions to extract build states from the build env.
     const JitBuildState& get_firmware_build_state(
@@ -60,6 +65,11 @@ public:
     const JitBuildState& get_kernel_build_state(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
     JitBuildStateSubset get_kernel_build_states(ChipId device_id, uint32_t programmable_core, uint32_t processor_class);
+    // Same as above, from a given build env (for example one held through get_device_build_env_ptr).
+    const JitBuildState& get_kernel_build_state(
+        const DeviceBuildEnv& build_env, uint32_t programmable_core, uint32_t processor_class, int processor_id) const;
+    JitBuildStateSubset get_kernel_build_states(
+        const DeviceBuildEnv& build_env, uint32_t programmable_core, uint32_t processor_class) const;
 
     void build_firmware(ChipId device_id, bool ignore_precompiled = false);
 
@@ -85,7 +95,7 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
+    std::unordered_map<ChipId, std::shared_ptr<DeviceBuildEnv>> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?

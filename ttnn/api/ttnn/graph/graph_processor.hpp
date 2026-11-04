@@ -68,7 +68,8 @@ void track_mesh_workload_execution(
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
-    bool do_block = false;
+    bool do_block = false;     // blocks dispatch, writes and reads
+    bool block_alloc = false;  // blocks allocation; separate so a collect can allocate for real
 
 public:
     ProcessorHooks() = default;
@@ -88,7 +89,8 @@ public:
 
     ~ProcessorHooks() override = default;
 
-    void set_block(bool block);
+    void set_block(bool block);        // sets both do_block and block_alloc
+    void set_block_alloc(bool block);  // sets only block_alloc
 
     bool get_block() const;
 };

@@ -15,7 +15,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--precompile|--precompile-wait|--no-precompile] [--jit-server=host:port] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -30,6 +30,21 @@
 #               wrapper masks pytest's exit code, so a profiled run is reported
 #               PASS as long as profiling completed, regardless of the underlying
 #               test result. Hangs are still detected and still reset the device.
+#   --precompile
+#               Load tests/plugins/precompile.py: a dry run of the selected tests finds the
+#               programs they build, and their kernels compile in the background while the
+#               real run starts. Hardware only.
+#   --precompile-wait
+#               Same, but the real run starts only once every queued kernel is built.
+#   --no-precompile
+#               Plain pytest; kernels compile when a test first needs them.
+#               With none of the three, precompile is decided from the command line: on (as
+#               --precompile) for a directory, a whole file, or more than
+#               $PRECOMPILE_NARROW_MAX_IDS (default 3) ::nodeids, counting @argfiles; off for
+#               fewer ids and for any -k filter. Off under the simulator.
+#   --jit-server=host:port[,host:port]
+#               While precompile is on, build the queued kernels on JIT compile server(s).
+#               The real run itself always compiles locally.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -71,8 +86,27 @@ fi
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+PRECOMPILE_MODE=auto
+PRECOMPILE_REASON="forced"
+JIT_SERVER=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --precompile)
+            PRECOMPILE_MODE=stream
+            shift
+            ;;
+        --precompile-wait)
+            PRECOMPILE_MODE=wait
+            shift
+            ;;
+        --no-precompile)
+            PRECOMPILE_MODE=off
+            shift
+            ;;
+        --jit-server=*)
+            JIT_SERVER="${1#*=}"
+            shift
+            ;;
         --dev)
             DEV_MODE=true
             shift
@@ -94,12 +128,51 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided"
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--precompile|--precompile-wait|--no-precompile] [--jit-server=host:port] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
 TEST_PATH="$1"
 shift
+
+# --- Precompile auto decision (command line only) ---
+# The dry run costs about one device open and one body per test, so precompile pays off only when
+# there is enough to compile in parallel: a directory, a whole file, or more than
+# PRECOMPILE_NARROW_MAX_IDS ::nodeids (also counted inside @argfiles). A -k filter can select one test
+# or thousands, so it stays off; pass --precompile for a broad -k slice. Explicit flags always win.
+if [[ "$PRECOMPILE_MODE" == auto ]]; then
+    PRECOMPILE_NARROW_MAX_IDS="${PRECOMPILE_NARROW_MAX_IDS:-3}"
+    _n_ids=0
+    _n_whole=0
+    _has_k=false
+    _skip_next=false
+    for _arg in "$TEST_PATH" "$@"; do
+        if [[ "$_skip_next" == true ]]; then _skip_next=false; continue; fi
+        case "$_arg" in
+            -k|--keyword) _has_k=true; _skip_next=true ;;
+            -k=*|--keyword=*) _has_k=true ;;
+            -m|-n|-p|-c|-o|-W|--deselect|--ignore|--rootdir|--junitxml|--maxfail|--timeout|--log-level|--count|--durations) _skip_next=true ;;
+            -*) ;;
+            @*)  # pytest @argfile: one argument per line
+                if [[ -r "${_arg#@}" ]]; then
+                    _n_ids=$((_n_ids + $(grep -c '::' "${_arg#@}" || true)))
+                    _n_whole=$((_n_whole + $(grep -v '::' "${_arg#@}" | grep -c '[^[:space:]]' || true)))
+                fi ;;
+            *::*) _n_ids=$((_n_ids + 1)) ;;
+            *) _n_whole=$((_n_whole + 1)) ;;
+        esac
+    done
+    if [[ "$_has_k" == true ]]; then
+        PRECOMPILE_MODE=off
+        PRECOMPILE_REASON="-k selection, size unknown; pass --precompile for a broad slice"
+    elif (( _n_whole == 0 && _n_ids <= PRECOMPILE_NARROW_MAX_IDS )); then
+        PRECOMPILE_MODE=off
+        PRECOMPILE_REASON="${_n_ids} test id(s), at most ${PRECOMPILE_NARROW_MAX_IDS}"
+    else
+        PRECOMPILE_MODE=stream
+        PRECOMPILE_REASON="auto: ${_n_whole} file(s) or director(ies), ${_n_ids} test id(s)"
+    fi
+fi
 
 # --- Deferred warnings ---
 # Warnings raised during setup get buried under pytest/triage output, so the
@@ -255,6 +328,22 @@ else
 fi
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+if [[ "$PRECOMPILE_MODE" != off && "$SIM_MODE" == true ]]; then
+    [[ "$PRECOMPILE_REASON" == forced ]] && echo "SAFE_PYTEST: precompile is hardware-only; ignored under the simulator" >&2
+    PRECOMPILE_MODE=off
+    PRECOMPILE_REASON="simulator"
+fi
+if [[ "$PRECOMPILE_MODE" != off ]]; then
+    export PRECOMPILE_WAIT=$([[ "$PRECOMPILE_MODE" == wait ]] && echo 1 || echo 0)
+    export PRECOMPILE_JIT_SERVER="$JIT_SERVER"
+    # The plugin lives in this checkout's tests package; make sure that is the one imported.
+    export PYTHONPATH="${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+    PYTEST_CMD+=(-p tests.plugins.precompile)
+    echo "SAFE_PYTEST: precompile on (${PRECOMPILE_MODE}, ${PRECOMPILE_REASON}${JIT_SERVER:+, JIT server ${JIT_SERVER}})" >&2
+else
+    echo "SAFE_PYTEST: precompile off (${PRECOMPILE_REASON/forced/--no-precompile})" >&2
+    [[ -n "$JIT_SERVER" ]] && echo "SAFE_PYTEST: --jit-server has no effect while precompile is off" >&2
 fi
 PYTEST_CMD+=("$@")
 
