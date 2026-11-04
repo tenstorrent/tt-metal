@@ -18,7 +18,6 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tests import l1_clean as L1C
 from models.demos.blackhole.deepseek_v41_flash.tests import test_fusedec_round_prof as H
 from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder, dev_id
 
@@ -131,7 +130,14 @@ def test_fusedec_layer(mesh_device):
             for r in range(LREPS):
                 rec.enabled, rec.depth = True, 0
                 i0 = dev_id()
+                if os.environ.get("FD_L1CLEAN") == "1":
+                    from models.demos.blackhole.deepseek_v41_flash.tests import l1_clean as L1C
+
+                    _b = L1C.snapshot(md, f"{name} before")
                 o = lay.forward(x, pre, states[st])
+                if os.environ.get("FD_L1CLEAN") == "1":
+                    ttnn.synchronize_device(md)
+                    L1C.assert_clean(md, _b, f"{name} after")
                 ttnn.synchronize_device(md)
                 i1 = dev_id()
                 rec.enabled = False

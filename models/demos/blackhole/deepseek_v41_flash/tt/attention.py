@@ -196,6 +196,23 @@ class DSV41Attention:
             )
         # column-parallel over heads: wq_b^T [1280, 64*512], local [1280, 8*512]
         self.wq_b = up(w["wq_b"].T.reshape(1, 1, Q_LORA, N_HEADS * HEAD_DIM), dtype=wdt, mapper=col_shard(3))
+        # DSV41_ATTN_FRONT / DSV41_ATTN_FRONT_ARM = 1: blaze-layout copies (DRAM width-sharded over the 8 banks, tiles shuffled column-major per shard) of wqkv and wq_b for the
+        # persistent attention-front kernel (tt/attn_front.py); the interleaved ones stay (prefill, other row counts)
+        if os.environ.get("DSV41_ATTN_FRONT") == "1" or os.environ.get("DSV41_ATTN_FRONT_ARM") == "1":
+            from models.demos.blackhole.deepseek_v41_flash.tt.attn_front import blaze_weight
+
+            self.af_split = int(os.environ.get("DSV41_ATTN_FRONT_SPLIT", "1"))
+            self.af_w1 = blaze_weight(
+                md,
+                torch.cat([w["wq_a"].T, w["wkv"].T], dim=1).reshape(1, 1, DIM, Q_LORA + HEAD_DIM),
+                wdt,
+                None,
+                n_pad=2048 if self.af_split == 2 else None,
+                groups=[2, 2, 2, 1],
+            )
+            self.af_w2 = blaze_weight(
+                md, w["wq_b"].T.reshape(1, 1, Q_LORA, N_HEADS * HEAD_DIM), wdt, 3, mesh_cols=self.cols, groups=[2] * 8
+            )
         # grouped o-projection: group g = column g
         wo_a = w["wo_a"].reshape(N_GROUPS, O_LORA, N_HEADS * HEAD_DIM // N_GROUPS)  # [g, r, d]
         wo_a = wo_a.permute(2, 0, 1).reshape(-1, N_GROUPS * O_LORA)  # [4096, 8*1024]
@@ -363,7 +380,12 @@ class DSV41Attention:
 
     # ---- helpers --------------------------------------------------------------------------------------
     def _lin(self, x, w, name, **kw):
-        ckc = self.ckc_lofi if os.environ.get("DSV41_ATTN_LIN_LOFI") == "1" else self.ckc
+        ckc = (
+            self.ckc_lofi
+            if os.environ.get("DSV41_ATTN_LIN_LOFI") == "1"
+            and name in os.environ.get("DSV41_ATTN_LIN_LOFI_OPS", "QKV+QB+OA+OB+SWO+CP+SW").split("+")
+            else self.ckc
+        )
         if (
             os.environ.get("DSV41_ATTN_LIN_LOFI") == "fp32"
         ):  # LoFi WITH fp32 accumulation (dramshard study: -13.2 us/layer at T=4, layer PCC 0.99962)
@@ -468,6 +490,39 @@ class DSV41Attention:
         from models.demos.blackhole.deepseek_v41_flash.tt.attn_pre import attn_pre, qk_heads
 
         T = self.T
+        if (
+            os.environ.get("DSV41_ATTN_FRONT") == "1"
+            and hasattr(self, "af_w1")
+            and hasattr(self, "qk_gamma")
+            and T in (8, 12)
+            and AF.flag("DSV41_ATTN_QKHEADS", "1")
+        ):
+            # persistent attention-front kernel (tt/attn_front.py): wqkv -> q/kv norm -> wq_b in one program, then the existing qk_heads
+            from models.demos.blackhole.deepseek_v41_flash.tt.attn_front import attn_front
+
+            md_ = self.mesh_device
+            mk = lambda n: ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, T, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md_, ttnn.DRAM_MEMORY_CONFIG
+            )
+            qr, kv, q = mk(Q_LORA), mk(HEAD_DIM), mk(N_HEADS // N_GROUPS * HEAD_DIM)
+            attn_front(
+                x,
+                self.af_w1,
+                self.af_w2,
+                self.qk_gamma,
+                qr,
+                kv,
+                q,
+                stage=3,
+                eps=self.eps,
+                ring_tiles=int(os.environ.get("DSV41_ATTN_FRONT_RING", "240")),
+                fp32=int(os.environ.get("DSV41_ATTN_FRONT_FP32", "1")),
+                x_split=int(os.environ.get("DSV41_ATTN_FRONT_XSPLIT", "0")),
+                x_mcast=int(os.environ.get("DSV41_ATTN_FRONT_XMCAST", "0")),
+                split=self.af_split,
+            )
+            self._last_qr = qr
+            return qk_heads(kv, q, st["Ch"], st["Sh"], T)
         y = self._lin(x, self.wqkv, "QKV")
         if hasattr(self, "qk_gamma"):
             qr, kv = qk_norm(y, self.qk_gamma, T, self.eps)
