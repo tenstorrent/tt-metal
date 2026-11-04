@@ -53,13 +53,16 @@ on Blackhole only.
 
 These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | BH P100 Device FPS | BH P150 Device FPS |
+| Variant | BEV size | Encoder layers | p100a Device FPS | p150b Device FPS |
 | --- | ---: | ---: | ---: | ---: |
 | tiny | 50 | 3 | 52.44 | 52.47 |
 | small | 150 | 3 | 13.93 | 14.15 |
 | base | 200 | 6 | 5.21 | 5.30 |
 
-*Commits: BH P100 — `db2aaa185fd74cfc81676ce1fc829b6bcf894b68`; BH P150 — `a96dcdcef8a3d77d1ea1b44f5be75f7e9442f53a`.*
+| Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
+| --- | ---: | ---: | ---: | --- |
+| p100a | 120 | 11x10 | 7 | `db2aaa185fd74cfc81676ce1fc829b6bcf894b68` |
+| p150b | 120 | 11x10 | 8 | `a96dcdcef8a3d77d1ea1b44f5be75f7e9442f53a` |
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
 with random weights and validate end-to-end execution only; they are not statistically characterized
