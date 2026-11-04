@@ -448,31 +448,39 @@ def dram_group_norm_core_grid(
 ) -> ttnn.CoreGrid | None:
     """Largest valid DRAM ``ttnn.group_norm`` core grid within ``max_grid``, or None if there is none.
 
-    The op splits Ht = nhw / 32 evenly over (grid_x / num_virtual_cols) * grid_y virtual rows
-    (``validate_dram_grid`` in groupnorm.cpp), so a fixed grid is not valid for every input: at
-    1248x832 the Ideogram 4 VAE mid block has Ht = 507, which no 16-row grid divides. Unlike the
-    op's own ``find_expected_dram_grid``, only grid widths that keep ``num_virtual_cols`` are
-    considered (the weight, bias and mask are laid out for it), and grids are ranked by the number
-    of virtual rows rather than by width, preferring widths with no idle columns.
+    The op splits the channels of each core-grid row over ``num_virtual_cols`` cores, so a row of
+    grid_x cores holds grid_x // num_virtual_cols virtual rows, and it splits Ht = nhw / 32 evenly
+    over all (grid_x // num_virtual_cols) * grid_y virtual rows (``validate_dram_grid`` in
+    groupnorm.cpp). A fixed grid is therefore not valid for every input: with 8 virtual columns an
+    8x8 grid has 8 virtual rows, which does not divide Ht = 507.
+
+    Unlike the op's own ``find_expected_dram_grid``, only grid widths that keep ``num_virtual_cols``
+    are considered, because the weight, bias and mask are laid out for it. Grids with no idle
+    columns (grid_x a multiple of ``num_virtual_cols``) rank first, then grids with more virtual
+    rows (more cores working), then wider grids.
     """
     ht = nhw // ttnn.TILE_SIZE
     best = None
-    best_key = None
+    best_rank = None
     for gx in range(1, max_grid.x + 1):
-        if ttnn.operations.normalization._compute_num_virtual_cols(gx, num_groups, num_channels) != num_virtual_cols:
+        width = ttnn.CoreGrid(x=gx, y=1)
+        nvc = ttnn.operations.normalization.dram_group_norm_virtual_columns(width, num_channels, num_groups)
+        if nvc != num_virtual_cols:
             continue
-        rows_per_y = gx // num_virtual_cols
-        if rows_per_y == 0:
+        virtual_rows_per_grid_row = gx // num_virtual_cols
+        if virtual_rows_per_grid_row == 0:
             continue
         for gy in range(1, max_grid.y + 1):
-            num_virtual_rows = rows_per_y * gy
+            num_virtual_rows = virtual_rows_per_grid_row * gy
             if num_virtual_rows > ht or ht % num_virtual_rows != 0:
                 continue
+            # Every batch must contribute the same number of rows to each multicast group.
             if num_virtual_rows >= num_batches and num_virtual_rows % num_batches != 0:
                 continue
-            key = (gx % num_virtual_cols == 0, num_virtual_rows, gx)
-            if best_key is None or key > best_key:
-                best, best_key = ttnn.CoreGrid(x=gx, y=gy), key
+            no_idle_columns = gx % num_virtual_cols == 0
+            rank = (no_idle_columns, num_virtual_rows, gx)
+            if best_rank is None or rank > best_rank:
+                best, best_rank = ttnn.CoreGrid(x=gx, y=gy), rank
     return best
 
 
@@ -531,12 +539,15 @@ class GroupNorm(Module):
 
         num_padded_groups = num_groups // self.num_devices * num_padded_channels // num_local_channels
 
-        # The op derives num_virtual_cols from the grid it runs on, so lay out the weight, bias and
-        # mask for the same grid width; forward() only picks grids that keep this value.
+        # The op derives num_virtual_cols from the width of the grid it runs on, which is
+        # self.core_grid or a grid inside it, so the weight, bias and mask are laid out for that
+        # width; forward() only picks grids that keep this value. For any grid at least 8 wide this
+        # equals the value derived from the full device grid.
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
             self.core_grid, num_padded_channels, num_padded_groups
         )
-        self._core_grid_by_shape: dict[tuple[int, int, int, int], ttnn.CoreGrid] = {}
+        # (max grid x, max grid y, batch size, H*W) -> the grid the op runs on.
+        self._op_core_grids: dict[tuple[int, int, int, int], ttnn.CoreGrid] = {}
 
         weight_shape = [
             self.num_devices,
@@ -611,12 +622,16 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def _core_grid_for(self, batch_size: int, spatial_size: int) -> ttnn.CoreGrid:
-        # Callers may swap self.core_grid between calls (vae_mochi does), so it is part of the key.
+    def _op_core_grid(self, batch_size: int, spatial_size: int) -> ttnn.CoreGrid:
+        """The grid the op runs on: the largest valid grid within self.core_grid for this input.
+
+        self.core_grid is an upper bound that callers may narrow between calls, so it is part of
+        the cache key.
+        """
         key = (self.core_grid.x, self.core_grid.y, batch_size, spatial_size)
-        grid = self._core_grid_by_shape.get(key)
-        if grid is None:
-            grid = dram_group_norm_core_grid(
+        op_core_grid = self._op_core_grids.get(key)
+        if op_core_grid is None:
+            op_core_grid = dram_group_norm_core_grid(
                 self.core_grid,
                 num_channels=self.num_padded_channels,
                 num_groups=self.num_padded_groups,
@@ -624,13 +639,13 @@ class GroupNorm(Module):
                 nhw=batch_size * math.ceil(spatial_size / ttnn.TILE_SIZE) * ttnn.TILE_SIZE,
                 num_batches=batch_size,
             )
-            if grid is None:
+            if op_core_grid is None:
                 raise ValueError(
                     f"GroupNorm: no core grid within {self.core_grid} with num_virtual_cols={self.num_virtual_cols} "
                     f"fits batch={batch_size}, H*W={spatial_size}, channels={self.num_padded_channels}"
                 )
-            self._core_grid_by_shape[key] = grid
-        return grid
+            self._op_core_grids[key] = op_core_grid
+        return op_core_grid
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
@@ -641,7 +656,7 @@ class GroupNorm(Module):
             input_mask=self.mask.data,
             num_groups=self.num_padded_groups,
             epsilon=self.eps,
-            core_grid=self._core_grid_for(batch_size, height * width),
+            core_grid=self._op_core_grid(batch_size, height * width),
             inplace=False,
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,

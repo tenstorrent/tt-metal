@@ -428,8 +428,6 @@ class Conv2d(Module):
             on_host=True,
         )
 
-        self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -444,10 +442,7 @@ class Conv2d(Module):
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
 
-        # Prepared (device-resident) weight/bias tensors, one pair per conv configuration:
-        # the prepared layout depends on the input size and slice config, so weights prepared
-        # for one input size give wrong results at another. Populated lazily on the first
-        # forward call at each size so they are ready before any trace capture begins.
+        # (batch, height, width, num_slices) -> device (weight, bias) prepared for that input.
         self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
     @classmethod
@@ -487,8 +482,6 @@ class Conv2d(Module):
         self._prepared.clear()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Invalidate any previously prepared device tensors so they are re-prepared on the
-        # next forward call with the new weights.
         self._release_prepared()
 
         bias = state.pop("bias", None)

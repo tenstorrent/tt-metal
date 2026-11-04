@@ -195,7 +195,6 @@ _TEXT_READBACK_BUCKET = 256
 
 _DEFAULT_WEIGHTS_DIR = os.environ.get("IDEOGRAM4_WEIGHTS")
 _DEFAULT_QWEN_REPO = "Qwen/Qwen3-VL-8B-Instruct"
-# The checkpoint subfolders the pipeline reads.
 _WEIGHTS_SUBFOLDERS = ("text_encoder", "tokenizer", "transformer", "unconditional_transformer", "vae")
 
 

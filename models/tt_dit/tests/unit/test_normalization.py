@@ -390,6 +390,8 @@ def test_distributed_layernorm(
         (32, (1, 256, 512, 512)),
         (32, (1, 256, 1024, 1024)),
         (8, (1, 64, 1024, 1024)),
+        (32, (1, 512, 169, 96)),  # Ht = 507: the 8x8 grid is not valid, a smaller one is picked
+        (32, (2, 256, 35, 96)),  # 2 batches, Ht = 210: the virtual rows must split evenly per batch
     ],
 )
 def test_group_norm(
@@ -467,6 +469,38 @@ def test_dram_group_norm_core_grid(
 
     assert (grid.x, grid.y) == expected
     assert ttnn.operations.normalization.dram_group_norm_virtual_columns(grid, num_channels, num_groups) == nvc
+
+
+# 256 channels, 8 groups: 8 virtual columns, so only 8-wide grids and one virtual row per grid row.
+@pytest.mark.parametrize(
+    ("ht", "num_batches", "expected"),
+    [
+        (210, 1, (8, 7)),
+        (210, 2, (8, 6)),  # 7 virtual rows would split the 2 batches unevenly
+        (420, 4, (8, 4)),
+        (420, 1, (8, 7)),
+    ],
+)
+def test_dram_group_norm_core_grid_batches(ht: int, num_batches: int, expected: tuple[int, int]) -> None:
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=8, y=8),
+        num_channels=256,
+        num_groups=8,
+        num_virtual_cols=8,
+        nhw=ht * ttnn.TILE_SIZE,
+        num_batches=num_batches,
+    )
+
+    assert (grid.x, grid.y) == expected
+
+
+def test_dram_group_norm_core_grid_none() -> None:
+    # The weight layout needs 8 virtual columns, but no grid at most 4 wide has them.
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=4, y=8), num_channels=256, num_groups=8, num_virtual_cols=8, nhw=512 * ttnn.TILE_SIZE
+    )
+
+    assert grid is None
 
 
 @pytest.mark.parametrize(
