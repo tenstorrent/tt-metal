@@ -73,7 +73,8 @@ FORCE_INLINE void check_worker_connections(
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
 inline void wait_for_notification(
     uint32_t address, uint32_t value, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
+    volatile tt_l1_ptr uint32_t* poll_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(address));
     while (*poll_addr != value
 #ifndef ARCH_WORMHOLE
            && !got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
