@@ -16,6 +16,8 @@ dict:
     ``_EMU_MAX_INPUT_BYTES``                             -> not emulator
   * any L1-sharded input whose captured grid needs more
     than ``_EMU_MAX_CORES`` cores                        -> not emulator
+  * an op in ``_EMU_MAX_SCALAR_ELEMS`` whose primary input
+    has more elements than its cap                      -> not emulator
 
 Note the row cap deliberately applies to the *activation* only: a matmul weight or a
 paged KV cache is legitimately tall, and judging it by row count would drop every
@@ -81,6 +83,15 @@ _PRIMARY_ARG = {
 }
 
 
+# Ops that walk every input element with scalar code on a data-movement core rather than on
+# the compute engine, so their run time scales with the element count, not the byte footprint.
+# ttnn.argmax compares each value on the reader core: the 32x151936 vocab case (4.9M elements,
+# ~2.4M per core on 2 cores) does not finish on craq-sim within the test timeout.
+_EMU_MAX_SCALAR_ELEMS = {
+    "ttnn.argmax": 1 << 20,
+}
+
+
 def _primary_input(case):
     """The activation whose height decides whether this is a prefill-sized case."""
     start = _PRIMARY_ARG.get(case.get("op"), 0)
@@ -111,6 +122,13 @@ def _fits_emulator(item) -> bool:
 
     primary = _primary_input(case)
     if primary is not None and _rows_of(primary["shape"]) > _EMU_MAX_ROWS:
+        return False
+    scalar_cap = _EMU_MAX_SCALAR_ELEMS.get(case.get("op"))
+    if (
+        scalar_cap is not None
+        and primary is not None
+        and _rows_of(primary["shape"]) * primary["shape"][-1] > scalar_cap
+    ):
         return False
 
     total_bytes = 0.0
