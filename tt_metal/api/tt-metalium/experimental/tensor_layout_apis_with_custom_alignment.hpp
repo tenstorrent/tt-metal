@@ -52,7 +52,7 @@ TensorLayout tensor_layout_with_custom_alignment(
  * - If **memory_config** is sharded, **logical_shape** and **padded_shape** may only
  *   differ in their last two dimensions.
  */
-[[deprecated("Use of Padded Shape is deprecated")]] TensorLayout tensor_layout_from_padded_shape(
+TensorLayout tensor_layout_from_padded_shape(
     DataType dtype,
     const PageConfig& page_config,
     const MemoryConfig& memory_config,
