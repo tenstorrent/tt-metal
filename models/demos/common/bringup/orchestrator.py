@@ -1489,6 +1489,8 @@ class Orchestrator:
         import hashlib
 
         keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs", "ab_positions")}
+        if task.get("ab_nonlast"):  # F248: only when set, so the reports of tasks without it keep their key
+            keep["ab_nonlast"] = True
         if isinstance(keep["ab"], dict) and "keep_default" in keep["ab"]:  # F241: what the accept ships, not measured
             keep["ab"] = {k: v for k, v in keep["ab"].items() if k != "keep_default"}
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -1741,6 +1743,9 @@ class Orchestrator:
         for p in task.get("ab_positions") or []:
             one = f"BRINGUP_POS={int(p)} BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
             out.append((f"p{int(p)}", "position", with_clean_wall(one), {}))
+            if task.get("ab_nonlast"):  # F248: the same chunk timed as one that is not the request's last
+                nl = f"BRINGUP_CHUNK_LAST=0 {one}"
+                out.append((f"p{int(p)}_nonlast", "position", with_clean_wall(nl), {"BRINGUP_CHUNK_LAST": "0"}))
         return out
 
     def ab_measure_before(self, task: dict) -> str | None:
@@ -1960,8 +1965,9 @@ class Orchestrator:
                     f"| {lbl} | " + " | ".join(f"{v:.1f}" if ms and v is not None else fmt(v) for v in vals) + " |"
                 )
         for name, by in (rec.get("positions") or {}).items():  # F230
-            pos = int(name[1:])
-            out += ["", f"## One chunk at position {pos:,} ({name}): device and host time (ms per chunk)", ""]
+            pos = int(name[1:].split("_")[0])
+            kind = ", not the request's last chunk" if name.endswith("_nonlast") else ""  # F248
+            out += ["", f"## One chunk at position {pos:,}{kind} ({name}): device and host time (ms per chunk)", ""]
             out += ["| | on | off | on - off |", "|---|---|---|---|"]
             new, old = by.get("new") or {}, by.get("old") or {}
             first = ["device_ms_total", "chunk_wall_ms", "chunk_wall_ms_spread", "host_overhead_ms", "host_cprofile_ms"]

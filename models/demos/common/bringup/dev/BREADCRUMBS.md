@@ -2547,3 +2547,20 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: Orchestrator.is_knowledge_format (the lines knowledge_errors produces); a perf attempt whose only problems are
   those records them for review (state: review) and goes on to its A/B, as a passing gate already did (FIX.21).
 - Selftest: test_perf_ab.py::test_a_knowledge_format_slip_does_not_cost_a_perf_attempt.
+
+## F248: an A/B position can time a chunk that is not the request's last (DeepSeek-V4.1 P.30, 2026-11-04)
+- Problem: P.30's decoder skip changes only non-last chunks; every A/B position and the profile timed the request's
+  last chunk (the harness passed no `last`), so both sides measured the full path and the table showed no change.
+- Fix: harness.begin_chunk(model, tokens, start, last=None) reads BRINGUP_CHUNK_LAST ("0" = not the last) and passes
+  `last=` to a model whose begin_chunk takes it, refusing otherwise (never a silent full-chunk timing). tasks.yaml
+  `ab_nonlast: true` adds a p<pos>_nonlast item per ab_positions entry; its table section says so. ab_nonlast enters
+  the A/B key only when set.
+- Selftests: test_perf_ab.py::test_ab_nonlast_times_each_position_as_a_non_last_chunk_too,
+  ::test_begin_chunk_passes_last_only_to_a_model_that_takes_it.
+
+## F244: a selftest opened every chip (DeepSeek-V4.1, 2026-11-03)
+- Problem: the full selftest run printed UMD cluster open / close lines while P.28 held the mesh: test_fork_cases.py::
+  test_a_volatile_cache_key_does_not_change_a_calls_signature calls fork_capture.record, whose _device() asks
+  ttnn.get_fabric_config() (MetalContext -> UMD cluster: opens every PCIe chip).
+- Fix: the test stubs fork_capture._device (selftests never touch the device). Found by a full run with saved output
+  on the idle box (2026-11-04: 680 passed; the one failure is xing40's server_rules.py:393 fixed threshold, open).
