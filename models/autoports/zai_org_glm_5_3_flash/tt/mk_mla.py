@@ -323,11 +323,17 @@ class GroupedWeight:
         ws = list(w) if isinstance(w, (list, tuple)) else [w]
         h, k, n = (int(v) for v in ws[0].shape)
         banks = device.dram_grid_size().x
-        r_all = banks * readers_per_bank
         kg, ng = k // TILE, n // TILE
+        # readers per bank taking part (rp <= readers_per_bank): the largest count whose readers tile the H x NG
+        # columns; fewer head tiles than readers (the 32-chip replica: 2 MLA heads x 8 W_uv tiles over 8 x 4 readers)
+        # leave readers idx >= rp of every bank out of the phase (kernels/mla/rw.cpp RP, ra.cpp SKIP: they still take
+        # part in its hand-offs)
+        fits = [r for r in range(1, readers_per_bank + 1) if (h * ng) % (banks * r) == 0]
+        if not fits:
+            raise ValueError(f"{role}: {h} heads x {ng} tiles over {banks} banks x {readers_per_bank} readers")
+        rp = max(fits)
+        r_all = banks * rp
         cols = h * ng // r_all
-        if h * ng % r_all:
-            raise ValueError(f"{role}: {h} heads x {ng} tiles over {r_all} readers")
         if cols >= ng:
             if cols % ng:
                 raise ValueError(f"{role}: {cols} columns per reader, head width {ng}")
@@ -353,7 +359,7 @@ class GroupedWeight:
         t = _upload(device, wvs, dtype)
         shard = ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
-            (nh * k, readers_per_bank * nr * TILE),
+            (nh * k, rp * nr * TILE),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         self.weight = ttnn.to_memory_config(
@@ -361,13 +367,15 @@ class GroupedWeight:
         )
         ttnn.deallocate(t)
         self.role, self.k, self.n_pad = role, nh * k, r_all * nr * TILE
-        self.heads, self.nh, self.kg, self.ng, self.nr = h, nh, kg, ng, nr
+        self.heads, self.nh, self.kg, self.ng, self.nr, self.rp = h, nh, kg, ng, nr, rp
         self.readers_per_bank, self.math_fidelity = readers_per_bank, math_fidelity
         self.host = w  # for the record / CPU checks
 
     def reader_geo(self, bank: int, idx: int) -> tuple:
-        """(h0, n0) of reader (bank, idx)"""
-        r = bank * self.readers_per_bank + idx
+        """(h0, n0) of reader (bank, idx); (0, SKIP) for a reader that sits the phase out (idx >= rp)"""
+        if idx >= self.rp:
+            return 0, SKIP
+        r = bank * self.rp + idx
         h0, c0 = self.head_of(r, 0)
         return h0, h0 * self.ng + c0
 
@@ -530,8 +538,8 @@ class MlaReaders:
             w = p.w
             if isinstance(w, GroupedWeight):
                 assert w.readers_per_bank == self.rpb, (w.role, w.readers_per_bank, self.rpb)
-                nh, kg, ng, nr, rp = w.nh, w.kg, w.ng, w.nr, self.rpb
-                shard_w = self.rpb * nr
+                nh, kg, ng, nr, rp = w.nh, w.kg, w.ng, w.nr, w.rp
+                shard_w = rp * nr
                 fid = p.fid or w.math_fidelity
             else:  # DSLinear: dense, read in place
                 kt = w.k // TILE
@@ -1247,6 +1255,7 @@ class MkMla(_MlaBase):
         aligned = (
             self.w_uk.nr == self.w_uk.ng
             and g_qb["rp"] == self.rpb
+            and self.w_uk.rp == self.rpb
             and all(
                 b * g_qb["shard_w"] + i * g_qb["nr"] == self.w_uk.reader_geo(b, i)[0] * self.w_uk.kg
                 and g_qb["nr"] == self.w_uk.nh * self.w_uk.kg
