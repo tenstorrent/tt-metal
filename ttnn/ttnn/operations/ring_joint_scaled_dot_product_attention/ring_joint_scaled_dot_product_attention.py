@@ -57,7 +57,7 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + Refinement 1: bf16 DEST, bfloat8_b Q and K/V)
+# 2. SUPPORTED (Phase 0 + Refinement 1: bf16 DEST, bfloat8_b Q and K/V + Refinement 2: causal / balanced, GQA/MQA/MLA)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -67,11 +67,11 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self"],
-    "kv_heads_mode": ["mha"],
+    "kv_heads_mode": ["mha", "gqa", "mqa", "mla"],
     "joint_len": ["none", "aligned"],
     "joint_mode": ["none", "replicated"],
-    "mask_mode": ["none"],
-    "is_balanced": [False],
+    "mask_mode": ["none", "causal"],
+    "is_balanced": [False, True],
     "seq_padding": ["exact", "padded"],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
@@ -226,4 +226,6 @@ def ring_joint_scaled_dot_product_attention(
         scale=scale,
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
     )

@@ -55,7 +55,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(a++);                         // my counter; the downstream port's is at the same address
     const uint32_t expect_in = get_arg_val<uint32_t>(a++);  // increments I receive from upstream this call
     const uint32_t total = get_arg_val<uint32_t>(a++);      // chunks I send
-    const uint32_t item_chunks = get_arg_val<uint32_t>(a++);
+    const uint32_t k_chunks = get_arg_val<uint32_t>(a++);   // chunks of one K / V part on this port
+    const uint32_t v_chunks = get_arg_val<uint32_t>(a++);
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
     const uint32_t send_ready = get_arg_val<uint32_t>(a++);
     const uint32_t ready_x = get_arg_val<uint32_t>(a++);
@@ -66,7 +67,9 @@ void kernel_main() {
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t cdone_addr = get_arg_val<uint32_t>(a++);
     const uint32_t num_consumers = get_arg_val<uint32_t>(a++);
-    const uint32_t num_entries = get_arg_val<uint32_t>(a++);
+    const uint32_t num_entries = get_arg_val<uint32_t>(a++);  // b * max(hk, hv)
+    const uint32_t hk = get_arg_val<uint32_t>(a++);
+    const uint32_t hv = get_arg_val<uint32_t>(a++);
     const uint32_t num_sources = get_arg_val<uint32_t>(a++);
     const uint32_t has_conn = get_arg_val<uint32_t>(a++);
     const uint32_t slots_idx = a;  // downstream landing slot of source k
@@ -75,8 +78,9 @@ void kernel_main() {
     if (has_conn) {
         const auto lk = TensorAccessor(lk_args, lk_addr, page_bytes);
         const auto lv = TensorAccessor(lv_args, lv_addr, page_bytes);
-        const uint32_t k_slot_pages = num_entries * kpe;
-        const uint32_t v_slot_pages = num_entries * vpe;
+        const uint32_t hmax = hk > hv ? hk : hv;
+        const uint32_t k_slot_pages = (num_entries / hmax) * hk * kpe;
+        const uint32_t v_slot_pages = (num_entries / hmax) * hv * vpe;
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
         for (uint32_t h = 0; h < num_headers; ++h) {
@@ -106,6 +110,11 @@ void kernel_main() {
             uint32_t chunks_left = total;
             uint32_t h = 0, unflushed = 0;
             for (uint32_t e = 0; e < num_entries; ++e) {
+                const uint32_t bi = e / hmax, j = e - (e / hmax) * hmax;
+                const uint32_t kp = (bi * hk + j) * kpe, vp = (bi * hv + j) * vpe;
+                const uint32_t kn = j < hk ? kpe : 0, vn = j < hv ? vpe : 0;
+                // the item's last chunk carries the arrival increment (host guarantees >= 1 chunk per item)
+                const uint32_t item_chunks = (j < hk ? k_chunks : 0) + (j < hv ? v_chunks : 0);
                 for (uint32_t k = 0; k < num_sources; ++k) {
                     const uint32_t slot = get_arg_val<uint32_t>(slots_idx + k);
                     uint32_t item_sent = 0;
@@ -130,11 +139,11 @@ void kernel_main() {
                             unflushed = 0;
                         }
                     };
-                    for_each_chunk(kpe, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
-                        send(lk.get_noc_addr(slot * k_slot_pages + e * kpe + page, 0, 0), n);
+                    for_each_chunk(kn, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
+                        send(lk.get_noc_addr(slot * k_slot_pages + kp + page, 0, 0), n);
                     });
-                    for_each_chunk(vpe, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
-                        send(lv.get_noc_addr(slot * v_slot_pages + e * vpe + page, 0, 0), n);
+                    for_each_chunk(vn, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
+                        send(lv.get_noc_addr(slot * v_slot_pages + vp + page, 0, 0), n);
                     });
                 }
             }

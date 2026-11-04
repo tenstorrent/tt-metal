@@ -108,7 +108,7 @@ the unit-test files each imported the session fabric-mesh fixture, giving one se
 <!-- Restored by the run operator: the Refinement 1 agent's commit bb7819f002d deleted the verifier's
      pending Refinements 2-6 from this queue, which made the orchestrator treat the queue as drained. -->
 
-### [ ] Refinement 2 — Causal prefill family: causal + zig-zag balanced, GQA / MQA / MLA heads
+### [x] Refinement 2 — Causal prefill family: causal + zig-zag balanced, GQA / MQA / MLA heads
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`, `True` to `SUPPORTED["is_balanced"]`, and `"gqa"`, `"mqa"`, `"mla"` to `SUPPORTED["kv_heads_mode"]`, natively in the kernels:
 - **Causal (design regime R4)**: extend the shared `key_block_plan` (reader and compute use the same function, so push/wait counts stay equal by construction). Each (unit, key block) is classified {skip, full, diagonal-masked} from global positions, contiguous (`p·n + i`) or zig-zag balanced (chunk p then chunk 2G−1−p, `helpers.global_positions`). Skipped blocks are neither read nor computed, so K/V reads scale with keys_seen. Diagonal blocks get a causal mask tile pattern. The first processed block of every unit must still hold ≥ 1 valid key (the online-softmax finite-max cap, `op_design.md` § Mechanism caps). The output stays in the caller's token layout (prompt rule: no cross-device reordering).
@@ -121,6 +121,7 @@ the unit-test files each imported the session fabric-mesh fixture, giving one se
 - A causal unit's remote segments that are entirely in its future are skipped: no landing wait for them (OVERLAP: fewer waits, not more).
 
 **Done when**: those five axis values are in SUPPORTED, the golden suite (incl. `test_ring_mock.py` causal-balanced cells and `test_regression.py`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and no regression on prior cells.
+**Outcome**: all five values in SUPPORTED. Busiest chip, GQA 8:1, n=2048/chip, 4-chip ring, bf8b K/V, bf16 DEST: contiguous 1.23 ms (chips 1.23/0.86/0.55/0.35) → balanced 1.04 ms (0.84/0.89/1.04/0.97). Balancing does not reach the mean (~0.75 ms) at this size because each core holds about one unit and the round-robin split assumes equal-cost units, so the costliest unit sets the wall. Next lever: causal-cost-aware unit assignment (pair early and late units per core); left for the perf rounds.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged Wan2.2 case: local compute (attention) — the measured dominant part
 

@@ -38,7 +38,10 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # ---- block knobs (single source of truth) ---------------------------------------------------------------------
 BATCHES_PER_UNIT = 1  # batch axis: nothing is shared across batches
-Q_HEADS_PER_UNIT = 1  # q_head axis: MHA (R3 / GQA head groups are a later knob-turn)
+# q_head axis (design regime R3): q heads stacked into one unit's row space, sharing ONE key-block stream (K/V DRAM
+# reads / g). None = the whole share group hq / max(hk, hv) (GQA/MQA: hq/hk; MHA and MLA: 1, since MLA's V heads are
+# per q head); an int must divide that group. The single source of g: every unit decode derives from it.
+Q_HEADS_PER_UNIT = None
 Q_BLOCK_DEPTH = 1  # cb_q_block depth (Q retained for the unit's whole key walk)
 KV_BLOCK_DEPTH = 2  # cb_k_block / cb_v_block depth: reader one key block ahead of compute
 OUT_BLOCK_DEPTH = 1  # cb_out_tiles depth: the writer drains a unit during the next unit's walk
@@ -50,6 +53,7 @@ L1_CB_BUDGET = 1300 * 1024  # per-core CB budget for choose_block_extents (desig
 # when fp32_dest_acc_en is off (the DiT production / perf-focus config keeps the requested HiFi2).
 FP32_DEST_MIN_FIDELITY = ttnn.MathFidelity.HiFi3
 MASK_TILES = 1  # main key-tail mask tile (joint tail mask comes with non-aligned joint)
+CAUSAL_MASK_TILES = 2  # causal (R4): [diagonal triangle, all -inf]; the key-tail mask is not needed (see writer)
 
 # ---- CB indices (compute cores) ----
 CB_Q_BLOCK = 0
@@ -88,7 +92,16 @@ def _pow2_ceil(x):
     return 1 << (x - 1).bit_length()
 
 
-def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype):
+def q_heads_per_unit(hq, hk, hv):
+    """g: q heads stacked per unit (R3). Heads in one unit must share both their K and their V head."""
+    share = hq // max(hk, hv)
+    g = share if Q_HEADS_PER_UNIT is None else int(Q_HEADS_PER_UNIT)
+    if g < 1 or share % g:
+        raise ValueError(f"ring_joint_sdpa: q_heads_per_unit={g} must divide hq / max(hk, hv) = {share}")
+    return g
+
+
+def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype, mask_tiles=MASK_TILES):
     """The compute-core CB inventory as (index, pages, dtype) — the single source of every compute CB's size.
 
     choose_block_extents() sums it for the L1 fit and the program descriptor allocates exactly it, so a change to a
@@ -97,7 +110,7 @@ def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype):
         (CB_Q_BLOCK, Q_BLOCK_DEPTH * Sq * DHt, q_dtype),
         (CB_K_BLOCK, KV_BLOCK_DEPTH * Sk * DHt, kv_dtype),
         (CB_V_BLOCK, KV_BLOCK_DEPTH * Sk * DVt, kv_dtype),
-        (CB_KEY_MASK, MASK_TILES, ttnn.bfloat16),
+        (CB_KEY_MASK, mask_tiles, ttnn.bfloat16),
         (CB_MAX_SCALER, 1, ttnn.bfloat16),
         (CB_SUM_SCALER, 1, ttnn.bfloat16),
         (CB_SCORES, Sq * Sk, acc_dtype),
@@ -113,12 +126,27 @@ def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype):
 
 
 def choose_block_extents(
-    *, tensor_q_tiles, joint_q_tiles, tensor_kv_tiles, b, hq, C, DHt, DVt, q_dtype, kv_dtype, acc_dtype
+    *,
+    tensor_q_tiles,
+    joint_q_tiles,
+    tensor_kv_tiles,
+    b,
+    hq,
+    C,
+    DHt,
+    DVt,
+    q_dtype,
+    kv_dtype,
+    acc_dtype,
+    mask_tiles=MASK_TILES,
 ):
-    """The single source of (q_block_tiles, k_block_tiles) — op_design.md `choose_block_extents()`."""
+    """The single source of (q_block_tiles, k_block_tiles) — op_design.md `choose_block_extents()`. With stacked
+    heads (R3) tensor_q_tiles / joint_q_tiles are a unit row space's (g heads) and hq counts head groups."""
 
     def footprint(Sq, Sk):
-        plan = compute_cb_plan(Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q_dtype, kv_dtype=kv_dtype, acc_dtype=acc_dtype)
+        plan = compute_cb_plan(
+            Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q_dtype, kv_dtype=kv_dtype, acc_dtype=acc_dtype, mask_tiles=mask_tiles
+        )
         return sum(pages * ttnn.tile_size(dt) for _, pages, dt in plan)
 
     total_q_tiles = b * hq * (tensor_q_tiles + joint_q_tiles)
@@ -576,6 +604,8 @@ def run_ring_joint_sdpa(
     scale,
     compute_kernel_config,
     memory_config,
+    is_causal=False,
+    is_balanced=False,
 ):
     mesh_device = q.device()
     joints = (jq, jk, jv)
@@ -604,6 +634,12 @@ def run_ring_joint_sdpa(
             raise ValueError("ring_joint_sdpa: joint tensor dtypes must match Q/K/V")
     if logical_l != 0:
         raise ValueError("ring_joint_sdpa: sharded joint (logical_l > 0) is not supported")
+    if is_balanced and not is_causal:
+        raise ValueError("ring_joint_sdpa: is_balanced is defined for causal attention only")
+    if is_causal and (has_joint or n_q != n_kv):
+        raise ValueError("ring_joint_sdpa: causal attention is self-attention without joint tokens")
+    if is_balanced and n_kv % 64:
+        raise ValueError(f"ring_joint_sdpa: balanced needs two tile-aligned halves per device; n={n_kv}")
 
     chips, ring, G, num_links = plan(mesh_device, cluster_axis=cluster_axis, topology=topology, num_links=num_links)
     if not (1 <= logical_n <= G * n_kv):
@@ -620,23 +656,29 @@ def run_ring_joint_sdpa(
     n_q_t, n_kv_t = n_q // 32, n_kv // 32
     Lq_t = (L + 31) // 32
     C = len(next(iter(chips.values()))["compute"])
+    qh = q_heads_per_unit(hq, hk, hv)
+    NQ, LQ, BG = qh * n_q_t, qh * Lq_t, b * hq // qh  # unit row space: g heads stacked (contiguous tile rows)
+    mask_tiles = CAUSAL_MASK_TILES if is_causal else MASK_TILES
     Sq, Sk = choose_block_extents(
-        tensor_q_tiles=n_q_t,
-        joint_q_tiles=Lq_t,
+        tensor_q_tiles=NQ,
+        joint_q_tiles=LQ,
         tensor_kv_tiles=n_kv_t,
         b=b,
-        hq=hq,
+        hq=hq // qh,
         C=C,
         DHt=DHt,
         DVt=DVt,
         q_dtype=q.dtype,
         kv_dtype=k.dtype,
         acc_dtype=acc_dtype,
+        mask_tiles=mask_tiles,
     )
 
-    cb_plan = compute_cb_plan(Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q.dtype, kv_dtype=k.dtype, acc_dtype=acc_dtype)
+    cb_plan = compute_cb_plan(
+        Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q.dtype, kv_dtype=k.dtype, acc_dtype=acc_dtype, mask_tiles=mask_tiles
+    )
     W_full, tail_pieces, tail_r = plan_work_split(
-        Sq, n_q_t=n_q_t, Lq_t=Lq_t, BH=b * hq, C=C, kv_tile_bytes=ttnn.tile_size(k.dtype)
+        Sq, n_q_t=NQ, Lq_t=LQ, BH=BG, C=C, kv_tile_bytes=ttnn.tile_size(k.dtype)
     )
     out_mem = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.allocate_tensor_on_device(
@@ -663,12 +705,17 @@ def run_ring_joint_sdpa(
         raise ValueError(f"ring_joint_sdpa: {num_links} links need at least as many DRAM banks ({num_banks})")
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
     group = PORT_BATCH_CHUNKS
-    kpe, vpe = n_kv_t * DHt, n_kv_t * DVt  # pages per entry (one (batch, kv head) slice) of K and V
-    E = b * hk  # entries (MHA: hk == hv)
-    BH = b * hq
+    kpe, vpe = n_kv_t * DHt, n_kv_t * DVt  # pages of one K / V head slice
+    Hmax = max(hk, hv)
+    E = b * Hmax  # transport entries (b, j): K head j if j < hk, V head j if j < hv
 
     def valid_rows(s):
-        return max(0, min(n_kv, logical_n - s * n_kv))
+        """Rows of device s at a global position < logical_n (a prefix: positions grow along a device)."""
+        if not is_balanced:
+            return max(0, min(n_kv, logical_n - s * n_kv))
+        h = n_kv // 2
+        first = max(0, min(h, logical_n - s * h))
+        return first + (max(0, min(h, logical_n - (2 * G - 1 - s) * h)) if first == h else 0)
 
     mask_cols = logical_n % 32
 
@@ -693,11 +740,17 @@ def run_ring_joint_sdpa(
         port_keys = [(d, l) for d in ("fwd", "bwd") for l in range(num_links)]
         port_cores = [ports[pk] for pk in port_keys]
         compute = ch["compute"]
-        item_chunks = {
-            l: _chunks_per_part(kpe, l, num_links, num_banks, run_pages)
-            + _chunks_per_part(vpe, l, num_links, num_banks, run_pages)
+        part_chunks = {
+            l: (
+                _chunks_per_part(kpe, l, num_links, num_banks, run_pages),
+                _chunks_per_part(vpe, l, num_links, num_banks, run_pages),
+            )
             for l in range(num_links)
         }
+        item_chunks = {l: ck + cv for l, (ck, cv) in part_chunks.items()}
+        for l, (ck, cv) in part_chunks.items():  # every item of a used port must carry >= 1 chunk (its increment)
+            if ck + cv and ((hk < hv and cv == 0) or (hv < hk and ck == 0)):
+                raise ValueError(f"ring_joint_sdpa: a K/V head slice is too small to split over {num_links} links")
 
         # ---------------- port cores (TRANSPORT) ----------------
         preader_rt, psender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -706,8 +759,9 @@ def run_ring_joint_sdpa(
             sends = ch[d] if peer is not None else []
             up = ch["prev"] if d == "fwd" else ch["next"]
             up_sends = chips[up][d] if up is not None else []
-            ic = item_chunks[l]
-            total = E * len(sends) * ic
+            ck, cv = part_chunks[l]
+            ic = ck + cv
+            total = b * (hk * ck + hv * cv) * len(sends)
             expect_in = E * len(up_sends) if ic > 0 else 0
             preader_rt[core.x][core.y] = [
                 addr(k),
@@ -719,9 +773,12 @@ def run_ring_joint_sdpa(
                 l,
                 num_links,
                 arrival_addr,
-                ic,
+                ck,
+                cv,
                 total,
                 E,
+                hk,
+                hv,
                 len(sends),
                 len(up_sends),
             ] + [_slot(p, s, G) for s in sends]
@@ -738,7 +795,8 @@ def run_ring_joint_sdpa(
                 arrival_addr,
                 expect_in,
                 total,
-                ic,
+                ck,
+                cv,
                 ready_addr,
                 int(send_ready),
                 rc.x if rc else 0,
@@ -748,26 +806,28 @@ def run_ring_joint_sdpa(
                 pc = virt(chips[peer]["ports"][(d, l)])
                 pn = node(peer)
                 q_pos = chips[peer]["p"]
-                args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), cdone_addr, C, E, len(sends), 1]
+                args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), cdone_addr, C, E, hk, hv, len(sends), 1]
                 args += [_slot(q_pos, s, G) for s in sends]
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, ch[f"{d}_links"][l], program, core))
             else:
-                args += [0, 0, 0, 0, cdone_addr, C, E, 0, 0]
+                args += [0, 0, 0, 0, cdone_addr, C, E, hk, hv, 0, 0]
             psender_rt[core.x][core.y] = args
 
         # ---------------- compute-core key segments (local -> joint -> remote by hop distance) ----------------
         port_index = {pk: i for i, pk in enumerate(port_keys)}
-        segments = []  # (kind, valid_tiles, masked, slot, S_in, rank, port_mask)
+        segments = []  # (kind, valid_tiles, masked, slot, S_in, rank, port_mask, src)
 
         def add_main(kind, s, slot=0, S_in=0, rank=0, port_mask=0):
             vr = valid_rows(s)
             if vr == 0:
                 return
-            segments.append((kind, (vr + 31) // 32, int(vr % 32 != 0), slot, S_in, rank, port_mask))
+            # causal: a key past logical_n is only visible to padded queries (key <= query), so no tail mask
+            masked = int(vr % 32 != 0 and not is_causal)
+            segments.append((kind, (vr + 31) // 32, masked, slot, S_in, rank, port_mask, s))
 
         add_main(0, p)
         if has_joint:
-            segments.append((1, Lq_t, 0, 0, 0, 0, 0))
+            segments.append((1, Lq_t, 0, 0, 0, 0, 0, 0))
         arr = {}
         for d in ("fwd", "bwd"):
             up = ch["prev"] if d == "fwd" else ch["next"]
@@ -783,7 +843,7 @@ def run_ring_joint_sdpa(
                             mask |= 1 << port_index[(d, l)]
                     add_main(2, s, _slot(p, s, G), len(arr[d]), dist - 1, mask)
         seg_flat = [x for sgm in segments for x in sgm]
-        seg_compute = [x for sgm in segments for x in (sgm[1], sgm[2])]
+        seg_compute = [x for sgm in segments for x in (sgm[1], sgm[2], sgm[7])]
         pxy = [virt(pc) for pc in port_cores]
 
         # ---------------- compute-core CBs ----------------
@@ -813,7 +873,8 @@ def run_ring_joint_sdpa(
         ]
 
         # ---------------- compute-core kernels ----------------
-        unit_ct = [Sq, Sk, DHt, DVt, n_q_t, Lq_t, n_kv_t, BH, C, hq, hk]
+        unit_ct = [Sq, Sk, DHt, DVt, NQ, LQ, n_kv_t, BG, C, hq, hk, hv, qh, n_q_t, Lq_t]
+        unit_ct += [int(is_causal), int(is_balanced), G]
         reader_ct = [CB_Q_BLOCK, CB_K_BLOCK, CB_V_BLOCK] + unit_ct + [len(port_cores)]
         for t in (q, k, v, jq, jk, jv, landk, landv):
             reader_ct += ta(t)
@@ -868,11 +929,10 @@ def run_ring_joint_sdpa(
                 + seg_flat
                 + [W_full]
                 + tail_args(ci)
+                + [p]
             )
             writer_rt[core.x][core.y] = [addr(out), addr(jout), ci, W_full] + tail_args(ci) + [tail_r]
-            compute_rt[core.x][core.y] = (
-                [ci, len(segments)] + seg_compute + [W_full, int(ci < len(tail_pieces)), tail_r]
-            )
+            compute_rt[core.x][core.y] = [ci, len(segments)] + seg_compute + [W_full] + tail_args(ci) + [tail_r, p]
 
         prefix = "ring_joint_scaled_dot_product_attention"
         port_crs = _crs(port_cores)
@@ -932,6 +992,9 @@ def run_ring_joint_sdpa(
                 hq,
                 hk,
                 hv,
+                qh,
+                is_causal,
+                is_balanced,
                 n_q,
                 n_kv,
                 dh,

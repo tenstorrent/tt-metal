@@ -12,7 +12,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 | `cb_q_block` | `q_block_depth·Sq·DHt` | `Sq·DHt` (Q retained by `score_block` for the whole key walk) | {batch: streams → 1, q_head: streams → 1, q_rows: spans → Sq, keys: streams → (not spanned), head_dim: spans → DHt, v_head_dim: streams → —, transport_entry: streams → —, transport_chunk: streams → —} | Q dtype (Float16_b; Bfp8_b later) | reader | compute | per unit | none: live for the entire unit, concurrent with every other CB; depth 1 = live set |
 | `cb_k_block` | `kv_block_depth·Sk·DHt` | `Sk_valid·DHt` per block; 2 blocks resident for prefetch | {batch: 1, q_head: 1, q_rows: streams → —, keys: spans → Sk, head_dim: spans → DHt, v_head_dim: streams → —, transport_entry: streams, transport_chunk: streams} | K dtype | reader | compute | per key block | none: concurrent with `cb_v_block` (same block), different dtype possible; capacity = 2× live set for double buffering (reader one block ahead) |
 | `cb_v_block` | `kv_block_depth·Sk·DVt` | `Sk_valid·DVt`; 2 blocks for prefetch | {batch: 1, q_head: 1, q_rows: streams, keys: spans → Sk, head_dim: streams, v_head_dim: spans → DVt, transport_entry: streams, transport_chunk: streams} | V dtype | reader | compute | per key block | none: V of block i is live from load to `pv_block` while K of block i+1 loads; capacity 2× for double buffering |
-| `cb_key_mask` | `mask_tiles` (= 1 Phase 0; 2 once a non-aligned joint tail exists) | `mask_tiles` | {all axes: streams — constant tile(s)} | Float16_b (−inf / 0 only: 16-bit is exact) | writer | compute | whole program | none: never popped, read by every masked block; a constant cannot alias a streaming CB |
+| `cb_key_mask` | `mask_tiles` (= 1 non-causal key-tail mask; 2 causal: [diagonal triangle, all −inf] — R2, the key-tail mask is not needed under causal) | `mask_tiles` | {all axes: streams — constant tile(s)} | Float16_b (−inf / 0 only: 16-bit is exact) | writer | compute | whole program | none: never popped, read by every masked block; a constant cannot alias a streaming CB |
 | `cb_max_scaler` | 1 | 1 (constant) | {all axes: streams — constant} | Float16_b (pool-type-aware bf16 scaler) | writer | compute | whole program | not shared with `cb_sum_scaler`: produced by different pool-type-aware overloads (MAX vs SUM, `reduce_helpers_dataflow.hpp:97-99`) whose fill patterns may differ; 1 tile each |
 | `cb_sum_scaler` | 1 | 1 (constant) | {all axes: streams — constant} | Float16_b | writer | compute | whole program | see `cb_max_scaler` |
 | `cb_scores` | `Sq·Sk` | `Sq·Sk_valid` (S, then P in place) | {batch: 1, q_head: 1, q_rows: spans → Sq, keys: spans → Sk, head_dim: streams (contracted), v_head_dim: streams, transport_entry: streams, transport_chunk: streams} | T_acc | compute | compute | per key block (score → mask → max → exp in place → consumed by pv) | none: S→P is already in place (Rule 3.2); live concurrently with stats and both O buffers; cannot alias `cb_out_tiles` because the writer drains the previous unit's output while this unit's scores are live |
@@ -43,7 +43,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 | `DVt` | `dv/32`; TARGET ≤ 8 | same |
 | `q_block_depth`, `out_block_depth` | 1 | host constants |
 | `kv_block_depth` | 2 | host constant |
-| `mask_tiles` | ≤ 2 | number of key segments with a partial last tile (main tail; joint tail) |
+| `mask_tiles` | ≤ 2 | non-causal: number of key segments with a partial last tile (main tail; joint tail); causal: 2 (diagonal, dead) |
 | `run_pages` | `max(1, payload // page_bytes)`; 7 bf16 / 13 bfp8 at 14,336 B | fabric config, read once |
 | `port_batch_chunks` | `max(1, min(8, 112 KiB // (2·chunk_bytes)))` = 4 | example's `group` rule |
 | `T_q, T_kv` | 2048 B (bf16), 1088 B (bfp8) | dtype |
@@ -82,7 +82,7 @@ per head). B = local K+V block = n·H·(dh+dv)·2 = 167.8 MB; Q = out = 83.9 MB.
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | Q (main, joint) | 1 read | resident for its unit's whole key walk | — |
-| local K/V | `Uq` compute reads + 2 transport reads (sent in both ring directions) = 18 × 167.8 MB | each Q block of a head re-streams the head's K/V (R1 is Q-stationary; R2 removes it) | — |
+| local K/V | (Refinement 2: `Uq` counts units of the stacked row space — `q_heads_per_unit` = hq/hk GQA/MQA heads share one key-block stream, K/V reads ÷ hq/hk; causal reads only the keys up to each unit's latest query) `Uq` compute reads + 2 transport reads (sent in both ring directions) = 18 × 167.8 MB | each Q block of a head re-streams the head's K/V (R1 is Q-stationary; R2 removes it) | — |
 | remote K/V (G−1 blocks) | 1 landing write + `Uq` compute reads each; relayed share (1 block-equivalent on a balanced 4-ring) +1 read | landing in DRAM is required (R10 rejected); re-read per Q block as above | — |
 | joint K/V (replicated) | `Uq` reads (Phase 0 cases) | local source, streamed per unit like local K/V | — |
 | out / joint_out | 1 write | normalized once per unit | — |

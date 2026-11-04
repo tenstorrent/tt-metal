@@ -30,19 +30,27 @@ void kernel_main() {
     constexpr uint32_t Sk = get_compile_time_arg_val(4);
     constexpr uint32_t DHt = get_compile_time_arg_val(5);
     constexpr uint32_t DVt = get_compile_time_arg_val(6);
-    constexpr uint32_t n_q_t = get_compile_time_arg_val(7);
-    constexpr uint32_t Lq_t = get_compile_time_arg_val(8);
+    constexpr uint32_t NQ = get_compile_time_arg_val(7);  // q tile-rows of a unit's row space (g heads stacked)
+    constexpr uint32_t LQ = get_compile_time_arg_val(8);  // joint q tile-rows of a unit's row space
     constexpr uint32_t n_kv_t = get_compile_time_arg_val(9);
-    constexpr uint32_t BH = get_compile_time_arg_val(10);
+    constexpr uint32_t BG = get_compile_time_arg_val(10);  // b * hq / g (batch, head group) pairs
     constexpr uint32_t C = get_compile_time_arg_val(11);
     constexpr uint32_t hq = get_compile_time_arg_val(12);
     constexpr uint32_t hk = get_compile_time_arg_val(13);
-    constexpr uint32_t num_ports = get_compile_time_arg_val(14);
+    constexpr uint32_t hv = get_compile_time_arg_val(14);
+    constexpr uint32_t g = get_compile_time_arg_val(15);  // q_heads_per_unit
+    constexpr uint32_t n_q_t = get_compile_time_arg_val(16);
+    constexpr uint32_t Lq_t = get_compile_time_arg_val(17);
+    constexpr bool causal = get_compile_time_arg_val(18) != 0;
+    constexpr bool balanced = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t G = get_compile_time_arg_val(20);
+    constexpr uint32_t num_ports = get_compile_time_arg_val(21);
     constexpr bool has_joint = Lq_t > 0;
-    constexpr uint32_t q_per_kv = hq / hk;
+    constexpr uint32_t groups = hq / g;
+    constexpr uint32_t Hmax = hk > hv ? hk : hv;  // transport entries per batch (one per kv head index)
     static_assert(num_ports <= MAX_PORTS, "too many port cores");
 
-    constexpr auto q_args = TensorAccessorArgs<15>();
+    constexpr auto q_args = TensorAccessorArgs<22>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto jq_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -74,7 +82,7 @@ void kernel_main() {
     }
     a += 2 * num_ports;
     const uint32_t num_segments = get_arg_val<uint32_t>(a++);
-    const uint32_t seg_idx = a;  // per segment: kind, valid_tiles, masked, slot, S_in, rank, port_mask
+    const uint32_t seg_idx = a;  // per segment: kind, valid_tiles, masked, slot, S_in, rank, port_mask, src
 
     const uint32_t q_tile = get_tile_size(cb_q);
     const uint32_t kv_tile = get_tile_size(cb_k);
@@ -84,23 +92,31 @@ void kernel_main() {
     const auto lk_acc = TensorAccessor(lk_args, lk_addr, kv_tile);
     const auto lv_acc = TensorAccessor(lv_args, lv_addr, kv_tile);
 
-    // landing slot pages: slot * (b*hk*n_kv_t*D) + entry pages; entry = b*hk + kv head
-    constexpr uint32_t B = BH / hq;
+    // landing slot pages: slot * (b*hk*n_kv_t*DHt) + K head pages (V: hv, DVt)
+    constexpr uint32_t B = BG / groups;
     constexpr uint32_t k_slot_pages = B * hk * n_kv_t * DHt;
-    constexpr uint32_t v_slot_pages = B * hk * n_kv_t * DVt;
+    constexpr uint32_t v_slot_pages = B * hv * n_kv_t * DVt;
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
 
-    const uint32_t tail_idx = seg_idx + num_segments * 7;  // W, then has_tail, bh, row0, rows, joint
+    const uint32_t tail_idx = seg_idx + num_segments * 8;  // W, then has_tail, bh, row0, rows, joint, then p
     const uint32_t W = get_arg_val<uint32_t>(tail_idx);
+    [[maybe_unused]] const uint32_t my_pos = get_arg_val<uint32_t>(tail_idx + 6);  // group position p
     const uint32_t my_units = W + get_arg_val<uint32_t>(tail_idx + 1);
 
     for (uint32_t i = 0; i < my_units; ++i) {
         MaybeDeviceZoneScope("reader_unit");
         uint32_t kb = 0;  // key blocks issued for this unit (zone sampling)
-        const AttnUnit unit = i < W ? decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C) : tail_piece(tail_idx + 1);
-        const uint32_t b = unit.bh / hq;
-        const uint32_t h = unit.bh - b * hq;
-        const uint32_t entry = b * hk + h / q_per_kv;
+        const AttnUnit unit = i < W ? decode_unit<Sq, NQ, LQ>(core_idx + i * C) : tail_piece(tail_idx + 1);
+        const uint32_t b = unit.bh / groups;
+        const uint32_t h = (unit.bh - b * groups) * g;  // first q head of the unit (all g share the K/V heads)
+        const uint32_t kh = h / (hq / hk), vh = h / (hq / hv);
+        const uint32_t k_head = b * hk + kh, v_head = b * hv + vh;
+        // transport entry (b, j) carries K head j (j < hk) and V head j (j < hv): the unit needs both landed
+        const uint32_t entry = b * Hmax + (kh > vh ? kh : vh);
+        [[maybe_unused]] uint32_t max_gq = 0;
+        if constexpr (causal) {
+            max_gq = unit_max_gtile<balanced>(unit, my_pos, n_q_t, G);
+        }
 
         // ---- load_q_block ----
         {
@@ -111,7 +127,7 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_q_read");
             uint32_t wptr = get_write_ptr(cb_q);
             if (!unit.joint) {
-                uint32_t page = (unit.bh * n_q_t + unit.row0) * DHt;
+                uint32_t page = (unit.bh * NQ + unit.row0) * DHt;
                 for (uint32_t t = 0; t < unit.rows * DHt; ++t) {
                     noc_async_read_tile(page + t, q_acc, wptr);
                     wptr += q_tile;
@@ -119,7 +135,7 @@ void kernel_main() {
             } else {
                 if constexpr (has_joint) {
                     const auto jq_acc = TensorAccessor(jq_args, jq_addr, q_tile);
-                    uint32_t page = (unit.bh * Lq_t + unit.row0) * DHt;
+                    uint32_t page = (unit.bh * LQ + unit.row0) * DHt;
                     for (uint32_t t = 0; t < unit.rows * DHt; ++t) {
                         noc_async_read_tile(page + t, jq_acc, wptr);
                         wptr += q_tile;
@@ -132,17 +148,23 @@ void kernel_main() {
 
         // ---- key walk ----
         for (uint32_t s = 0; s < num_segments; ++s) {
-            const uint32_t base = seg_idx + s * 7;
+            const uint32_t base = seg_idx + s * 8;
             const uint32_t kind = get_arg_val<uint32_t>(base + 0);
-            const uint32_t valid = get_arg_val<uint32_t>(base + 1);
+            uint32_t valid = get_arg_val<uint32_t>(base + 1);
             const uint32_t slot = get_arg_val<uint32_t>(base + 3);
+            if constexpr (causal) {  // keys past the unit's latest query are never read (shared plan)
+                valid = causal_visible_tiles<balanced>(valid, get_arg_val<uint32_t>(base + 7), max_gq, n_kv_t, G);
+                if (valid == 0) {
+                    continue;  // wholly in the future: no landing wait, no read
+                }
+            }
             uint32_t k_base, v_base;  // first page of this head in the source tensor
             if (kind == 1) {
-                k_base = entry * Lq_t * DHt;
-                v_base = entry * Lq_t * DVt;
+                k_base = k_head * Lq_t * DHt;
+                v_base = v_head * Lq_t * DVt;
             } else {
-                k_base = (kind == 2 ? slot * k_slot_pages : 0) + entry * n_kv_t * DHt;
-                v_base = (kind == 2 ? slot * v_slot_pages : 0) + entry * n_kv_t * DVt;
+                k_base = (kind == 2 ? slot * k_slot_pages : 0) + k_head * n_kv_t * DHt;
+                v_base = (kind == 2 ? slot * v_slot_pages : 0) + v_head * n_kv_t * DVt;
             }
             if (kind == 2) {
                 MaybeDeviceZoneScope("reader_landing_wait");

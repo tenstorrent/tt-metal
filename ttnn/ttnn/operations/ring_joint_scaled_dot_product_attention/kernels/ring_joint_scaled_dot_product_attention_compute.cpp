@@ -136,19 +136,49 @@ void kernel_main() {
     constexpr uint32_t Sk = get_compile_time_arg_val(16);
     constexpr uint32_t DHt = get_compile_time_arg_val(17);
     constexpr uint32_t DVt = get_compile_time_arg_val(18);
-    constexpr uint32_t scale_bits = get_compile_time_arg_val(26);
-    constexpr uint32_t cb_p_tok = get_compile_time_arg_val(27);
+    constexpr uint32_t NQ = get_compile_time_arg_val(19);  // unit row space (q_heads_per_unit heads stacked)
+    constexpr uint32_t LQ = get_compile_time_arg_val(20);
+    constexpr uint32_t n_kv_t = get_compile_time_arg_val(21);
+    constexpr uint32_t C = get_compile_time_arg_val(23);
+    constexpr uint32_t n_q_t = get_compile_time_arg_val(28);  // per-head q tiles (causal row positions)
+    constexpr bool causal = get_compile_time_arg_val(30) != 0;
+    constexpr bool balanced = get_compile_time_arg_val(31) != 0;
+    constexpr uint32_t G = get_compile_time_arg_val(32);
+    constexpr uint32_t scale_bits = get_compile_time_arg_val(33);
+    constexpr uint32_t cb_p_tok = get_compile_time_arg_val(34);
+    constexpr uint32_t mask_tiles = causal ? 2 : 1;  // causal: [diagonal, all -inf]; else the key-tail mask
 
+    const uint32_t core_idx = get_arg_val<uint32_t>(0);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
+    constexpr uint32_t SEG = 3;  // per segment: valid_tiles, masked, src
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_scores);
 
     CircularBuffer q_buf(cb_q), k_buf(cb_k), v_buf(cb_v), scores_buf(cb_scores);
     CircularBuffer out_acc_buf(cb_out_acc), out_blk_buf(cb_out_blk);
 
-    const uint32_t W = get_arg_val<uint32_t>(2 + 2 * num_segments);
-    const uint32_t my_units = W + get_arg_val<uint32_t>(3 + 2 * num_segments);
-    const uint32_t tail_rows = get_arg_val<uint32_t>(4 + 2 * num_segments);
+    const uint32_t tail_idx = 3 + SEG * num_segments;  // has_tail, bh, row0, rows, joint
+    const uint32_t W = get_arg_val<uint32_t>(2 + SEG * num_segments);
+    const uint32_t my_units = W + get_arg_val<uint32_t>(tail_idx);
+    const uint32_t tail_rows = get_arg_val<uint32_t>(tail_idx + 5);
+    [[maybe_unused]] const uint32_t my_pos = get_arg_val<uint32_t>(tail_idx + 6);  // group position p
+
+    // ---- per-(row, key tile) mask of the current block: 0 none, else mask tile index + 1 ----
+    // causal: the global tile of every compute row (filled per unit) against the block's key tiles (shared plan in
+    // ring_joint_sdpa_common.hpp); non-causal: the key-tail padding mask on the segment's last valid tile only.
+    uint32_t row_gq[Sq];
+    struct BlockMask {
+        bool any;          // the block needs any mask tile
+        bool pad;          // non-causal: key-tail mask on column skv - 1
+        uint32_t src, t0;  // causal: source device, first key tile of the block
+    };
+    auto mask_of = [&](const BlockMask& bm, uint32_t r, uint32_t c, uint32_t skv) -> uint32_t {
+        if constexpr (causal) {
+            return causal_mask_class(row_gq[r], global_tile<balanced>(bm.src, bm.t0 + c, n_kv_t, G));
+        } else {
+            return (bm.pad && c + 1 == skv) ? 1 : 0;
+        }
+    };
     const uint32_t pv_sbw = subblock_w(DVt);
 
     // P.V output chunk width inside the S2 section (2 DEST slots go to the max and the row sum).
@@ -161,7 +191,7 @@ void kernel_main() {
     // Streamed score phases of one key block (bf16 DEST). Leaves cb_max_blk (R, fronted), cb_sum_{acc|blk} (R),
     // cb_out_{acc|blk} (R*DVt) exactly as the op's phase-by-phase body does; cb_scores is consumed.
     // ------------------------------------------------------------------------------------------------------------
-    auto stream_block = [&](uint32_t R, uint32_t skv, bool masked, bool first) {
+    auto stream_block = [&](uint32_t R, uint32_t skv, const BlockMask& bm, bool first) {
         const uint32_t sbw = subblock_w(skv);
         const uint32_t sum_cb = first ? cb_sum_acc : cb_sum_blk;
         const uint32_t out_cb = first ? cb_out_acc : cb_out_blk;
@@ -176,8 +206,8 @@ void kernel_main() {
         if (!first) {
             cb_wait_front(cb_max_acc, R);
         }
-        if (masked) {
-            cb_wait_front(cb_mask, 1);
+        if (bm.any) {
+            cb_wait_front(cb_mask, mask_tiles);
         }
         cb_reserve_back(cb_scores, Sq * Sk);
 
@@ -189,10 +219,20 @@ void kernel_main() {
             for (uint32_t k = 0; k < DHt; ++k) {
                 matmul_block(cb_q, cb_k, r * DHt + k, k * Sk + c0, 0, 1, sbw, 1, DHt);
             }
-            if (masked && (skv - 1) >= c0 && (skv - 1) < c0 + sbw) {
-                src.use(src.a, cb_mask);
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask);
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask, 0, skv - 1 - c0);
+            if (bm.any) {
+                bool add_ready = false;
+                for (uint32_t j = 0; j < sbw; ++j) {
+                    const uint32_t mt = mask_of(bm, r, c0 + j, skv);
+                    if (mt == 0) {
+                        continue;
+                    }
+                    if (!add_ready) {
+                        src.use(src.a, cb_mask);
+                        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask);
+                        add_ready = true;
+                    }
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask, mt - 1, j);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -337,22 +377,71 @@ void kernel_main() {
         set_pack_width(cb_scores, 1);  // the helpers that follow pack one tile per call
     };
 
+    // fp32-DEST causal mask: scores (row r, cols [c, c + n)) += mask tile `mt` (in place, caller-managed credit).
+    [[maybe_unused]] auto apply_mask_run = [&](uint32_t r, uint32_t c, uint32_t n, uint32_t mt) {
+        eltwise_chain(
+            IterationShape::grid(1, n),
+            BinaryFpu<
+                BinaryFpuOp::Add,
+                input(
+                    cb_scores,
+                    WaitPolicy::None,
+                    PopPolicy::None,
+                    InputTileMapping::Block,
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Strided),
+                input(
+                    cb_mask,
+                    BroadcastDim::None,
+                    WaitPolicy::Upfront,
+                    PopPolicy::None,
+                    InputTileMapping::Scalar,
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Offset)>{StridedTileRange{r * Sk + c, Sk}, mt},
+            PackTile<output(
+                cb_scores,
+                ReservePolicy::None,
+                PushPolicy::None,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Strided)>{StridedTileRange{r * Sk + c, Sk}});
+    };
+
     // One unit's key walk + finalize on R compute rows (Sq for whole units, tail_rows for the tail piece).
     auto run_unit = [&](uint32_t R, uint32_t i) {
         MaybeDeviceZoneScope("compute_unit");
         uint32_t kb = 0;  // processed key blocks of this unit
+        [[maybe_unused]] uint32_t max_gq = 0, min_gq = 0;
+        if constexpr (causal) {
+            const AttnUnit unit = i < W ? decode_unit<Sq, NQ, LQ>(core_idx + i * C) : tail_piece(tail_idx);
+            max_gq = unit_max_gtile<balanced>(unit, my_pos, n_q_t, G);
+            min_gq = max_gq;
+            for (uint32_t r = 0; r < R; ++r) {
+                row_gq[r] = unit_row_gtile<balanced>(unit, r, my_pos, n_q_t, G);
+                min_gq = row_gq[r] < min_gq ? row_gq[r] : min_gq;
+            }
+        }
         for (uint32_t s = 0; s < num_segments; ++s) {
-            const uint32_t valid = get_arg_val<uint32_t>(2 + 2 * s);
-            const bool seg_masked = get_arg_val<uint32_t>(3 + 2 * s) != 0;
+            uint32_t valid = get_arg_val<uint32_t>(2 + SEG * s);
+            const bool seg_masked = get_arg_val<uint32_t>(3 + SEG * s) != 0;
+            [[maybe_unused]] const uint32_t seg_src = get_arg_val<uint32_t>(4 + SEG * s);
+            if constexpr (causal) {  // same truncation as the reader (keys past the unit's latest query)
+                valid = causal_visible_tiles<balanced>(valid, seg_src, max_gq, n_kv_t, G);
+            }
             for (uint32_t t0 = 0; t0 < valid; t0 += Sk, ++kb) {
                 const uint32_t skv = (valid - t0) < Sk ? (valid - t0) : Sk;
-                const bool masked = seg_masked && (t0 + skv == valid);
+                BlockMask bm{false, false, seg_src, t0};
+                if constexpr (causal) {
+                    bm.any = global_tile<balanced>(seg_src, t0 + skv - 1, n_kv_t, G) >= min_gq;
+                } else {
+                    bm.pad = seg_masked && (t0 + skv == valid);
+                    bm.any = bm.pad;
+                }
                 const bool zs = (i == 0) && (kb >= ZONE_SAMPLE_KB0) && (kb < ZONE_SAMPLE_KB0 + ZONE_SAMPLE_NKB);
                 if constexpr (!DST_ACCUM_MODE) {
                     // One zone over the whole streamed block: its steps interleave QK / max / exp / rowsum / P.V
                     // rows across the three TRISCs, so per-phase zones no longer measure separable work.
                     MaybeDeviceZoneScopeIf("compute_stream", zs);
-                    stream_block(R, skv, masked, kb == 0);
+                    stream_block(R, skv, bm, kb == 0);
                 } else {
                     // ---- fp32 DEST: the op's phase-by-phase body (helpers), unchanged ----
                     {
@@ -386,27 +475,45 @@ void kernel_main() {
                         cb_push_back(cb_scores, (Sq - R) * Sk);
                     }
                     cb_wait_front(cb_scores, Sq * Sk);
-                    if (masked) {
+                    if (bm.any) {
                         MaybeDeviceZoneScopeIf("compute_mask", zs);
-                        eltwise_chain(
-                            IterationShape::grid(R, 1),
-                            BinaryFpu<
-                                BinaryFpuOp::Add,
-                                input(
+                        if constexpr (causal) {
+                            // per row: the diagonal tile (mask tile 0) then the dead run (mask tile 1); the visible
+                            // keys of a row are a prefix of the block (positions grow along the source)
+                            for (uint32_t r = 0; r < R; ++r) {
+                                uint32_t c = 0;
+                                while (c < skv && mask_of(bm, r, c, skv) == 0) {
+                                    ++c;
+                                }
+                                if (c < skv && mask_of(bm, r, c, skv) == 1) {
+                                    apply_mask_run(r, c, 1, 0);
+                                    ++c;
+                                }
+                                if (c < skv) {
+                                    apply_mask_run(r, c, skv - c, 1);
+                                }
+                            }
+                        } else {
+                            eltwise_chain(
+                                IterationShape::grid(R, 1),
+                                BinaryFpu<
+                                    BinaryFpuOp::Add,
+                                    input(
+                                        cb_scores,
+                                        WaitPolicy::None,
+                                        PopPolicy::None,
+                                        InputTileMapping::Block,
+                                        DataFormatReconfig::Enabled,
+                                        TileAddressing::Strided),
+                                    input(cb_mask, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::None)>{
+                                    StridedTileRange{skv - 1, Sk}},
+                                PackTile<output(
                                     cb_scores,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
+                                    ReservePolicy::None,
+                                    PushPolicy::None,
                                     DataFormatReconfig::Enabled,
-                                    TileAddressing::Strided),
-                                input(cb_mask, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::None)>{
-                                StridedTileRange{skv - 1, Sk}},
-                            PackTile<output(
-                                cb_scores,
-                                ReservePolicy::None,
-                                PushPolicy::None,
-                                DataFormatReconfig::Enabled,
-                                TileAddressing::Strided)>{StridedTileRange{skv - 1, Sk}});
+                                    TileAddressing::Strided)>{StridedTileRange{skv - 1, Sk}});
+                        }
                         cb_pop_front(cb_scores, Sq * Sk);
                         cb_reserve_back(cb_scores, Sq * Sk);
                         cb_push_back(cb_scores, Sq * Sk);
