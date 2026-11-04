@@ -80,6 +80,7 @@ class Experts:
         """
         self.config = config
         self.mesh_config = mesh_config
+        self.weight_dtype, self.tensor_cache_path = weight_dtype, tensor_cache_path
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config

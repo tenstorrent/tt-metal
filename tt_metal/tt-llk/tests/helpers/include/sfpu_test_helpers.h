@@ -6,9 +6,10 @@
 
 #include <cstdint>
 
+#include "llk_sfpu/ckernel_sfpu_conversions.h"
+#include "llk_sfpu/ckernel_sfpu_expm1_cw.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
-#include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 // Test-only wrappers that adapt production per-vector SFPU primitives to the
 // shared test harness. Not part of any production SFPU API; kept out of
@@ -42,13 +43,38 @@ inline void calculate_expm1_cw()
     }
 }
 
-// Adapts calculate_mask to the 2-tile binary SFPU harness signature. The indices
-// are unused: calculate_mask hard-codes its operands (data at dst_reg[0], mask at
+// Adapts calculate_mask / calculate_mask_posinf to the 2-tile binary SFPU harness signature.
+// The indices are unused: both hard-code their operands (data at dst_reg[0], mask at
 // dst_reg[32], result in place), so only the default in0=0/in1=1/out=0 placement works.
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// POSINF selects calculate_mask_posinf, where the data becomes +inf where the mask is zero,
+// over calculate_mask, where it becomes 0.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool POSINF = false>
 inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const std::uint32_t /*dst_index_in1*/, const std::uint32_t /*dst_index_out*/)
 {
-    calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    if constexpr (POSINF)
+    {
+        calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else
+    {
+        calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    }
+}
+
+// Runs _float_to_int32_positive_ on the raw fp32 words of in0 and writes the int32 result to out, both
+// as raw 32-bit Dest words, so every exponent edge of the helper is checked bit-exactly.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_float_to_int32_positive_binary(
+    const std::uint32_t dst_index_in0, const std::uint32_t /*dst_index_in1*/, const std::uint32_t dst_index_out)
+{
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        const sfpi::vInt in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = _float_to_int32_positive_(sfpi::as<sfpi::vFloat>(in));
+        sfpi::dst_reg++;
+    }
 }
 
 // 0x42 repeated (about 48.56 as a float): easy to spot in dumps. Keep it positive and well above 1, or guards like
