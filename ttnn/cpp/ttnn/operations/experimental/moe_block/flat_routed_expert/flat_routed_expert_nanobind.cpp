@@ -61,7 +61,6 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["wd_rot_tiles"] = p.w_tile ? p.wd_rot_region / p.w_tile : 0;
     d["hbuf"] = p.hbuf;
     d["gu_pieces"] = p.gu_pieces;
-    d["gu_kg"] = p.gu_kg;
     d["d_ch"] = p.d_ch;
     d["arena_bytes"] = p.arena_tiles * 2048;
     d["static_l1_bytes"] = p.static_l1_bytes;

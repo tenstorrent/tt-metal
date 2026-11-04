@@ -312,11 +312,6 @@ FlatRoutedExpertPlan make_plan(
     // wide gate/up blocks (gwt > 4) with row passes: gate/up in a full-sync DST
     p.gu_full_sync = p.gwt > 4 && p.gu_rp && p.mt * p.gwt > 4;
     TT_FATAL(p.mt * p.gwt <= p.dst_tiles, "flat_routed_expert: sub-block split");
-    // gate/up K blocks per handshake (row passes only): 2 (GLM-5.3 E 8 M 1024 / 2048 -2.7 / -3.4%, DSv4.1 -1.2 /
-    // -1.3%, neutral below M 512 and for K3 / K2.7 / M3; 4 regressed M3 at 2048)
-    if (p.gu_rp && !p.gu_full_sync) {
-        p.gu_kg = std::min(2u, p.Ht / kKBlk);
-    }
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = 1;
     p.land_slots = 2;  // (two landing rings a primary: the helpers feed both)
@@ -667,10 +662,9 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         auto plan = std::make_shared<const FlatRoutedExpertPlan>(make_flat_routed_expert_plan(mesh_device, c));
         log_debug(
             tt::LogOp,
-            "flat_routed_expert plan ({}): gate/up row passes {} K group {} sub-block rows {}",
+            "flat_routed_expert plan ({}): gate/up row passes {} sub-block rows {}",
             c.layout.str(),
             plan->gu_rp,
-            plan->gu_kg,
             plan->mt * 32);
         it = cache.emplace(key, std::move(plan)).first;
     }

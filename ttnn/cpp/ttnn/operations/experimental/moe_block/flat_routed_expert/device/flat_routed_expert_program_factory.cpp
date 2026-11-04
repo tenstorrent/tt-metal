@@ -450,9 +450,6 @@ FlatProgramHandles add_flat_routed_expert_program(
         if (gu_rp) {
             cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / p.gwt));
             cdef["SE_XSLOTS"] = std::to_string(p.x_slots);
-            if (p.gu_kg > 1) {  // gate/up K blocks per CB handshake
-                cdef["SE_GU_KG"] = std::to_string(p.gu_kg);
-            }
         }
         TT_FATAL(
             !p.hg || cfg.activation <= 3,

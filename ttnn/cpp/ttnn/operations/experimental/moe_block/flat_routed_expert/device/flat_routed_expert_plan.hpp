@@ -57,8 +57,6 @@ struct FlatRoutedExpertPlan {
     uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
     // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop: wide gate/up blocks, gwt > 4)
     bool gu_full_sync = false;
-    // gate/up K blocks per CB handshake in the row-pass K loop (1 without row passes)
-    uint32_t gu_kg = 1;
     // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), gate/up CB 16
     // and h_local (3). A caller sizing the arena leaves this much L1 below it (the program
     // factory checks its CBs against it)
