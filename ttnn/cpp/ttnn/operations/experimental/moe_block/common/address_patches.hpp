@@ -31,14 +31,25 @@ struct AddressPatches {
     std::vector<Arg> args;  // grouped by source
     // [begin, end) of each source's args: a hit reads one arg a source, never walks a source that did not move
     std::vector<std::pair<uint32_t, uint32_t>> groups;
+    // A CB backed by a source's buffer (e.g. an op's region of the block's arena): the CB's index in the descriptor (=
+    // in the program's circular_buffers()), its source, its offset in that buffer.
+    struct Cb {
+        uint32_t index;
+        uint16_t src;
+        uint32_t offset;
+    };
+    std::vector<Cb> cbs;
+    // each source's address the CBs were last pointed at (a hit re-points a source's CBs only when it moved)
+    mutable std::vector<uint64_t> cb_src_addr;
 };
 
 // The address arguments of desc by source. sources[i]: source i's buffer (nullptr: absent). A buffer that is two
-// sources is recorded as the first. Every binding must be to one of sources; desc may hold no tensor-backed CB.
+// sources is recorded as the first. Every binding, and every tensor-backed CB's buffer, must be one of sources.
 AddressPatches take_address_patches(
     const tt::tt_metal::ProgramDescriptor& desc, std::span<tt::tt_metal::Buffer* const> sources);
 
-// Rewrites the arguments of every source whose address moved (sources as at take_address_patches, this call's).
+// Rewrites the arguments of every source whose address moved, and re-points its CBs (sources as at
+// take_address_patches, this call's).
 void apply_address_patches(
     tt::tt_metal::Program& program, const AddressPatches& patches, std::span<tt::tt_metal::Buffer* const> sources);
 

@@ -64,14 +64,11 @@ fre::FlatRoutedExpertConfig base_flat_config(
     return cfg;
 }
 
-// L1 a core the static circular buffers of the flat program and the dispatch (its manifest rings and CBs on the port
-// cores, at this row group) take: the larger.
-uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp, uint32_t group) {
-    const auto& topo = res.topology();
-    const uint32_t N = topo.num_chips(), S = res.config().chunk_tokens / N, W = res.dims().routed_width();
-    const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
-    return std::max(
-        align64(fp.static_l1_bytes), align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, group));
+// L1 a core the block's own programs that run while its arena is allocated take for static circular buffers: the
+// flat program's only (the head's and the dispatch's CBs are in the arena - MoEBlock passes it to both; the row group
+// sizes the dispatch's arena region, not a static CB).
+uint32_t static_cb_bytes(MoEBlockResources& /*res*/, const fre::FlatRoutedExpertPlan& fp, uint32_t /*group*/) {
+    return align64(fp.static_l1_bytes);
 }
 
 // The cells the flat plan leaves (k3 combine_cells), row-major.

@@ -53,7 +53,8 @@ Tensor sparse_dispatch_2d(
     MoEBlockResources& resources,
     std::optional<uint32_t> group,
     uint32_t manifest_batch,
-    std::optional<uint32_t> pack) {
+    std::optional<uint32_t> pack,
+    const std::optional<Tensor>& arena) {
     using namespace sparse_dispatch_2d_detail;
     const State& state = state_of(resources);
     const uint32_t row_bytes = xbuf.buffer()->aligned_page_size();
@@ -64,7 +65,16 @@ Tensor sparse_dispatch_2d(
         .pack = pack.value_or(default_pack(row_bytes, resources.fabric_max_payload_bytes())),
         .ports = state.ports,
     };
-    return ttnn::prim::moe_block_sparse_dispatch_2d(xbuf, route, state.sems, params);
+    return ttnn::prim::moe_block_sparse_dispatch_2d(xbuf, route, state.sems, params, arena);
+}
+
+uint32_t sparse_dispatch_2d_arena_bytes(MoEBlockResources& resources, uint32_t width, uint32_t dtype_bytes) {
+    const auto& topo = resources.topology();
+    const uint32_t N = topo.num_chips();
+    const uint32_t S = resources.config().chunk_tokens / N;
+    const uint32_t row_bytes = (width * dtype_bytes + 63u) / 64u * 64u;
+    const uint32_t plan_bytes = (S * route_words(N) * 4u + 63u) / 64u * 64u;
+    return cb_sizes(topo, S, row_bytes, plan_bytes, default_group(width), 16).arena_bytes();
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d

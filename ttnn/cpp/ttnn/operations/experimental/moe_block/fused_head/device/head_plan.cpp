@@ -270,7 +270,8 @@ std::string degradation(const HeadPlanned& chosen, const std::optional<HeadPlann
 using namespace head_plan_detail;
 
 ArenaMax arena_max_of(int64_t l1_free, uint32_t payload, int64_t cb_floor) {
-    return [l1_free, payload, cb_floor](uint32_t kb) { return arena_cap_of(l1_free, kb, payload, cb_floor); };
+    (void)payload;
+    return [l1_free, cb_floor](uint32_t) { return arena_cap_of(l1_free, cb_floor); };
 }
 
 ArenaMax arena_max_fixed(int64_t bytes) {

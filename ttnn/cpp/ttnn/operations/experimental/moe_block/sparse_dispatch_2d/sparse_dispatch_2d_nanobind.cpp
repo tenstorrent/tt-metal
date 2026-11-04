@@ -40,6 +40,9 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
                 group: rows a reader-to-sender hand-off; default the block's L1 plan's (moe_block_plan), else 8.
                 manifest_batch: manifest entries a stream sends at once (default 16).
                 pack: rows a fabric packet (1 or 2); default 2 when two rows fit the fabric payload.
+                arena: the block's L1 arena of the call (height-sharded over the worker grid): the dispatch's CBs go in
+                    its first ``sparse_dispatch_2d_arena_bytes`` a port core instead of static CBs under it. Default:
+                    static CBs.
 
             Returns:
                 xbuf.
@@ -51,7 +54,17 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("group") = nb::none(),
         nb::arg("manifest_batch") = 16,
-        nb::arg("pack") = nb::none());
+        nb::arg("pack") = nb::none(),
+        nb::arg("arena") = nb::none());
+
+    mod.def(
+        "sparse_dispatch_2d_arena_bytes",
+        &sparse_dispatch_2d_arena_bytes,
+        R"doc(Bytes a port core of the block's arena the dispatch's CBs take (sparse_dispatch_2d's arena=) for a row of
+``width`` elements of ``dtype_bytes``, with the dispatch's defaults (group, manifest_batch 16).)doc",
+        nb::arg("resources"),
+        nb::arg("width"),
+        nb::arg("dtype_bytes") = 2);
 
     mod.def(
         "sparse_dispatch_2d_wiring",

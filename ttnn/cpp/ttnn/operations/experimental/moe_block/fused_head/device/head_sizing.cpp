@@ -139,8 +139,10 @@ int64_t port_cb_bytes(uint32_t kb, uint32_t payload, uint32_t group) {
     return 2 * int64_t(group) * rp * 2048;
 }
 
-int64_t arena_cap_of(int64_t l1_free, uint32_t kb, uint32_t payload, int64_t cb_floor) {
-    return std::min(kArenaMax, floor_div(l1_free - std::max(port_cb_bytes(kb, payload), cb_floor) - 1024, 64) * 64);
+int64_t arena_cap_of(int64_t l1_free, int64_t cb_floor) {
+    // (the x-gather's port CB is an arena region now, not a static CB under the arena: only other programs' static CBs,
+    // cb_floor, stay below it)
+    return std::min(kArenaMax, floor_div(l1_free - cb_floor - 1024, 64) * 64);
 }
 
 std::vector<uint32_t> column_split(uint32_t n, uint32_t parts, uint32_t unit) {

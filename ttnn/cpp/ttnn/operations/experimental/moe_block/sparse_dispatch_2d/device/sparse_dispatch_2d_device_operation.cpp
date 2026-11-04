@@ -38,7 +38,8 @@ ttsl::hash::hash_t SparseDispatch2dDeviceOperation::compute_program_hash(
         args.pack,
         t.xbuf.tensor_spec(),
         t.route.tensor_spec(),
-        t.sems.tensor_spec());
+        t.sems.tensor_spec(),
+        t.arena.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t.arena->tensor_spec()) : std::nullopt);
 }
 
 void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
@@ -112,11 +113,25 @@ void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
             "sparse_dispatch_2d: port core {} has no semaphore words",
             core.str());
     }
+    if (t.arena.has_value()) {
+        const auto& am = t.arena->memory_config();
+        TT_FATAL(
+            t.arena->device() == mesh && am.buffer_type() == BufferType::L1 &&
+                am.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && am.shard_spec().has_value(),
+            "sparse_dispatch_2d: the arena must be an L1 HEIGHT_SHARDED tensor on the same mesh");
+        for (const auto& [key, core] : args.ports->cores) {
+            TT_FATAL(
+                am.shard_spec()->grid.contains(core),
+                "sparse_dispatch_2d: port core {} is outside the arena",
+                core.str());
+        }
+    }
 }
 
 void SparseDispatch2dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*args*/, const tensor_args_t& t) {
     TT_FATAL(t.xbuf.is_allocated() && t.route.is_allocated(), "sparse_dispatch_2d: xbuf and route must be allocated");
+    TT_FATAL(!t.arena.has_value() || t.arena->is_allocated(), "sparse_dispatch_2d: the arena must be allocated");
 }
 
 SparseDispatch2dDeviceOperation::spec_return_value_t SparseDispatch2dDeviceOperation::compute_output_specs(
@@ -142,10 +157,11 @@ Tensor moe_block_sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     const Tensor& sems,
-    const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params) {
+    const ttnn::operations::experimental::moe_block::sparse_dispatch_2d::SparseDispatch2dParams& params,
+    const std::optional<Tensor>& arena) {
     using namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d;
     return ttnn::device_operation::launch<SparseDispatch2dDeviceOperation>(
-        params, SparseDispatch2dInputs{.xbuf = xbuf, .route = route, .sems = sems});
+        params, SparseDispatch2dInputs{.xbuf = xbuf, .route = route, .sems = sems, .arena = arena});
 }
 
 }  // namespace ttnn::prim

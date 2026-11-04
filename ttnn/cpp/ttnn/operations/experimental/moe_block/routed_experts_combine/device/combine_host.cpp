@@ -195,13 +195,4 @@ uint32_t exchange_arena_bytes(uint32_t largest_free_bytes, uint32_t reserve) {
     return static_cast<uint32_t>(rows * 64);
 }
 
-uint32_t dispatch_static_cb_bytes(
-    uint32_t N, uint32_t S, uint32_t row_width, uint32_t group, uint32_t manifest_batch, uint32_t dtype_bytes) {
-    constexpr uint32_t kMetaPage = 16;
-    const uint32_t row_bytes = align64(row_width * dtype_bytes);
-    const uint32_t plan_bytes = align64(S * route_words(N) * 4);
-    return align64(2 * group * row_bytes) + align64(2 * group * kMetaPage) + align64(plan_bytes) +
-           align64(3 * 2 * manifest_batch * 16);
-}
-
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

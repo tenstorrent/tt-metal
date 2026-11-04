@@ -60,8 +60,8 @@ tt::tt_metal::CBDescriptor cb(uint8_t index, uint32_t size, tt::DataFormat fmt, 
 }
 
 // The buffers the runtime args address, by source (address_patches.hpp).
-std::array<tt::tt_metal::Buffer*, 3> sources_of(const SparseDispatch2dInputs& t) {
-    return {t.xbuf.buffer(), t.route.buffer(), t.sems.buffer()};
+std::array<tt::tt_metal::Buffer*, 4> sources_of(const SparseDispatch2dInputs& t) {
+    return {t.xbuf.buffer(), t.route.buffer(), t.sems.buffer(), t.arena ? t.arena->buffer() : nullptr};
 }
 
 // Every chip's program descriptor.
@@ -84,6 +84,23 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
     const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, S);
     const uint32_t ring_offs = ml.ring1_offset | (ml.ring2_offset << 16);
     const CbSizes sizes = cb_sizes(topo, S, row_bytes, plan_bytes, args.group, args.manifest_batch);
+    Buffer* arena_buf = t.arena ? t.arena->buffer() : nullptr;
+    const auto arena_off = sizes.arena_offsets();
+    if (arena_buf != nullptr) {
+        TT_FATAL(
+            arena_buf->aligned_size_per_bank() >= sizes.arena_bytes(),
+            "sparse_dispatch_2d: the arena holds {} B a core, the dispatch's CBs need {} B",
+            arena_buf->aligned_size_per_bank(),
+            sizes.arena_bytes());
+    }
+    // a CB at its arena offset (with an arena) or static (without)
+    const auto place = [&](tt::tt_metal::CBDescriptor c, uint32_t which) {
+        if (arena_buf != nullptr) {
+            c.buffer = arena_buf;
+            c.address_offset = arena_off[which];
+        }
+        return c;
+    };
     const auto defines = common_defines(topo, S);
     const tt::DataFormat row_fmt = tt::tt_metal::datatype_to_dataformat_converter(t.xbuf.dtype());
 
@@ -125,21 +142,26 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
         tt::tt_metal::ProgramDescriptor desc;
         // (the manifest first: at the CB base, the same address on every port core of every chip - remote senders
         // write into it at their own manifest's address)
-        desc.cbs.push_back(cb(CB_MANIFEST, sizes.manifest, tt::DataFormat::UInt32, port_set));
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = sizes.rows,
-            .core_ranges = port_set,
-            .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = CB_ROWS, .data_format = row_fmt, .page_size = row_bytes}},
-        });
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = sizes.meta,
-            .core_ranges = port_set,
-            .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = CB_META, .data_format = tt::DataFormat::UInt32, .page_size = META_PAGE}},
-        });
-        desc.cbs.push_back(cb(CB_PLAN, sizes.plan, tt::DataFormat::UInt32, port_set));
-        desc.cbs.push_back(cb(CB_STAGE, sizes.stage, tt::DataFormat::UInt32, port_set));
+        // (with an arena: the arena's first CbSizes::arena_bytes() a port core, the manifest at its base)
+        desc.cbs.push_back(place(cb(CB_MANIFEST, sizes.manifest, tt::DataFormat::UInt32, port_set), 0));
+        desc.cbs.push_back(place(
+            tt::tt_metal::CBDescriptor{
+                .total_size = sizes.rows,
+                .core_ranges = port_set,
+                .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = CB_ROWS, .data_format = row_fmt, .page_size = row_bytes}},
+            },
+            1));
+        desc.cbs.push_back(place(
+            tt::tt_metal::CBDescriptor{
+                .total_size = sizes.meta,
+                .core_ranges = port_set,
+                .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = CB_META, .data_format = tt::DataFormat::UInt32, .page_size = META_PAGE}},
+            },
+            2));
+        desc.cbs.push_back(place(cb(CB_PLAN, sizes.plan, tt::DataFormat::UInt32, port_set), 3));
+        desc.cbs.push_back(place(cb(CB_STAGE, sizes.stage, tt::DataFormat::UInt32, port_set), 4));
 
         KernelDescriptor reader;
         reader.kernel_source = std::string(KERNEL_DIR) + "sparse_dispatch_2d_port_reader.cpp";

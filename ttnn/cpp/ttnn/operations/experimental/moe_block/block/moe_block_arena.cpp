@@ -53,7 +53,6 @@ const MoEBlockPlan& moe_block_plan(
             *combine.n_acc,
             *accumulators);
         const int64_t l1 = fused_head::fused_head_l1_free(resources, l1_free);
-        const uint32_t payload = uint32_t(resources.fabric_max_payload_bytes());
         auto& mesh = resources.mesh_device();
         MoEBlockPlan out;
         std::optional<GroupKey> base;
@@ -73,7 +72,8 @@ const MoEBlockPlan& moe_block_plan(
                 break;
             }
             const auto& lay = fit.planned[0].lay;
-            const uint32_t port = uint32_t(fused_head::port_cb_bytes(lay.KB, payload));
+            // (the head's x-gather CB is an arena region, not a static CB: nothing of the head's under the combine's)
+            const uint32_t port = 0;
             comb.n_acc = A;  // (pinned: the head is planned for A)
             c = routed_experts_combine::plan_routed_experts_combine_l1(
                 resources, max_tokens_per_expert, activation, layout, comb, g, port);

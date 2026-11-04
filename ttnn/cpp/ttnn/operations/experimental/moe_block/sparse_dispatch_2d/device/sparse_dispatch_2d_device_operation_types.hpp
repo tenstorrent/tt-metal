@@ -45,6 +45,10 @@ struct SparseDispatch2dInputs {
     // The port cores' semaphore words (MoEBlockResources persistent words "sparse_dispatch_2d/sems"): per port core
     // the three ring counters and the fence's ready word, 16 B apart. Persistent and zero between calls.
     Tensor sems;
+    // The block's L1 arena of the call (height-sharded over the worker grid, one address on every core and chip): the
+    // dispatch's CBs are its first CbSizes::arena_bytes() a port core - manifest first, then rows, meta, plan, stage,
+    // 64 B aligned. Absent: static CBs (a standalone call).
+    std::optional<Tensor> arena;
 };
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d

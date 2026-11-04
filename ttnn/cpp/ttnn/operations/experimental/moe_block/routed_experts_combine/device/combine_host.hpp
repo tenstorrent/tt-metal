@@ -131,13 +131,5 @@ CreditPolicy credit_policy();
 uint32_t fused_arena_reserve(uint32_t flat_static_bytes);
 uint32_t exchange_arena_reserve(uint32_t static_cb_bytes);
 uint32_t exchange_arena_bytes(uint32_t largest_free_bytes, uint32_t reserve);
-// The dispatch's static CB bytes on its port cores, less its manifest (sparse_dispatch_2d's cb_sizes).
-uint32_t dispatch_static_cb_bytes(
-    uint32_t N,
-    uint32_t S,
-    uint32_t row_width,
-    uint32_t group = 8,
-    uint32_t manifest_batch = 16,
-    uint32_t dtype_bytes = 2);
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

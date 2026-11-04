@@ -102,10 +102,10 @@ class MoEBlock:
         self.x_dram = bool(fit.ok and len(fit.planned) and fit.planned[0].lay.xdram)
 
     def _one_arena_fits(self) -> bool:
-        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers -
-        the flat experts', the dispatch's and the fused head's ports' (allocated top-down in the largest free L1 block,
-        it reaches from the block's top down by its size), else two: the head's, then the exchange's (planned above
-        them). The real fix is those CBs in the arena."""
+        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
+        (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
+        the head's, then the exchange's (planned above them). The head's and the dispatch's CBs are in the arena; the
+        flat expert's static CBs are what is left below it."""
         free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
         kw = self.expert_kw
         static = self.mb.routed_experts_combine_static_cb_bytes(
@@ -210,10 +210,11 @@ class MoEBlock:
             )
         if self.exchange_spec:
             # (two arenas a forward for a head larger than the exchange's arena - K3: the head's
-            # arena reaches below the dispatch's static circular buffers; the exchange's arena is planned above them)
+            # arena reaches below the flat expert's static circular buffers; the exchange's is planned above them)
             ttnn.deallocate(arena)
             arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
-        dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources)
+        # (the dispatch's CBs in the call's arena - between the head's use of it and the combine's)
+        dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources, arena=arena)
         y_own = mb.routed_experts_combine(
             dispatched,
             head.counts,
