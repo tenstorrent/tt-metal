@@ -121,8 +121,10 @@ def test_specific_chip_lm_head_matmul(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    # Debug: MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh like test_specific_chip_ff1_matmul
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_lm_head_matmul(
-        mesh_device.get_device(logical_chip_id),
+        submesh_devices[logical_chip_id],
         didt_workload_iterations,
         determinism_check_interval,
     )

@@ -94,6 +94,10 @@ def test_minimal_matmul(
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    # Debug: override math fidelity with DIDT_MATH_FIDELITY (ttnn.MathFidelity name: LoFi, HiFi2, HiFi3, HiFi4)
+    if os.environ.get("DIDT_MATH_FIDELITY"):
+        math_fidelity = getattr(ttnn.MathFidelity, os.environ["DIDT_MATH_FIDELITY"])
+    logger.info(f"Math fidelity: {math_fidelity}")
     # Create compute config
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(

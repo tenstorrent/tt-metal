@@ -142,6 +142,19 @@ def test_duty_cycle(
     duty_cycle_test.run_op_test()
 
 
+# Debug: bursty (duty cycle) workload on ONE chip of the galaxy mesh, selected via a 1x1 submesh
+@pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"galaxy_chip_{i}" for i in range(32)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy")], indirect=["mesh_device"])
+@pytest.mark.parametrize("wl_loops", [100, 1000, 10000], ids=["rep-100x", "rep-1000x", "rep-10000x"])
+@pytest.mark.parametrize("non_mm_loops", [1, 2, 3, 4, 5, 6], ids=[f"duty-{i}" for i in range(1, 7)])
+def test_specific_chip_duty_cycle(
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, non_mm_loops, wl_loops
+):
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
+    test_duty_cycle(
+        submesh_devices[logical_chip_id], didt_workload_iterations, determinism_check_interval, non_mm_loops, wl_loops
+    )
+
 
 @pytest.mark.parametrize(
     "mesh_device",
