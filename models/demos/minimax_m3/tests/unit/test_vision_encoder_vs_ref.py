@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Device tests of TtMiniMaxM3VisionEncoder (multimodal/encoder.py), the vision encoder as the encoder service calls it,
+Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py), the vision encoder as the encoder service calls it,
 against the Torch reference, on one chip with the 2-layer reference of conftest.py (seeded random weights, no
 checkpoint):
   - test_vision_encoder_vs_ref: forward(pixels) of a seeded noise image returns its vision tokens on the chip as bf16
@@ -33,9 +33,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 from models.demos.minimax_m3.tt.vision.preprocess import BLOCK, PATCH_SIZE, patch_rows
 from models.demos.minimax_m3.vision import format as media_format
+from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, assert_close, grid_name

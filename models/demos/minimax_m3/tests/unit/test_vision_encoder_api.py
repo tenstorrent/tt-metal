@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of TtMiniMaxM3VisionEncoder and read_embeddings (multimodal/encoder.py), with stand-ins for the chip.
+Host-side checks of TtMiniMaxM3VisionEncoder and read_embeddings (vision/encoder.py), with stand-ins for the chip.
 The tests check that:
   - forward raises for pixels that no image resizes to (check_pixels' rules) before any ttnn call;
   - forward runs the model on patch_rows of the pixels, untilizes the model's output on the chip, frees the tiled copy
@@ -34,11 +34,11 @@ import torch
 from safetensors.torch import save_file
 
 import ttnn
-from models.demos.minimax_m3.multimodal import encoder as encoder_module
-from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
+from models.demos.minimax_m3.vision import encoder as encoder_module
+from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
 from .vision_checkpoint import checkpoint_name
 
