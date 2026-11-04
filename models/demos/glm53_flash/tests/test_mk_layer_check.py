@@ -28,7 +28,9 @@ from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 LAYER = int(os.environ.get("GLM53_MK_LAYER", "0"))
 GOLDEN = os.environ.get("GLM53_MK_GOLDEN", "/home/ttuser/ashai/glm53/_logs/mesh/hf_golden_t1")
-VTP = int(os.environ.get("GLM53_MK_VTP", "1"))  # 1 = the whole layer on the chip
+MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "1,1").split(","))
+VTP = int(os.environ.get("GLM53_MK_VTP", "0")) or MESH[0] * MESH[1]  # the TP the shards are sized for (1 chip: 1)
+STEPS = int(os.environ.get("GLM53_MK_STEPS", "1"))  # golden steps: the first token, then decode0 .. (state carry)
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "256"))
 WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
 
@@ -41,16 +43,19 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "device_params",
-    [mesh_device_params(1, 1, trace_region_size=TRACE_MB << 20, worker_l1_size=WORKER_L1)],
+    [mesh_device_params(*MESH, trace_region_size=TRACE_MB << 20, worker_l1_size=WORKER_L1)],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mk_layer_check(mesh_device):
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     ocfg = OptimizedDecoderConfig()
     kind = layer_kind(cfg, LAYER)
-    gold = torch.load(os.path.join(GOLDEN, f"layer{LAYER}_prefill.pt"))
+    golds = [torch.load(os.path.join(GOLDEN, f"layer{LAYER}_prefill.pt"))] + [
+        torch.load(os.path.join(GOLDEN, f"layer{LAYER}_decode{k}.pt")) for k in range(STEPS - 1)
+    ]
+    gold = golds[0]
     x_in, x_out = gold["x_in"].float(), gold["x_out"].float()  # [1, T, 4, H]
     assert x_in.shape[1] == 1, f"golden T = {x_in.shape[1]}: this check decodes one token at position 0"
     H = cfg.hidden_size
@@ -70,28 +75,24 @@ def test_mk_layer_check(mesh_device):
     logger.info(f"{kind} layer {LAYER} built in {time.perf_counter() - t0:.0f} s (vtp {VTP})")
     state = layer.attn.allocate_state(1)
     active = layer.masks(torch.ones(1))
-    # the residual row of token 0: the 4 streams side by side [1, 1, 1, 4 H] fp32
-    x = layer.replicated(x_in[0, 0].reshape(1, 1, 1, 4 * H).contiguous(), ttnn.float32)
-    s1, out, details, _ = layer(x, state.C, active, state.S, t=1)
-    ttnn.synchronize_device(mesh_device)
-    o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+    worst = 1.0
+    for step, gold in enumerate(golds):  # the same state object through the steps (the KDA conv history / state)
+        x_in, x_out = gold["x_in"].float(), gold["x_out"].float()
+        # the residual row of the token: the 4 streams side by side [1, 1, 1, 4 H] fp32
+        x = layer.replicated(x_in[0, 0].reshape(1, 1, 1, 4 * H).contiguous(), ttnn.float32)
+        s1, out, details, _ = layer(x, state.C, active, state.S, t=1)
+        ttnn.synchronize_device(mesh_device)
+        o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().reshape(4, H)
+        g = x_out[0, 0].reshape(4, H)
+        p = pcc(o, g)
+        per_stream = [round(pcc(o[s_], g[s_]), 5) for s_ in range(4)]
+        delta = pcc(o - x_in[0, 0].reshape(4, H), g - x_in[0, 0].reshape(4, H))
+        logger.info(
+            f"MK_LAYER_CHECK: {kind} layer {LAYER} mesh {MESH} vtp {VTP} step {step}: pcc {p:.6f} per stream "
+            f"{per_stream}; delta (out - in) pcc {delta:.6f}; golden x_out std {x_out.std():.4f}"
+        )
+        worst = min(worst, p)
     logger.info(
-        f"out shape {tuple(o.shape)} {out.dtype}; golden x_out std {x_out.std():.4f}, x_in std {x_in.std():.4f}"
+        f"MK_LAYER_CHECK_SUMMARY: {kind} layer {LAYER} mesh {MESH} vtp {VTP} steps {len(golds)}: worst pcc {worst:.6f}"
     )
-    g = x_out[0, 0].reshape(4, H)
-    cands = {}
-    if o.numel() == 4 * H:
-        cands["row[4H]"] = o.reshape(4, H)
-    if o.dim() == 4 and o.shape[0] == 4:  # stacked [4, 1, T, H]
-        cands["stacked[4,1,T,H]"] = o[:, 0, 0, :]
-    if o.dim() == 4 and o.shape[-1] == H and o.shape[-2] >= 4:
-        cands["rows[T*4,H]"] = o.reshape(-1, H)[:4]
-    res = {k: pcc(v, g) for k, v in cands.items()}
-    per_stream = {k: [round(pcc(v[s], g[s]), 5) for s in range(4)] for k, v in cands.items()}
-    best = max(res.values()) if res else float("nan")
-    delta = {k: pcc(v - x_in[0, 0].reshape(4, H), g - x_in[0, 0].reshape(4, H)) for k, v in cands.items()}
-    logger.info(
-        f"MK_LAYER_CHECK: {kind} layer {LAYER} vtp {VTP}: pcc {res} per stream {per_stream}; "
-        f"delta (out - in) pcc {delta}; best {best:.5f}"
-    )
-    assert best > 0.98, f"layer {LAYER} output pcc {best}"
+    assert worst > 0.98, f"layer {LAYER} output pcc {worst}"
