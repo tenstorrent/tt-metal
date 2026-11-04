@@ -9,7 +9,7 @@
 //
 // Each pass, one step per serviced VC's receiver channel (in VC order; step), the same for every channel:
 //   ack       channels with first-level acks (the host's ENABLE_FIRST_LEVEL_ACK_VC<n>): ack every packet that arrived
-//   poll      packets known present: the count from the packets-received register (one of the pass's grouped reads)
+//   poll      packets known present: the count from the packets-received register (one of the pass's first reads)
 //             is taken only when the count kept from its last read is used up (the register stays the source of truth;
 //             the kept count is a lower bound of it); under first-level acks, the packets acked and not yet processed
 //   decode    the route: deliver here, and which downstream routers to forward to (router_routing.hpp; with the
@@ -460,7 +460,7 @@ FORCE_INLINE bool receive(
         if constexpr (ReceiverChannel<VC>::first_level_ack) {
             return false;  // nothing acked to process
         } else {
-            progress.packets_ready = arrived;  // the register's count, from the pass's grouped reads
+            progress.packets_ready = arrived;  // the register's count, from the pass's first reads
             if (progress.packets_ready == 0) {
                 return false;
             }
@@ -738,9 +738,9 @@ FORCE_INLINE void step_channel(
     }
 }
 
-// One pass over the serviced VCs' receiver channels: the pass's grouped reads, one step per channel, and the credit
-// frame when the counts changed. The group (a read group, begin_read_group): every channel's packets-received register
-// and, with first-level acks (a frame goes out most passes), the TX queue's status, raw, each tested where it is used.
+// One pass over the serviced VCs' receiver channels: the pass's reads, one step per channel, and the credit frame when
+// the counts changed. The reads, first: every channel's packets-received register and, with first-level acks (a frame
+// goes out most passes), the TX queue's status, raw, each tested where it is used.
 // The body of run()'s loop; a single-ERISC router runs it as the receiver half of each pass over its state in memory
 // (router_single.hpp).
 static_assert(MAX_NUM_VCS == 3, "pass() steps the receiver channels of VCs 0, 1 and 2");
@@ -752,7 +752,6 @@ FORCE_INLINE void pass(
     Credits& credits,
     Connections& downstreams,
     const ChipCoordinates& my_chip) {
-    begin_read_group();
     const std::array<uint32_t, MAX_NUM_VCS> arrived = {// by VC, in order
                                                        read_packets_received<0>(),
                                                        read_packets_received<1>(),
@@ -761,7 +760,6 @@ FORCE_INLINE void pass(
     if constexpr (any_first_level_ack_channel) {
         txq_status = read_txq_status(receiver_txq_id);
     }
-    end_read_group();
     step_channel<0>(loop_copy, states, downstreams, credits, credit_frame_due, arrived[0], my_chip);
     step_channel<1>(loop_copy, states, downstreams, credits, credit_frame_due, arrived[1], my_chip);
     step_channel<2>(loop_copy, states, downstreams, credits, credit_frame_due, arrived[2], my_chip);
