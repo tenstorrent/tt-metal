@@ -146,7 +146,7 @@ How it differs from `run_matrix.sh`:
   (`CHUNK=2048`, `LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4`). The table is set by the env knobs (`CACHED`, `NEW`,
   `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) in the job's `cmd`.
 * Perf is reported, not gated. The tables go to the job summary and the job log in the #57827 markdown layout
-  (`matrix_table.py --markdown`). The JSONL, CSV, runner/producer/rank logs and timing CSVs are uploaded as the
+  (`matrix_table.py --markdown`). The JSONL, CSV and runner/producer/rank logs are uploaded as the
   `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run breaks (bring-up, a producer
   error, missing chunks).
 * `MATRIX_CI_DRY_RUN=1` prints the tt-run and producer commands without launching anything. `TTRUN_DIR` can point at

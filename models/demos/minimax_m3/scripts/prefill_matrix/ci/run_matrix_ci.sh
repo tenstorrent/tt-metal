@@ -76,16 +76,15 @@ if [ "${LAUNCH}" = binding ]; then
   }
 fi
 
-# ---- work dir on the shared /ci volume: runner.log, ranklogs/, timing/, c<cached>/producer.log ----------------------
+# ---- work dir on the shared /ci volume: runner.log, ranklogs/, c<cached>/producer.log ------------------------------
 OUT_DIR="${PREFILL_SUMMARIES}/m3_prefill_matrix"
 WORK="${OUT_DIR}/work"
 TTRUN_CWD="${WORK}/ttrun-cwd"
-TIMING="${WORK}/timing"          # one CSV per rank; producer sessions continue the chunk index
 RANKLOGS="${WORK}/ranklogs"
 RUNNER_LOG="${WORK}/runner.log"
 OUT="${OUT_DIR}/results_${STAGES}stage.jsonl"
 mkdir -p "${TTRUN_CWD}" "${PREFILL_SUMMARIES}/perf"
-[ "${DRY_RUN}" != 0 ] || mkdir -p "${TIMING}" "${RANKLOGS}"
+[ "${DRY_RUN}" != 0 ] || mkdir -p "${RANKLOGS}"
 
 COMMIT=$(git -C "${TT_METAL_HOME}" rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "[matrix-ci] $(date) commit=${COMMIT} launch=${LAUNCH} hosts=${RESOLVED_HOSTS} stages=${STAGES}"
@@ -102,7 +101,6 @@ RUNNER_ENV+=" export PREFILL_FABRIC_MODE=2d; export PREFILL_SP=2; export PREFILL
 RUNNER_ENV+=" export PREFILL_MAX_SEQ_LEN=${KV_CAPACITY}; export PREFILL_NUM_USERS=${RUNNER_USERS};"
 RUNNER_ENV+=" export PREFILL_CHUNK_SIZE=${MATRIX_CHUNK}; export PREFILL_H2D_SERVICE_ID=ds_prefill;"
 RUNNER_ENV+=" export PREFILL_PP_D2D_FIFO_BYTES=32768; export M3_INDEX_CACHE_BF16=0; export EXPERT_DTYPE=${EXPERT_DTYPE:-bf4};"
-RUNNER_ENV+=" export PREFILL_SYNC_PER_CHUNK=1; export PREFILL_TIMING_DIR=$(printf '%q' "${TIMING}");"
 RUNNER_ENV+=" export HF_MODEL=$(printf '%q' "${HF_MODEL}"); export TT_CACHE_PATH=$(printf '%q' "${TT_CACHE_PATH}");"
 [ -z "${MATRIX_LAYER_COUNTS}" ] || RUNNER_ENV+=" export PREFILL_PP_LAYER_COUNTS=${MATRIX_LAYER_COUNTS};"
 
@@ -145,7 +143,7 @@ on_rank0() {
 producer_cmd() {   # for the current row
   echo "env $(matrix_producer_env "${KV_CAPACITY}") PREFILL_H2D_CONNECT_TIMEOUT=120 \
     timeout ${PRODUCER_TIMEOUT_SECS} python3 $(printf '%q' "${PKG_DIR}/matrix_producer.py") --cached ${ROW_C} --new $(printf '%q' "${NEW}") \
-    --iters ${ITERS} --timing-dir $(printf '%q' "${TIMING}") --out $(printf '%q' "${OUT}") --last-rank ${LAST} \
+    --iters ${ITERS} --out $(printf '%q' "${OUT}") --last-rank ${LAST} \
     --label ci_${STAGES}stage_c${MATRIX_CHUNK}${MATRIX_LAYER_COUNTS:+_split} --users ${USERS} \
     ${REQS:+--reqs ${REQS}} --target-chunks ${TARGET_CHUNKS} ${SKIP_IDLE:+--skip-idle}"
 }
