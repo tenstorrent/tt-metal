@@ -197,8 +197,11 @@ def create_optimizer(model, yaml_config: dict):
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
     Passes the dict straight to the C++ optimizer factory. With a top-level
-    config, training_config.precision.master_dtype first stores the model's
-    trainable parameters in that dtype, so the optimizer state follows it.
+    config, training_config.precision is applied first: master_dtype stores the
+    model's trainable parameters in that dtype, so the optimizer state follows
+    it, and reduce_dtype (none when unset) becomes the dtype the gradient syncs
+    sum in when a call passes none (ttml.sync_gradients, the FSDP backward hook,
+    C++ synchronize_gradients). An optimizer dict alone applies neither.
 
     Args:
         model: Model to optimize

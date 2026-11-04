@@ -147,8 +147,8 @@ void py_module(nb::module_& m) {
         nb::arg("training_config"),
         nb::arg("parameters"),
         "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
-        "and precision.reduce_dtype, when set, as the dtype the gradient syncs sum in by default. Returns the master "
-        "dtype applied, or None.");
+        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
+        "master dtype applied, or None.");
 
     m.def(
         "reduce_dtype_from_config",

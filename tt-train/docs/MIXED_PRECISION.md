@@ -102,10 +102,11 @@ gradient's dtype, bf16, so every hop of the reduction rounds its running total t
 averaged in fp32, and the mean is written back in the gradient's dtype, so the optimizers still get bf16 gradients, as
 the fused kernels require. Unset keeps the bf16 sum.
 
-- **DDP.** `core::apply_precision_config()` stores the value in `AutoContext` (`set_gradient_reduce_dtype()`) when the
-  key is present; a config without it leaves the stored value as it is, and `close_device()` clears it. C++
-  `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in the
-  stored one. `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an
+- **DDP.** `core::apply_precision_config()` stores the value in `AutoContext` (`set_gradient_reduce_dtype()`) every
+  time it runs: a config without the key stores none, so nothing carries over from a config applied earlier in the
+  process, and `close_device()` clears it too. A script that sets the value itself does so after `create_optimizer()`.
+  C++ `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in
+  the stored one. `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an
   argument.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the

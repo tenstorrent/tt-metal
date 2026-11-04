@@ -655,6 +655,8 @@ def run_training(
         t.get_value(native).dtype.name.lower() for t in model.parameters().values() if t.get_requires_grad()
     }
     optimizer_fields.append(("master dtype", ", ".join(sorted(master_dtypes))))
+    reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
+    optimizer_fields.append(("reduce dtype", reduce_dtype.name.lower() if reduce_dtype else "gradient's own"))
     if training_cfg.use_clip_grad_norm:
         optimizer_fields.append(("clip", f"max-norm {training_cfg.clip_grad_norm_max_norm}"))
 

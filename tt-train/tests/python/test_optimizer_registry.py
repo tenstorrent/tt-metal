@@ -417,15 +417,24 @@ def test_create_optimizer_rejects_an_unknown_master_dtype(expect_error):
         create_optimizer(_ModelWithoutParameters(), config)
 
 
-def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default):
+@pytest.mark.parametrize(
+    "precision, expected",
+    [
+        ({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32),
+        ({"reduce_dtype": "bfloat16"}, ttnn.DataType.BFLOAT16),
+        ({}, None),
+    ],
+)
+def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default, precision, expected):
     """With a full config, create_optimizer also stores precision.reduce_dtype as the default the gradient syncs sum in:
-    ttml.sync_gradients and the FSDP backward hook read it when a call passes none. No parameter is touched, so this
-    needs no device."""
-    config = {"training_config": {"precision": {"reduce_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
+    ttml.sync_gradients and the FSDP backward hook read it when a call passes none. A config without the key stores
+    none, whatever was stored before. No parameter is touched, so this needs no device."""
+    gradient_reduce_default(ttnn.DataType.FLOAT32 if expected is None else None)
+    config = {"training_config": {"precision": precision, "optimizer": {"type": "AdamW"}}}
 
     create_optimizer(_ModelWithoutParameters(), config)
 
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == expected
 
 
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
