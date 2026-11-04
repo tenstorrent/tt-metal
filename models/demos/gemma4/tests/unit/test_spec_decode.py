@@ -3866,3 +3866,112 @@ def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, s
                 gap < 0.5
             ), f"drafter row {r} at B={B}: top-1 {int(torch.argmax(lb[r]))} vs batch-1 {int(top2.indices[0])}"
     spec.serving_release()
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_record_draws_match_the_device_sampler(mesh_device, device_params, reset_seeds, monkeypatch):
+    """GEMMA4_SPEC_SAMPLED_VERIFY on the (5, 5) record over the TP-sharded verify logits: a replay with a sampling
+    plan (two seeded rows at different temperatures / top-k / top-p, one greedy row, one unseeded row) hands back,
+    on every sampled packed row, the SAME id the target's own device sampler draws from the record's published
+    logits with the plan's parameters and seeds (the oracle: ``tt_sampling.forward`` on the shared verify-logits
+    buffer after the replay), and the record's argmax id on the greedy row; a second replay of the same plan
+    repeats the seeded rows' draws; then the greedy serving loop under the plan stays coherent (every committed
+    token comes from the sampler, so the plain-greedy reference does not apply: the loop converges, the accepted
+    counts are logged)."""
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_sampling import serving_sampling_rows
+
+    monkeypatch.setenv("GEMMA4_SPEC_SAMPLED_VERIFY", "1")
+    monkeypatch.setenv("GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX", "1")  # the oracle takes the chip's vocab slice
+    shape, max_seq_len, widths = (5, 5), 4096, [2048]
+    B, K = shape
+    P = K + 1
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
+    assert spec._srv_sampled_verify and spec._srv_sharded_verify_argmax
+    spec.serving_prepare([shape], {shape: widths}, max_rows=_SERVING_MAX_ROWS)
+    assert spec._srv_sampler is not None and spec._srv_shape_bufs[shape]["sampler"]["chunks"] == 1
+    spec.serving_capture()
+    live = 4
+    users = list(range(live))
+    page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+    page_tables[:live] = page_table[:live]
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    # row ids are the users; the step's sampling params are indexed by them
+    sampling = SimpleNamespace(
+        temperature=[1.0, 0.0, 0.8, 1.0] + [0.0] * 28,
+        top_k=[32, 1, 20, 0] + [1] * 28,
+        top_p=[1.0, 1.0, 0.9, 1.0] + [1.0] * 28,
+        seed=[42, None, 7, None] + [None] * 28,
+    )
+    plan = serving_sampling_rows(shape, users, positions, sampling)
+    assert plan.sampled[:P] == [True] * P and plan.sampled[P : 2 * P] == [False] * P
+    assert plan.sampled[2 * P : 4 * P] == [True] * (2 * P) and not any(plan.sampled[4 * P :])
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    res = spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+    lh = res.logits_to_host()  # [live, P, V] of this replay, read before the oracle consumes the buffer
+    ids = res.argmax_ids.clone()
+    # the greedy row holds the record's argmax ids (ties excepted)
+    host_arg = lh[1].float().argmax(-1)
+    for j in range(P):
+        a, b = int(host_arg[j]), int(ids[1, j])
+        assert a == b or lh[1, j, a] == lh[1, j, b], f"greedy row col {j}: device {b} vs host argmax {a}, not a tie"
+    # the oracle: the target's device sampler over the same published logits, the plan's parameters and seeds
+    tt_sampling = spec.target.sampling.tt_sampling
+    seed_manager = spec.target.sampling.seed_manager
+    k, p, temp, seeds = plan.chunk(0)
+    tt_sampling.reset_params(k, p, temp)
+    seed_manager.write_device_seed_values(seeds)
+    tok, _ = tt_sampling.forward(spec._srv_logits)
+    oracle = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).to(torch.int64).reshape(-1)[: B * P]
+    for b in (0, 2, 3):
+        for j in range(P):
+            r = b * P + j
+            assert int(ids[b, j]) == int(oracle[r]), (
+                f"row {b} col {j}: the record drew {int(ids[b, j])}, the device sampler {int(oracle[r])} "
+                f"(seed {seeds[r]}, k {k[r]}, p {p[r]}, 1/temp {temp[r]})"
+            )
+            top = torch.topk(lh[b, j].float(), 32).indices.tolist()
+            assert int(ids[b, j]) in top, f"row {b} col {j}: draw {int(ids[b, j])} outside the column's top-32"
+    logger.info(f"[sampled record] draws per row: {ids[:live].tolist()} (oracle {oracle[: live * P].tolist()})")
+    # the same plan again (same seeds): the seeded rows repeat their draws, the greedy row its argmax
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    res2 = spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+    assert res2.argmax_ids[0].tolist() == ids[0].tolist() and res2.argmax_ids[2].tolist() == ids[2].tolist()
+    assert res2.argmax_ids[1].tolist() == ids[1].tolist()
+    # the serving loop under sampled plans: coherent, converging; the accepted counts are the sampled acceptance
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    outs = [[] for _ in users]
+    accepts = [[] for _ in users]
+    seed_cols = [None] * live
+    anchors, positions = list(anchors), list(positions)
+    it = 0
+    while min(len(o) for o in outs) < n_new:
+        plan = serving_sampling_rows(shape, users, positions, sampling)
+        res = spec.serving_step(shape, users, anchors, positions, page_tables, seed_cols, plan)
+        for r in range(live):
+            drafts = res.drafts[r].tolist()
+            g = res.argmax_ids[r].tolist()
+            m = next((i for i in range(K) if drafts[i] != g[i]), K)
+            committed = drafts[:m] + [g[m]]
+            outs[r].extend(committed)
+            accepts[r].append(m)
+            positions[r] += m + 1
+            anchors[r] = committed[-1]
+            seed_cols[r] = min(m, K)
+        it += 1
+        assert it <= 4 * n_new, "the sampled serving loop did not converge"
+    for r in range(live):
+        text = tokenizer.decode(outs[r][:n_new])
+        logger.info(f"[sampled record] row {r} T={sampling.temperature[r]} accepted {accepts[r]}: {text!r}")
+        assert len(outs[r]) >= n_new and all(0 <= t < spec.target.vocab_size for t in outs[r])
+    greedy_mean = sum(accepts[1]) / len(accepts[1])
+    assert greedy_mean >= float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5)), "the greedy row's acceptance floor"
+    spec.serving_release()
