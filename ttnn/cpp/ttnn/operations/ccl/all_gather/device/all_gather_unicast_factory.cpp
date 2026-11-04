@@ -592,6 +592,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     } else {
                         std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
                         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                            *mesh_device,
                             sender_fabric_node_id,
                             dst,
                             {link},
