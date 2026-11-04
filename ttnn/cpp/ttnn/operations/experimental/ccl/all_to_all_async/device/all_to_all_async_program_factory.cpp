@@ -526,13 +526,13 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;
         writer_rt_arg_list.reserve(writer_rt_args.size());

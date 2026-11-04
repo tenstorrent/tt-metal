@@ -7,7 +7,7 @@ import ttnn
 import pytest
 from functools import partial
 
-from tt_py_test_utils_common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -2732,6 +2732,7 @@ def test_where_nd_sharded_output_l1_interleaved_inputs(device, explicit_out):
     assert torch.equal(ttnn.to_torch(out), torch.where(cond.bool(), t, f))
 
 
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
 @pytest.mark.parametrize(
     "inputs_nd_sharded, explicit_out",
     [(True, False), (True, True), (False, True)],

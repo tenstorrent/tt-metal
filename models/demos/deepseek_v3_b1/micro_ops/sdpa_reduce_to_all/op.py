@@ -743,6 +743,7 @@ class SdpaReduceToAll:
                     # BRISC forwarder fabric connection (FWD direction)
                     fwd_brisc_idx = forwarder_group.brisc_kernel_index
                     brisc_fabric_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=fabric_node_id,
                         dst_fabric_node_id=fwd_fabric_node_id,
                         link_idx=link_idx,
@@ -754,6 +755,7 @@ class SdpaReduceToAll:
                     # NCRISC forwarder fabric connection (BWD direction)
                     fwd_ncrisc_idx = forwarder_group.ncrisc_kernel_index
                     ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=fabric_node_id,
                         dst_fabric_node_id=bwd_fabric_node_id,
                         link_idx=link_idx,
