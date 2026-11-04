@@ -1,0 +1,58 @@
+---
+# torrentci#1821 S6: the PR Gate "runtime validation smoke" device test (smoke.yaml
+# with product tt-metalium, test-category pr_gate; the wh_n150_civ2 entry in
+# tests/pipeline_reorg/runtime_validation_pr_gate_tests.yaml) on one n150 through
+# the card VM path: the non-CPU cases of tt-metalium-validation-smoke against
+# asan-build's packages, which are installed in the guest by apt before the
+# first step (as 30-smoke-cpu-asan.yaml, minus the mock cluster).
+#
+# Differences from the GitHub job, all forced by the platform:
+# - The image is the ci-build chain image, not ci-test.
+# - No hugepages: the card sits behind the guest's vIOMMU, as on GitHub's
+#   viommu runners (smoke.yaml mounts /no_hugepages there).
+# - No remote kernel ccache, so kernel JIT runs cold; 8 vCPUs and a 45 m
+#   test timeout instead of the GitHub job's 15 m.
+# Run it by hand. asan-build is an implicit dependency.
+jobs:
+  - id: smoke-n150-asan
+    description: "Run the PR Gate runtime validation smoke test (non-CPU cases) on one n150 with the ASan packages"
+    timeout: 1h30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation]
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}
+      - {name: ASAN_OPTIONS, value: color=always}
+      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
+      - {name: GTEST_COLOR, value: 'yes'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: TT_LOGGER_LEVEL, value: warn}
+      - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
+      - {name: LSAN_OPTIONS, value: suppressions=/usr/share/tt-metalium/lsan.supp}
+    steps:
+      - id: smoke-n150
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" "$TT_METAL_CACHE" test-reports
+            - cat .torrentci/packages.json 2>/dev/null || true
+            - dpkg -s tt-metalium tt-metalium-validation | grep -e '^Package' -e '^Version'
+            - ls -l /dev/tenstorrent/
+            # gtest prints a line per test; log to a file and print the tail so
+            # a long run cannot exhaust the runner's output budget.
+            - >-
+              ulimit -n 4096; rc=0; timeout 45m tt-metalium-validation-smoke --gtest_filter='-*CPU_*'
+              --gtest_output=xml:test-reports/ >/tmp/smoke.log 2>&1 || rc=$?;
+              tail -c 20000 /tmp/smoke.log; exit $rc
