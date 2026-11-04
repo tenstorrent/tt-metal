@@ -6,6 +6,9 @@
 // A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
 // kernel).
 #pragma once
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+
 namespace ra {
 
 constexpr uint32_t S = RAP_S, K = RAP_K, EPC = RAP_EPC, R = RAP_R, C = RAP_C, N = R * C, ME = RAP_ME;
@@ -243,7 +246,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             }
         }
         uint32_t* wr = reinterpret_cast<uint32_t*>(B + O_WANT);
-        const InterleavedAddrGen<true> pgg = {.bank_base_address = plan_addr, .page_size = 4096};
+        const DramPages pgg = dram_pages(plan_addr, 4096);
         for (uint32_t i = 0, aa = q; aa < A; ++i, aa += M) {
             uint32_t want[N], nloc = 0;
             for (uint32_t s = 0; s < N; ++s) {
@@ -270,7 +273,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             for (uint32_t s = 0; s < 32; ++s) {
                 wr[i * 32 + s] = s < N ? want[s] : 0;
             }
-            noc_async_write(B + O_WANT + i * 128, get_noc_addr(0, pgg) + (32 + aa * 32) * 4, 128);
+            noc_async_write(B + O_WANT + i * 128, pgg.get_noc_addr(0) + (32 + aa * 32) * 4, 128);
             noc_inline_dw_write(get_noc_addr(px[0], py[0], bb[0] + O_PLAN + (16 + aa) * 4), nloc);
         }
     }
@@ -381,10 +384,8 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             cw[E0 + e - b0 / 4] = tot[e];
             rw[E0 + e - b0 / 4] = reg[e];
         }
-        const InterleavedAddrGen<true> cgg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
-        const InterleavedAddrGen<true> rgg = {.bank_base_address = reg_addr, .page_size = NG * 4};
-        noc_async_write(B + O_CNT, get_noc_addr(0, cgg) + b0, b1 - b0);
-        noc_async_write(B + O_RGN, get_noc_addr(0, rgg) + b0, b1 - b0);
+        noc_async_write(B + O_CNT, dram_pages(cnt_addr, NG * 4).get_noc_addr(0) + b0, b1 - b0);
+        noc_async_write(B + O_RGN, dram_pages(reg_addr, NG * 4).get_noc_addr(0) + b0, b1 - b0);
     }
     const uint32_t W1c = R1 < ROWS_CAP ? R1 : ROWS_CAP, W1 = W1c < R0 + INST_ROWS ? W1c : R0 + INST_ROWS;
     const uint32_t ER = e1 - e0;
@@ -484,11 +485,10 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
         }
     }
     if (W1 > R0) {
-        const InterleavedAddrGen<true> ig = {.bank_base_address = tidx_addr, .page_size = ROWS_CAP * 4};
-        const InterleavedAddrGen<true> tg = {.bank_base_address = tab_addr, .page_size = 256};
-        noc_async_write(B + O_TIDX, get_noc_addr(0, ig) + R0 * 4, (W1 - R0) * 4);
+        const DramPages tg = dram_pages(tab_addr, 256);
+        noc_async_write(B + O_TIDX, dram_pages(tidx_addr, ROWS_CAP * 4).get_noc_addr(0) + R0 * 4, (W1 - R0) * 4);
         for (uint32_t pg = R0 / 32; pg < W1 / 32; ++pg) {
-            noc_async_write(B + O_TAB + (pg - R0 / 32) * 256, get_noc_addr(pg, tg), 256);
+            noc_async_write(B + O_TAB + (pg - R0 / 32) * 256, tg.get_noc_addr(pg), 256);
         }
     }
     // (7) n_inj / n_ret partials to core 0; core 0 writes counts / regions and the plan's words 0..31 and 600, 601
@@ -528,9 +528,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
         }
         rows[8] = off;
         rows[9] = off > ROWS_CAP ? 1 : 0;
-        const InterleavedAddrGen<true> pgg = {.bank_base_address = plan_addr, .page_size = 4096};
-        noc_async_write(B + O_PLAN, get_noc_addr(0, pgg), 128);
-        noc_async_write(B + O_ROWS, get_noc_addr(0, pgg) + 592 * 4, 64);
+        const uint64_t plan_noc = dram_pages(plan_addr, 4096).get_noc_addr(0);
+        noc_async_write(B + O_PLAN, plan_noc, 128);
+        noc_async_write(B + O_ROWS, plan_noc + 592 * 4, 64);
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

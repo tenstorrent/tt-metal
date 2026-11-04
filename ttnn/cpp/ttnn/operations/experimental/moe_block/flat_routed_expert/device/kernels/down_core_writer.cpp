@@ -25,6 +25,7 @@
 //     let fast down cores stand in for a slow one); the coordinator zeroes them again at the end.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "expert_schedule.hpp"
 #include "combine_done.hpp"
 #ifdef SE_Y_RM
@@ -69,13 +70,10 @@ void kernel_main() {
     // region_tile(e) + s * MT + r, only those below the expert's token count (RT: per expert region tile, count tiles)
 #ifdef SE_Y_BF16  // (bf16 tiles)
     constexpr uint32_t out_page = 2048;
-    constexpr auto y_fmt = DataFormat::Float16_b;
 #else
     constexpr uint32_t out_page = 1088;
-    constexpr auto y_fmt = DataFormat::Bfp8_b;
 #endif
-    const InterleavedAddrGenFast<true> y = {
-        .bank_base_address = get_arg_val<uint32_t>(6), .page_size = out_page, .data_format = y_fmt};
+    const DramPages y = dram_pages(get_arg_val<uint32_t>(6), out_page);
     const uint32_t e2e_args = 10 + n_gu;
     // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10 + N_GU.. are the expert_schedule.hpp args (CT
     // 22 NUM_E), CB 7 this RISC's scratch; the compute gets them in CB 6. Output rows come from the experts' regions.
@@ -165,7 +163,7 @@ void kernel_main() {
                 }
                 const uint32_t trow = dyn.off[y_a] / 32 + y_s * mt + r;
                 for (uint32_t c = 0; c < pcd; ++c) {
-                    noc_async_write_tile(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
+                    noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
                 }
             }
             y_pending = true;

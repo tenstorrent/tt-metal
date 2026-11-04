@@ -13,6 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "schedule_meta.hpp"
 
 // bytes of scratch per table (counts + the local experts' global ids, regions); a RISC owns 2 * SE_DYN_HALF of CB 7
@@ -252,12 +253,12 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     const uint32_t gidx_addr = get_arg_val<uint32_t>(dyn0 + 5), gidx_bytes = get_arg_val<uint32_t>(dyn0 + 6);
     const uint32_t rd = (row_bytes + 63) / 64 * 64;
     const uint32_t ids_l1 = scratch + rd;  // after the counts row (host: SE_DYN_HALF >= rd + the ids, rounded)
-    const InterleavedAddrGen<true> cg = {.bank_base_address = counts_addr, .page_size = row_bytes};
-    const InterleavedAddrGen<true> rg = {.bank_base_address = regions_addr, .page_size = row_bytes};
-    const InterleavedAddrGen<true> ig = {.bank_base_address = gidx_addr, .page_size = gidx_bytes};
-    noc_async_read(get_noc_addr(0, cg), scratch, rd);
-    noc_async_read(get_noc_addr(0, rg), scratch + SE_DYN_HALF, rd);
-    noc_async_read(get_noc_addr(0, ig), ids_l1, (gidx_bytes + 63) / 64 * 64);
+    const DramPages cg = dram_pages(counts_addr, row_bytes);
+    const DramPages rg = dram_pages(regions_addr, row_bytes);
+    const DramPages ig = dram_pages(gidx_addr, gidx_bytes);
+    noc_async_read(cg.get_noc_addr(0), scratch, rd);
+    noc_async_read(rg.get_noc_addr(0), scratch + SE_DYN_HALF, rd);
+    noc_async_read(ig.get_noc_addr(0), ids_l1, (gidx_bytes + 63) / 64 * 64);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SE_DYN_HALF);

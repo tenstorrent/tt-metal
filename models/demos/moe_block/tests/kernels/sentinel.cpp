@@ -6,6 +6,7 @@
 // writes the count to page `page` (64 B) of the DRAM result tensor.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 
 void kernel_main() {
     const uint32_t target = get_arg_val<uint32_t>(0), words = get_arg_val<uint32_t>(1);
@@ -25,7 +26,6 @@ void kernel_main() {
     p[1] = page;
     p[2] = 0x5E47;
     p[3] = 0;
-    const InterleavedAddrGen<true> g = {.bank_base_address = out, .page_size = 64};
-    noc_async_write(target, get_noc_addr(page, g), 16);
+    noc_async_write(target, dram_pages(out, 64).get_noc_addr(page), 16);
     noc_async_write_barrier();
 }

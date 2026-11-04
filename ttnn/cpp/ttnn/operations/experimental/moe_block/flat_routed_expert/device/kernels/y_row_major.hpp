@@ -12,6 +12,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "expert_schedule.hpp"
 
 template <uint32_t out_cb, uint32_t pcd, uint32_t mt, uint32_t ht>
@@ -27,7 +28,7 @@ struct SeYRmWriter {
     // the y writes' NoC: this RISC's
     static constexpr uint8_t ynoc = noc_index;
     static_assert(rows >= 1 && trid0 + rows <= 16);
-    InterleavedAddrGen<true> yg;
+    DramPages yg;
     uint32_t col_off;
     uint32_t base = 0;  // the out CB's start (its read pointer before anything is consumed)
     // issue cursor (entry, sub-block, row tile) and the in-order retire cursor
@@ -64,7 +65,7 @@ struct SeYRmWriter {
 #endif
 
     SeYRmWriter(uint32_t y_addr, uint32_t col0) :
-        yg{.bank_base_address = y_addr, .page_size = ht * 64}, col_off(col0 * 64), base(get_read_ptr(out_cb)) {
+        yg(dram_pages(y_addr, ht * 64)), col_off(col0 * 64), base(get_read_ptr(out_cb)) {
 #ifdef SE_Y_L1
         constexpr uint32_t A0 = SE_Y_L1;
         nd = get_arg_val<uint32_t>(A0 + 0);
@@ -148,8 +149,7 @@ struct SeYRmWriter {
             // this tile's table page: (destination, header word) per row
             const uint32_t page = row0 / 32, tabl = words + 256;
             if (page != tab_tile) {
-                const InterleavedAddrGen<true> tg = {.bank_base_address = tab_base, .page_size = 256};
-                noc_async_read(get_noc_addr(page, tg), tabl, 256);
+                noc_async_read(dram_pages(tab_base, 256).get_noc_addr(page), tabl, 256);
                 noc_async_read_barrier();
                 tab_tile = page;
             }
@@ -221,7 +221,7 @@ struct SeYRmWriter {
 #else
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
-                src + i * seg, get_noc_addr(row0 + i, yg, col_off, ynoc), seg, trid, write_cmd_buf, ynoc, yvc);
+                src + i * seg, yg.get_noc_addr(row0 + i, col_off, ynoc), seg, trid, write_cmd_buf, ynoc, yvc);
         }
 #endif
         ++issued;

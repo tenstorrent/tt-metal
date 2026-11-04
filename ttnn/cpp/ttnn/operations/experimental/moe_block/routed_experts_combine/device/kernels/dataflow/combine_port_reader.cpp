@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "combine_zero_gate.hpp"
 
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
@@ -32,8 +33,7 @@ void kernel_main() {
     {
         cb_reserve_back(cb_tab, 1);
         const uint32_t sc = (get_write_ptr(cb_tab) + 63) & ~63u;
-        const InterleavedAddrGen<true> pg = {.bank_base_address = plan, .page_size = 4096};
-        noc_async_read(get_noc_addr(0, pg), sc, 64);
+        noc_async_read(dram_pages(plan, 4096).get_noc_addr(0), sc, 64);
         noc_async_read_barrier();
         n = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[did];
     }

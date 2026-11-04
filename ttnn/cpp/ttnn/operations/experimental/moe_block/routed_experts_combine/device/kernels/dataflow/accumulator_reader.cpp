@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
 #include "combine_zero_gate.hpp"
 
 constexpr uint32_t cb_row = get_compile_time_arg_val(0);
@@ -68,9 +69,9 @@ void kernel_main() {
     uint32_t n_local = 0;
     {  // (the device plan: n_local and want[] of this accumulator)
         const uint32_t sc = (get_write_ptr(cb_tab) + 63) & ~63u;
-        const InterleavedAddrGen<true> pg = {.bank_base_address = plan, .page_size = 4096};
-        noc_async_read(get_noc_addr(0, pg) + 64, sc, 64);                        // n_local[16]
-        noc_async_read(get_noc_addr(0, pg) + (32 + me * 32) * 4, sc + 64, 128);  // want[me][32]
+        const uint64_t plan_noc = dram_pages(plan, 4096).get_noc_addr(0);
+        noc_async_read(plan_noc + 64, sc, 64);                        // n_local[16]
+        noc_async_read(plan_noc + (32 + me * 32) * 4, sc + 64, 128);  // want[me][32]
         noc_async_read_barrier();
         n_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[me];
         for (uint32_t k = 0; k < N; ++k) {

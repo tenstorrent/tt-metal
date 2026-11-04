@@ -6,6 +6,9 @@
 // A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
 // kernel).
 #pragma once
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/device/kernels/dram_pages.hpp"
+
 // one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
 // planner core 0; kind 1: the next forwarding port's DRAM slot page (fbase: the forward slots tensor, slot | page <<
 // 8), its flag on that port), chunks of MAXP, the last with the increment. (A forward slot in DRAM, not the port's L1:
@@ -36,12 +39,10 @@ FORCE_INLINE void ra_hop(
                    slot = get_arg_val<uint32_t>(a + 4);
     uint64_t dst, inc;
     if (kind == 0) {
-        const InterleavedAddrGen<true> slg = {.bank_base_address = sl, .page_size = PCAP};
-        dst = get_noc_addr(par * RA_N + srcid, slg);
+        dst = dram_pages(sl, PCAP).get_noc_addr(par * RA_N + srcid);
         inc = get_noc_addr(px, py, par ? c1 : c0);
     } else {
-        const InterleavedAddrGen<true> fg = {.bank_base_address = fbase, .page_size = PCAP};
-        dst = get_noc_addr(slot >> 8, fg);
+        dst = dram_pages(fbase, PCAP).get_noc_addr(slot >> 8);
         inc = get_noc_addr(nx, ny, flags + 16 * (slot & 0xFF));
     }
     for (uint32_t off = 0; off < bytes; off += MAXP) {
@@ -162,8 +163,7 @@ struct RASend {
                     RA_N,
                     MAXP);
             } else {  // (SELF: my own chip's packet)
-                const InterleavedAddrGen<true> slg = {.bank_base_address = sl, .page_size = PCAP};
-                noc_async_write(pb, get_noc_addr(par * RA_N + RA_ME, slg), bytes);
+                noc_async_write(pb, dram_pages(sl, PCAP).get_noc_addr(par * RA_N + RA_ME), bytes);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(px, py, par ? c1 : c0), 1);
             }
@@ -230,8 +230,7 @@ struct RAFwd {
                 DeviceZoneScopedN("SE-RAFWD");
                 const uint32_t pb = fb + k * PCAP;
                 {
-                    const InterleavedAddrGen<true> fg = {.bank_base_address = fd, .page_size = PCAP};
-                    noc_async_read(get_noc_addr(pg0 + k, fg), pb, PCAP);
+                    noc_async_read(dram_pages(fd, PCAP).get_noc_addr(pg0 + k), pb, PCAP);
                     noc_async_read_barrier();
                     invalidate_l1_cache();
                 }
