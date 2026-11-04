@@ -162,8 +162,8 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
     if (cluster.is_galaxy_cluster()) {
         GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
     }
-    if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
-        GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
+    if (cluster.number_of_devices() > 1) {
+        GTEST_SKIP() << "Multi-chip clusters fatal earlier when fabric is launched on a subset of devices";
     }
 
     ScopedFabricConfig fabric(tt::tt_fabric::FabricConfig::FABRIC_1D);
