@@ -84,6 +84,10 @@ class MoEBlock:
             None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
         )
         self.one_arena = None
+        # (the head planner's DRAM fallback - a shape whose resident layouts do not fit the head's L1: x gathered over
+        # TP into DRAM ahead of the head, which reloads it a row chunk at a time; the plan the op runs, same l1_free)
+        fit = mb.plan_fused_head(resources, dtypes, accumulators, l1_free)
+        self.x_dram = bool(fit.ok and len(fit.planned) and fit.planned[0].lay.xdram)
 
     def _one_arena_fits(self) -> bool:
         """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
@@ -111,6 +115,10 @@ class MoEBlock:
         mb = self.mb
         if self.exchange_spec is None:  # (the first call, before any arena: one arena or two)
             self.one_arena = self._one_arena_fits()
+        # (the DRAM fallback's x_full [1, 1, rows, H]: this mesh row's x gathered over the TP axis)
+        x_full = (
+            ttnn.all_gather(x, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.x_dram else None
+        )
         arena = ttnn.allocate_tensor_on_device(self.arena_spec, self.mesh_device)
         self.arena_address = int(arena.buffer_address())
         head = mb.fused_head(
@@ -119,9 +127,12 @@ class MoEBlock:
             resources=self.resources,
             dtypes=self.dtypes,
             accumulators=self.accumulators,
+            x_full=x_full,
             l1_free=self.l1_free,
             arena=arena,
         )
+        if x_full is not None:
+            ttnn.deallocate(x_full)
         self.last_head = head  # (its persistent outputs: a model's checks read the routing rows)
         if self.exchange_spec is None:  # (once: the exchange's own arena - the combine's, without the head's bytes)
             self.exchange_spec = (
