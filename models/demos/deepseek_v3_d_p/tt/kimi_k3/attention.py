@@ -22,7 +22,6 @@ collective rather than adding one.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -30,7 +29,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -301,13 +299,8 @@ def build_attention(
             tt_ccl=get_tt_ccl(mesh_device),
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            # (with the MoE block - K3's default MoE - the output projection stays unfused: the fused one's persistent L1
-            # staging, shared by every KDA layer, leaves the block's fused head 1137 KB of the 1199 KB it needs)
-            program_config=dataclasses.replace(
-                kimi_k3_program_config(
-                    active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
-                ),
-                fused_output_reduce_scatter=not moe_block_enabled("KimiK3Config"),
+            program_config=kimi_k3_program_config(
+                active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
             ),
             active_seq_len=seq_len,
         ),
