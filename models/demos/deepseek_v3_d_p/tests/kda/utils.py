@@ -520,14 +520,21 @@ def make_kimi_k3_device_case(
     program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
     cache_weights: bool = True,
+    shard_hidden_over_tp: bool = False,
 ) -> tuple[ttKDA, ttnn.Tensor]:
-    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
+    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input.
+
+    ``shard_hidden_over_tp`` also splits the input's hidden dim over TP, the model's residual layout, so the layer
+    all-gathers it as in production; otherwise every TP rank holds the full hidden.
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     tensor_cache_path = (
         kimi_k3_tensor_cache_path(case.weights_identity, mesh_device, tensor_parallel_axis) if cache_weights else None
     )
     mesh_dims: list[int | None] = [None, None]
     mesh_dims[sequence_parallel_axis] = 1
+    if shard_hidden_over_tp:
+        mesh_dims[tensor_parallel_axis] = 2
     hidden = ttnn.from_torch(
         case.hidden,
         dtype=ttnn.bfloat16,
