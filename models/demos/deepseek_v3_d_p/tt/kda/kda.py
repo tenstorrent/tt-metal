@@ -365,16 +365,12 @@ class ttKDA:
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
-            self._fused_output_staging = (
-                _fused_output_staging(
-                    mesh_device,
-                    self.active_seq_len_local,
-                    self.weights.output_projection,
-                    self.norm_output_memory_config,
-                    self._fused_output_ccl_kwargs,
-                )
-                if program_config.fused_output_persistent_staging
-                else None  # (the op allocates its staging per call: no L1 held between calls)
+            self._fused_output_staging = _fused_output_staging(
+                mesh_device,
+                self.active_seq_len_local,
+                self.weights.output_projection,
+                self.norm_output_memory_config,
+                self._fused_output_ccl_kwargs,
             )
 
     @property
