@@ -854,13 +854,20 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         num_vcs(ring_extent(operation_attributes)),
         l1_resources,
         release_order_words(operation_attributes));
+    // Without an arena, everything combine places by hand stays below both its own semaphores and whatever else
+    // occupied L1 when the op was called (CombineFabric2dParams::l1_floor).
+    uint32_t hand_floor = sems.lowest_address();
+    if (l1_resources.arena == nullptr && operation_attributes.l1_floor != 0 &&
+        operation_attributes.l1_floor < hand_floor) {
+        hand_floor = operation_attributes.l1_floor;
+    }
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
         cmbf2d::NUM_L1_SLOTS,
         token_size_bytes(tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
-        sems.lowest_address(),
+        hand_floor,
         l1_resources.arena);
     // Two worker rows of 11 hold at most 8 untilizers per group before whole-column dealing runs out, and the
     // collector needs one cell of what is left.
@@ -916,7 +923,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
             const uint32_t sem_floor = l1_resources.arena != nullptr
                                            ? l1_base(mesh_device, l1_resources.arena) +
                                                  static_cast<uint32_t>(l1_resources.arena->aligned_size_per_bank())
-                                           : sems.lowest_address();
+                                           : hand_floor;
             (*collectors)[coord] = CollectorTarget{
                 placement.at(coord).collector.value(),
                 l1.collector_counts,

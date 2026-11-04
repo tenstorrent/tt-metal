@@ -329,6 +329,12 @@ struct HybridRoutedExpertFfnParams {
     // with, picked from the free L1 when the op is called. Hashed, as unified_routed_expert_moe hashes it.
     uint32_t wave_per_core_M = 0;
     uint32_t wave_in0_block_w = 0;
+    // Overlapped without an arena: the lowest occupied L1 address when the op is called. Combine lays its rings,
+    // control tables and the routed expert's L1 slots out below it, by hand, so they must stay under every buffer
+    // that holds data across launches -- including persistent state another op allocates after this one's first
+    // call. Hashed, so such an allocation rebuilds the program over the smaller region instead of a cached program
+    // writing over it.
+    uint32_t combine_l1_floor = 0;
 
     // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon
     // as this op has written it, and the op returns combine's output. The fields below are combine's and
@@ -369,6 +375,7 @@ struct HybridRoutedExpertFfnParams {
         "big_first_threshold",
         "wave_per_core_M",
         "wave_in0_block_w",
+        "combine_l1_floor",
         "overlap_combine",
         "combine_axis",
         "combine_num_links",
@@ -393,6 +400,7 @@ struct HybridRoutedExpertFfnParams {
             big_first_threshold,
             wave_per_core_M,
             wave_in0_block_w,
+            combine_l1_floor,
             overlap_combine,
             combine_axis,
             combine_num_links,

@@ -36,6 +36,7 @@ combine::CombineFabric2dParams combine_attributes(
         .axis = op.combine_axis,
         .num_links = op.combine_num_links,
         .hybrid_token_threshold = op.hybrid_token_threshold,
+        .l1_floor = op.combine_l1_floor,
     };
 }
 

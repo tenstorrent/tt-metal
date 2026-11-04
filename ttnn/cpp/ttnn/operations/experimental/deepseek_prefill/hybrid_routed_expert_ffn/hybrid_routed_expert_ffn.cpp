@@ -237,6 +237,10 @@ ttnn::Tensor hybrid_routed_expert_moe(
         .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
         .forwarding_buffer = forwarding_buffer,
         .weight_table = weight_address_table};
+    if (overlap_combine && !l1_arena.has_value()) {
+        attributes.combine_l1_floor =
+            static_cast<uint32_t>(dispatched_buffer.device()->lowest_occupied_compute_l1_address().value_or(0));
+    }
     if (unified_waves) {
         // The wave-planned program sizes its circular buffers from the free L1, so the plan it picks now is part of
         // the program-cache key.

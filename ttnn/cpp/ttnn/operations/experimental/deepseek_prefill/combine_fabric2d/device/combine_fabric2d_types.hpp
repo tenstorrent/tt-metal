@@ -50,6 +50,8 @@ struct CombineFabric2dParams {
     bool walk_partial_eighth = false;
     uint32_t walk_taper_tail = 0;
     uint32_t walk_big_first_threshold = 0;
+    // Overlapped without an arena: no hand-placed L1 above this address (0: no bound beyond combine's semaphores).
+    uint32_t l1_floor = 0;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 };
