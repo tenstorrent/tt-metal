@@ -598,6 +598,8 @@ FORCE_INLINE bool send(
     next_slot_addr = slot_addr == SenderChannel<CH>::last_slot_addr ? SenderChannel<CH>::first_slot_addr
                                                                     : slot_addr + channel_buffer_size;
 
+    // The TX queue's status after the send and the channel's counters, as one read group (without it, a 2D 3-hop row
+    // measured about 2 cycles per packet slower at 256 B).
     begin_read_group();
     const uint32_t status_after = read_txq_status(sender_txq_id);
     const uint32_t reported =
@@ -660,7 +662,8 @@ FORCE_INLINE void visit_worker(
     }
     // The visit's counters, unless the send read them, as one read group: completions, and acks (first-level-ack VCs).
     // Completions before acks, so the acks seen are never fewer than the completions seen. Whether to read each is
-    // known before any is read.
+    // known before any is read. (Without the group, some rows measured up to 3 cycles per packet faster but a VC1
+    // router's 2-hop row 2 slower; it stays.)
     const bool read_completions = !sent && progress.sent != progress.completed;
     const bool read_acks = SenderChannel<CH>::first_level_ack && !sent && progress.sent != progress.first_level_acked;
     uint32_t reported_completions = 0;
@@ -760,7 +763,8 @@ FORCE_INLINE void visit_channel_with_work(
 // forwarding channel's state stays in memory: such a channel is visited only when the pass's reads show it work (it
 // holds a packet, or has packets in flight: channels_in_flight), its fields are taken into locals where first needed
 // and written back where they change, and its state is kept in memory after the visit (keep_in_memory), so it does not
-// take the loop-local VC's registers on its packet path. A one-ERISC router keeps every state in memory and visits the
+// take the loop-local VC's registers on its packet path (without that, forwarding rows measured 6 to 9 cycles per
+// packet slower, and single-ERISC rows about 8). A one-ERISC router keeps every state in memory and visits the
 // loop-local VC's in place (router_single.hpp). The accessors are templates on the VC so that an absent VC's state is
 // named only in template-dependent code.
 struct SenderChannelStates {

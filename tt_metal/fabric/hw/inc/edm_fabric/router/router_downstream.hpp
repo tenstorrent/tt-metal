@@ -405,7 +405,9 @@ struct Downstreams {
     std::array<DownstreamLink, Traits::count> links;                      // by entry, set at init
 
     // Every downstream in `forward_to` (live names, one bit each) has a free slot. The known counts are tested first;
-    // only when one the packet needs is used up are the live local credit registers re-read, as one group.
+    // only when one the packet needs is used up are the live local credit registers re-read, as one group (without
+    // it, a VC1 router's 2-hop row measured about 4 cycles per packet slower; single-ERISC forwarding up to 2.6
+    // faster).
     FORCE_INLINE bool admit(uint32_t forward_to) {
         if (!any_without_free_slot<live>(forward_to)) {
             return true;
