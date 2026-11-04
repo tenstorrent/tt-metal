@@ -1,0 +1,13 @@
+formats.input_A,formats.input_B,formats.register_A,formats.register_B,formats.output,formats.sfpu_src,formats.sfpu_dst,unpack_to_dest,dest_acc,speed_of_light,math_transpose_faces,tile_cnt,unpack_transpose_faces,marker,mean(L1_TO_L1),TEXT_SIZE(L1_TO_L1)
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,Transpose.Yes,16,Transpose.No,INIT,314.0,11046
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,Transpose.Yes,16,Transpose.No,KERNEL,2694.0,11046
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,Transpose.Yes,16,Transpose.No,TILE_LOOP,1968.0,11046
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.No,INIT,299.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.No,KERNEL,5303.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.No,TILE_LOOP,4579.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.Yes,INIT,298.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.Yes,KERNEL,5336.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.No,16,Transpose.Yes,TILE_LOOP,4587.0,11122
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.Yes,16,Transpose.No,INIT,304.0,11162
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.Yes,16,Transpose.No,KERNEL,5348.0,11162
+Int32,Int32,Int32,Int32,Int32,Int32,Int32,True,DestAccumulation.Yes,False,Transpose.Yes,16,Transpose.No,TILE_LOOP,4632.0,11162

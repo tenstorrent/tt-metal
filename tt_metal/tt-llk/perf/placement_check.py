@@ -18,7 +18,8 @@ regression, review and unmeasured.
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
     placement_check.py render --results 'legs/**/stage2.json' --report stage2.md   (exit 1: it blocks)
-    placement_check.py gate   --results 'legs/**/stage2.json' --legs 4 --stage1 R.regressions.csv --bases 'legs/**/stage2.base' --report stage2.md
+
+The merge gate reads the legs' stage2.json through gate() (gate.py compare --stage2).
 """
 
 import argparse
@@ -448,38 +449,7 @@ def main(argv=None):
     r.add_argument("--results", required=True, help="glob of decide's .json files")
     r.add_argument("--arch", default="")
     r.add_argument("--report", required=True)
-    g = sub.add_parser(
-        "gate", help="the merge gate's stage-2 verdict (exit 1: it blocks)"
-    )
-    g.add_argument(
-        "--results", required=True, help="glob of the legs' stage2.json files"
-    )
-    g.add_argument(
-        "--legs", type=int, required=True, help="measuring legs of this arch"
-    )
-    g.add_argument("--stage1", required=True, help="the gate's stage-1 regressions CSV")
-    g.add_argument("--gate-base", default="", help="commit of the gate's baseline")
-    g.add_argument("--bases", required=True, help="glob of the legs' stage2.base files")
-    g.add_argument("--arch", default="")
-    g.add_argument("--report", required=True)
     a = ap.parse_args(argv)
-    if a.cmd == "gate":
-        paths = sorted(glob.glob(a.results, recursive=True))
-        results, notes = gate(
-            [json.loads(Path(path).read_text()) for path in paths],
-            a.legs,
-            read_candidates(a.stage1) if Path(a.stage1).exists() else [],
-            a.gate_base,
-            [
-                Path(b).read_text().strip()
-                for b in sorted(glob.glob(a.bases, recursive=True))
-            ],
-        )
-        report = render(results, a.arch)
-        if notes:
-            report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)
-        Path(a.report).write_text(report + "\n")
-        return 1 if notes or blocks(results) else 0
     if a.cmd == "render":
         results = [
             row

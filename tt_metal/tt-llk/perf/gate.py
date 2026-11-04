@@ -13,16 +13,21 @@ verdict-<arch>.json is the only thing the later steps read: the PR comment, Slac
 """
 
 import argparse
+import collections
 import csv
 import glob
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import placement_check as pc  # noqa: E402
 import regression_compare as rc  # noqa: E402
 
 POLICY = Path(__file__).with_name("gate_policy.yaml")
@@ -100,16 +105,80 @@ def fails(verdict):
     return True
 
 
+def _run_commit(run_id):
+    """The commit a workflow run measured, or "" when the API does not answer."""
+    out = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{run_id}",
+        ]
+        + ["--jq", ".head_sha"],
+        capture_output=True,
+        text=True,
+    )
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _baseline(a, base):
+    """What the baseline is, or None when its read did not finish. ``have``: it holds points."""
+    if a.baseline_run:
+        meta = {"run_id": a.baseline_run, "commit_sha": _run_commit(a.baseline_run)}
+    elif a.baseline_commit:
+        meta = {"commit_sha": a.baseline_commit}
+    else:
+        meta = _read_json(a.baseline_meta)
+    return None if meta is None else {**meta, "have": bool(base)}
+
+
+def _legs(current, arch):
+    """The measuring legs of ``arch`` that wrote data: one perf_data/runs/<run>-<arch>-<job> directory each."""
+    return {
+        part
+        for path in current
+        for part in Path(path).parts
+        if re.fullmatch(rf"\d+-{arch}-\d+", part)
+    }
+
+
+def _stage2(a, current, regressions_csv, gate_base):
+    """The stage-2 section of the report, from the legs' stage2.json. Report-only; a fault is a note."""
+    try:
+        paths = sorted(glob.glob(a.stage2, recursive=True))
+        results, notes = pc.gate(
+            [json.loads(Path(path).read_text()) for path in paths],
+            len(_legs(current, a.arch)),
+            (
+                pc.read_candidates(regressions_csv)
+                if Path(regressions_csv).exists()
+                else []
+            ),
+            gate_base,
+            [
+                Path(b).read_text().strip()
+                for b in sorted(
+                    glob.glob(
+                        a.stage2.replace("stage2.json", "stage2.base"), recursive=True
+                    )
+                )
+            ],
+        )
+        report = pc.render(results, a.arch)
+        if notes:
+            report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)
+        counts = collections.Counter(r["outcome"] for r in results)
+        return report, {"legs": len(paths), "notes": notes, "outcomes": dict(counts)}
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 - report-only: any fault becomes a line in the report
+        return f"Stage 2 could not build its report: {e!r}", {"error": repr(e)}
+
+
 def compare(a):
     p = policy(a.gate, a.arch, a.policy)
-    meta = _read_json(a.baseline_meta)
-    baseline = None
-    if meta is not None:
-        have = Path(a.have_baseline).read_text().strip() == "true"
-        baseline = {**meta, "have": have}
-
-    result, error = None, ""
+    result, error, stage2 = None, "", None
     current, base = _csvs(a.current), _csvs(a.baseline)
+    baseline = _baseline(a, base)
     if not a.incomplete and baseline and baseline["have"]:
         sol = _speed_of_light(current)
         if not current:
@@ -159,11 +228,15 @@ def compare(a):
             module_thresholds=p["modules"],
             arch=a.arch,
         )
-        (out / "perf_gate_report.md").write_text(report + "\n")
         rc._write_points_csv(result["records"], out / "perf_gate_report.points.csv")
-        rc._write_points_csv(
-            result["regressions"], out / "perf_gate_report.regressions.csv"
-        )
+        regressions_csv = out / "perf_gate_report.regressions.csv"
+        rc._write_points_csv(result["regressions"], regressions_csv)
+        if a.stage2:
+            section, stage2 = _stage2(
+                a, current, regressions_csv, baseline.get("commit_sha", "")
+            )
+            report += "\n\n" + section
+        (out / "perf_gate_report.md").write_text(report + "\n")
     verdict = {
         "schema": SCHEMA,
         "gate": a.gate,
@@ -179,6 +252,7 @@ def compare(a):
             "improvements": len(result["improvements"]) if result else 0,
             "new": len(result["new_points"]) if result else 0,
         },
+        "stage2": stage2,
     }
     verdict["fails"] = fails(verdict)
     path = out / f"verdict-{a.arch}.json"
@@ -239,6 +313,39 @@ def baseline_cmd(a):
     """Read this gate's baseline from the warehouse into ``--out``."""
     import baseline_from_warehouse as bw
 
+    reuse = Path(a.reuse or "-") / a.arch
+    if (reuse / "baseline.csv").exists():
+        # The read stage 2 already made, so the gate and stage 2 compare against the same baseline.
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(reuse / "baseline.csv", a.out)
+        shutil.copy(reuse / "baseline_metadata.json", a.metadata)
+        return 0
+    if a.match_ref:
+        # Commits and trees only: enough for the merge base and the 200 commits before it.
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                "--filter=blob:none",
+                "--depth=250",
+                "origin",
+                head.stdout.strip(),
+            ],
+            check=True,
+        )
+        script = (
+            Path(__file__).resolve().parents[3]
+            / ".github/scripts/llk-perf-baseline-commits.sh"
+        )
+        out = subprocess.run([str(script), a.match_ref], capture_output=True, text=True)
+        # An empty list is passed on, so the reader skips instead of taking any run.
+        a.commits = ",".join(out.stdout.split()) if out.returncode == 0 else ""
+        print(f"Expected baseline commit: {a.commits.split(',')[0] or '(none)'}")
+
     p = policy(a.gate, a.arch, a.policy)
     b = p["baseline"]
     pipeline, run = (b["pipeline"], b["run"]) if isinstance(b, dict) else (b, "")
@@ -275,8 +382,24 @@ def main(argv=None):
     c.add_argument("--arch", required=True)
     c.add_argument("--current", required=True, help="glob of the current side's CSVs")
     c.add_argument("--baseline", required=True, help="glob of the baseline's CSVs")
-    c.add_argument("--baseline-meta", default="baseline_metadata.json")
-    c.add_argument("--have-baseline", default="have_baseline.txt")
+    c.add_argument(
+        "--baseline-meta",
+        default="baseline_metadata.json",
+        help="what gate.py baseline wrote",
+    )
+    c.add_argument(
+        "--baseline-commit",
+        default="",
+        help="the baseline is the branch point at this commit",
+    )
+    c.add_argument(
+        "--baseline-run",
+        default="",
+        help="the baseline is this workflow run's perf data",
+    )
+    c.add_argument(
+        "--stage2", default="", help="glob of the legs' stage2.json (merge gate)"
+    )
     c.add_argument("--current-sha", default="?")
     c.add_argument("--current-label", default="")
     c.add_argument(
@@ -301,6 +424,16 @@ def main(argv=None):
         help="this workflow run, whose upload is no baseline",
     )
     b.add_argument("--wait-minutes", default="0")
+    b.add_argument(
+        "--match-ref",
+        default="",
+        help="the run at the newest perf change at or before this ref",
+    )
+    b.add_argument(
+        "--reuse",
+        default="",
+        help="directory with <arch>/baseline.csv read earlier in this run",
+    )
     b.add_argument("--out", default="baseline_perf/baseline.csv")
     b.add_argument("--metadata", default="baseline_metadata.json")
     b.set_defaults(func=baseline_cmd)

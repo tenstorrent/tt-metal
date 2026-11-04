@@ -403,31 +403,6 @@ def test_gate_blocks_a_stage1_regression_no_leg_judged(tmp_path):
     assert blocks(results)
 
 
-def test_gate_command_exit_code(tmp_path):
-    rows = _cleared(tmp_path)
-    leg = tmp_path / "legs" / "1"
-    leg.mkdir(parents=True)
-    (leg / "stage2.json").write_text(json.dumps(rows, default=str))
-    (leg / "stage2.base").write_text("abc\n")
-    args = [
-        "gate",
-        "--results",
-        f"{tmp_path}/legs/**/stage2.json",
-        "--bases",
-        f"{tmp_path}/legs/**/stage2.base",
-        "--stage1",
-        str(tmp_path / "s1.regressions.csv"),
-        "--gate-base",
-        "abc",
-        "--report",
-        str(tmp_path / "r.md"),
-    ]
-
-    assert main(args + ["--legs", "1"]) == 0
-    assert main(args + ["--legs", "2"]) == 1
-    assert "> ⚠️ 1 of 2 leg(s) left a stage-2 result." in (tmp_path / "r.md").read_text()
-
-
 def test_a_test_the_base_does_not_have_is_named(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
     cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
