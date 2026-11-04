@@ -142,8 +142,19 @@ def test_moe_persistent(mesh_device, weights):
     op.forward(xg, wg, w13, w2, act, out, base)
     (comb_ref,) = reduce([out])
     ref = _chips(comb_ref)
+    out_chips = _chips(out)  # the expert op's own output (before the reduce): [32, H] per chip
     for d, (got, exp) in enumerate(zip(ref, expect)):
         p = pcc(exp[:T], got[:T])
+        if not p > 0.999:
+            bad = torch.isnan(got[:T]) | torch.isinf(got[:T])
+            o = out_chips[d]
+            obad = torch.isnan(o) | torch.isinf(o)
+            logger.error(
+                f"chip {d}: pcc {p}; combined NaN/inf {int(bad.sum())} of {bad.numel()} (rows {bad.any(1).nonzero().flatten().tolist()}, "
+                f"tile cols {sorted(set((bad.any(0).nonzero().flatten() // 32).tolist()))[:20]}); expert out NaN/inf {int(obad.sum())} "
+                f"(rows {obad.any(1).nonzero().flatten().tolist()[:12]}, tile cols {sorted(set((obad.any(0).nonzero().flatten() // 32).tolist()))[:20]}); "
+                f"out abs max {float(o[torch.isfinite(o)].abs().max()) if torch.isfinite(o).any() else float('nan'):.3g}"
+            )
         assert p > 0.999, ("three-op sequence vs golden", d, p)
 
     # the persistent program
