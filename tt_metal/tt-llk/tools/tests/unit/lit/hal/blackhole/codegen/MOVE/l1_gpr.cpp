@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %t/codegen.cpp -o %t/codegen.o
+// RUN: %{blackhole_objdump} -drz %t/codegen.o > %t/codegen.dump
+// RUN: %{blackhole_compare_codegen} %t/codegen.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -UENABLE_LLK_ASSERT -c %t/compile_time.cpp -o %t/compile_time.o
+// RUN: %{blackhole_objdump} -d %t/compile_time.o | FileCheck %s
 
+// Compare each runtime HAL function with its adjacent reference_ function.
+// Disable identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instructions.
+
+//--- common.h
+#pragma once
 
 #include <cstdint>
 
@@ -17,6 +26,82 @@ using L1ToGpr   = move::Transfer<move::L1, move::Gpr>;
 using GprToL1   = move::Transfer<move::Gpr, move::L1>;
 using GprToSrcA = move::Transfer<move::Gpr, move::SrcA>;
 using GprToSrcB = move::Transfer<move::Gpr, move::SrcB>;
+
+//--- codegen.cpp
+#include "common.h"
+
+// TT_OP_ macros join fields with +, which compiles to add where the HAL's |
+// compiles to or, so runtime operands are ORed onto an encoding that holds
+// zero in their fields. OffsetIndex selects a 16-bit GPR half: 2 * gpr + (half == High).
+
+extern "C" __attribute__((noinline, used)) void l1_to_gpr_runtime(const std::uint32_t base, const std::uint32_t offset, const std::uint32_t destination)
+{
+    move::run(L1ToGpr {
+        .source =
+            {
+                .base             = hal::gpr(base),
+                .offset           = {.gpr = hal::gpr(offset), .half = move::GprHalf::High},
+                .offset_increment = move::OffsetIncrement::Bytes4,
+            },
+        .destination = hal::gpr(destination),
+        .size        = move::ScalarSize::Bytes4,
+    });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_l1_to_gpr_runtime(
+    const std::uint32_t base, const std::uint32_t offset, const std::uint32_t destination)
+{
+    TT_INSN(
+        TT_OP_LOADIND(1 /*SizeSel*/, 0 /*OffsetIndex*/, 2 /*AutoIncSpec*/, 0 /*DataRegIndex*/, 0 /*AddrRegIndex*/) | base | (destination << 6) |
+        ((2 * offset + 1) << 14));
+}
+
+extern "C" __attribute__((noinline, used)) void gpr_to_l1_runtime_completion(const std::uint32_t source, const move::Completion completion)
+{
+    move::run(GprToL1 {
+        .source      = hal::gpr(source),
+        .destination = {.base = hal::gpr<5>(), .offset = {.gpr = hal::gpr<6>()}},
+        .size        = move::ScalarSize::Bytes2,
+        .completion  = completion,
+    });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_gpr_to_l1_runtime_completion(const std::uint32_t source, const move::Completion completion)
+{
+    TT_INSN(
+        TT_OP_STOREIND(1 /*MemHierSel*/, 1 /*SizeSel*/, 0 /*RegSizeSel*/, 12 /*OffsetIndex*/, 0 /*AutoIncSpec*/, 0 /*DataRegIndex*/, 5 /*AddrRegIndex*/) |
+        (source << 6));
+    if (completion == move::Completion::Wait)
+    {
+        TTI_STALLWAIT(511 /*stall_res*/, 1 /*wait_res*/);
+    }
+}
+
+extern "C" __attribute__((noinline, used)) void gpr_to_srcb_runtime(const std::uint32_t source)
+{
+    move::run(GprToSrcB {.source = hal::gpr(source), .destination = {.base = hal::gpr<13>(), .offset = {.gpr = hal::gpr<14>()}}});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_gpr_to_srcb_runtime(const std::uint32_t source)
+{
+    TT_INSN(
+        TT_OP_STOREIND(0 /*MemHierSel*/, 0 /*SizeSel*/, 1 /*RegSizeSel*/, 28 /*OffsetIndex*/, 0 /*AutoIncSpec*/, 0 /*DataRegIndex*/, 13 /*AddrRegIndex*/) |
+        (source << 6));
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t l1_to_gpr_encode_runtime(const std::uint32_t destination)
+{
+    return L1ToGpr {.source = {.base = hal::gpr<1>(), .offset = {.gpr = hal::gpr<2>()}}, .destination = hal::gpr(destination), .size = move::ScalarSize::Bytes1}
+        .get_operation();
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_l1_to_gpr_encode_runtime(const std::uint32_t destination)
+{
+    return TT_OP_LOADIND(3 /*SizeSel*/, 4 /*OffsetIndex*/, 0 /*AutoIncSpec*/, 0 /*DataRegIndex*/, 1 /*AddrRegIndex*/) | (destination << 6);
+}
+
+//--- compile_time.cpp
+#include "common.h"
 
 template <move::ScalarSize Size, move::OffsetIncrement Increment, move::GprHalf Half>
 constexpr L1ToGpr load {
@@ -34,10 +119,10 @@ extern "C" __attribute__((noinline, used)) void l1_to_gpr_sizes()
 }
 
 // CHECK-LABEL: <l1_to_gpr_sizes>:
-// CHECK-NEXT: ttloadind 0,4,0,4,1
-// CHECK-NEXT: ttloadind 1,5,2,4,1
-// CHECK-NEXT: ttloadind 2,4,1,4,1
-// CHECK-NEXT: ttloadind 3,5,3,4,1
+// CHECK-NEXT: ttloadind 0,4,0,4,1{{$}}
+// CHECK-NEXT: ttloadind 1,5,2,4,1{{$}}
+// CHECK-NEXT: ttloadind 2,4,1,4,1{{$}}
+// CHECK-NEXT: ttloadind 3,5,3,4,1{{$}}
 // CHECK-NEXT: ret
 
 constexpr L1ToGpr load_wait {
@@ -52,8 +137,8 @@ extern "C" __attribute__((noinline, used)) void l1_to_gpr_wait()
 }
 
 // CHECK-LABEL: <l1_to_gpr_wait>:
-// CHECK-NEXT: ttloadind 0,127,0,60,63
-// CHECK-NEXT: ttstallwait 511,1
+// CHECK-NEXT: ttloadind 0,127,0,60,63{{$}}
+// CHECK-NEXT: ttstallwait 511,1{{$}}
 // CHECK-NEXT: ret
 
 template <move::ScalarSize Size, move::OffsetIncrement Increment>
@@ -72,10 +157,10 @@ extern "C" __attribute__((noinline, used)) void gpr_to_l1_sizes()
 }
 
 // CHECK-LABEL: <gpr_to_l1_sizes>:
-// CHECK-NEXT: ttstoreind 1,0,0,12,3,8,5
-// CHECK-NEXT: ttstoreind 1,0,1,12,0,8,5
-// CHECK-NEXT: ttstoreind 1,1,0,12,1,8,5
-// CHECK-NEXT: ttstoreind 1,1,1,12,2,8,5
+// CHECK-NEXT: ttstoreind 1,0,0,12,3,8,5{{$}}
+// CHECK-NEXT: ttstoreind 1,0,1,12,0,8,5{{$}}
+// CHECK-NEXT: ttstoreind 1,1,0,12,1,8,5{{$}}
+// CHECK-NEXT: ttstoreind 1,1,1,12,2,8,5{{$}}
 // CHECK-NEXT: ret
 
 constexpr GprToL1 store_wait {
@@ -91,8 +176,8 @@ extern "C" __attribute__((noinline, used)) void gpr_to_l1_wait()
 }
 
 // CHECK-LABEL: <gpr_to_l1_wait>:
-// CHECK-NEXT: ttstoreind 1,1,0,12,3,4,5
-// CHECK-NEXT: ttstallwait 511,1
+// CHECK-NEXT: ttstoreind 1,1,0,12,3,4,5{{$}}
+// CHECK-NEXT: ttstallwait 511,1{{$}}
 // CHECK-NEXT: ret
 
 constexpr GprToSrcA store_srca {
@@ -112,8 +197,8 @@ extern "C" __attribute__((noinline, used)) void gpr_to_src()
 }
 
 // CHECK-LABEL: <gpr_to_src>:
-// CHECK-NEXT: ttstoreind 0,0,0,21,1,8,9
-// CHECK-NEXT: ttstoreind 0,0,1,28,0,12,13
+// CHECK-NEXT: ttstoreind 0,0,0,21,1,8,9{{$}}
+// CHECK-NEXT: ttstoreind 0,0,1,28,0,12,13{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void scalar_issue_encoded_operations()
@@ -125,105 +210,8 @@ extern "C" __attribute__((noinline, used)) void scalar_issue_encoded_operations(
 }
 
 // CHECK-LABEL: <scalar_issue_encoded_operations>:
-// CHECK-NEXT: ttloadind 1,5,2,4,1
-// CHECK-NEXT: ttstoreind 1,1,1,12,2,8,5
-// CHECK-NEXT: ttstoreind 0,0,0,21,1,8,9
-// CHECK-NEXT: ttstoreind 0,0,1,28,0,12,13
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void l1_to_gpr_runtime(const std::uint32_t base, const std::uint32_t offset, const std::uint32_t destination)
-{
-    move::run(L1ToGpr {
-        .source =
-            {
-                .base             = hal::gpr(base),
-                .offset           = {.gpr = hal::gpr(offset), .half = move::GprHalf::High},
-                .offset_increment = move::OffsetIncrement::Bytes4,
-            },
-        .destination = hal::gpr(destination),
-        .size        = move::ScalarSize::Bytes4,
-    });
-}
-
-// CHECK-LABEL: <l1_to_gpr_runtime>:
-// CHECK-NEXT: slli a1,a1,0x1
-// CHECK-NEXT: addi a1,a1,1
-// CHECK-NEXT: slli a1,a1,0xe
-// CHECK-NEXT: slli a2,a2,0x6
-// CHECK-NEXT: or a1,a1,a2
-// CHECK-NEXT: or a1,a1,a0
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x49402
-// CHECK-NEXT: lui [[R1:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or a1,a1,[[R0]]
-// CHECK-NEXT: mv [[R1]],[[R1]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a1,0([[R1]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void gpr_to_l1_runtime_completion(const std::uint32_t source, const move::Completion completion)
-{
-    move::run(GprToL1 {
-        .source      = hal::gpr(source),
-        .destination = {.base = hal::gpr<5>(), .offset = {.gpr = hal::gpr<6>()}},
-        .size        = move::ScalarSize::Bytes2,
-        .completion  = completion,
-    });
-}
-
-// CHECK-LABEL: <gpr_to_l1_runtime_completion>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x66c30
-// CHECK-NEXT: addi [[R1:a[0-7]]],[[R0]],5
-// CHECK-NEXT: slli a0,a0,0x6
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or a0,a0,[[R1]]
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: li [[R1]],1
-// CHECK-NEXT: beq a1,[[R1]],{{[0-9a-f]+}}
-// CHECK-NEXT: R_RISCV_BRANCH
-// CHECK-NEXT: ret
-// CHECK-EMPTY:
-// CHECK-NEXT: <.L{{[0-9]+}}>:
-// CHECK-NEXT: lui [[R1]],0xa2ff8
-// CHECK-NEXT: add [[R1]],[[R1]],a1
-// CHECK-NEXT: sw [[R1]],0([[R0]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void gpr_to_srcb_runtime(const std::uint32_t source)
-{
-    move::run(GprToSrcB {.source = hal::gpr(source), .destination = {.base = hal::gpr<13>(), .offset = {.gpr = hal::gpr<14>()}}});
-}
-
-// CHECK-LABEL: <gpr_to_srcb_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x66270
-// CHECK-NEXT: addi [[R1:a[0-7]]],[[R0]],13
-// CHECK-NEXT: slli a0,a0,0x6
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: or a0,a0,[[R1]]
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t l1_to_gpr_encode_runtime(const std::uint32_t destination)
-{
-    return L1ToGpr {.source = {.base = hal::gpr<1>(), .offset = {.gpr = hal::gpr<2>()}}, .destination = hal::gpr(destination), .size = move::ScalarSize::Bytes1}
-        .get_operation();
-}
-
-// CHECK-LABEL: <l1_to_gpr_encode_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0x49c10
-// CHECK-NEXT: addi [[R0]],[[R0]],1
-// CHECK-NEXT: slli a0,a0,0x6
-// CHECK-NEXT: or a0,a0,[[R0]]
+// CHECK-NEXT: ttloadind 1,5,2,4,1{{$}}
+// CHECK-NEXT: ttstoreind 1,1,1,12,2,8,5{{$}}
+// CHECK-NEXT: ttstoreind 0,0,0,21,1,8,9{{$}}
+// CHECK-NEXT: ttstoreind 0,0,1,28,0,12,13{{$}}
 // CHECK-NEXT: ret
