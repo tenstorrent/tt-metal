@@ -436,7 +436,8 @@ TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
 
 // End-to-end check for `tt-run --mesh-pinning-file`. Phase 1 (generate_rank_bindings) pins logical host ranks to
 // hostname + TT_VISIBLE_DEVICES; tt-run then launches every Phase 2 rank with TT_MESH_ID, TT_MESH_HOST_RANK,
-// TT_METAL_CLUSTER_ID (the hostname Phase 1 saw; the cluster descriptor file name in mock mode) and
+// TT_METAL_CLUSTER_ID (the hostname Phase 1 saw; in mock mode the descriptor's cluster_id, or its file name for
+// descriptors without one) and
 // TT_VISIBLE_DEVICES taken from the generated rank bindings. Each rank re-reads the pinning file named by
 // TT_METAL_TEST_MESH_PINNING_FILE and checks its own placement against it. The (mesh, host rank) this rank runs
 // must appear in the file, so a pin that silently stopped applying cannot pass. Run with:
@@ -444,7 +445,7 @@ TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
 //   tt-run --mesh-graph-descriptor
 //   tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto \
 //   --mock-cluster-rank-binding
-//   tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml \
+//   tt_metal/third_party/tt-cluster-descriptors/wormhole/dual_t3k_ci/dual_t3k_ci_cluster_desc_mapping.yaml \
 //   --mesh-pinning-file tests/tt_metal/distributed/config/dual_t3k_mesh_pinnings_swapped.yaml \
 //   --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests
 //   --gtest_filter="MultiHost.MeshPinningFileHonored"
