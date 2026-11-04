@@ -18,6 +18,7 @@ from safetensors import safe_open
 
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
+from ...pipelines.flux3_klein.weights_flux3_klein import checkpoint_id
 from ...utils import cache
 from .model_qwen3vl import Qwen3VlTextEncoder
 
@@ -87,12 +88,10 @@ def build_flux3_klein_text_encoder(
         is_fsdp=is_fsdp,
         high_fidelity_linears=True,
     )
-    # the first shard's blob name identifies the checkpoint revision
     shard = Path(snapshot) / SUBFOLDER / "model-00001-of-00002.safetensors"
-    blob = Path(os.readlink(shard)).name if shard.is_symlink() else f"{shard.name}:{shard.stat().st_size}"
     cache.load_model(
         encoder,
-        model_name=f"flux3_klein_text_encoder_{blob[:16]}",
+        model_name=f"flux3_klein_text_encoder_{checkpoint_id(shard)}",
         subfolder=f"text_encoder_L{NUM_LAYERS}",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),

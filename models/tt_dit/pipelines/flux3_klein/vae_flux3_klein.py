@@ -23,8 +23,10 @@ from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from .packing import latent_shape
+from .weights_flux3_klein import checkpoint_id
 
 SUBFOLDER = "vae"
+VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"
 SCALE = 8
 LATENT_CHANNELS = 128
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
@@ -99,8 +101,7 @@ class Flux3KleinVae:
         self._dit_sp_axis = dit_sp_axis
         self._tp_axis = tp_axis
         self._h_axis = h_axis
-        blob = Path(os.path.realpath(self._snapshot / SUBFOLDER / "diffusion_pytorch_model.safetensors")).name
-        self._model_name = f"flux3_klein_vae_{blob[:16]}"
+        self._model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         # a conv prepares its weights for the first input shape it sees, so every shape gets its own instance
         self._decoders: dict[int, Flux2VaeDecoder] = {}
         self._encoders: dict[int, Flux2VaeEncoder] = {}
