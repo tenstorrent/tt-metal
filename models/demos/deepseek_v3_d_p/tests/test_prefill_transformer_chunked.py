@@ -225,9 +225,11 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI runs 40424879138, 40494538796,
-    # 40532334659 and 40610708699.
-    (61, 11, 10): [0.311, 0.325, 0.356, 0.386, 0.418, 0.449, 0.475, 0.509, 0.551, 0.590, 0.623],
+    # (55k / code_debug), TP-deduped KV cache, routed expert overlapped with combine as unified waves.
+    # Two runs on one Galaxy, 2026-11-04, identical to the ms but chunk 9 (0.571 / 0.570 s). Replaces the
+    # per-chunk median of CI runs 40424879138, 40494538796, 40532334659 and 40610708699, which the overlap now
+    # runs under on chunks 8 and 9.
+    (61, 11, 10): [0.303, 0.321, 0.348, 0.376, 0.407, 0.439, 0.466, 0.496, 0.534, 0.571, 0.605],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
