@@ -699,9 +699,10 @@ jobs:
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      # A regression is report-only, stage 2 included. A measurement that did not complete,
-      # a missing baseline or a comparison that did not finish fails the job, and blocks the merge.
-      fail_on_regression: false
+      # A Blackhole regression that stage 2 confirms blocks the merge; Wormhole is report-only.
+      # A measurement that did not complete, a missing baseline or a comparison that did not finish
+      # fails the job, and blocks the merge.
+      fail_on_regression: ${{ matrix.arch == 'blackhole' }}
       fail_without_baseline: true
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
