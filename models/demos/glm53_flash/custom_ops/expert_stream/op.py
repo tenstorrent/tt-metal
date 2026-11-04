@@ -698,14 +698,14 @@ class ExpertGateUpStream(_BankStreamOp):
             self.page_bytes = _packet_bytes(self.kt, self.w_tile)
         self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
-    SPLITK_SEM0 = 0  # the split-K owners' arrival counters: two slots (ids 0, 1) on the gate|up cores
+    SPLITK_SEM0 = 0  # the split-K owners' arrival counters: four slots (ids 0-3) on the gate|up cores
     SPLITK_CB = (6, 7)  # the partial-tile CB and the owners' receive CB (both fp32)
 
     def extra_semaphores(self) -> list:
         """The program semaphores this op needs besides the fused arrival counters: the split-K slots."""
         if not self.split_k:
             return []
-        return [ttnn.SemaphoreDescriptor(self.SPLITK_SEM0 + i, ttnn.CoreType.WORKER, self.cores, 0) for i in range(2)]
+        return [ttnn.SemaphoreDescriptor(self.SPLITK_SEM0 + i, ttnn.CoreType.WORKER, self.cores, 0) for i in range(4)]
 
     def splitk_slices(self) -> list[tuple[int, int]]:
         """Per bank rank r: (k0, ks) K tiles of its slice (the first ``kt % groups`` ranks take one more)."""
@@ -741,7 +741,7 @@ class ExpertGateUpStream(_BankStreamOp):
             self._cb(cb_h, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_part, ttnn.float32, fp32_tile, 4),
-            self._cb(cb_recv, ttnn.float32, fp32_tile, 2 * 2 * G),
+            self._cb(cb_recv, ttnn.float32, fp32_tile, 4 * 2 * G),  # four receive slots of 2G partial tiles
         ]
         base_rt = [base.buffer_address()] if self.routing_fold else []
         tail = list(fused_rt or [])
