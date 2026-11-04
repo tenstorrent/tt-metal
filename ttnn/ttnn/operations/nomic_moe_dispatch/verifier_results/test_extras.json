@@ -1,0 +1,26 @@
+{
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T4096_R8416-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "achievable_ns": 21850,
+    "minimum_expected_speedup": 1.457,
+    "measured_on": "blackhole_p300c",
+    "reference_aiclk_mhz": 1350,
+    "routing": "real_text",
+    "l1_reserved_kb": 96
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T2048_R4320-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "achievable_ns": 13030,
+    "minimum_expected_speedup": 1.448,
+    "measured_on": "blackhole_p300c",
+    "reference_aiclk_mhz": 1350,
+    "routing": "real_text",
+    "l1_reserved_kb": 96
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T1024_R2272-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "achievable_ns": 8970,
+    "minimum_expected_speedup": 1.38,
+    "measured_on": "blackhole_p300c",
+    "reference_aiclk_mhz": 1350,
+    "routing": "real_text",
+    "l1_reserved_kb": 96
+  }
+}

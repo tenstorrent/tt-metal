@@ -1,0 +1,374 @@
+{
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1000_R2240-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=ragged]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "ragged"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1000_R2240-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=ragged]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "ragged"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1000_R2240-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=ragged]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "ragged"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1000_R2240-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=ragged]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "ragged"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1024_R2272-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1024_R2272-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1024_R2272-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1024_R2272-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1152_R2528-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1152_R2528-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1152_R2528-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1152_R2528-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1536_R3296-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1536_R3296-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1536_R3296-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T1536_R3296-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2048_R4320-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2048_R4320-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2048_R4320-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2048_R4320-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2560_R5344-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2560_R5344-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2560_R5344-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T2560_R5344-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3072_R6368-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3072_R6368-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3072_R6368-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3072_R6368-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3584_R7392-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3584_R7392-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3584_R7392-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3584_R7392-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3904_R8064-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3904_R8064-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3904_R8064-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T3904_R8064-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4000_R8224-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4000_R8224-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4000_R8224-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4000_R8224-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4096_R8416-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4096_R8416-dtype=BFLOAT16-output_buffer=dram-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4096_R8416-dtype=BFLOAT16-output_buffer=l1-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op[T4096_R8416-dtype=BFLOAT16-output_buffer=dram-table_buffer=dram-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "dram",
+    "output_buffer": "dram",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T4096_R8416-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T2048_R4320-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_golden.py::test_op_loose[T1024_R2272-dtype=BFLOAT16-output_buffer=l1-table_buffer=l1-window=aligned]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[uniform-1024]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[uniform-4096]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[extreme-1024]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[extreme-4096]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[random-1024]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[random-4096]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[reversed-1024]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_index_patterns_copy_exactly[reversed-4096]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_hot_row[1024]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_spare_tile_rows[3744-1]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_spare_tile_rows[3904-2]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_spare_tile_rows[3968-3]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_every_output_tile_is_written[2048]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_every_output_tile_is_written[4096]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  },
+  "eval/golden_tests/nomic_moe_dispatch/test_regression.py::test_new_tensors_between_calls[2048]": {
+    "dtype": "BFLOAT16",
+    "table_buffer": "l1",
+    "output_buffer": "l1",
+    "window": "aligned"
+  }
+}
