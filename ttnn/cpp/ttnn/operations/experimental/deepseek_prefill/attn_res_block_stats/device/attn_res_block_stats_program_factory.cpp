@@ -340,6 +340,7 @@ ProgramDescriptor build_descriptor_at(
             std::vector<uint32_t> gather_rt_args = {0u, rank, link};
             gather_rt_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *device,
                 src_node,
                 dst_nodes,
                 std::vector<uint32_t>(dst_nodes.size(), link),
