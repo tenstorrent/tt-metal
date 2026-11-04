@@ -85,15 +85,22 @@ def test_mesh_model_chain_and_perf(mesh_device):
     tt_ids = (
         []
     )  # the device-sampled greedy id after every position, per user: the decode-path gate (two runs diff these)
+    eager_chain = os.environ.get("GLM53_MODEL_EAGER_CHAIN", "0") == "1"  # diagnostics: the chain without the trace
+    if eager_chain:
+        model.mesh.allocations_frozen[0] = False  # the eager steps may read back (GLM53_ROWX_CHECK)
     for t in range(S):
         model.load_ids(prompt[t].repeat(U))
         model.set_positions([t] * U)
         t0 = time.perf_counter()
-        model.replay(trace_id)
+        if eager_chain:
+            streams_e, logits_e, ids_e = model.decode_step(model.ids_dev, model.positions)
+        else:
+            model.replay(trace_id)
         step_times.append(time.perf_counter() - t0)
-        out = model.mesh.to_host(streams_tr, rows=2 if model.mesh.rows > 1 else None).float()[0, 0]  # [U, 16384]
+        src_streams, src_ids = (streams_e, ids_e) if eager_chain else (streams_tr, ids_tr)
+        out = model.mesh.to_host(src_streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0]  # [U, 16384]
         outs.append(out)
-        tt_ids.append(model.ids_to_host(ids_tr).reshape(-1)[:U].clone())
+        tt_ids.append(model.ids_to_host(src_ids).reshape(-1)[:U].clone())
     per_user = []
     collapsed = outs[0].shape[-1] == cfg.hidden_size  # the last layer emitted the head's stream mean (collapse=True)
     ref_cmp = ref.float().mean(1) if collapsed else ref

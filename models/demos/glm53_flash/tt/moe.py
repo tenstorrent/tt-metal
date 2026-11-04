@@ -873,7 +873,9 @@ class TtRoutedExperts(LightweightModule):
         self.dense = dense
         self.stream = stream
         self._row_exchange_ops: dict = {}  # the fabric row-exchange ops by (mode, widths, T), built on first use
-        self._rowx_checks_left = 64 if os.environ.get("GLM53_ROWX_CHECK", "0") == "1" else 0
+        # GLM53_ROWX_CHECK=N: cross-check the first N eager calls of the fabric combine (1 = the warm-up step's 64)
+        _n = int(os.environ.get("GLM53_ROWX_CHECK", "0"))
+        self._rowx_checks_left = 64 if _n == 1 else _n
         assert not (dense and stream), "dense and stream are alternatives"
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
