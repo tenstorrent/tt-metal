@@ -84,15 +84,16 @@ becomes the master router.
 when the link connects to nothing, or to a channel trimmed from the peer's routing planes. A peer can be on another
 chip, another mesh, or another host.
 
-**4. Edge siblings** (`resolve_edge_siblings`). The router pass knows only the direction each downstream edge points
-in. The sibling is the router the builder paired with this one that faces that direction. Reading the builder's pairs,
-rather than looking for any router facing that direction, gives the routers the builder actually connected. That
-matters where it pairs routers that don't face opposite ways, such as the corner fold in 1D. Then:
+**4. Edges and sibling producers** (`resolve_edges_through_tensix_mux`, then `resolve_sibling_producers`). The router
+pass knows only the direction each downstream edge points in. The sibling is the router the builder paired with this
+one that faces that direction. Reading the builder's pairs, rather than looking for any router facing that direction,
+gives the routers the builder actually connected. That matters where it pairs routers that don't face opposite ways,
+such as the corner fold in 1D. Each step writes only to the router it resolves, and reads its siblings:
 
-- `through_tensix_mux` comes from `builder_type_for_vc()`: the tensix mux owns VC0 on a router with a tensix
-  extension.
-- An edge that doesn't end at a tensix mux makes this router the producer of the sibling's sender channel it lands
-  on.
+- A router's edges get `through_tensix_mux` from `builder_type_for_vc()`: the tensix mux owns VC0 on a sibling with a
+  tensix extension. An edge whose direction has no paired router isn't through the mux.
+- A router's sender channel gets a sibling `producer` when a sibling's edge lands on it and doesn't end at this
+  router's tensix mux. An edge landing past the router's sender channels on its VC feeds none.
 
 ## Checks
 
@@ -101,13 +102,10 @@ The topology pass checks only what it puts together itself, where the builders a
 - **Published routers match ControlPlane's active channels.** Every active fabric channel has a published router,
   every published router is on an active channel, and no two share a channel or a key.
 - **The local sync master has a router.**
-- **An edge lands on a channel that exists.** Its landing channel must be one of the sibling's sender channels on the
-  edge's VC, or the `downstream_channel` path would name nothing.
-- **An edge's direction has a paired router.** The builder must have connected this router to one facing that way.
 
-It doesn't check the builder's wiring against itself: that each sender channel has at most one edge, that a
-`static_connection` channel has one, or that the worker channel has none. The edges come from the builder, so that's
-fabric's to test.
+It doesn't check the builder's wiring against itself: that an edge's direction has a paired router, that it lands on a
+sender channel the sibling has, that each sender channel has at most one edge, that a `static_connection` channel has
+one, or that the worker channel has none. The edges come from the builder, so that's fabric's to test.
 
 ## Router paths
 

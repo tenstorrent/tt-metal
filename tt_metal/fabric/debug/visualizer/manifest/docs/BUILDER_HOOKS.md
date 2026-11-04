@@ -63,13 +63,13 @@ way.
 
 | Input | From | Used for |
 | --- | --- | --- |
-| `erisc_builder` | The router's `FabricEriscDatamoverBuilder` | Its config's channel allocator (channel buffers and the L1 left over after them), its channel trimming overrides, the receiver's downstream adapter (the edges to sibling routers), and the semaphore ids three fields read |
+| `erisc_builder` | The router's `FabricEriscDatamoverBuilder` | Its configured ERISC count, sender channels per VC, tensix extension and channel buffer size (the router's shape and slot size); its config's channel allocator (channel buffers and the L1 left over after them) and credit counter bases; its channel trimming overrides; the receiver's downstream adapter (the edges to sibling routers); and the semaphore ids three fields read |
 | `vc_shape` | The router's `RouterVcShape` | The VC count and the receivers per VC |
 | `location` | The router's `RouterLocation` | Its Ethernet channel, the direction it faces, and whether its link is a dispatch link |
 | `chip_facts` | The chip's `ChipRoutingFacts`, passed in by `FabricBuilder` | The edge capability of the direction the router faces, which becomes its link's `edge_capability` |
 | `addresses_to_clear` | `FabricBuilderContext::get_fabric_router_addresses_to_clear()` | Whether fabric init clears each L1 region (`cleared_by_host`) |
-| `kernel` | `make_router_kernel_inputs` over the `KernelInputs` recorded in `create_kernel`: ERISC 0's defines, and each RISC's processor and named compile-time arguments | Every field the field tables read, and the check that every argument and define is accounted for |
-| `hal` | `FabricContext`'s HAL | The physical ERISC each RISC runs on |
+| `args` | A `RouterArgs` over the `KernelInputs` recorded in `create_kernel` | Every value an argument carries: the shape's counts, credits and stream ids, every field per ERISC, which ERISCs run each channel, the defines; and the check that every argument and define is accounted for |
+| `hal` | `FabricContext`'s HAL | The physical ERISC each RISC runs on, and stream register addresses |
 
 [ROUTER_PASS.md](ROUTER_PASS.md) covers what the router pass does with these.
 
@@ -108,5 +108,4 @@ A new `FabricRouterBuilder` subclass has to:
 1. Implement `collect_manifest_router`. It's pure virtual, so the build fails until it does.
 2. Record each RISC's `KernelInputs` in `create_kernel`, as it calls `CreateKernel`.
 3. Fill a `ManifestRouterInputs` and call the router pass, or describe its router some other way if it isn't an
-
    ERISC datamover router. The router pass assumes one.

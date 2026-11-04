@@ -31,6 +31,7 @@
     },
     "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
     "vc_key": { "pattern": "^vc[0-9]+$" },
+    "erisc_key": { "pattern": "^erisc[0-9]+$" },
     "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
     "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
@@ -365,7 +366,6 @@
             "receivers_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
             "num_active_eriscs": { "type": "integer", "minimum": 1 },
             "channel_trimming_overrides_applied": { "type": "boolean" },
-            "vc0_bubble_flow_control": { "type": "boolean" },
             "has_tensix_extension": {
               "description": "The router's VC0 senders other than the worker channel are carried by its tensix mux, so a sibling's VC0 edge into it ends at the mux. False on a dispatch link, even in mux mode.",
               "type": "boolean"
@@ -373,7 +373,7 @@
           },
           "required": [
             "num_vcs", "senders_per_vc", "receivers_per_vc", "num_active_eriscs",
-            "channel_trimming_overrides_applied", "vc0_bubble_flow_control", "has_tensix_extension"
+            "channel_trimming_overrides_applied", "has_tensix_extension"
           ],
           "additionalProperties": false
         },
@@ -431,10 +431,9 @@
             "type": "object",
             "properties": {
               "processor": { "$ref": "#/$defs/name" },
-              "physical_erisc": { "$ref": "#/$defs/count" },
-              "fields": { "$ref": "#/$defs/fields" }
+              "physical_erisc": { "$ref": "#/$defs/count" }
             },
-            "required": ["processor", "physical_erisc", "fields"],
+            "required": ["processor", "physical_erisc"],
             "additionalProperties": false
           }
         },
@@ -490,13 +489,19 @@
         },
         "ring_buffer": { "$ref": "#/$defs/optional_region" },
         "credits": {
+          "description": "Keyed by ERISC: the credits as that ERISC is told to read them. acked only on VC0, on an ERISC with bubble flow control.",
           "type": "object",
-          "properties": {
-            "acked": { "$ref": "#/$defs/credit_ref" },
-            "completed": { "$ref": "#/$defs/credit_ref" }
-          },
-          "required": ["completed"],
-          "additionalProperties": false
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/erisc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "acked": { "$ref": "#/$defs/credit_ref" },
+              "completed": { "$ref": "#/$defs/credit_ref" }
+            },
+            "required": ["completed"],
+            "additionalProperties": false
+          }
         },
         "fields": { "$ref": "#/$defs/fields" }
       },
@@ -509,7 +514,13 @@
       "properties": {
         "status": { "$ref": "#/$defs/channel_status" },
         "serviced_by": { "$ref": "#/$defs/serviced_by" },
-        "forwards_on": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^vc[0-9]+$" }] },
+        "forwards_on": {
+          "description": "Keyed by ERISC: the VC whose downstream edges that ERISC gives the receiver's step, or null when it doesn't run the step or forwards to no sibling.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/erisc_key" },
+          "additionalProperties": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^vc[0-9]+$" }] }
+        },
         "ring_buffer": { "$ref": "#/$defs/optional_region" },
         "fields": { "$ref": "#/$defs/fields" }
       },
@@ -532,7 +543,15 @@
     },
 
     "fields": {
-      "description": "Keyed by the field's key (docs/FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
+      "description": "Keyed by ERISC: each ERISC's fields, as its compile-time arguments give them.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/erisc_key" },
+      "additionalProperties": { "$ref": "#/$defs/erisc_fields" }
+    },
+
+    "erisc_fields": {
+      "description": "One ERISC's fields, keyed by the field's key (docs/FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/name" },
       "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }

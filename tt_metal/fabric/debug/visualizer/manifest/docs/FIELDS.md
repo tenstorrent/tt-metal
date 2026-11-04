@@ -6,7 +6,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Router fields
 
-`routers.<key>.fields`
+`routers.<key>.fields.erisc<r>`
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -29,6 +29,7 @@ Every field the manifest records, with the named compile-time argument that feed
 | `txq_spin_wait_completion_ack` | flag |  | kernel_params | `ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK` | The same, for a receiver's completion ack. |
 | `txq_accept_ahead` | number |  | kernel_params | `DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD` | How many packets each Ethernet TX queue accepts before the earlier ones are sent. Written to both queues' ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD register at startup. |
 | `risc_cpu_data_cache` | flag |  | kernel_params | `ENABLE_RISC_CPU_DATA_CACHE` | Whether the kernel treats the RISC's data cache as on, and so invalidates it before reading what other cores write to its L1. |
+| `vc0_bubble_flow_control` | flag |  | kernel_params | `ENABLE_DEADLOCK_AVOIDANCE` | Whether VC0 runs bubble flow control for deadlock avoidance, which adds first-level acks: VC0 senders then also get credits back when the peer receives a packet (acked). |
 | `speedy_vc0` | flag |  | kernel_params | `ENABLE_SPEEDY_VC0` | Whether VC0 runs the speedy path: worker-only steps that pass credits in batches, so a credit count can lag the packet count by up to a batch. |
 | `sender_credit_amortization` | number |  | kernel_params | `SENDER_CREDIT_AMORTIZATION_FREQUENCY` | Speedy VC0 only: the sender reads completions once this many packets are outstanding, and returns credits to its producer once this many have completed. |
 | `receiver_credit_amortization` | number |  | kernel_params | `RECEIVER_CREDIT_AMORTIZATION_FREQUENCY` | Speedy VC0 only: the receiver acks completions to the peer's sender in batches of at least this many packets. |
@@ -36,13 +37,6 @@ Every field the manifest records, with the named compile-time argument that feed
 | `code_profiling` | l1 | `CodeProfilingTimerResult` | diagnostics | `CODE_PROFILING_BUFFER_ADDR` | Where the router accumulates each code profiling timer's cycles and captures, one result per timer type. Allocated only with code profiling on. |
 | `channel_trimming_capture_enabled` | flag |  | diagnostics | `ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE` | Whether the router records which of its channels carry traffic, for a later run to trim the unused ones. |
 | `channel_trimming_capture` | l1 | `FabricDatapathUsageL1Results<true, 3, 10>` | diagnostics | `RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS` (with the channel trimming capture on) | Where it records them: the packet sizes each sender channel saw, and which sender and receiver channels carried traffic. |
-
-### ERISC fields
-
-`routers.<key>.eriscs.erisc<n>.fields`
-
-| Key | Kind | Type | Category | Fed as | Description |
-| --- | --- | --- | --- | --- | --- |
 | `local_handshake_master` | flag |  | lifecycle | `IS_LOCAL_HANDSHAKE_MASTER` | Whether this ERISC leads the chip's startup sync (the chip's local_sync). The kernel reads it only with wait_for_host_signal. |
 | `handshake_enabled` | flag |  | kernel_params | `ENABLE_ETHERNET_HANDSHAKE` | Whether this ERISC runs the Ethernet handshake with the peer at startup. |
 | `context_switch_enabled` | flag |  | kernel_params | `ENABLE_CONTEXT_SWITCH` | Whether this ERISC hands control back to base firmware. |
@@ -56,7 +50,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Sender channel fields
 
-`routers.<key>.channels.senders.vc<v>.ch<c>.fields`
+`routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>`
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -71,7 +65,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Receiver channel fields
 
-`routers.<key>.channels.receivers.vc<v>.ch<c>.fields`
+`routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>`
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -86,7 +80,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Downstream edge fields
 
-`routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields`
+`routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields.erisc<r>`
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -103,6 +97,7 @@ The named arguments and defines the router kernel is fed that the manifest does 
 | `NUM_LOCAL_EDMS` | The chip's local_sync num_routers, from KernelCreationContext. |
 | `EDM_CHANNELS_MASK` | The chip's local_sync router_channels_mask, from KernelCreationContext. |
 | `MY_ERISC_ID` | The ERISC's index in the router's eriscs, which the manifest lists in RISC order. |
+| `NUM_RECEIVER_CHANNELS` | The router's receiver count. The manifest lists the receivers from the builder's VC shape. |
 | `MAX_NUM_SENDER_CHANNELS` | builder_config::num_max_sender_channels. |
 | `MAX_NUM_RECEIVER_CHANNELS` | builder_config::num_max_receiver_channels. |
 | `MAX_NUM_VCS` | builder_config::MAX_NUM_VCS. |
@@ -137,6 +132,7 @@ The named arguments and defines the router kernel is fed that the manifest does 
 | Define | Reason |
 | --- | --- |
 | `FABRIC_2D` | The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled. |
+| `FABRIC_2D_VC1_ACTIVE` | The same fact as ACTUAL_VC1_SENDER_CHANNELS > 0: set when the router has VC1 senders. |
 | `ROUTING_MODE` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
 | `UDM_MODE` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
 | `FABRIC_1D_PKT_HDR_EXTENSION_WORDS` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |

@@ -100,23 +100,21 @@ std::string fields_table(std::string_view title, std::string_view path, std::spa
 
 std::string render_fields() {
     std::string out;
-    out += fields_table("Router fields", "routers.<key>.fields", manifest::k_router_fields);
-    out += "\n";
-    out += fields_table("ERISC fields", "routers.<key>.eriscs.erisc<n>.fields", manifest::k_erisc_fields);
+    out += fields_table("Router fields", "routers.<key>.fields.erisc<r>", manifest::k_router_fields);
     out += "\n";
     out += fields_table(
         "Sender channel fields",
-        "routers.<key>.channels.senders.vc<v>.ch<c>.fields",
+        "routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>",
         manifest::k_sender_channel_fields);
     out += "\n";
     out += fields_table(
         "Receiver channel fields",
-        "routers.<key>.channels.receivers.vc<v>.ch<c>.fields",
+        "routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>",
         manifest::k_receiver_channel_fields);
     out += "\n";
     out += fields_table(
         "Downstream edge fields",
-        "routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields",
+        "routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields.erisc<r>",
         manifest::k_downstream_edge_fields);
     return out;
 }
