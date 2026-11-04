@@ -16,6 +16,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
 template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
@@ -45,8 +46,6 @@ FORCE_INLINE void read_and_publish_value_slice(
 // block's Vt identity columns. Summaries require K == V, so every global column has its diagonal tile.
 template <uint32_t Kt, uint32_t Vt, typename DFB>
 FORCE_INLINE void seed_summary_pair(DFB& buffer, Noc& noc, uint32_t value_block) {
-    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
-    constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
     constexpr uint32_t tile_count = Kt * 2 * Vt;
 
@@ -58,11 +57,7 @@ FORCE_INLINE void seed_summary_pair(DFB& buffer, Noc& noc, uint32_t value_block)
         auto state_ptr = lock.template get_ptr<volatile uint32_t>();
         for (uint32_t local_col = 0; local_col < Vt; ++local_col) {
             const uint32_t global_col = value_block * Vt + local_col;
-            auto tile = state_ptr + (global_col * 2 * Vt + Vt + local_col) * tile_elements;
-            for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
-                tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
-                tile[3 * face_elements + row * tt::constants::FACE_WIDTH + row] = one_fp32;
-            }
+            kda::write_identity_diagonal(state_ptr + (global_col * 2 * Vt + Vt + local_col) * tile_elements);
         }
     }
     buffer.push_back(tile_count);
@@ -148,6 +143,9 @@ TT_KERNEL void reader(
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     if constexpr (summary) {
+        // The head summary subtracts it to publish E = A - I.
+        DataflowBuffer identity(dfb::identity);
+        kda::seed_identity_tile(noc, identity);
         seed_summary_pair<Kt, Vt>(state, noc, value_block);
     } else {
         const auto group_entry_states_accessor = TensorAccessor(tensor::group_entry_states);

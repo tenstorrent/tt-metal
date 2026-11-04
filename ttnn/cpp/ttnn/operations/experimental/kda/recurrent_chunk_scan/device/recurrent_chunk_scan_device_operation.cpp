@@ -72,7 +72,8 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_output_interleaved(attrs.output_mem_config, operation_name);
     }
     check_compute_config(attrs.compute_kernel_config, operation_name);
-    check_fp32_dest_acc(attrs.compute_kernel_config, operation_name);
+    check_fp32_dest_acc(
+        attrs.compute_kernel_config, operation_name, "the recurrent state is carried in FP32 through DST");
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
@@ -142,7 +143,7 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // Summary structure is independent of actual_start: one [A | B] slot per segment kind.
+    // Summary structure is independent of actual_start: one [E | B] slot per segment kind.
     if (summary) {
         const uint32_t slots = attrs.tail ? 2 : 1;
         return {TensorSpec(
@@ -184,7 +185,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
         };
     } else {
         // As in the recurrence, the state update adds no FPU work beyond its matmul and multiply; publishing
-        // A = (A + B) - B is an SFPU subtraction, which this FPU model does not count.
+        // E = (A + B) - B - I takes SFPU subtractions, which this FPU model does not count.
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
