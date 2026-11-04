@@ -500,6 +500,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
             cluster_axis=sp_axis,
             num_links=num_links,
+            fwd_reduction=model.COMBINE_FWD_REDUCTION,
             topology=per_axis_topology(device_params["fabric_config"])[0],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
