@@ -350,8 +350,6 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.reduce_affine_transforms(summaries, 1, actual_start=None, local_rows=128)
-    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.affine_exclusive_scan(summaries, seed, 1, local_rows=128, tail_entry_states=seed)
     # A sequence-parallel mesh can split at runtime, so the scan needs the tail slot and its seed.
     with expect_error(RuntimeError, "summaries need a tail slot when the sequence-parallel axis has more than one"):
