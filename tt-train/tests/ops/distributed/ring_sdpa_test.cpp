@@ -9,6 +9,7 @@
  * sharded across CP (context parallel) devices.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -20,12 +21,14 @@
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 static bool check_32_chips() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
@@ -491,4 +494,84 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*seq_len=*/256,
         /*head_dim=*/64,
         /*test_backward=*/true);
+}
+
+// The ring SDPA ops reuse the single-device SDPA program factories, which bake each tensor's
+// buffer type (DRAM vs L1) into the kernels' compile-time TensorAccessorArgs. The ring_sdpa_fw
+// program hash does not include buffer types, so an L1 call with the same shapes as a cached DRAM
+// call would hit the DRAM program and read/write L1 addresses as if they were DRAM. The ops define
+// no validate_on_program_cache_hit, so validate_on_program_cache_miss runs on every call and must
+// reject non-DRAM tensors before the cache lookup.
+//
+// Order matters: the DRAM call must run FIRST so it is the entry the L1 calls then collide with.
+TEST_F(GalaxyRingSDPATest, L1InputsRejectedAfterDramProgramCached) {
+    using namespace ttml;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+
+    // A shape no other test in this suite uses, so the DRAM call is a cache miss.
+    constexpr size_t kBatch = 1;
+    constexpr size_t kHeads = 2;
+    constexpr size_t kLocalSeq = 64;
+    constexpr size_t kHeadDim = 64;
+    const std::array<std::size_t, 4> shape{kBatch, kHeads, kLocalSeq * cp_size, kHeadDim};
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    auto upload = [&](uint32_t seed) {
+        const auto values = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, seed);
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(values, device, ttnn::Layout::TILE, mapper.get());
+    };
+    const auto query = upload(11U);
+    const auto key = upload(12U);
+    const auto value = upload(13U);
+    ASSERT_EQ(query.memory_config().buffer_type(), ttnn::BufferType::DRAM);
+
+    // Step 0 with a causal mask: every device executes (diagonal chunk), so a program is built.
+    auto run = [&](const ttnn::Tensor& q,
+                   const ttnn::Tensor& k,
+                   const ttnn::Tensor& v,
+                   const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt) {
+        return metal::ring_sdpa_fw(
+            q,
+            k,
+            v,
+            cp_size,
+            cp_axis,
+            /*step=*/0U,
+            metal::AttentionMaskType::Causal,
+            metal::ops::ring_sdpa_fw::RingDirection::Backward,
+            /*preallocated_output=*/std::nullopt,
+            preallocated_intermediates);
+    };
+
+    const auto entries_before_dram = device->num_program_cache_entries();
+    const auto [dram_output, dram_intermediates] = run(query, key, value);
+    ASSERT_GT(device->num_program_cache_entries(), entries_before_dram) << "the DRAM call must build a program";
+    ASSERT_EQ(dram_intermediates.memory_config().buffer_type(), ttnn::BufferType::DRAM);
+
+    // Same shapes, L1 Q/K/V: same program hash as the DRAM call.
+    const auto l1_query = ttnn_fixed::to_l1_interleaved(query);
+    const auto l1_key = ttnn_fixed::to_l1_interleaved(key);
+    const auto l1_value = ttnn_fixed::to_l1_interleaved(value);
+    ASSERT_EQ(l1_query.memory_config().buffer_type(), ttnn::BufferType::L1);
+    const auto entries_before_l1 = device->num_program_cache_entries();
+    EXPECT_THAT(
+        [&] { run(l1_query, l1_key, l1_value); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("RingSDPA: Query must be in DRAM")));
+    EXPECT_EQ(device->num_program_cache_entries(), entries_before_l1) << "a rejected call must not touch the cache";
+
+    // DRAM Q/K/V with L1 preallocated intermediates: the hash ignores preallocated tensors entirely.
+    // Count entries after the FP32 copy to L1, which builds a program of its own.
+    const auto l1_intermediates = ttnn_fixed::to_l1_interleaved(dram_intermediates);
+    ASSERT_EQ(l1_intermediates.memory_config().buffer_type(), ttnn::BufferType::L1);
+    const auto entries_before_l1_intermediates = device->num_program_cache_entries();
+    EXPECT_THAT(
+        [&] { run(query, key, value, l1_intermediates); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("RingSDPA: Intermediates must be in DRAM")));
+    EXPECT_EQ(device->num_program_cache_entries(), entries_before_l1_intermediates)
+        << "a rejected call must not touch the cache";
 }

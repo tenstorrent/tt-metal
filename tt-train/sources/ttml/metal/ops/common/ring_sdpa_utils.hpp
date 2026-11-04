@@ -88,13 +88,16 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
 }
 
 // Per-tensor device contract of the reused SDPA kernels: on device, allocated,
-// co-located with the query, rank 4, TILE layout, expected dtype, interleaved.
+// co-located with the query, rank 4, TILE layout, expected dtype, interleaved DRAM.
+// The SDPA program factories bake the buffer type into the kernels' compile-time
+// accessor args and only check it when a program is built, so the ring ops (whose
+// program hash does not include buffer types) require DRAM up front, on every call.
 inline void validate_sdpa_tensor(
     const ttnn::Tensor& tensor,
     std::string_view name,
     const ttnn::Tensor& query,
     ttnn::DataType required_dtype = ttnn::DataType::BFLOAT16) {
-    check_device_tensor(tensor, "RingSDPA", name, {.dtypes = {required_dtype}});
+    check_device_tensor(tensor, "RingSDPA", name, {.dtypes = {required_dtype}, .buffer_type = ttnn::BufferType::DRAM});
     TT_FATAL(tensor.device() == query.device(), "Tensor '{}' must be on the same mesh device as the query", name);
     TT_FATAL(
         tensor.logical_shape().rank() == 4U,
@@ -161,6 +164,7 @@ inline void validate_grad_like_tensor(
 // The SDPA kernels read the logsumexp from column 0 of a (B, H, S, TILE_WIDTH) FP32
 // tile-layout tensor; anything else is silently misinterpreted on device.
 inline void validate_intermediates_tensor(const ttnn::Tensor& intermediates, const ttnn::Tensor& query) {
+    validate_sdpa_tensor(intermediates, "Intermediates", query, ttnn::DataType::FLOAT32);
     TT_FATAL(
         intermediates.dtype() == ttnn::DataType::FLOAT32,
         "Intermediates must be FLOAT32, got {}",
