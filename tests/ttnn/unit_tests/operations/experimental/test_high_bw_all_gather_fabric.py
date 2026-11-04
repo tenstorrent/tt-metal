@@ -47,6 +47,8 @@ def _system_mesh():
 TORUS_6K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, 6144), id="torus_xy_6k")
 FABRIC_2D_6K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), id="fabric_2d_6k")
 TORUS_14K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, 14336), id="torus_xy_14k")
+# wraps axis 1 only: a 4x4 mesh of a Galaxy is then a cylinder (axis 1 a ring, axis 0 a line)
+TORUS_X_6K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X, 6144), id="torus_x_6k")
 
 MESH = pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
 LAYOUTS = pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
@@ -177,6 +179,26 @@ def test_num_links(mesh_device, num_links, cluster_axis, layout):
     out, _ = _output(mesh_device, gathered, ttnn.bfloat16, layout)
     _gather(mesh_device, inp, out, dim=2, cluster_axis=cluster_axis, num_links=num_links)
     _check(out, host, f"num_links {num_links}")
+
+
+@pytest.mark.skipif(ttnn.get_num_devices() < 16, reason="the 4x4 cylinder needs 16 chips (Galaxy)")
+@pytest.mark.parametrize("device_params", [TORUS_X_6K], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [None, 2, 1], ids=["all_links", "2_links", "1_link_snake"])
+@INPUT_MEMORY
+@LAYOUTS
+def test_cylinder_4x4(mesh_device, num_links, nd_sharded, layout):
+    """Full-mesh gather on a 4x4 cylinder: three Hamiltonian cycles, a hop shared by two of them giving each its own
+    link. One link per hop cannot be shared, so it falls back to the snake. The second call is a program-cache hit."""
+    torch.manual_seed(5)
+    G, mapper = _group(mesh_device, None)
+    gathered = [1, 1, 64 * G, 512]
+    for call in range(2):
+        host = _random(gathered, ttnn.bfloat16)
+        inp = _input(mesh_device, host, ttnn.bfloat16, layout, mapper(2), nd_sharded)
+        out, _ = _output(mesh_device, gathered, ttnn.bfloat16, layout)
+        _gather(mesh_device, inp, out, dim=2, cluster_axis=None, num_links=num_links)
+        _check(out, host, f"call {call}, num_links {num_links}")
 
 
 @pytest.mark.parametrize("device_params", [TORUS_6K, TORUS_14K], indirect=True)
