@@ -52,12 +52,14 @@ How a target works
 Output
   [PASS] target clean on every chip       [HIT ] wrong data read: chip and count shown
   [FAIL] step crashed or timed out; the rest of the boot is skipped and the next boot starts with a reset
-  [STOP] the reset failed; the loop ends because the device state is unknown
+  [STOP] a reset ran and failed; the loop ends because the device state is unknown
+  [WARN] no reset method on this host; boots run without a reset
   <out>/<step>_<boot>.log has the full pytest output, <out>/<step>_<boot>/ the per-target JSON.
 
 Reset
   TTOP container (socket /run/ttop-ipmi/reset): IPMI reset via that socket. tt-smi -glx_reset_auto wedges all chips
-  in this container, so it is never used there. Bare metal (/dev/ipmi0): tt-smi -glx_reset_auto. Neither: stop.
+  in this container, so it is never used there. Bare metal (/dev/ipmi0): tt-smi -glx_reset_auto. Neither: [WARN]
+  and no reset; every boot then runs on the same power-up, so it repeats the test instead of sampling a new boot.
   After the reset the script checks that 32 chips enumerate; enumeration alone does not prove the chips are usable,
   so a bad reset can still show up as [FAIL] on the first step.
 
@@ -123,12 +125,15 @@ PY
       ;;
     # The venv and PYTHONPATH (repo root) break the host tt-smi import.
     glx_reset_auto) env -u PYTHONPATH -u VIRTUAL_ENV tt-smi -glx_reset_auto ;;
-    *) echo "no $SOCK socket and no /dev/ipmi0: no known reset method on this host"; return 2 ;;
   esac
 }
 
 do_reset() {  # do_reset <boot>
   local log=$OUT/reset_$1.log r n
+  if [[ $RESET_MODE == none ]]; then
+    say "${Y}[WARN]${N} no $SOCK socket and no /dev/ipmi0: no reset, boot $1 continues on the current power-up"
+    return
+  fi
   say "${B}reset${N} ($RESET_MODE) ..."
   board_reset > "$log" 2>&1
   r=$?
@@ -193,7 +198,7 @@ echo "${B}DRAM ACT screen${N}: $NB boot(s), steps $STEPS, ctrl $CTRL, ${SECS}s p
 echo "  repo $REPO"
 echo "  out  $OUT"
 if [[ $DRY -eq 1 ]]; then
-  [[ $RESET_MODE == none ]] && echo "${R}no reset method on this host; a real run would stop at the first reset${N}"
+  [[ $RESET_MODE == none ]] && echo "${Y}[WARN]${N} no reset method on this host; boots would run without a reset"
   echo "dry run: nothing started"
   exit 0
 fi
