@@ -9,8 +9,8 @@
 //
 // Contract (what the caller provides and may rely on):
 //  * Cores: the flat expert occupies FlatRoutedExpertPlan::arena_cores() (gate/up, down, relays, idle gate/up cells,
-//    the schedule leader). The caller's kernels go on other cores. The flat expert creates 16 semaphores (ids
-//    0..15) on its cores only, and its CBs on its cores only (ids 0, 1, 2, 3, 6, 7, 9, 16).
+//    an idle reader cell). The caller's kernels go on other cores. The flat expert creates 16 semaphores (ids
+//    0..15) on its cores only, and its CBs on its cores only (ids 0, 1, 2, 3, 6, 7, 16).
 //  * L1: every arena-backed CB lies inside `tensors.arena` (>= plan.arena_tiles x 32 rows a core, sharded over at
 //    least the plan's arena cores). The flat expert's static CBs take at most plan.static_l1_bytes a core below it.
 //    The caller may lay its own buffers in the same arena on its own cells (e.g. a persistent arena the caller owns).

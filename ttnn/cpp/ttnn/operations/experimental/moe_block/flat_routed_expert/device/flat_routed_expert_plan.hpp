@@ -59,13 +59,12 @@ struct FlatRoutedExpertPlan {
     bool gu_full_sync = false;
     // gate/up K blocks per CB handshake in the row-pass K loop (1 without row passes)
     uint32_t gu_kg = 1;
-    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), the schedule
-    // inputs (9), gate/up CB 16 and h_local (3). A caller sizing the arena leaves this much L1 below it (the program
+    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), gate/up CB 16
+    // and h_local (3). A caller sizing the arena leaves this much L1 below it (the program
     // factory checks its CBs against it)
     uint32_t static_l1_bytes = 0;
-    // the schedule leader: reads the call's counts / regions / expert ids once, the other cores pull its compact copy
-    // (SE_DYN_PULL; one of the reader cells, the others go to the down cores)
-    Core leader{0, 0};
+    // reader cell 0: idle (kept out of the relay / down pool, so the cells the others take are where they were)
+    Core spare{0, 0};
     // weight slots (one per reader cell, slot r in bank r % banks)
     uint32_t n_slots = 0;
     // weight reads in flight a gate/up core (pieces), and the pieces a weight block is read as (layout.gu_read_pieces)
@@ -90,7 +89,7 @@ struct FlatRoutedExpertPlan {
     std::map<uint32_t, uint32_t> d_pred, d_succ;
     std::vector<uint32_t> d_heads;
 
-    std::vector<Core> arena_cores() const;  // gu + down + relays + gu_idle + leader
+    std::vector<Core> arena_cores() const;  // gu + down + relays + gu_idle + spare
     uint32_t rect_of(const Core& c) const;
     static uint32_t kd_of(uint32_t pcd, uint32_t it);
 };

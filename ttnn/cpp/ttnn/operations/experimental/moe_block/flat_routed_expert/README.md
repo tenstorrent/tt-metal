@@ -36,7 +36,6 @@ hops from the bank's NOC0 endpoint tile (all (slot, core) pairs taken nearest fi
 
 | Role | Cores | Kernels |
 |---|---|---|
-| Schedule leader | reader cell 0 | `se_dyn_lead.cpp` (reads the call's counts / regions once; the other cores pull its compact copy) |
 | x relays: 2 primaries + 2 helpers | next to the DRAM reader columns | `se11_xrd.cpp`, `se11_tz.cpp`, `se13_xhelp.cpp`, `se11_xmc.cpp` |
 | gate/up | two full rectangles (64 cores, 48 on DSv4.1-Flash) | `se5_recv.cpp`, `se5_xfwd.cpp` (+ `se_gu_read.hpp`), `se3_compute.cpp` (+ `se_glu_faces.hpp`) |
 | down | <= 32 cores, chains of 7 (4 with units) | `se6_drecv.cpp`, `se6_dw.cpp`, `se6_dcompute.cpp` (+ `se_yrm.hpp`, `se_cmb_done.hpp`) |

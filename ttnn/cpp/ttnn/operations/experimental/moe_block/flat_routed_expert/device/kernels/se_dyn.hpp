@@ -255,53 +255,13 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     const InterleavedAddrGen<true> cg = {.bank_base_address = counts_addr, .page_size = row_bytes};
     const InterleavedAddrGen<true> rg = {.bank_base_address = regions_addr, .page_size = row_bytes};
     const InterleavedAddrGen<true> ig = {.bank_base_address = gidx_addr, .page_size = gidx_bytes};
-#ifdef SE_DYN_PULL
-    // (program factory: the schedule inputs read once by the leader - reader 0's BRISC - and pulled from its CB
-    // SE_DYN_CB by everyone else once its semaphore SE_DYN_LSEM is set; [0, SE_MAX_E) counts, [SE_MAX_E, 2 SE_MAX_E)
-    // regions per local expert)
-#if defined(COMPILE_FOR_BRISC)
-    const bool leader = my_x[0] == SE_DYN_LPX && my_y[0] == SE_DYN_LPY;
-#else
-    constexpr bool leader = false;
-#endif
-    const uint32_t shared = get_write_ptr(SE_DYN_CB);
-    volatile tt_l1_ptr uint32_t* cr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(leader ? shared : scratch);
-    if (leader) {
-#endif
-        noc_async_read(get_noc_addr(0, cg), scratch, rd);
-        noc_async_read(get_noc_addr(0, rg), scratch + SE_DYN_HALF, rd);
-        noc_async_read(get_noc_addr(0, ig), ids_l1, (gidx_bytes + 63) / 64 * 64);
-        noc_async_read_barrier();
-        volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-        volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SE_DYN_HALF);
-        volatile tt_l1_ptr uint32_t* ids = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
-#ifdef SE_DYN_PULL
-        for (uint32_t e = 0; e < num_e; ++e) {
-            cr[e] = counts[ids[e]];
-            cr[SE_MAX_E + e] = regions[ids[e]];
-        }
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_DYN_LSEM)) = 1;
-    } else {
-        const uint64_t lsem = get_noc_addr(SE_DYN_LX, SE_DYN_LY, get_semaphore(SE_DYN_LSEM));
-        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-        do {
-            noc_async_read(lsem, scratch, 4);
-            noc_async_read_barrier();
-            invalidate_l1_cache();
-        } while (*w == 0);
-        noc_async_read(get_noc_addr(SE_DYN_LX, SE_DYN_LY, shared), scratch, 2 * SE_MAX_E * 4);
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-    }
-    se_dyn_build(
-        d,
-        num_e,
-        rows_per_sub,
-        lo,
-        hi,
-        [&](uint32_t e) { return cr[e]; },
-        [&](uint32_t e) { return cr[SE_MAX_E + e]; });
-#else
+    noc_async_read(get_noc_addr(0, cg), scratch, rd);
+    noc_async_read(get_noc_addr(0, rg), scratch + SE_DYN_HALF, rd);
+    noc_async_read(get_noc_addr(0, ig), ids_l1, (gidx_bytes + 63) / 64 * 64);
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+    volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SE_DYN_HALF);
+    volatile tt_l1_ptr uint32_t* ids = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
     se_dyn_build(
         d,
         num_e,
@@ -310,7 +270,6 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
         hi,
         [&](uint32_t e) { return counts[ids[e]]; },
         [&](uint32_t e) { return regions[ids[e]]; });
-#endif
 #ifdef SE_PIN_MIN
     se_dyn_pin(d, rows_per_sub);
 #endif

@@ -185,22 +185,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     for (const auto& [k, v] : flat_schedule_defines(cfg, p)) {  // (SE_RPS, SE_MAX_E, SE_GU_NREG, pinning)
         dyn_def[k] = v;
     }
-    // The schedule's inputs (counts, regions, expert ids: one DRAM page each, all in bank 0) read once per call (the
-    // plain op): the schedule leader's BRISC (se_dyn_lead.cpp) reads them, compacts this chip's per-expert count / region
-    // into its CB 9 and sets its semaphore SE_DYN_LSEM (reset every launch); every other se_dyn_load polls that
-    // semaphore over the NoC and pulls the compact copy (instead of ~150 tiny DRAM reads of bank 0 behind the startup
-    // weight streams: 5-16 us each). Inside a combine overlap (cmb_rt) every kernel reads DRAM.
-    const bool dyn_pull = cfg.cmb_rt == 0;
-    if (dyn_pull) {
-        const CoreCoord lv = phys(p.leader), l0 = flat_worker_noc0(mesh_device, p.leader);
-        dyn_def["SE_DYN_PULL"] = "1";
-        dyn_def["SE_DYN_LX"] = std::to_string(lv.x);
-        dyn_def["SE_DYN_LY"] = std::to_string(lv.y);
-        dyn_def["SE_DYN_LPX"] = std::to_string(l0.x);
-        dyn_def["SE_DYN_LPY"] = std::to_string(l0.y);
-        dyn_def["SE_DYN_LSEM"] = "13";
-        dyn_def["SE_DYN_CB"] = "9";
-    }
+    // The schedule's inputs (counts, regions, expert ids: one DRAM page each, all in bank 0) are read by every kernel
+    // that builds the schedule (se_dyn_load), in the plain op as inside a combine overlap.
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
     }
@@ -308,13 +294,6 @@ FlatProgramHandles add_flat_routed_expert_program(
         }
         return d;
     };
-    // the schedule leader (se_dyn_lead.cpp): builds the call's schedule from the DRAM rows; with the schedule pull its
-    // compact copy is what every other core pulls
-    {
-        const auto k = dm("se_dyn_lead.cpp", {p.leader}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, dyn_def);
-        add_rt(k, p.leader, dyn);
-    }
-
     // x relays: primaries (feed their snake) + helpers (read / tilize half of x each, into both primaries' rings)
     auto rl_off = [&](uint32_t idx) { return idx < NR ? 0 : (idx - NR) / NR + 1; };
     auto rl_sb = [&](uint32_t idx) {
@@ -660,9 +639,6 @@ FlatProgramHandles add_flat_routed_expert_program(
     }
     static_cb(6, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
     static_cb(7, 4 * dyn_half, arena_cores, tt::DataFormat::UInt32, 4 * dyn_half);
-    if (dyn_pull) {  // the leader's compact schedule inputs (2 x SE_MAX_E words; the CB exists on every core)
-        static_cb(9, 1024, arena_cores, tt::DataFormat::UInt32, 1024);
-    }
     TT_FATAL(
         static_bytes <= p.static_l1_bytes,
         "flat_routed_expert: static CBs {} B > the plan's static_l1_bytes {} B (callers size the arena with it)",

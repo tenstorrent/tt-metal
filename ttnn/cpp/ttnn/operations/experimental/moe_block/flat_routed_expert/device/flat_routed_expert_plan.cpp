@@ -121,7 +121,7 @@ std::vector<Core> FlatRoutedExpertPlan::arena_cores() const {
     for (const auto* l : {&down, &relays, &gu_idle}) {
         out.insert(out.end(), l->begin(), l->end());
     }
-    out.push_back(leader);  // (the other reader cells are down cores, relays or idle)
+    out.push_back(spare);  // (the other reader cells are down cores, relays or idle)
     return out;
 }
 
@@ -353,11 +353,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             taken.insert({c.x, c.y});
         }
     }
-    // one weight slot per reader cell (two a bank); the reader cells but the schedule leader's go to the relays /
-    // down cores
+    // one weight slot per reader cell (two a bank); the reader cells but the first go to the relays / down cores
     p.n_slots = p.readers.size();
     TT_FATAL(p.n_slots <= 2 * p.banks, "flat_routed_expert: {} weight slots > two a bank", p.n_slots);
-    p.leader = p.readers[0];
+    p.spare = p.readers[0];
     for (uint32_t r = 1; r < p.n_slots; ++r) {
         taken.erase({p.readers[r].x, p.readers[r].y});
     }
@@ -532,11 +531,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, L1_BANK_BYTES);
     TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= L1_BANK_BYTES, "flat_routed_expert: down core arena does not fit");
     const uint32_t gu_bytes = p.hl_off;
-    {  // (the program factory's static CBs, an upper bound: CB 9 counted whether or not the schedule pull is on)
+    {  // (the program factory's static CBs, an upper bound)
         const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
         const uint32_t meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
         const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
-        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 1024 + 2048 + a64(p.hbuf * p.mt * p.hpc * kBf8Tile);
+        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 2048 + a64(p.hbuf * p.mt * p.hpc * kBf8Tile);
     }
     TT_FATAL(gu_bytes <= L1_BANK_BYTES, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
