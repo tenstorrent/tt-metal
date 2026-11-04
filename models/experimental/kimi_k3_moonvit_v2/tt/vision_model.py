@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 from .host_prep import prepare_host_inputs
-from .ccl import ParallelFactor, TT_CCL
+from .ccl import ParallelFactor, TT_CCL, ccl_slot_for_layer
 from .device_input import DeviceInput
 from .model_config import MoonViTConfig, VisionParallel, check_grid, compute_kernel_config, resolve_parallel
 from .module import Module, ModuleList
@@ -42,11 +42,16 @@ class TT_MoonViT_Encoder(Module):
         self, config: MoonViTConfig, *, mesh_device: ttnn.MeshDevice, parallel: VisionParallel, compute_kernel_config
     ) -> None:
         super().__init__()
+        n = config.num_hidden_layers
         self.blocks = ModuleList(
             TT_Vision_Block(
-                config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config
+                config,
+                mesh_device=mesh_device,
+                parallel=parallel,
+                compute_kernel_config=compute_kernel_config,
+                ccl_slot=ccl_slot_for_layer(layer, n),
             )
-            for _ in range(config.num_hidden_layers)
+            for layer in range(n)
         )
         # Reads the fp32 residual stream, hands bf16 to the merger.
         self.final_layernorm = RMSNorm(
