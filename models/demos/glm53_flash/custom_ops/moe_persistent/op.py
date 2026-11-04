@@ -35,6 +35,29 @@ def _with_defines(k: ttnn.KernelDescriptor, extra: list[tuple[str, str]]) -> ttn
     return k
 
 
+def grid_mcast_rects(device, grid: tuple[int, int]) -> list[tuple[int, int, int, int, int]]:
+    """The logical ``grid`` (all of ``compute_with_storage_grid_size``) as physically contiguous NOC rects
+    ``(x0, y0, x1, y1, cores)``: consecutive NOC columns with the same NOC row span (a NOC multicast may cover Tensix
+    cores only, and the Galaxy Blackhole chips' worker columns are NOC x 2-7 and 10-15)."""
+    cols: dict[int, list[int]] = {}
+    for x in range(grid[0]):
+        for y in range(grid[1]):
+            n = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            cols.setdefault(int(n.x), []).append(int(n.y))
+    rects = []
+    run: list[int] = []
+    for nx in sorted(cols) + [None]:
+        if run and (nx is None or nx != run[-1] + 1 or sorted(cols[nx]) != sorted(cols[run[0]])):
+            ys = sorted(cols[run[0]])
+            assert ys == list(range(ys[0], ys[-1] + 1)), ("NOC rows not contiguous", ys)
+            rects.append((run[0], ys[0], run[-1], ys[-1], len(run) * len(ys)))
+            run = []
+        if nx is not None:
+            run.append(nx)
+    assert sum(r[4] for r in rects) == grid[0] * grid[1], (rects, grid)
+    return rects
+
+
 def persistent_fused_groups(device, E_loc: int, I_loc: int, H: int, *, down_readers=None, cap: int = 12) -> int:
     """The fused expert op's gate|up group count that leaves the persistent block its cores: the largest choice
     (today's cap of 12) whose placement keeps ``1 + the gather's chunks`` cores free on this device's grid
@@ -103,10 +126,22 @@ class MoePersistent:
         self.full_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
-        c0 = self.device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
-        c1 = self.device.worker_core_from_logical_core(ttnn.CoreCoord(grid.x - 1, grid.y - 1))
-        self.mcast = (int(c0.x), int(c0.y), int(c1.x), int(c1.y), grid.x * grid.y)
+        # the grid's multicast rects: a NOC multicast may target Tensix cores only and the worker grid spans two
+        # NOC column ranges on Blackhole (x 2-7 and 10-15 on the Galaxy chips; 8-9 are not Tensix), so one rect over
+        # the whole grid stalls (the 2026-11-04 tracy_l4_b4_persist_g11 hang: the release reached four cores)
+        self.mcast_rects = grid_mcast_rects(self.device, (grid.x, grid.y))
         self.down_xy = [self._noc(c) for c, *_ in experts.down.assignments]
+
+    def mcast_args(self, core: tuple[int, int]) -> list[int]:
+        """The multicast rects as runtime args for a kernel on logical ``core``: ``[n, (x0, y0, x1, y1, num_dests,
+        loopback) x n]``; the sender's own rect counts it (the loopback variant), the others do not."""
+        n = self.device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
+        assert len(self.mcast_rects) <= 4, self.mcast_rects  # the kernels hold four
+        out = [len(self.mcast_rects)]
+        for x0, y0, x1, y1, cores in self.mcast_rects:
+            inside = x0 <= int(n.x) <= x1 and y0 <= int(n.y) <= y1
+            out += [x0, y0, x1, y1, cores, int(inside)]
+        return out
 
     def _noc(self, core) -> int:
         n = self.device.worker_core_from_logical_core(core)
@@ -265,7 +300,7 @@ class MoePersistent:
         args += [len(peers)]
         for row2, dev, mesh_id, grp in peers:
             args += [row2, dev, mesh_id, grp]
-        args += [len(g.groups[coord])] + list(self.mcast)
+        args += [len(g.groups[coord])] + self.mcast_args(self.xchg_core)
         xchg_rt = ttnn.RuntimeArgs()
         xchg_rt[self.xchg_core[0]][self.xchg_core[1]] = args
         kernels.append(

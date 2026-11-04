@@ -10,8 +10,8 @@
 // compile-time: [CB_SEND_A, CB_SEND_B, SEM_STAGED, SEM_GO, NW_A, NW_B, NCHUNKS_A, NCHUNKS_B, PS, CPP, NP_A, NP_B,
 //                NSRC, PSEM0, <TensorAccessorArgs recvA>, <TensorAccessorArgs recvB>]   (PSEM0..PSEM0+3 multicast)
 // runtime: [my_idx, xchg_noc, recvA_addr, arrivedA_addr, recvB_addr, arrivedB_addr, worker nocs x NW_A, n_peers,
-//           (idx, dev_id, mesh_id, group) x n_peers, n_groups, mcast x0, y0, x1, y1, num_dests,
-//           <fabric connection args> x n_groups]
+//           (idx, dev_id, mesh_id, group) x n_peers, n_groups, n_rects, (x0, y0, x1, y1, num_dests, loopback) x
+//           n_rects, <fabric connection args> x n_groups]
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -60,9 +60,14 @@ void kernel_main() {
         pgrp[j] = get_arg_val<uint32_t>(a++);
     }
     const uint32_t n_groups = get_arg_val<uint32_t>(a++);
-    const uint32_t mx0 = get_arg_val<uint32_t>(a++), my0 = get_arg_val<uint32_t>(a++);
-    const uint32_t mx1 = get_arg_val<uint32_t>(a++), my1 = get_arg_val<uint32_t>(a++);
-    const uint32_t num_dests = get_arg_val<uint32_t>(a++);
+    // the grid's multicast rects (Tensix-only, physically contiguous): x0, y0, x1, y1, num_dests, loopback
+    const uint32_t n_rects = get_arg_val<uint32_t>(a++);
+    uint32_t rect[4][6];
+    for (uint32_t r = 0; r < n_rects; ++r) {
+        for (uint32_t f = 0; f < 6; ++f) {
+            rect[r][f] = get_arg_val<uint32_t>(a++);
+        }
+    }
     tt::tt_fabric::WorkerToFabricEdmSender senders[MAX_GROUPS];
     for (uint32_t g = 0; g < n_groups; ++g) {
         senders[g] = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
@@ -124,8 +129,15 @@ void kernel_main() {
     for (uint32_t s = 0; s < 4; ++s) {
         volatile tt_l1_ptr uint32_t* one = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(PSEM0 + s));
         noc_semaphore_set(one, 1);
-        noc_semaphore_set_multicast_loopback_src(
-            get_semaphore(PSEM0 + s), get_noc_multicast_addr(mx0, my0, mx1, my1, get_semaphore(PSEM0 + s)), num_dests);
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            const uint64_t dst =
+                get_noc_multicast_addr(rect[r][0], rect[r][1], rect[r][2], rect[r][3], get_semaphore(PSEM0 + s));
+            if (rect[r][5]) {
+                noc_semaphore_set_multicast_loopback_src(get_semaphore(PSEM0 + s), dst, rect[r][4]);
+            } else {
+                noc_semaphore_set_multicast(get_semaphore(PSEM0 + s), dst, rect[r][4]);
+            }
+        }
     }
     noc_async_write_barrier();
     noc_semaphore_set(arrivedA, 0);
