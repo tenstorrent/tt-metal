@@ -170,7 +170,7 @@ def test_policy_prints_the_compare_arguments(capsys):
 
 def test_arches_lists_the_stage2_arches(capsys):
     gate.main(["arches", "--gate", "merge", "--stage2"])
-    assert capsys.readouterr().out.split() == ["blackhole"]
+    assert capsys.readouterr().out.split() == ["blackhole", "wormhole"]
 
 
 REPLAY = pathlib.Path(__file__).parent / "replay_merge_blackhole"
@@ -503,9 +503,10 @@ def test_stage2_decides_whether_a_blocking_regression_fails(block, stage2, fails
     assert gate.fails(v) == fails
 
 
-def test_the_merge_gate_blocks_on_blackhole_only():
-    assert gate.policy("merge", "blackhole")["block"]
-    assert not gate.policy("merge", "wormhole")["block"]
+def test_the_merge_gate_blocks_on_both_arches_with_stage2():
+    for arch in ARCHES:
+        p = gate.policy("merge", arch)
+        assert p["block"] and p["stage2"]
 
 
 def test_stage2_counts_only_on_an_arch_whose_policy_runs_it(tmp_path):
