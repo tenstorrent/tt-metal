@@ -16,6 +16,12 @@
 
 namespace binding_details {
 
+// Returns the LLK tile and face geometry of a resource binding.
+constexpr ckernel::TensorShape tensor_shape_from_metadata(const TokenWithLLKMetadata& token) {
+    return ckernel::TensorShape{
+        get_face_r_dim(token), get_face_c_dim(token), get_num_faces_r_dim(token), get_num_faces_c_dim(token)};
+}
+
 // Identifies binding tokens that carry resource metadata.
 template <typename T>
 inline constexpr bool binding_token_with_llk_metadata = std::is_base_of_v<TokenWithLLKMetadata, T>;
@@ -29,8 +35,7 @@ struct LLKOperandExtractor {
         "LLKOperandFrom requires a BindingToken with llk metadata (DFB / Scratchpad / Tensor)");
 
     static constexpr DataFormat format = get_dataformat(Token);
-    static constexpr ckernel::TensorShape shape{
-        get_face_r_dim(Token), get_face_c_dim(Token), get_num_faces_r_dim(Token), get_num_faces_c_dim(Token)};
+    static constexpr ckernel::TensorShape shape = tensor_shape_from_metadata(Token);
 
     using OperandT = ckernel::experimental::LLKOperand<format, shape>;
 };
