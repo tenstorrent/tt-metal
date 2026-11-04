@@ -45,7 +45,6 @@ set(UNIT_TESTS_API_SOURCES
     test_compile_defines.cpp
     test_compiler_include_paths.cpp
     test_direct.cpp
-    test_dram_core_kernels.cpp
     test_dram_geometry.cpp
     test_dram_kernels.cpp
     test_dram_subchannel_helper.cpp

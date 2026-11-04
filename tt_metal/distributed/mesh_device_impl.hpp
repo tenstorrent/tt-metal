@@ -69,9 +69,6 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
-namespace experimental {
-struct DramCoreKernelsState;
-}
 namespace streaming_profiler {
 class Receiver;
 }
@@ -217,10 +214,6 @@ private:
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
-
-    // Resident DRAM-core kernels (experimental::LaunchDramCoreKernels), held until close_impl(), which stops the ones
-    // still running (their handles may be gone).
-    std::vector<std::shared_ptr<::tt::tt_metal::experimental::DramCoreKernelsState>> dram_core_kernels_;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
@@ -409,11 +402,6 @@ public:
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
-    // Resident DRAM-core kernels launched on this mesh (experimental::LaunchDramCoreKernels): close_impl() stops
-    // the ones still running.
-    std::vector<std::shared_ptr<::tt::tt_metal::experimental::DramCoreKernelsState>>& dram_core_kernels() {
-        return dram_core_kernels_;
-    }
     // Created on first use. One per mesh: the region is provisioned against this device's
     // PCIe endpoint, so two meshes cannot share one. A handle, so a holder that may outlive
     // this mesh (RingAlias) keeps the object valid; see host_region_. After close() it
