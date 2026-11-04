@@ -3,7 +3,8 @@
 
 """The LLK perf gate: compare one arch under gate_policy.yaml and write its verdict.
 
-    gate.py compare --gate merge --arch wormhole --current 'cur/**/*.csv' --baseline 'base/**/*.csv'
+    gate.py compare --gate merge --arch wormhole --current current_perf --baseline baseline_perf
+    gate.py complete --dir perf-data --arch wormhole  (exit 1 unless every leg ran its whole plan)
     gate.py verdict verdict-wormhole.json      (exit 1 when the verdict fails the job)
     gate.py baseline --gate nightly --arch wormhole  (read the policy's baseline from the warehouse)
     gate.py policy --gate merge --arch wormhole  (the compare arguments, for stage 2 in a leg)
@@ -48,15 +49,73 @@ def policy(gate, arch, path=POLICY):
         "modules": a.get("modules", {}),
         "run_types": a["run_types"],
         "min_cycles": data["min_cycles"],
+        "baseline_coverage": data["baseline_coverage"],
         "block": a.get("block", False),
         "stage2": a.get("stage2", False),
     }
 
 
-def _csvs(pattern):
+def _csvs(directory):
     return sorted(
-        p for p in glob.glob(pattern, recursive=True) if not p.endswith(".post.csv")
+        p
+        for p in glob.glob(f"{directory}/**/*.csv", recursive=True)
+        if not p.endswith(".post.csv")
     )
+
+
+def complete(directory, arch):
+    """ "" when every leg of ``arch`` under ``directory`` ran its whole plan; else why not.
+
+    Each leg writes plan.json (its node ids, its group of N) and ran.txt (what passed or skipped).
+    """
+    plans = []
+    for path in sorted(glob.glob(f"{directory}/**/plan.json", recursive=True)):
+        plan = _read_json(path)
+        if plan and plan.get("arch") == arch:
+            plans.append((Path(path), plan))
+    if not plans:
+        return f"No {arch} leg left a plan (plan.json), so nothing shows what was measured."
+    splits = {plan["groups"] for _, plan in plans}
+    if len(splits) != 1:
+        return (
+            f"The {arch} legs were cut {' and '.join(map(str, sorted(splits)))} ways."
+        )
+    n = splits.pop()
+    problems = [
+        f"leg {g}/{n} left no data"
+        for g in sorted(set(range(1, n + 1)) - {plan["group"] for _, plan in plans})
+    ]
+    for path, plan in plans:
+        ran = path.with_name("ran.txt")
+        ran = set(ran.read_text().splitlines()) if ran.exists() else set()
+        left = [node for node in plan["nodes"] if node not in ran]
+        if left:
+            problems.append(
+                f"leg {plan['group']}/{n} ran {len(plan['nodes']) - len(left)} of "
+                f"{len(plan['nodes'])} tests (first not run: {left[0]})"
+            )
+    if problems:
+        return f"A {arch} measuring leg did not complete: {'; '.join(problems)}."
+    return ""
+
+
+def _short_baseline(p, result):
+    """Why a baseline holds too little of the current run to judge it, or ""."""
+    modules = lambda rows: {r[rc.MODULE_COL] for r in rows}  # noqa: E731
+    current = modules(result["records"]) | modules(result["new_points"])
+    shared = modules(result["records"])
+    if len(shared) < p["baseline_coverage"] * len(current):
+        return (
+            f"The baseline holds {len(shared)} of the {len(current)} test modules measured now. "
+            "A partly uploaded or loaded run is no baseline."
+        )
+    new = sum(r[rc.MODULE_COL] in shared for r in result["new_points"])
+    if new > (1 - p["baseline_coverage"]) * (len(result["records"]) + new):
+        return (
+            f"{new} points of modules the baseline has are missing from it. "
+            "A partly uploaded or loaded run is no baseline."
+        )
+    return ""
 
 
 def _speed_of_light(paths):
@@ -179,7 +238,13 @@ def compare(a):
     result, error, stage2 = None, "", None
     current, base = _csvs(a.current), _csvs(a.baseline)
     baseline = _baseline(a, base)
-    if not a.incomplete and baseline and baseline["have"]:
+    incomplete = complete(a.current, a.arch)
+    if not incomplete and (a.baseline_commit or a.baseline_run):
+        # A branch point or a run measured in CI: its legs left a plan too.
+        incomplete = complete(a.baseline, a.arch).replace(
+            "measuring leg", "baseline leg"
+        )
+    if not incomplete and baseline and baseline["have"]:
         sol = _speed_of_light(current)
         if not current:
             error = f"No {a.arch} perf CSVs for the current side, so the gate measured nothing."
@@ -199,9 +264,11 @@ def compare(a):
             )
             if not result["records"]:
                 error = "No point was compared: the two sides share no points."
+            elif not (a.baseline_commit or a.baseline_run):
+                error = _short_baseline(p, result)
 
     status, reason = decide(
-        p, incomplete=a.incomplete, baseline=baseline, result=result, error=error
+        p, incomplete=incomplete, baseline=baseline, result=result, error=error
     )
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -228,6 +295,13 @@ def compare(a):
             module_thresholds=p["modules"],
             arch=a.arch,
         )
+        missing = result["missing_points"]
+        if missing:
+            names = sorted({r[rc.MODULE_COL] for r in missing})
+            report += (
+                f"\n\n{len(missing)} baseline point(s) were not measured now, in "
+                f"{', '.join(names[:10])}{' …' if len(names) > 10 else ''} (removed or renamed tests?)."
+            )
         rc._write_points_csv(result["records"], out / "perf_gate_report.points.csv")
         regressions_csv = out / "perf_gate_report.regressions.csv"
         rc._write_points_csv(result["regressions"], regressions_csv)
@@ -251,6 +325,7 @@ def compare(a):
             "regressions": len(result["regressions"]) if result else 0,
             "improvements": len(result["improvements"]) if result else 0,
             "new": len(result["new_points"]) if result else 0,
+            "missing": len(result["missing_points"]) if result else 0,
         },
         "stage2": stage2,
     }
@@ -259,6 +334,12 @@ def compare(a):
     path.write_text(json.dumps(verdict, indent=1) + "\n")
     print(f"{a.arch}: {status} {verdict['counts']} {reason}".rstrip())
     return 0
+
+
+def complete_cmd(a):
+    reason = complete(a.dir, a.arch)
+    print(f"::error::{reason}" if reason else f"Every {a.arch} leg ran its whole plan.")
+    return 1 if reason else 0
 
 
 def verdict_cmd(a):
@@ -380,8 +461,10 @@ def main(argv=None):
     c = sub.add_parser("compare", help="compare one arch and write verdict-<arch>.json")
     c.add_argument("--gate", required=True)
     c.add_argument("--arch", required=True)
-    c.add_argument("--current", required=True, help="glob of the current side's CSVs")
-    c.add_argument("--baseline", required=True, help="glob of the baseline's CSVs")
+    c.add_argument(
+        "--current", required=True, help="directory of the current side's data"
+    )
+    c.add_argument("--baseline", required=True, help="directory of the baseline's data")
     c.add_argument(
         "--baseline-meta",
         default="baseline_metadata.json",
@@ -402,11 +485,15 @@ def main(argv=None):
     )
     c.add_argument("--current-sha", default="?")
     c.add_argument("--current-label", default="")
-    c.add_argument(
-        "--incomplete", default="", help="why the measurement is incomplete, if it is"
-    )
     c.add_argument("--out-dir", default=".")
     c.set_defaults(func=compare)
+
+    m = sub.add_parser(
+        "complete", help="exit 1 unless every leg of an arch ran its plan"
+    )
+    m.add_argument("--dir", required=True)
+    m.add_argument("--arch", required=True)
+    m.set_defaults(func=complete_cmd)
 
     v = sub.add_parser("verdict", help="exit 1 when the verdict fails the job")
     v.add_argument("path")

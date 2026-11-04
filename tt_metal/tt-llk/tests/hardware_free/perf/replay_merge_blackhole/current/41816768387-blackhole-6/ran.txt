@@ -1,0 +1,2 @@
+perf_transpose_dest.py::test_perf_transpose_dest
+perf_sfpu_ema.py::test_perf_sfpu_ema

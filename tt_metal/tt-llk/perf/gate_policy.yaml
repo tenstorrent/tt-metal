@@ -10,6 +10,8 @@
 # harness stability stack (#60314) merges; WH matmul LoFi configs are the least stable.
 
 min_cycles: 30
+# A warehouse baseline must hold this share of the test modules measured now, and of their points.
+baseline_coverage: 0.95
 
 gates:
   pr:

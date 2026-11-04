@@ -86,7 +86,6 @@ jobs:
     with:
       gate: nightly_sol
       arch: ${{ matrix.arch }}
-      measure_result: ${{ needs.llk-perf-tests.result }}
     secrets: inherit
 
   llk-perf-summary:

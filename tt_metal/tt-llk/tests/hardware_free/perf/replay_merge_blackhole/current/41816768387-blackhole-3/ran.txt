@@ -1,0 +1,2 @@
+perf_eltwise_bcast_col_custom.py::test_perf_eltwise_bcast_col_custom
+perf_bcast.py::test_perf_bcast
