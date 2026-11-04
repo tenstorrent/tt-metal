@@ -9,8 +9,7 @@
 #include "ckernel_addrmod.h"
 #include "sfpi.h"
 
-namespace ckernel::sfpu
-{
+namespace ckernel::sfpu {
 
 // Two-row SFPU loop bodies: one iteration reads and writes Dest rows 0 and 1, and the second row's
 // store also advances Dest past both rows, so the body needs no separate TTINCRWC. That store names
@@ -34,11 +33,9 @@ constexpr std::int16_t SFPU_ROW_PAIR_DEST_INCR = 4;
  *
  * @note Call from the op's init; nothing may rewrite ADDR_MOD_6 between that init and the op's calls.
  */
-inline void _init_sfpu_row_pair_()
-{
-    if constexpr (SFPU_ROW_PAIR_STORE_ADVANCES_DEST)
-    {
-        addr_mod_t {
+inline void _init_sfpu_row_pair_() {
+    if constexpr (SFPU_ROW_PAIR_STORE_ADVANCES_DEST) {
+        addr_mod_t{
             .srca = {.incr = 0},
             .srcb = {.incr = 0},
             .dest = {.incr = SFPU_ROW_PAIR_DEST_INCR},
@@ -56,14 +53,10 @@ inline void _init_sfpu_row_pair_()
  * @param value: The value to store to Dest row 1.
  * @note Pair with @ref _sfpu_row_pair_end_ at the end of the body, after @ref _init_sfpu_row_pair_ ran.
  */
-sfpi_inline void _sfpu_row_pair_store_second_(const sfpi::vFloat value)
-{
-    if constexpr (SFPU_ROW_PAIR_STORE_ADVANCES_DEST)
-    {
+sfpi_inline void _sfpu_row_pair_store_second_(const sfpi::vFloat value) {
+    if constexpr (SFPU_ROW_PAIR_STORE_ADVANCES_DEST) {
         sfpi::dst_reg[1].mode(ADDR_MOD_2) = value;
-    }
-    else
-    {
+    } else {
         sfpi::dst_reg[1] = value;
     }
 }
@@ -71,12 +64,10 @@ sfpi_inline void _sfpu_row_pair_store_second_(const sfpi::vFloat value)
 /**
  * @brief Ends a two-row body: advances Dest past both rows when the second store did not.
  */
-sfpi_inline void _sfpu_row_pair_end_()
-{
-    if constexpr (!SFPU_ROW_PAIR_STORE_ADVANCES_DEST)
-    {
+sfpi_inline void _sfpu_row_pair_end_() {
+    if constexpr (!SFPU_ROW_PAIR_STORE_ADVANCES_DEST) {
         sfpi::dst_reg += 2;
     }
 }
 
-} // namespace ckernel::sfpu
+}  // namespace ckernel::sfpu
