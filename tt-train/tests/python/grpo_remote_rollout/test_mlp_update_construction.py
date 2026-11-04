@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence test for ``MLP.update`` (real weights, HF auth).
+"""Construction-equivalence test for ``MLP.update`` (real weights).
 
 Round-trip per layer: generate -> snapshot w1/w2/w3 -> overwrite with a constant
 (must change output) -> restore via update -> generate must match the original.
