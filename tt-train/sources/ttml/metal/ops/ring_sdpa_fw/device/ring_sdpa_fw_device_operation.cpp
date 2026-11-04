@@ -24,6 +24,17 @@ void RingSDPAFwDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_intermediates.has_value()) {
         validate_intermediates_tensor(tensor_args.preallocated_intermediates.value(), tensor_args.query);
     }
+
+    validate_ring_lane_selection(attrs, tensor_args.lane1.has_value());
+    if (tensor_args.lane1.has_value()) {
+        const auto& lane1 = tensor_args.lane1.value();
+        validate_ring_qkv(lane1.query, lane1.key, lane1.value);
+        validate_same_spec(lane1.query, tensor_args.query, "query");
+        validate_same_spec(lane1.key, tensor_args.key, "key");
+        validate_same_spec(lane1.value, tensor_args.value, "value");
+        validate_output_like_tensor(lane1.output, "Second-lane output", lane1.query, lane1.value);
+        validate_intermediates_tensor(lane1.intermediates, lane1.query);
+    }
 }
 
 RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::compute_output_specs(
@@ -77,6 +88,7 @@ ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
         attrs.step,
         attrs.mask_type,
         static_cast<int>(attrs.ring_direction),
+        static_cast<int>(attrs.lane_selection),
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.logical_shape());
@@ -96,7 +108,9 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
     ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_fw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates) {
+    const std::optional<ttnn::Tensor>& preallocated_intermediates,
+    ttml::metal::ops::RingLaneSelection lane_selection,
+    const std::optional<ttml::metal::ops::ring_sdpa_fw::RingSDPAFwLane>& lane1) {
     using OperationType = ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -104,14 +118,16 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
         .ring_axis = ring_axis,
         .step = step,
         .mask_type = mask_type,
-        .ring_direction = ring_direction};
+        .ring_direction = ring_direction,
+        .lane_selection = lane_selection};
 
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,
         .value = value,
         .preallocated_output = preallocated_output,
-        .preallocated_intermediates = preallocated_intermediates};
+        .preallocated_intermediates = preallocated_intermediates,
+        .lane1 = lane1};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -14,6 +14,44 @@
 #include "ring_sdpa_bw_kv_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_bw::kv {
+
+namespace {
+
+// SDPA backward-KV inputs/outputs of one device at one ring step: lane 0 is the op's primary
+// tensors, lane 1 the second-lane tensors (RingLaneSelection::ZigZag only). The u_scaler
+// input is shared by both lanes (the Q op filled it for the lane this device computes).
+struct KVLaneRefs {
+    const ttnn::Tensor& grad_output;
+    const ttnn::Tensor& query;
+    const ttnn::Tensor& key;
+    const ttnn::Tensor& value;
+    const ttnn::Tensor& intermediates;
+    const ttnn::Tensor& grad_key;
+    const ttnn::Tensor& grad_value;
+};
+
+KVLaneRefs select_lane(
+    uint32_t lane,
+    const tensor_args_t& tensor_args,
+    const std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
+    if (lane == 0U) {
+        return {
+            tensor_args.grad_output,
+            tensor_args.query,
+            tensor_args.key,
+            tensor_args.value,
+            tensor_args.intermediates,
+            std::get<0>(tensor_return_value),
+            std::get<1>(tensor_return_value)};
+    }
+    TT_FATAL(tensor_args.lane1.has_value(), "Device was assigned lane 1 but no second-lane tensors were given");
+    const auto& lane1 = tensor_args.lane1.value();
+    return {
+        lane1.grad_output, lane1.query, lane1.key, lane1.value, lane1.intermediates, lane1.grad_key, lane1.grad_value};
+}
+
+}  // namespace
+
 // ============== Backward KV Program Factory ==============
 
 RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::create_mesh_workload(
@@ -23,16 +61,9 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
-    const auto& grad_output = tensor_args.grad_output;
     const auto& u_scaler = tensor_args.u_scaler;
-    const auto& query = tensor_args.query;
-    const auto& key = tensor_args.key;
-    const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_key = std::get<0>(tensor_return_value);
-    auto& grad_value = std::get<1>(tensor_return_value);
 
-    auto* mesh_device = query.device();
+    auto* mesh_device = tensor_args.query.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device");
 
     const auto mesh_shape = mesh_device->shape();
@@ -48,27 +79,29 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.lane_selection);
+        const auto effective_mask_type = work.mask_type;
 
-        if (!should_execute) {
+        if (!work.execute) {
             continue;
         }
+        const auto lane = select_lane(work.lane, tensor_args, tensor_return_value);
 
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .query = query,
-            .key = key,
-            .value = value,
+            .grad_output = lane.grad_output,
+            .query = lane.query,
+            .key = lane.key,
+            .value = lane.value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
+            .intermediates = lane.intermediates,
             .u_scaler = u_scaler,
-            .preallocated_grad_key = grad_key,
-            .preallocated_grad_value = grad_value};
+            .preallocated_grad_key = lane.grad_key,
+            .preallocated_grad_value = lane.grad_value};
 
-        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key, grad_value};
+        sdpa_kv::tensor_return_value_t sdpa_return_value{lane.grad_key, lane.grad_value};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardKVProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -100,16 +133,9 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
-    const auto& grad_output = tensor_args.grad_output;
     const auto& u_scaler = tensor_args.u_scaler;
-    const auto& query = tensor_args.query;
-    const auto& key = tensor_args.key;
-    const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_key = std::get<0>(tensor_return_value);
-    auto& grad_value = std::get<1>(tensor_return_value);
 
-    auto* mesh_device = query.device();
+    auto* mesh_device = tensor_args.query.device();
     const auto mesh_shape = mesh_device->shape();
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
@@ -122,23 +148,26 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         const auto& start_coord = coord_range.start_coord();
 
         uint32_t device_ring_id = start_coord[ring_axis];
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.lane_selection);
+        const auto effective_mask_type = work.mask_type;
+        TT_FATAL(work.execute, "Cached ring SDPA backward program found for a device that does not execute");
+        const auto lane = select_lane(work.lane, tensor_args, tensor_return_value);
 
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .query = query,
-            .key = key,
-            .value = value,
+            .grad_output = lane.grad_output,
+            .query = lane.query,
+            .key = lane.key,
+            .value = lane.value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
+            .intermediates = lane.intermediates,
             .u_scaler = u_scaler,
-            .preallocated_grad_key = grad_key,
-            .preallocated_grad_value = grad_value};
+            .preallocated_grad_key = lane.grad_key,
+            .preallocated_grad_value = lane.grad_value};
 
-        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key, grad_value};
+        sdpa_kv::tensor_return_value_t sdpa_return_value{lane.grad_key, lane.grad_value};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardKVProgramFactory::shared_variables_t sdpa_shared_vars{

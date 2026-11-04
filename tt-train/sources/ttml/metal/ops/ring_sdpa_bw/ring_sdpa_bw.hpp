@@ -13,7 +13,22 @@ namespace ttml::metal {
 
 using RingDirection = ttml::metal::ops::ring_sdpa_bw::RingDirection;
 
-// Returns [grad_Q, grad_K, grad_V]
+// Second-lane tensors for RingLaneSelection::ZigZag (see metal/ops/common/ring_sdpa_utils.hpp).
+// Devices assigned lane 1 at a step read the lane-1 inputs and write grad_query, grad_key and
+// grad_value in place; the returned gradients always refer to lane 0.
+struct RingSDPABwLane {
+    ttnn::Tensor grad_output;
+    ttnn::Tensor attn_output;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
+    ttnn::Tensor intermediates;
+    ttnn::Tensor grad_query;
+    ttnn::Tensor grad_key;
+    ttnn::Tensor grad_value;
+};
+
+// Returns [grad_Q, grad_K, grad_V] of lane 0.
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     const ttnn::Tensor& grad_output,    // Gradient w.r.t. output
     const ttnn::Tensor& attn_output,    // sdpa forward output (needed for gradients)
@@ -28,6 +43,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     RingDirection ring_direction = RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    ops::RingLaneSelection lane_selection = ops::RingLaneSelection::None,
+    const std::optional<RingSDPABwLane>& lane1 = std::nullopt);
 
 }  // namespace ttml::metal

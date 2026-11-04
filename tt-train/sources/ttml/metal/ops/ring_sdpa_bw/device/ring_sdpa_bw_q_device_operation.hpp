@@ -48,6 +48,8 @@ ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation::tensor_return_val
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None,
     ttml::metal::ops::ring_sdpa_bw::RingDirection ring_direction =
         ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
+    ttml::metal::ops::RingLaneSelection lane_selection = ttml::metal::ops::RingLaneSelection::None,
+    const std::optional<ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQLane>& lane1 = std::nullopt);
 
 }  // namespace ttnn::prim

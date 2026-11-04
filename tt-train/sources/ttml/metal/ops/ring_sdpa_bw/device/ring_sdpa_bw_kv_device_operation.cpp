@@ -45,6 +45,19 @@ void RingSDPABwKVDeviceOperation::validate_on_program_cache_miss(
             tensor_args.value,
             tensor_args.query);
     }
+
+    validate_ring_lane_selection(attrs, tensor_args.lane1.has_value());
+    if (tensor_args.lane1.has_value()) {
+        const auto& lane1 = tensor_args.lane1.value();
+        validate_ring_qkv(lane1.query, lane1.key, lane1.value);
+        validate_same_spec(lane1.query, tensor_args.query, "query");
+        validate_same_spec(lane1.key, tensor_args.key, "key");
+        validate_same_spec(lane1.value, tensor_args.value, "value");
+        validate_output_like_tensor(lane1.grad_output, "Second-lane grad output", lane1.query, lane1.value);
+        validate_intermediates_tensor(lane1.intermediates, lane1.query);
+        validate_grad_like_tensor(lane1.grad_key, "Second-lane grad key", lane1.key, lane1.query);
+        validate_grad_like_tensor(lane1.grad_value, "Second-lane grad value", lane1.value, lane1.query);
+    }
 }
 
 RingSDPABwKVDeviceOperation::spec_return_value_t RingSDPABwKVDeviceOperation::compute_output_specs(
@@ -104,7 +117,9 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
     ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_bw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    ttml::metal::ops::RingLaneSelection lane_selection,
+    const std::optional<ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVLane>& lane1) {
     using OperationType = ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -112,7 +127,8 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
         .ring_axis = ring_axis,
         .step = step,
         .mask_type = mask_type,
-        .ring_direction = ring_direction};
+        .ring_direction = ring_direction,
+        .lane_selection = lane_selection};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
@@ -122,7 +138,8 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
         .value = value,
         .intermediates = intermediates,
         .preallocated_grad_key = preallocated_grad_key,
-        .preallocated_grad_value = preallocated_grad_value};
+        .preallocated_grad_value = preallocated_grad_value,
+        .lane1 = lane1};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -16,6 +16,47 @@
 
 namespace ttml::metal::ops::ring_sdpa_bw::q {
 
+namespace {
+
+// SDPA backward-Q inputs/outputs of one device at one ring step: lane 0 is the op's primary
+// tensors, lane 1 the second-lane tensors (RingLaneSelection::ZigZag only). The u_scaler
+// output is shared by both lanes.
+struct QLaneRefs {
+    const ttnn::Tensor& grad_output;
+    const ttnn::Tensor& attn_output;
+    const ttnn::Tensor& query;
+    const ttnn::Tensor& key;
+    const ttnn::Tensor& value;
+    const ttnn::Tensor& intermediates;
+    const ttnn::Tensor& grad_query;
+};
+
+QLaneRefs select_lane(
+    uint32_t lane, const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+    if (lane == 0U) {
+        return {
+            tensor_args.grad_output,
+            tensor_args.attn_output,
+            tensor_args.query,
+            tensor_args.key,
+            tensor_args.value,
+            tensor_args.intermediates,
+            std::get<0>(tensor_return_value)};
+    }
+    TT_FATAL(tensor_args.lane1.has_value(), "Device was assigned lane 1 but no second-lane tensors were given");
+    const auto& lane1 = tensor_args.lane1.value();
+    return {
+        lane1.grad_output,
+        lane1.attn_output,
+        lane1.query,
+        lane1.key,
+        lane1.value,
+        lane1.intermediates,
+        lane1.grad_query};
+}
+
+}  // namespace
+
 // ============== Backward Q Program Factory ==============
 
 RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::create_mesh_workload(
@@ -25,15 +66,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_q = ttml::metal::ops::sdpa_bw::device::q;
 
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
-    const auto& query = tensor_args.query;
-    const auto& key = tensor_args.key;
-    const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_query = std::get<0>(tensor_return_value);
-
-    auto* mesh_device = query.device();
+    auto* mesh_device = tensor_args.query.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device");
 
     const auto mesh_shape = mesh_device->shape();
@@ -49,12 +82,14 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.lane_selection);
+        const auto effective_mask_type = work.mask_type;
 
-        if (!should_execute) {
+        if (!work.execute) {
             continue;
         }
+        const auto lane = select_lane(work.lane, tensor_args, tensor_return_value);
 
         // Create SDPA backward Q with mask_type (no explicit mask tensor needed)
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -62,19 +97,19 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         auto& u_scaler = std::get<1>(tensor_return_value);
 
         sdpa_q::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .attn_output = attn_output,
-            .query = query,
-            .key = key,
-            .value = value,
+            .grad_output = lane.grad_output,
+            .attn_output = lane.attn_output,
+            .query = lane.query,
+            .key = lane.key,
+            .value = lane.value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
-            .preallocated_grad_query = grad_query,
+            .intermediates = lane.intermediates,
+            .preallocated_grad_query = lane.grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
             .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
+        sdpa_q::tensor_return_value_t sdpa_return_value{lane.grad_query, u_scaler, std::nullopt, std::nullopt};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardQProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -106,16 +141,9 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_q = ttml::metal::ops::sdpa_bw::device::q;
 
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
-    const auto& query = tensor_args.query;
-    const auto& key = tensor_args.key;
-    const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_query = std::get<0>(tensor_return_value);
     auto& u_scaler = std::get<1>(tensor_return_value);
 
-    auto* mesh_device = query.device();
+    auto* mesh_device = tensor_args.query.device();
     const auto mesh_shape = mesh_device->shape();
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
@@ -129,27 +157,29 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
 
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-        (void)should_execute;  // Already filtered in create_mesh_workload
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.lane_selection);
+        const auto effective_mask_type = work.mask_type;
+        TT_FATAL(work.execute, "Cached ring SDPA backward program found for a device that does not execute");
+        const auto lane = select_lane(work.lane, tensor_args, tensor_return_value);
 
         // Create SDPA attributes and tensor args
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_q::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .attn_output = attn_output,
-            .query = query,
-            .key = key,
-            .value = value,
+            .grad_output = lane.grad_output,
+            .attn_output = lane.attn_output,
+            .query = lane.query,
+            .key = lane.key,
+            .value = lane.value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
-            .preallocated_grad_query = grad_query,
+            .intermediates = lane.intermediates,
+            .preallocated_grad_query = lane.grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
             .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
+        sdpa_q::tensor_return_value_t sdpa_return_value{lane.grad_query, u_scaler, std::nullopt, std::nullopt};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardQProgramFactory::shared_variables_t sdpa_shared_vars{
