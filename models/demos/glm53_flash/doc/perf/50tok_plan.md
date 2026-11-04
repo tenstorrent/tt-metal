@@ -330,3 +330,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   `grid_mcast_rects` splits every grid multicast into Tensix-only contiguous rects (the sender's own rect uses the
   loopback variant); the step-2 landing multicast takes the same rects (71cf14a9ee0). SIGTERM freed the chips;
   `gate84_B1_fabar` opened the mesh fine afterwards.
+- 2026-11-04 05:57-06:08 `gate84_B4_persist_g11b` (rect split) HUNG with the same signature: the release landed on
+  nine edge cores (top and bottom rows), the exchange core in its write barrier. The Blackhole kernel API does not
+  mirror coordinates per NOC (`NOC_0_X(noc, size, x) = x`), but a multicast rect is walked from its start corner along
+  the NOC's direction and tt-metal's factories swap the corners for NOC_1 (matmul 2D: `std::swap(in0_mcast_start,
+  in0_mcast_end)` when the kernel's NOC is NOC_1); a mis-oriented rect is a torus wrap-around multicast that reaches
+  the grid's edges only. Fix 62da7b05527 / f31e1f1fec1: the kernels swap the corners when `noc_index == 1`. Reset #2
+  (same procedure), the unit test `unit_moe_persistent` now runs first; `chain_persist_g11c` re-gates on a pass.
