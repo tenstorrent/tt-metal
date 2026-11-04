@@ -24,6 +24,7 @@ from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import BonsaiGGUF
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
 
 STEMS = ("ffn_gate", "ffn_up", "ffn_down")
+ROT_GLU = os.environ.get("BONSAI_ROT_GLU", "1") == "1"
 
 
 class TernaryMLP:
@@ -58,11 +59,14 @@ class TernaryMLP:
         g = self.gate(xr, lead=lead)
         u = self.up(xr, lead=lead)
         ttnn.deallocate(xr)
-        h = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        if ROT_GLU:
+            hr = self.rot_hidden(g, u=u)  # rotates silu(g) * u in one op
+        else:
+            h = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+            hr = self.rot_hidden(h)
+            ttnn.deallocate(h)
         ttnn.deallocate(g)
         ttnn.deallocate(u)
-        hr = self.rot_hidden(h)
-        ttnn.deallocate(h)
         y = self.down(hr, lead=lead)
         ttnn.deallocate(hr)
         return y

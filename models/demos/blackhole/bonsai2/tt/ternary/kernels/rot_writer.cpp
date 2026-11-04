@@ -3,10 +3,16 @@
 // Decode rotation, writer (BRISC): the rotated block (row-major, 2048 B) into each of the C copies of x', at 2048 b.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_span.hpp"
 
 void kernel_main() {
+#ifdef ROT_COMMON
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t b = core_index(get_common_arg_val<uint32_t>(1));
+#else
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t b = get_arg_val<uint32_t>(1);
+#endif
     constexpr uint32_t C = get_compile_time_arg_val(0);
     constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(1);
     constexpr auto out_args = TensorAccessorArgs<2>();

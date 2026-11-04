@@ -69,24 +69,17 @@ class GDNStep:
         grid = device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(j % grid.x, j // grid.x) for j in range(nv)]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        # One set of runtime args for all cores (each kernel finds its head from its core index): per-core args
+        # cost the dispatcher one write per core per kernel.
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for j, c in enumerate(coords):
-            lj = self.group * (j // self.group)
-            lead_core = device.worker_core_from_logical_core(coords[lj])
-            rd[c.x][c.y] = [
-                qkv.buffer_address(),
-                z.buffer_address(),
-                ab.buffer_address(),
-                conv_state.buffer_address(),
-                rec_state.buffer_address(),
-                self.consts.buffer_address(),
-                j,
-                lead_core.x,
-                lead_core.y,
-                1 if j == lj else 0,
-            ]
-            wr[c.x][c.y] = [rec_state.buffer_address(), out.buffer_address(), j]
-            cp[c.x][c.y] = [_f32_bits(self.dt_bias[j]), _f32_bits(self.a_neg[j])] + self.consts_scalar
+        leaders = []
+        for kh in range(nv // self.group):
+            lc = device.worker_core_from_logical_core(coords[self.group * kh])
+            leaders += [lc.x, lc.y]
+        addrs = [t.buffer_address() for t in (qkv, z, ab, conv_state, rec_state, self.consts)]
+        rd_c = addrs + [grid.x] + leaders
+        wr_c = [rec_state.buffer_address(), out.buffer_address(), grid.x]
+        cp_c = self.consts_scalar + [grid.x] + [_f32_bits(v) for v in self.dt_bias] + [_f32_bits(v) for v in self.a_neg]
         rd_ct = [nv, self.qkv_tiles, ht, self.group]
         for t in (qkv, z, ab, conv_state, rec_state, self.consts):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -136,6 +129,7 @@ class GDNStep:
                     core_ranges=crs,
                     compile_time_args=rd_ct,
                     runtime_args=rd,
+                    common_runtime_args=rd_c,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -143,13 +137,15 @@ class GDNStep:
                     core_ranges=crs,
                     compile_time_args=wr_ct,
                     runtime_args=wr,
+                    common_runtime_args=wr_c,
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "step_compute.cpp",
                     core_ranges=crs,
-                    compile_time_args=[],
+                    compile_time_args=[nv],
                     runtime_args=cp,
+                    common_runtime_args=cp_c,
                     defines=list(self.compute_defines),
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,

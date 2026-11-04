@@ -11,6 +11,7 @@
 // two have read them (semaphore 0).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "../../ternary/kernels/core_span.hpp"
 
 namespace {
 constexpr uint32_t TB = 2048;  // bf16 tile bytes
@@ -42,16 +43,15 @@ void fill_row0(uint32_t tile, uint16_t v) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t qkv_addr = get_arg_val<uint32_t>(0);
-    const uint32_t z_addr = get_arg_val<uint32_t>(1);
-    const uint32_t ab_addr = get_arg_val<uint32_t>(2);
-    const uint32_t conv_addr = get_arg_val<uint32_t>(3);
-    const uint32_t st_addr = get_arg_val<uint32_t>(4);
-    const uint32_t c_addr = get_arg_val<uint32_t>(5);
-    const uint32_t j = get_arg_val<uint32_t>(6);
-    const uint32_t leader_x = get_arg_val<uint32_t>(7);
-    const uint32_t leader_y = get_arg_val<uint32_t>(8);
-    const uint32_t leader = get_arg_val<uint32_t>(9);
+    // Common args (the same on every core): qkv, z, ab, conv, state, consts, grid_x, then the NOC x, y of the first
+    // core of each key head's group. Core j (row-major logical index) owns value head j.
+    const uint32_t qkv_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t z_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t ab_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t conv_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t st_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t c_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t j = core_index(get_common_arg_val<uint32_t>(6));
 
     constexpr uint32_t NV = get_compile_time_arg_val(0);     // value heads (48)
     constexpr uint32_t QT = get_compile_time_arg_val(1);     // q (= k) width in tiles (2048 / 32 = 64)
@@ -74,6 +74,9 @@ void kernel_main() {
     constexpr uint32_t cb_sc = 9, cb_n = 10;
     constexpr uint32_t NCH = 3 * HT;  // conv chunks: q, k, v of this head
     const uint32_t kh = j / GROUP;
+    const uint32_t leader = (j % GROUP) == 0;
+    const uint32_t leader_x = get_common_arg_val<uint32_t>(7 + 2 * kh);
+    const uint32_t leader_y = get_common_arg_val<uint32_t>(8 + 2 * kh);
     auto chunk_tile = [&](uint32_t c) -> uint32_t {
         return c < HT ? kh * HT + c : (c < 2 * HT ? QT + kh * HT + (c - HT) : 2 * QT + j * HT + (c - 2 * HT));
     };

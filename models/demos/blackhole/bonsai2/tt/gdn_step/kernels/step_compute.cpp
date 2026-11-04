@@ -23,6 +23,7 @@
 #include "api/compute/sfpu_binary_bcast.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "../../ternary/kernels/core_span.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/softplus.h"
@@ -84,12 +85,15 @@ ALWI void pack_n(uint32_t n, uint32_t cb, uint32_t base) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t dt_bias = get_arg_val<uint32_t>(0);  // fp32 bits
-    const uint32_t a_neg = get_arg_val<uint32_t>(1);
-    const uint32_t eps_qk = get_arg_val<uint32_t>(2);
-    const uint32_t q_scale = get_arg_val<uint32_t>(3);
-    const uint32_t inv_hd = get_arg_val<uint32_t>(4);
-    const uint32_t eps_o = get_arg_val<uint32_t>(5);
+    // Common args (fp32 bits): eps_qk, q_scale, 1/hd, eps_o, grid_x, dt_bias[NV], a_neg[NV]; head j = core index.
+    constexpr uint32_t NV = get_compile_time_arg_val(0);
+    const uint32_t eps_qk = get_common_arg_val<uint32_t>(0);
+    const uint32_t q_scale = get_common_arg_val<uint32_t>(1);
+    const uint32_t inv_hd = get_common_arg_val<uint32_t>(2);
+    const uint32_t eps_o = get_common_arg_val<uint32_t>(3);
+    const uint32_t j = core_index(get_common_arg_val<uint32_t>(4));
+    const uint32_t dt_bias = get_common_arg_val<uint32_t>(5 + j);
+    const uint32_t a_neg = get_common_arg_val<uint32_t>(5 + NV + j);
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_decay);
 

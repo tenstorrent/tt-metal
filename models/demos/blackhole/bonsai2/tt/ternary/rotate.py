@@ -34,7 +34,8 @@ class DecodeRotation:
         )
         self.device = device
 
-    def __call__(self, x: ttnn.Tensor, debug_copy=False) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, debug_copy=False, u=None) -> ttnn.Tensor:
+        """u: rotate silu(x) * u instead of x (the MLP's gate/up product, one op instead of a mul and a rotation)."""
         device, K, B, C = self.device, self.K, self.B, self.copies
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([C, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
@@ -52,12 +53,24 @@ class DecodeRotation:
 
         rd, wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for b, c in enumerate(coords):
-            rd[c.x][c.y] = [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), b] + self.chunk_src[
-                32 * b : 32 * b + 32
-            ]
+            rd[c.x][c.y] = (
+                [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), b]
+                + self.chunk_src[32 * b : 32 * b + 32]
+                + ([u.buffer_address()] if u is not None else [])
+            )
             wr[c.x][c.y] = [out.buffer_address(), b]
+        common = self.chunk_src == list(range(K // 32))
+        rd_c, wr_c, dm_def = [], [], []
+        if common:
+            # One set of args for all cores (kernels/core_span.hpp): block b = core index.
+            rd, wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            rd_c = [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), grid.x] + (
+                [u.buffer_address()] if u is not None else [0]
+            )
+            wr_c = [out.buffer_address(), grid.x]
+            dm_def = [("ROT_COMMON", "1")]
         rd_ct = []
-        for t in (x, self.m, self.h):
+        for t in (x, self.m, self.h) + ((u,) if u is not None else ()):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         program = ttnn.ProgramDescriptor(
             kernels=[
@@ -66,6 +79,8 @@ class DecodeRotation:
                     core_ranges=crs,
                     compile_time_args=rd_ct,
                     runtime_args=rd,
+                    common_runtime_args=rd_c,
+                    defines=([("ROT_GLU", "1")] if u is not None else []) + dm_def,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -73,6 +88,8 @@ class DecodeRotation:
                     core_ranges=crs,
                     compile_time_args=[C, K * 2] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
                     runtime_args=wr,
+                    common_runtime_args=wr_c,
+                    defines=dm_def,
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -80,7 +97,8 @@ class DecodeRotation:
                     core_ranges=crs,
                     compile_time_args=[],
                     runtime_args=[],
-                    defines=[("ROT_DEBUG_COPY", "1")] if debug_copy else [],
+                    defines=([("ROT_DEBUG_COPY", "1")] if debug_copy else [])
+                    + ([("ROT_GLU", "1")] if u is not None else []),
                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
                 ),
             ],
@@ -93,6 +111,11 @@ class DecodeRotation:
                 cb(24, ttnn.bfloat16, 2048, 1),
                 cb(25, ttnn.bfloat16, 2048, 1),
                 cb(16, ttnn.bfloat16, 2048, 1),
-            ],
+            ]
+            + (
+                [cb(4, ttnn.bfloat16, 2048, 1), cb(26, ttnn.bfloat16, 2048, 1), cb(27, ttnn.bfloat16, 2048, 1)]
+                if u is not None
+                else []
+            ),
         )
-        return ttnn.generic_op([x, self.m, self.h, out], program)
+        return ttnn.generic_op([x, self.m, self.h] + ([u] if u is not None else []) + [out], program)

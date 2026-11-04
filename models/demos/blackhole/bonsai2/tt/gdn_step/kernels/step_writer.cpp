@@ -4,11 +4,12 @@
 // reads them, so neither side pops) and its 4 output tiles (c_16).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "../../ternary/kernels/core_span.hpp"
 
 void kernel_main() {
-    const uint32_t st_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_arg_val<uint32_t>(1);
-    const uint32_t j = get_arg_val<uint32_t>(2);
+    const uint32_t st_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t j = core_index(get_common_arg_val<uint32_t>(2));
     constexpr uint32_t HT = get_compile_time_arg_val(0);
     constexpr auto st_args = TensorAccessorArgs<1>();
     constexpr auto out_args = TensorAccessorArgs<st_args.next_compile_time_args_offset()>();
