@@ -455,8 +455,8 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
         my_xy, atomic_ret_val);  // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
 }
 
-// Fields a later read, write, or atomic does not program itself. Virtual channels and the
-// write direction are rewritten on each issue and stay at the values from overlay_cmd_buff_init.
+// Fields a later read, write, or atomic does not program itself. The write direction and
+// write virtual channels are rewritten on each issue.
 inline __attribute__((always_inline)) void restore_complex_cmd_buf_launch_state(uint32_t cmd_buf) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
@@ -482,6 +482,10 @@ inline __attribute__((always_inline)) void restore_complex_cmd_buf_launch_state(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
         NOC_OVERLAY_MAX_BYTES_IN_PACKET);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_EXCLUDE_REG_OFFSET / 8,
+        TT_ROCC_CMD_BUF_MCAST_EXCLUDE_REG_DEFAULT);
 }
 
 inline __attribute__((always_inline)) void overlay_cmd_buff_restore_launch_state(uint32_t atomic_ret_val) {
@@ -493,6 +497,10 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_restore_launch_state
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, NOC_OVERLAY_RD_REQ_VC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_RD_RESP_VC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_atomic_ret_operand(atomic_ret_val));
@@ -501,6 +509,9 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_restore_launch_state
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, TT_ROCC_CMD_BUF_PACKET_TAGS_REG_DEFAULT);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_EXCLUDE_REG_OFFSET / 8,
+        TT_ROCC_SIMPLE_CMD_BUF_MCAST_EXCLUDE_REG_DEFAULT);
 }
 
 // set noc local memory state for a single kernel from the global state
