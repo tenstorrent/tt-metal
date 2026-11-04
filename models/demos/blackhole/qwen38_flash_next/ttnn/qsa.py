@@ -7983,7 +7983,8 @@ class Qwen38TTNNQSA:
         _require_shape(sparse_indices, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), "QSA lane sparse indices")
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
-        if lane_constants.page_table is not None:  # PAGED: lane-local ids -> pool rows (sentinels kept)
+        # PAGED: lane-local ids -> pool rows (sentinels kept); the MTP lane verify's constants have no page table
+        if getattr(lane_constants, "page_table", None) is not None:
             from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 
             local = sparse_indices

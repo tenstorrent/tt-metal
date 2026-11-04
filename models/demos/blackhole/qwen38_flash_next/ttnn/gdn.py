@@ -4000,7 +4000,9 @@ class Qwen38TTNNGDN:
         """
 
         rows = self._validate_lane_rows_state(rows_state, state)
-        full_hidden = self._all_gather_rows(hidden_rows, rows)
+        # The lanes' real rows are B * R of the tile (every lane's block), not the per-lane R: with R the live-row
+        # gather of the verify rows body would move lane 0's rows only and zero the other lanes' rows.
+        full_hidden = self._all_gather_rows(hidden_rows, rows_state.lanes * rows)
         # The body between the gather and the result, dispatched exactly as ``forward_rows`` dispatches the single
         # stream's: the verify-rows fold's registry step (``fused.resolve_admitted("gdn_rows_scan")``, resolved once)
         # runs the fold's lanes form on a lane rows state that carries its buffers and the lanes chain

@@ -82,6 +82,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic impor
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
     WARM_TOKEN_ID,
     Qwen38PlainLaneDecoder,
+    lane_page_count,
     lane_token_ids,
     pack_buckets_from_env,
     pack_dram_bytes,
@@ -852,6 +853,47 @@ def batch_pool_token_cap(max_model_len: int, max_num_seqs: int, buckets: Sequenc
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
 
 
+def plain_lanes_max_batch(
+    prompt_len: int,
+    steps: int,
+    allocated_context: int,
+    page_size: int = 64,
+    lane_cap: int = BATCH_MAX_LANES,
+    margin: int = POOL_ADMISSION_MARGIN_BYTES,
+) -> dict[str, Any]:
+    """The largest B <= ``lane_cap`` whose lanes (each ``prompt_len`` + ``steps`` tokens, one paged pool of the demo's
+    size: scratch page, B lanes' pages, 8 spare) fit the chain's free DRAM at ``allocated_context``, from the constants
+    measured at context 32768.  ``limiting`` names what stops B + 1: ``lane_cap``, ``pool`` or ``lane_states``.  Pure
+    arithmetic: the demo test needs B before it opens the chain, so there is no live free figure to use."""
+
+    extra = allocated_context - 32768
+    free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
+    pages = lane_page_count(prompt_len, steps, page_size)
+    lane_bytes = LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE
+    pool_lane_bytes = pages * page_size * KV_BYTES_PER_TOKEN
+
+    def need(lanes: int) -> int:
+        rows = page_size * (1 + lanes * pages + 8)
+        return LANE_FIXED_BASE_32K + lanes * lane_bytes + rows * KV_BYTES_PER_TOKEN + margin
+
+    best = next((b for b in range(lane_cap, 0, -1) if need(b) <= free), 0)
+    if best == lane_cap:
+        limiting = "lane_cap"
+    else:
+        limiting = "pool" if pool_lane_bytes >= lane_bytes else "lane_states"
+    return {
+        "B": best,
+        "limiting": limiting,
+        "need_bytes": need(best),
+        "free_bytes": free,
+        "pool_bytes_per_lane": pool_lane_bytes,
+        "lane_state_bytes_per_lane": lane_bytes,
+        "margin_bytes": margin,
+        "prompt_len": prompt_len,
+        "allocated_context": allocated_context,
+    }
+
+
 def check_block_size(block_size: Any) -> int:
     """Batch mode's page size is vLLM's block size: a power of two >= 32 (the QSA page scatter works in 32-row slabs),
     at most ``BATCH_MAX_BLOCK_SIZE``; anything else is refused naming the knob (``--block-size``)."""
@@ -982,6 +1024,66 @@ class _ModelCapabilities:
             "supports_async_decode": ASYNC_DECODE,
             "supports_sample_on_device": True,
         }
+
+
+def prepare_vllm_construction(hf_config: Any, mesh_device: Any, max_seq_len: int) -> tuple[Any, int]:
+    """The checkpoint, cache layout and cache identity for ``max_seq_len``'s resident context, and the library's
+    prepared construction; returns ``(prepared, allocated_context)``.  The checkpoint and cache rules are
+    ``Qwen38ForCausalLM.initialize_vllm_model``'s."""
+
+    allocated_context = resident_allocated_context(max_seq_len)
+    physical_ids = tuple(int(device_id) for device_id in mesh_device.get_device_ids())
+    # The checkpoint: --model when vLLM was given a directory, else HF_MODEL (a directory or a repo id), else
+    # --model as a repo id, else the default repo; a repo id resolves to the pinned revision in the hub cache.
+    name_or_path = getattr(hf_config, "_name_or_path", None)
+    if not (name_or_path and Path(name_or_path).is_dir()):
+        name_or_path = os.environ.get("HF_MODEL") or name_or_path or HF_REPO_ID
+    try:
+        checkpoint_root = checkpoint_directory({"HF_MODEL": name_or_path}, revision=PINNED_CHECKPOINT_REVISION)
+    except FileNotFoundError as error:
+        raise ValueError(f"{error} (vLLM's --model directory, else HF_MODEL, names the checkpoint)") from error
+    cache_root = os.environ.get("TT_CACHE_PATH")
+    if not cache_root:
+        raise ValueError(
+            "TT_CACHE_PATH must name the cache root: <root>/caches/<label>/{components,model-io} and "
+            "<root>/caches/bf4-experts, the chat server launcher's layout"
+        )
+    caches = Path(cache_root) / "caches"
+    label = f"c{allocated_context}-vllm"
+    corpus_root = os.environ.get("QWEN38_BF4_CORPUS")
+    corpus_verification = os.environ.get("QWEN38_BF4_CORPUS_VERIFICATION")
+    extension = Path(ttnn._ttnn.__file__).resolve()
+    tt_metal_sha = os.environ.get("QWEN38_TT_METAL_SHA")
+    if tt_metal_sha and (len(tt_metal_sha) != 40 or any(c not in "0123456789abcdef" for c in tt_metal_sha)):
+        raise ValueError(f"QWEN38_TT_METAL_SHA must be lowercase 40-hex, got {tt_metal_sha!r}")
+    runtime_sha256 = sha256_of(extension)
+    # The identity's sha without git: the launcher's pin, else the checkout head, else the extension digest (an
+    # image with no .git or git binary); the digest already keys the identity, so each build keeps one namespace.
+    if tt_metal_sha:
+        source = "QWEN38_TT_METAL_SHA"
+    else:
+        try:
+            tt_metal_sha, source = git_identity(Path(ttnn.__file__).resolve().parents[2])["head"], "checkout head"
+        except (RuntimeAdmissionError, FileNotFoundError):
+            tt_metal_sha, source = runtime_sha256[:40], "runtime extension digest"
+    logger.info(f"tt_metal_sha {tt_metal_sha} ({source})")
+    # The library's construction gate is read at call time; set here so vLLM's launch needs no export.
+    os.environ.setdefault("QWEN38_HARDWARE_MODE", MODE)
+    prepared = prepare_live_decode_diagnostic(
+        checkpoint_root=checkpoint_root,
+        component_cache_root=caches / label / "components",
+        routed_bf4_scratch_root=caches / "bf4-experts",
+        model_io_cache_root=caches / label / "model-io",
+        tt_metal_sha=tt_metal_sha,
+        runtime_extension=extension,
+        runtime_sha256=runtime_sha256,
+        allocated_context=allocated_context,
+        physical_ids=physical_ids,
+        bf4_corpus_root=None if corpus_root is None else Path(corpus_root),
+        bf4_corpus_verification=None if corpus_verification is None else Path(corpus_verification),
+        marker=logger.info,
+    )
+    return prepared, allocated_context
 
 
 class Qwen38ForCausalLM:
@@ -1178,58 +1280,7 @@ class Qwen38ForCausalLM:
             )
         if mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError(f"Qwen3.8 needs a Blackhole mesh, got {mesh_device.arch()}")
-        allocated_context = resident_allocated_context(max_seq_len)
-        physical_ids = tuple(int(device_id) for device_id in mesh_device.get_device_ids())
-        # The checkpoint: --model when vLLM was given a directory, else HF_MODEL (a directory or a repo id), else
-        # --model as a repo id, else the default repo; a repo id resolves to the pinned revision in the hub cache.
-        name_or_path = getattr(hf_config, "_name_or_path", None)
-        if not (name_or_path and Path(name_or_path).is_dir()):
-            name_or_path = os.environ.get("HF_MODEL") or name_or_path or HF_REPO_ID
-        try:
-            checkpoint_root = checkpoint_directory({"HF_MODEL": name_or_path}, revision=PINNED_CHECKPOINT_REVISION)
-        except FileNotFoundError as error:
-            raise ValueError(f"{error} (vLLM's --model directory, else HF_MODEL, names the checkpoint)") from error
-        cache_root = os.environ.get("TT_CACHE_PATH")
-        if not cache_root:
-            raise ValueError(
-                "TT_CACHE_PATH must name the cache root: <root>/caches/<label>/{components,model-io} and "
-                "<root>/caches/bf4-experts, the chat server launcher's layout"
-            )
-        caches = Path(cache_root) / "caches"
-        label = f"c{allocated_context}-vllm"
-        corpus_root = os.environ.get("QWEN38_BF4_CORPUS")
-        corpus_verification = os.environ.get("QWEN38_BF4_CORPUS_VERIFICATION")
-        extension = Path(ttnn._ttnn.__file__).resolve()
-        tt_metal_sha = os.environ.get("QWEN38_TT_METAL_SHA")
-        if tt_metal_sha and (len(tt_metal_sha) != 40 or any(c not in "0123456789abcdef" for c in tt_metal_sha)):
-            raise ValueError(f"QWEN38_TT_METAL_SHA must be lowercase 40-hex, got {tt_metal_sha!r}")
-        runtime_sha256 = sha256_of(extension)
-        # The identity's sha without git: the launcher's pin, else the checkout head, else the extension digest (an
-        # image with no .git or git binary); the digest already keys the identity, so each build keeps one namespace.
-        if tt_metal_sha:
-            source = "QWEN38_TT_METAL_SHA"
-        else:
-            try:
-                tt_metal_sha, source = git_identity(Path(ttnn.__file__).resolve().parents[2])["head"], "checkout head"
-            except (RuntimeAdmissionError, FileNotFoundError):
-                tt_metal_sha, source = runtime_sha256[:40], "runtime extension digest"
-        logger.info(f"tt_metal_sha {tt_metal_sha} ({source})")
-        # The library's construction gate is read at call time; set here so vLLM's launch needs no export.
-        os.environ.setdefault("QWEN38_HARDWARE_MODE", MODE)
-        prepared = prepare_live_decode_diagnostic(
-            checkpoint_root=checkpoint_root,
-            component_cache_root=caches / label / "components",
-            routed_bf4_scratch_root=caches / "bf4-experts",
-            model_io_cache_root=caches / label / "model-io",
-            tt_metal_sha=tt_metal_sha,
-            runtime_extension=extension,
-            runtime_sha256=runtime_sha256,
-            allocated_context=allocated_context,
-            physical_ids=physical_ids,
-            bf4_corpus_root=None if corpus_root is None else Path(corpus_root),
-            bf4_corpus_verification=None if corpus_verification is None else Path(corpus_verification),
-            marker=logger.info,
-        )
+        prepared, allocated_context = prepare_vllm_construction(hf_config, mesh_device, max_seq_len)
         construction = construct_live_decode_diagnostic(
             prepared,
             mesh_device=mesh_device,

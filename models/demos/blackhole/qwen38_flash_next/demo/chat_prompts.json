@@ -1,0 +1,9 @@
+{
+ "_note": "the 4 prompts of the MTP chat bench (mtpbench/client2.py); the warm-up prompt is P3",
+ "prompts": {
+  "P1": "“Well, Prince, so Genoa and Lucca are now just family estates of the\nBuonapartes. But I warn you, if you don’t tell me\n\nThe secret pass key is 58213. Remember it.\n\n that this means war,\nif you still try to defend the infamies and horrors perpetrated by that\nAntichrist—I really believe he is Antichrist—I will have\n\nWhat is the secret pass key mentioned in the text above? Answer with the number first. Then summarize the text above in three sentences.",
+  "P2": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? Think step by step.",
+  "P3": "Write a Python function that returns the n-th Fibonacci number using memoization, then explain its time complexity.",
+  "P4": "Explain how a transformer language model generates text one token at a time. Cover embeddings, attention, the feed-forward layers and sampling. Use about 250 words."
+ }
+}

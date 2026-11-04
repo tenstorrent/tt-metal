@@ -117,7 +117,9 @@ def test_selection_rows_is_the_decode_selection_program_on_the_tile(expect_error
     guard = "if self._rows_fused is not None and rows == CHUNK_ROWS:"
     assert guard in hook and "self._rows_fused.selection_rows(" in hook
     assert hook.index("topk_large_indices") < hook.index(guard) < hook.index("starts = ttnn.bitwise_left_shift(")
-    assert "constants.block_offsets_rows, chunk.row_keep_bits, chunk.row_fill" in hook
+    # the live row count reaches the program so the rows past it are not selected
+    tail = "constants.block_offsets_rows,\n                chunk.row_keep_bits,\n                chunk.row_fill,\n                live_rows=live_rows,"
+    assert tail in hook
 
 
 def test_score_pages_is_a_default_bitwise_data_movement_program() -> None:

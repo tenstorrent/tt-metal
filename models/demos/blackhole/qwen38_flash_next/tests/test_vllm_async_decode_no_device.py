@@ -289,6 +289,7 @@ def test_the_capability_follows_the_knob_read_at_import() -> None:
 
 
 def test_knob_off_is_the_old_behaviour(monkeypatch, expect_error) -> None:
+    monkeypatch.setenv("QWEN38_RING", "0")  # explicit, so this no-device test never probes the device cluster
     monkeypatch.setattr(vllm_module, "ASYNC_DECODE", False)
     monkeypatch.setattr(batch_tests, "FakeDecoder", AsyncDecoder)
     rig = Rig(monkeypatch)

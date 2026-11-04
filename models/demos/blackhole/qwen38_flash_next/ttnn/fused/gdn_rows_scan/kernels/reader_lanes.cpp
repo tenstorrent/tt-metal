@@ -6,7 +6,8 @@
 // row t = lane * R + j is lane u's row j.  Per item this reader feeds the compute exactly what the single form's
 // reader feeds it for a 32-row tile whose rows 0..R-1 are the real ones, with three differences:
 //   - the state tiles are lane u's ([B, 12, 128, 128] fp32: page (lane * 12 + head) * 16 + kt * 4 + vt);
-//   - the FIR history tile is lane u's ([1, B, 32, 2560] bf16: page lane * 80 + column tile), and after the whole-tile
+//   - the FIR history tile is lane u's ([1, B, 32, 2560] bf16: page lane * QKV tiles + column tile), and after the
+//   whole-tile
 //     shifted-window assembly (slot i, row t = window row t + i, window = [history rows 0..2 | projection rows
 //     0..31]) lane u's first rows are PATCHED: slot with shift s = 3 - i, rows t = lane * R + j for j < min(s, R) take
 //     lane u's history rows 3 - s + j (the assembly gave them lane u-1's projection rows).  Lane 0 needs no patch;
@@ -34,7 +35,7 @@ constexpr uint32_t LANES = get_compile_time_arg_val(2);
 constexpr uint32_t HEADS = SCAN_HEADS, HT = 4, QK_TILES = 2 * HT, NT = QK_TILES + VBT, ST = HT * VBT, HISTORY_ROWS = 3;
 constexpr uint32_t K_TILE0 = SCAN_K_TILE0, V_TILE0 = SCAN_V_TILE0, Z_TILE0 = SCAN_Z_TILE0, A_TILE = SCAN_A_TILE,
                    B_TILE = SCAN_B_TILE;
-constexpr uint32_t QKV_TILES = 80;  // column tiles of one lane's history tile row
+constexpr uint32_t QKV_TILES = Z_TILE0;  // column tiles of one lane's history tile row (80 at TP=4, 40 at TP=8)
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096;
 constexpr uint32_t FACE_BYTES = fused_rows::FACE_BYTES, HALF_ROW = fused_rows::HALF_ROW_BYTES, FACE_ROWS = 16;
 static_assert(VBT == HT, "the lanes form runs the whole head on one core");

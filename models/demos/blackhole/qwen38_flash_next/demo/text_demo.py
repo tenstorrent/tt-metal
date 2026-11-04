@@ -29,21 +29,28 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.chat import EOS_TOKEN_IDS, TOKENIZER_SIZE, Qwen38OfficialChatTemplate
 from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import (
+    _BOOK_TOKENS,
     build_prompt_ids,
     build_user_prompt_ids,
     load_context_text,
 )
+from models.demos.blackhole.qwen38_flash_next.demo.mtp_demo import open_mtp_chain, run_mtp_lanes, run_mtp_single
 from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
     Qwen38PlainLaneDecoder,
     chain_warm_hook,
     lane_page_count,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import resolve_route
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
+    Qwen38ChatChainError,
+    Qwen38ChatSession,
+    resolve_route,
+)
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lanes_session import Qwen38LanesSession
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM, plain_lanes_max_batch
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import FABRIC_CONFIG, MESH_SHAPE, fabric_config
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
@@ -111,8 +118,15 @@ def greedy_sampling_params() -> SimpleNamespace:
     )
 
 
-def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_tokens: int, profiler: BenchmarkProfiler):
-    """Prefill, then greedy decode for the fixed count (no stop on EOS); returns (tokens, ttft_s, step_seconds)."""
+def generate(
+    model: Qwen38ForCausalLM,
+    prompt_ids: list[int],
+    max_generated_tokens: int,
+    profiler: BenchmarkProfiler,
+    stop_ids: tuple[int, ...] = (),
+):
+    """Prefill, then greedy decode for the fixed count (no stop on EOS unless ``stop_ids`` is given; the stop id is kept
+    as the last token); returns (tokens, ttft_s, step_seconds)."""
 
     host_argmax = host_argmax_route()
     sampling = {} if host_argmax else {"sampling_params": greedy_sampling_params()}
@@ -143,6 +157,8 @@ def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_toke
         step_tokens = torch.empty((1, 1), dtype=torch.int32)
         step_image = step_tokens.numpy()
     for step in range(1, max_generated_tokens):
+        if generated[-1] in stop_ids:
+            break
         started = time.perf_counter()
         if lean:
             step_image[0, 0] = generated[-1]
@@ -308,6 +324,252 @@ def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs, tmp_p
         )
 
 
+MTP_DRAFTS = 4
+CHAT_MAX_NEW_TOKENS = 512  # the chat prompts stop at EOS; the cap only guards a runaway
+CHAT_WARMUP_TOKENS = 48
+CHAT_PROMPT_FILE = Path(__file__).with_name("chat_prompts.json")  # the 4 prompts of the MTP chat bench (client2.py)
+CHAT_NAMES = ("P1", "P2", "P3", "P4")  # passage summary, GSM8K, Fibonacci function, transformer explanation
+
+
+def build_chat_prompts(checkpoint):
+    """(template, [(name, ids)], warm-up ids): the bench's chat messages through the model's chat template with thinking
+    off, which is what the chat server renders for them.  The warm-up prompt is P3 (as the bench's)."""
+
+    template = Qwen38OfficialChatTemplate(checkpoint)
+    texts = json.loads(CHAT_PROMPT_FILE.read_text(encoding="utf-8"))["prompts"]
+
+    def ids_of(name):
+        rendered = template.render([{"role": "user", "content": texts[name]}], enable_thinking=False)
+        return [int(token) for token in rendered.input_ids[0].tolist()]
+
+    return template, [(name, ids_of(name)) for name in CHAT_NAMES], ids_of("P3")
+
+
+def chat_row(name, isl, ttft_s, tokens, decode_s, passes, accepted, finish):
+    return {
+        "prompt": name,
+        "isl": isl,
+        "ttft_s": ttft_s,
+        "generated_tokens": tokens,
+        "decode_s": decode_s,
+        "decode_ms_per_token": 1000.0 * decode_s / tokens,
+        "tok_s": tokens / decode_s,
+        "passes": passes,
+        "accepted_drafts": accepted,
+        "tokens_per_pass": tokens / passes,
+        "finish": finish,
+    }
+
+
+def chat_totals(rows):
+    tokens = sum(row["generated_tokens"] for row in rows)
+    decode_s = sum(row["decode_s"] for row in rows)
+    passes = sum(row["passes"] for row in rows)
+    return {
+        "generated_tokens": tokens,
+        "decode_s": decode_s,
+        "decode_ms_per_token": 1000.0 * decode_s / tokens,
+        "tok_s": tokens / decode_s,
+        "passes": passes,
+        "accepted_drafts": sum(row["accepted_drafts"] for row in rows),
+        "tokens_per_pass": tokens / passes,
+    }
+
+
+def log_chat_table(label, rows, totals):
+    logger.info(f"{label}: prompt ISL TTFT_s tokens decode_s ms/tok tok/s passes accepted tok/pass finish")
+    for row in rows:
+        logger.info(
+            f"{label}: {row['prompt']} {row['isl']} {row['ttft_s']:.3f} {row['generated_tokens']} {row['decode_s']:.4f} "
+            f"{row['decode_ms_per_token']:.2f} {row['tok_s']:.1f} {row['passes']} {row['accepted_drafts']} "
+            f"{row['tokens_per_pass']:.2f} {row['finish']}"
+        )
+    logger.info(
+        f"{label}: ALL tokens={totals['generated_tokens']} decode_s={totals['decode_s']:.4f} "
+        f"ms/tok={totals['decode_ms_per_token']:.2f} tok/s={totals['tok_s']:.1f} passes={totals['passes']} "
+        f"accepted={totals['accepted_drafts']} tok/pass={totals['tokens_per_pass']:.2f}"
+    )
+
+
+def write_chat_report(tmp_path, record_property, schema, extra):
+    report_path = tmp_path / "fixed-length-generation.json"
+    report_path.write_text(json.dumps({"schema": schema, **extra}, indent=2) + "\n", encoding="utf-8")
+    record_property("fixed_length_generation_report", str(report_path))
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param("chat_mtp4", id="chat_mtp4", marks=pytest.mark.timeout(3600)),
+        pytest.param("chat_mtp3", id="chat_mtp3", marks=pytest.mark.timeout(3600)),
+        pytest.param("determinism", id="determinism_128_mtp4", marks=pytest.mark.timeout(2400)),
+    ],
+)
+def test_demo_text_mtp(mesh_device, case, tmp_path, record_property):
+    """Batch 1 with MTP speculative decode (4 drafts, greedy): the chat server's chain and session without the server.
+    chat_mtp4: the 4 chat prompts one after another (session reset before each), each until EOS or 512 tokens, after
+    one uncounted warm-up prompt.  determinism_128_mtp4: the first chat prompt twice, 128 tokens, equal streams."""
+
+    drafts = 3 if case == "chat_mtp3" else MTP_DRAFTS
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+
+    max_seq_len = CONTEXTS[0] - RESIDENT_CONTEXT_HEADROOM
+    template, prompts, warmup_ids = build_chat_prompts(checkpoint)
+    tokenizer = template.tokenizer
+    stop_ids = tuple(EOS_TOKEN_IDS)
+
+    mesh_device.enable_program_cache()
+    started = time.perf_counter()
+    try:
+        chain = open_mtp_chain(mesh_device, checkpoint, max_seq_len, drafts)
+    except Qwen38ChatChainError as error:
+        pytest.skip(f"MTP admission refused at context {CONTEXTS[0]}: {error}")
+    logger.info(f"MTP chain ready in {time.perf_counter() - started:.1f} s")
+    try:
+        session = Qwen38ChatSession(chain, template, prefill_mode="chunked")
+        run_mtp_single(session, warmup_ids, CHAT_WARMUP_TOKENS, stop_ids=stop_ids)
+        if case == "determinism":
+            runs = [run_mtp_single(session, prompts[0][1], 128, stop_ids=stop_ids) for _ in range(2)]
+            for index, run in enumerate(runs):
+                logger.info(
+                    f"determinism run {index}: {len(run['tokens'])} tokens, TTFT {run['ttft_s']:.3f} s, decode "
+                    f"{run['decode_ms_per_token']:.2f} ms/tok, tokens/pass {run['chain_tokens_per_pass']:.3f}"
+                )
+            write_chat_report(
+                tmp_path,
+                record_property,
+                "qwen38-fixed-length-demo/v1-mtp-chat",
+                {
+                    "drafts": drafts,
+                    "prompt": prompts[0][0],
+                    "runs": [
+                        {"generated_token_ids": r["tokens"], **{k: v for k, v in r.items() if k != "tokens"}}
+                        for r in runs
+                    ],
+                },
+            )
+            assert not session.poisoned
+            assert runs[0]["tokens"] == runs[1]["tokens"], "run 1 differs from run 0"
+            assert 8 < len(runs[0]["tokens"]) <= 128 and len(set(runs[0]["tokens"])) > 1
+            return
+        runs = []
+        for name, ids in prompts:
+            runs.append(run_mtp_single(session, ids, CHAT_MAX_NEW_TOKENS, stop_ids=stop_ids))
+            logger.info(f"{name}: {tokenizer.decode(runs[-1]['tokens'], skip_special_tokens=True)!r}")
+        assert not session.poisoned
+    finally:
+        chain.close()
+
+    # tokens/pass as the chat bench counts it: generated tokens over the chain's passes (the bootstrap pass included)
+    rows = [
+        chat_row(
+            name,
+            len(ids),
+            run["ttft_s"],
+            run["generated_tokens"],
+            run["decode_s"],
+            run["chain_passes"],
+            run["chain_accepted_drafts"],
+            run["finish"],
+        )
+        for (name, ids), run in zip(prompts, runs)
+    ]
+    totals = chat_totals(rows)
+    log_chat_table(f"chat_mtp{drafts}", rows, totals)
+    write_chat_report(
+        tmp_path,
+        record_property,
+        "qwen38-chat-demo/v1-mtp",
+        {
+            "drafts": drafts,
+            "max_new_tokens": CHAT_MAX_NEW_TOKENS,
+            "stop_ids": list(stop_ids),
+            "rows": rows,
+            "totals": totals,
+            "runs": [
+                {
+                    "prompt": name,
+                    "generated_token_ids": run["tokens"],
+                    "decoded": tokenizer.decode(run["tokens"], skip_special_tokens=True),
+                }
+                for (name, _ids), run in zip(prompts, runs)
+            ],
+        },
+    )
+    for row, run in zip(rows, runs):
+        assert row["finish"] in ("stop", "length"), (row["prompt"], row["finish"])
+        assert row["generated_tokens"] > 8 and len(set(run["tokens"])) > 1, (row["prompt"], run["tokens"][:8])
+    assert 1.0 < totals["tokens_per_pass"] <= drafts + 1, totals["tokens_per_pass"]
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("case", [pytest.param("chat_plain", id="chat_plain", marks=pytest.mark.timeout(3600))])
+def test_demo_text_chat_plain(mesh_device, case, tmp_path, record_property):
+    """The same 4 chat prompts as chat_mtp4 on the normal batch-1 demo chain without MTP: each until EOS or 512 tokens,
+    after one uncounted warm-up prompt, so the MTP speedup is measured on the same prompts."""
+
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+
+    max_seq_len = CONTEXTS[0] - RESIDENT_CONTEXT_HEADROOM
+    template, prompts, warmup_ids = build_chat_prompts(checkpoint)
+    tokenizer = template.tokenizer
+    stop_ids = tuple(EOS_TOKEN_IDS)
+
+    mesh_device.enable_program_cache()
+    profiler = BenchmarkProfiler()
+    model = Qwen38ForCausalLM.initialize_vllm_model(
+        SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
+    )
+    runs = []
+    try:
+        generate(model, warmup_ids, CHAT_WARMUP_TOKENS, profiler, stop_ids)
+        for name, ids in prompts:
+            runs.append(generate(model, ids, CHAT_MAX_NEW_TOKENS, profiler, stop_ids))
+            logger.info(f"{name}: {tokenizer.decode(runs[-1][0], skip_special_tokens=True)!r}")
+    finally:
+        model.release_persistent_capture()
+
+    rows = []
+    for (name, ids), (tokens, ttft, steps) in zip(prompts, runs):
+        finish = "stop" if tokens[-1] in stop_ids else "length"
+        # one pass per decode step; the first token comes from the prefill, so the stream has len(steps) + 1 tokens
+        rows.append(chat_row(name, len(ids), ttft, len(tokens), sum(steps), len(steps), 0, finish))
+    totals = chat_totals(rows)
+    log_chat_table("chat_plain", rows, totals)
+    write_chat_report(
+        tmp_path,
+        record_property,
+        "qwen38-chat-demo/v1-plain",
+        {
+            "max_new_tokens": CHAT_MAX_NEW_TOKENS,
+            "stop_ids": list(stop_ids),
+            "rows": rows,
+            "totals": totals,
+            "runs": [
+                {
+                    "prompt": name,
+                    "generated_token_ids": tokens,
+                    "decoded": tokenizer.decode(tokens, skip_special_tokens=True),
+                }
+                for (name, _ids), (tokens, _ttft, _steps) in zip(prompts, runs)
+            ],
+        },
+    )
+    for row, (tokens, _ttft, _steps) in zip(rows, runs):
+        assert row["generated_tokens"] > 8 and len(set(tokens)) > 1, (row["prompt"], tokens[:8])
+
+
 BATCH_PAGE_SIZE = 64
 BATCH_EXACT_PREFIX = 8
 DRIFT_WINDOW = 16
@@ -335,6 +597,17 @@ def batch_pool_pages(prompt_lens: list[int], max_generated_tokens: int, page_siz
         pytest.param(16384, 8, id="batched_16k_b8", marks=pytest.mark.timeout(5400)),
         pytest.param(32768, 8, id="batched_32k_b8", marks=pytest.mark.timeout(7200)),
         pytest.param(65536, 8, id="batched_64k_b8", marks=pytest.mark.timeout(9000)),
+        pytest.param(128, None, id="batched_128_bmax", marks=pytest.mark.timeout(5400)),
+        pytest.param(256, None, id="batched_256_bmax", marks=pytest.mark.timeout(5400)),
+        pytest.param(1024, None, id="batched_1k_bmax", marks=pytest.mark.timeout(5400)),
+        pytest.param(2048, None, id="batched_2k_bmax", marks=pytest.mark.timeout(5400)),
+        pytest.param(4096, None, id="batched_4k_bmax", marks=pytest.mark.timeout(7200)),
+        pytest.param(8192, None, id="batched_8k_bmax", marks=pytest.mark.timeout(7200)),
+        pytest.param(16384, None, id="batched_16k_bmax", marks=pytest.mark.timeout(9000)),
+        pytest.param(32768, None, id="batched_32k_bmax", marks=pytest.mark.timeout(10800)),
+        pytest.param(65536, None, id="batched_64k_bmax", marks=pytest.mark.timeout(14400)),
+        pytest.param(131072, None, id="batched_128k_bmax", marks=pytest.mark.timeout(21600)),
+        pytest.param(262144, None, id="batched_256k_bmax", marks=pytest.mark.timeout(28800)),
     ],
 )
 def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_property):
@@ -357,6 +630,26 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
     context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
+    bmax_record = None
+    if batch_size is None:
+        bmax_record = plain_lanes_max_batch(prompt_len, max_generated_tokens, allocated_context, BATCH_PAGE_SIZE)
+        batch_size = bmax_record["B"]
+        # each user reads its own non-overlapping excerpt, so the book text also caps B
+        render = lambda content: template.render([{"role": "user", "content": content}], enable_thinking=False).text
+        _, info0 = build_prompt_ids(tokenizer, render, config, context_text, prompt_len)
+        book_cap = len(_BOOK_TOKENS[context_text]) // info0["context_tokens"]
+        bmax_record["book_cap"] = book_cap
+        if book_cap < batch_size:
+            batch_size = book_cap
+            bmax_record["B"] = book_cap
+            bmax_record["limiting"] = "book_text"
+        if os.environ.get("QWEN38_BMAX_OVERRIDE"):  # the model is an estimate: a real out-of-memory B is retried lower
+            batch_size = int(os.environ["QWEN38_BMAX_OVERRIDE"])
+            bmax_record["override"] = batch_size
+        logger.info(f"max batch B={batch_size} limited by {bmax_record['limiting']}: {bmax_record}")
+        record_property("bmax_record", json.dumps(bmax_record))
+        assert batch_size >= 1, f"no lane fits at ISL {prompt_len}, context {allocated_context}: {bmax_record}"
+
     built = [
         build_user_prompt_ids(
             tokenizer,
@@ -479,6 +772,7 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
             {
                 "schema": "qwen38-batched-demo/v1",
                 "batch_size": batch_size,
+                "bmax_record": bmax_record,
                 "seqlen": seqlen,
                 "prompt_len": prompt_len,
                 "allocated_context": allocated_context,
@@ -532,3 +826,299 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
             input_sequence_length=prompt_len,
             output_sequence_length=max_generated_tokens,
         )
+
+
+MTP_LANES = 8
+MTP_LANE_DRAFTS = 3  # 8 lanes x (3 + 1) rows fill the 32-row tile; 4 drafts do not fit
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{**DEVICE_PARAMS, "num_command_queues": 1}], indirect=True
+)  # the lanes' one-queue form
+@pytest.mark.parametrize(
+    "seqlen",
+    [
+        pytest.param(128, id="batched_128_b8_mtp3", marks=pytest.mark.timeout(5400)),
+        pytest.param(1024, id="batched_1k_b8_mtp3", marks=pytest.mark.timeout(5400)),
+        pytest.param(4096, id="batched_4k_b8_mtp3", marks=pytest.mark.timeout(5400)),
+        pytest.param(8192, id="batched_8k_b8_mtp3", marks=pytest.mark.timeout(5400)),
+        pytest.param(16384, id="batched_16k_b8_mtp3", marks=pytest.mark.timeout(5400)),
+        pytest.param(32768, id="batched_32k_b8_mtp3", marks=pytest.mark.timeout(7200)),
+        pytest.param(65536, id="batched_64k_b8_mtp3", marks=pytest.mark.timeout(9000)),
+    ],
+)
+def test_demo_text_batched_mtp(mesh_device, seqlen, tmp_path, record_property):
+    """8 users, each with its own prompt, decoded together by the MTP lane scheduler (3 drafts): 128 tokens per user
+    (token 1 from the admission, the rest from the passes).  Each prompt is first run alone on the same chain as the
+    reference for the lane's first tokens."""
+
+    batch_size, drafts, max_generated_tokens = MTP_LANES, MTP_LANE_DRAFTS, 128
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH to the cache root (the book download goes to <root>/demo-context)")
+
+    allocated_context = min(context for context in CONTEXTS if context >= seqlen)
+    max_seq_len = allocated_context - RESIDENT_CONTEXT_HEADROOM
+    prompt_len = min(seqlen, max_seq_len - max_generated_tokens)
+
+    template = Qwen38OfficialChatTemplate(checkpoint)
+    tokenizer = template.tokenizer
+    config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
+    built = [
+        build_user_prompt_ids(
+            tokenizer,
+            lambda content: template.render([{"role": "user", "content": content}], enable_thinking=False).text,
+            config,
+            context_text,
+            prompt_len,
+            user,
+        )
+        for user in range(batch_size)
+    ]
+    prompts = [ids for ids, _ in built]
+    infos = [info for _, info in built]
+    keys = [info["pass_key"] for info in infos]
+    assert len(set(keys)) == batch_size and len({tuple(p) for p in prompts}) == batch_size
+
+    mesh_device.enable_program_cache()
+    started = time.perf_counter()
+    lanes_session = Qwen38LanesSession(lanes=batch_size, drafts=drafts, marker=logger.info)
+    chain = None
+    try:
+        try:
+            chain = open_mtp_chain(mesh_device, checkpoint, max_seq_len, drafts, lanes_session=lanes_session)
+        except Qwen38ChatChainError as error:
+            pytest.skip(f"MTP lanes admission refused at context {allocated_context}: {error}")
+        model_ready_s = time.perf_counter() - started
+        logger.info(f"MTP lanes chain ready in {model_ready_s:.1f} s; pass keys {keys}")
+        session = Qwen38ChatSession(chain, template, prefill_mode="chunked")
+        references = []
+        for user, prompt in enumerate(prompts):  # single-stream runs on the same chain form, before the lane capture
+            reference = run_mtp_single(session, prompt, max_generated_tokens)
+            references.append(reference)
+            logger.info(
+                f"reference user {user}: ttft {reference['ttft_s']:.3f} s, {reference['decode_ms_per_token']:.2f} "
+                f"ms/tok, tokens/pass {reference['tokens_per_pass']:.3f}, {reference['tokens'][:8]}..."
+            )
+        session.reset()
+        lanes_session.capture(chain, session)
+        run = run_mtp_lanes(lanes_session, prompts, drafts, max_generated_tokens)
+        assert not session.poisoned
+    except BaseException:  # the mesh close after a failed lane run can take minutes: keep the cause in the log
+        logger.exception("MTP lanes run failed")
+        raise
+    finally:
+        if chain is not None:
+            lanes_session.close()
+            chain.close()
+
+    results = []
+    for user, row in enumerate(run["lanes_rows"]):
+        out, ref = row["tokens"], references[user]["tokens"]
+        diffs = [i for i in range(min(len(out), len(ref))) if out[i] != ref[i]]
+        decoded = tokenizer.decode(out, skip_special_tokens=True)
+        leaks = [other for other in range(batch_size) if other != user and keys[other] in decoded]
+        results.append(
+            {
+                **{k: v for k, v in row.items() if k != "tokens"},
+                "user": user,
+                "pass_key": keys[user],
+                "own_key_found": keys[user] in decoded,
+                "leaked_keys_of_users": leaks,
+                "exact_match": len(out) == len(ref) and not diffs,
+                "first_diff_index": diffs[0] if diffs else None,
+                "prefix_match": out[:BATCH_EXACT_PREFIX] == ref[:BATCH_EXACT_PREFIX],
+                "tokens": out,
+                "reference_tokens": ref,
+                "reference_ttft_s": references[user]["ttft_s"],
+                "decoded": decoded,
+            }
+        )
+        logger.info(
+            f"user {user}: {len(out)} tokens {row['finish']} ttft own {row['ttft_own_prefill_s']:.3f} s / from batch "
+            f"start {row['ttft_from_batch_start_s']:.3f} s | passes {row['passes']} tokens/pass "
+            f"{row['tokens_per_pass']:.3f} | vs single K={drafts}: exact={'yes' if results[-1]['exact_match'] else 'no'} "
+            f"first_diff={results[-1]['first_diff_index']} | own key {'found' if results[-1]['own_key_found'] else 'MISSING'} "
+            f"leaks {leaks}"
+        )
+    exact = sum(r["exact_match"] for r in results)
+    mean_ttft = sum(r["ttft_own_prefill_s"] for r in results) / batch_size
+    logger.info(
+        f"B={batch_size} MTP k={drafts} ISL {prompt_len} (ctx {allocated_context}) | mean TTFT {mean_ttft:.3f} s/user "
+        f"(last lane {max(r['ttft_from_batch_start_s'] for r in results):.3f} s from batch start) | pass "
+        f"{run['pass_ms_mean']:.2f} ms (median {run['pass_ms_median']:.2f}) | decode "
+        f"{run['decode_ms_per_token_per_user']:.2f} ms/tok/user | {run['per_user_tok_s']:.2f} t/s/u | aggregate "
+        f"{run['aggregate_tok_s']:.1f} tok/s | tokens/pass {run['tokens_per_pass_mean']:.3f} | exact vs single "
+        f"{exact}/{batch_size} | own key {sum(r['own_key_found'] for r in results)}/{batch_size} | model ready "
+        f"{model_ready_s:.1f} s"
+    )
+
+    report_path = tmp_path / "batched-generation.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": "qwen38-batched-demo/v1-mtp",
+                "batch_size": batch_size,
+                "drafts": drafts,
+                "seqlen": seqlen,
+                "prompt_len": prompt_len,
+                "allocated_context": allocated_context,
+                "prompt_infos": infos,
+                "model_ready_s": model_ready_s,
+                "lanes_admission": lanes_session.admission,
+                "mean_ttft_own_prefill_s": mean_ttft,
+                "pass_ms": run["pass_ms"],
+                "pass_ms_mean": run["pass_ms_mean"],
+                "pass_ms_median": run["pass_ms_median"],
+                "decode_window_s": run["decode_window_s"],
+                "decode_ms_per_token_per_user": run["decode_ms_per_token_per_user"],
+                "decode_tok_s_u": run["per_user_tok_s"],
+                "aggregate_decode_tok_s": run["aggregate_tok_s"],
+                "tokens_per_pass_mean": run["tokens_per_pass_mean"],
+                "exact_users": exact,
+                "users": results,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    record_property("batched_generation_report", str(report_path))
+
+    for r in results:
+        user = r["user"]
+        assert (
+            r["finish"] == "length" and len(r["tokens"]) == max_generated_tokens
+        ), f"user {user}: {len(r['tokens'])} tokens, finish {r['finish']}"
+        assert r["own_key_found"], f"user {user}: pass key {r['pass_key']} not in {r['decoded'][:300]!r}"
+        assert not r["leaked_keys_of_users"], f"user {user}: holds the pass keys of users {r['leaked_keys_of_users']}"
+        assert (
+            r["passes"] > 0 and 1.0 < r["tokens_per_pass"] <= drafts + 1
+        ), f"user {user}: passes {r['passes']} tokens/pass {r['tokens_per_pass']}"
+        assert r["prefix_match"], f"user {user}: first {BATCH_EXACT_PREFIX} tokens differ from the single-stream run"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{**DEVICE_PARAMS, "num_command_queues": 1}], indirect=True
+)  # the lanes' one-queue form
+@pytest.mark.parametrize("case", [pytest.param("chat_b8_mtp3", id="chat_b8_mtp3", marks=pytest.mark.timeout(5400))])
+def test_demo_text_batched_mtp_chat(mesh_device, case, tmp_path, record_property):
+    """8 lanes at 3 drafts: the 4 chat prompts twice (lane i gets prompt i % 4), greedy, each lane stops at its own EOS
+    or at 512 tokens (the lane scheduler's per-ticket stop).  Each prompt is first run alone at 3 drafts on the same
+    chain form (batch-1 reference, after one warm-up prompt).  Lanes 0-3 and 4-7 must be equal (same prompts); the
+    equality with the batch-1 run is reported, not asserted."""
+
+    batch_size, drafts = MTP_LANES, MTP_LANE_DRAFTS
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+
+    max_seq_len = CONTEXTS[0] - RESIDENT_CONTEXT_HEADROOM
+    template, chat_prompts, warmup_ids = build_chat_prompts(checkpoint)
+    tokenizer = template.tokenizer
+    stop_ids = tuple(EOS_TOKEN_IDS)
+    lane_prompts = [chat_prompts[user % len(chat_prompts)] for user in range(batch_size)]
+
+    mesh_device.enable_program_cache()
+    started = time.perf_counter()
+    lanes_session = Qwen38LanesSession(lanes=batch_size, drafts=drafts, marker=logger.info)
+    chain = None
+    try:
+        try:
+            chain = open_mtp_chain(mesh_device, checkpoint, max_seq_len, drafts, lanes_session=lanes_session)
+        except Qwen38ChatChainError as error:
+            pytest.skip(f"MTP lanes admission refused at context {CONTEXTS[0]}: {error}")
+        logger.info(f"MTP lanes chain ready in {time.perf_counter() - started:.1f} s")
+        session = Qwen38ChatSession(chain, template, prefill_mode="chunked")
+        run_mtp_single(session, warmup_ids, CHAT_WARMUP_TOKENS, stop_ids=stop_ids)
+        references = {}
+        for name, ids in chat_prompts:  # batch-1 runs on the same chain form, before the lane capture
+            references[name] = run_mtp_single(session, ids, CHAT_MAX_NEW_TOKENS, stop_ids=stop_ids)
+            logger.info(
+                f"batch-1 K={drafts} {name}: {references[name]['generated_tokens']} tokens {references[name]['finish']}, "
+                f"tokens/pass {references[name]['tokens_per_pass']:.3f}"
+            )
+        session.reset()
+        lanes_session.capture(chain, session)
+        run = run_mtp_lanes(
+            lanes_session, [ids for _name, ids in lane_prompts], drafts, CHAT_MAX_NEW_TOKENS, stop_ids=stop_ids
+        )
+        assert not session.poisoned
+    except BaseException:  # the mesh close after a failed lane run can take minutes: keep the cause in the log
+        logger.exception("MTP lanes chat run failed")
+        raise
+    finally:
+        if chain is not None:
+            lanes_session.close()
+            chain.close()
+
+    results = []
+    for user, row in enumerate(run["lanes_rows"]):
+        name, ids = lane_prompts[user]
+        out, ref = row["tokens"], references[name]["tokens"]
+        diffs = [i for i in range(min(len(out), len(ref))) if out[i] != ref[i]]
+        first_diff = diffs[0] if diffs else (None if len(out) == len(ref) else min(len(out), len(ref)))
+        results.append(
+            {
+                **{k: v for k, v in row.items() if k != "tokens"},
+                "user": user,
+                "prompt": name,
+                "isl": len(ids),
+                "tok_s": (row["committed"] - 1) / row["decode_s"],
+                "equal_to_batch1_k3": first_diff is None,
+                "first_diff_index_vs_batch1": first_diff,
+                "batch1_tokens": len(ref),
+                "tokens": out,
+                "decoded": tokenizer.decode(out, skip_special_tokens=True),
+            }
+        )
+        logger.info(
+            f"lane {user} {name}: ISL {len(ids)} | TTFT own {row['ttft_own_prefill_s']:.3f} s / from batch start "
+            f"{row['ttft_from_batch_start_s']:.3f} s | {row['committed']} tokens {row['finish']} | decode "
+            f"{row['decode_s']:.3f} s | {results[-1]['tok_s']:.2f} tok/s | passes {row['passes']} tokens/pass "
+            f"{row['tokens_per_pass']:.3f} | vs batch-1 K={drafts}: equal={results[-1]['equal_to_batch1_k3']} "
+            f"first_diff={first_diff} (batch-1 {len(ref)} tokens)"
+        )
+    logger.info(
+        f"chat_b8_mtp3: total tokens {run['total_generated_tokens']} | decode window {run['decode_window_s']:.3f} s | "
+        f"aggregate {run['aggregate_all_tokens_tok_s']:.1f} tok/s (token 1 of each lane counted; "
+        f"{run['aggregate_tok_s']:.1f} without it) | mean per-user {run['mean_per_user_tok_s']:.2f} tok/s | pass "
+        f"{run['pass_ms_mean']:.2f} ms (median {run['pass_ms_median']:.2f}) | scheduler passes {run['scheduler_passes']}"
+    )
+    write_chat_report(
+        tmp_path,
+        record_property,
+        "qwen38-chat-demo/v1-mtp-lanes",
+        {
+            "drafts": drafts,
+            "lanes": batch_size,
+            "max_new_tokens": CHAT_MAX_NEW_TOKENS,
+            "stop_ids": list(stop_ids),
+            "batch1_references": {
+                name: {k: v for k, v in ref.items() if k != "tokens"} | {"tokens": ref["tokens"]}
+                for name, ref in references.items()
+            },
+            "run": {k: v for k, v in run.items() if k not in ("lanes_rows", "pass_ms")},
+            "lanes_rows": results,
+        },
+    )
+
+    for r in results:
+        assert r["finish"] in ("stop", "length"), (r["user"], r["finish"])
+        assert r["passes"] > 0 and 1.0 < r["tokens_per_pass"] <= drafts + 1, (
+            r["user"],
+            r["passes"],
+            r["tokens_per_pass"],
+        )
+    for user in range(batch_size // 2):
+        a, b = results[user], results[user + batch_size // 2]
+        assert a["tokens"] == b["tokens"], f"lanes {user} and {user + batch_size // 2} (same prompt) differ"
