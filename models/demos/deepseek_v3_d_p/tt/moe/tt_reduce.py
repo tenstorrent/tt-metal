@@ -18,7 +18,6 @@ This module produces TP-sharded output [seq_len, emb_dim / num_chips]
 ready for the next layer.
 """
 
-import os
 from typing import Optional
 
 from loguru import logger
@@ -56,6 +55,7 @@ class TtReduceModule(LightweightModule):
         cluster_axis: int = 1,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        output_memory_config: ttnn.MemoryConfig | None = None,
     ):
         """
         Initialize reduce module.
@@ -68,6 +68,7 @@ class TtReduceModule(LightweightModule):
             cluster_axis: Mesh dimension to reduce across (0=rows, 1=columns)
             num_links: Number of ethernet links to use for collective
             topology: Ring or Linear topology for reduce_scatter
+            output_memory_config: Memory config of the reduce_scatter output (None: op default)
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -75,6 +76,7 @@ class TtReduceModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.output_memory_config = output_memory_config
 
     def forward(
         self,
@@ -136,8 +138,7 @@ class TtReduceModule(LightweightModule):
                 cluster_axis=self.cluster_axis,
                 num_links=self.num_links,
                 topology=self.topology,
-                # glue track (GLUE_EPI_L1=1): the [S, emb/tp] output is consumed at once by the final add.
-                **({"memory_config": ttnn.L1_MEMORY_CONFIG} if os.environ.get("GLUE_EPI_L1", "0") == "1" else {}),
+                **({"memory_config": self.output_memory_config} if self.output_memory_config is not None else {}),
             )
         else:
             output = summed
