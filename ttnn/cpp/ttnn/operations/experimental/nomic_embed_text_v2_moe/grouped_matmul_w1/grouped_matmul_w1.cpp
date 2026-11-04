@@ -98,7 +98,8 @@ Tensor prepare_grouped_matmul_w1_weight(
     }
 
     const auto grid = device->compute_with_storage_grid_size();
-    const auto chunks = grouped_weight_chunks(k_tiles, n_tiles, num_experts, has_bias, chunk_tiles, grid.x);
+    const auto chunks =
+        grouped_weight_chunks(k_tiles, n_tiles, num_experts, has_bias, chunk_tiles, grid.x, dram_banks(*device));
     const tt::tt_metal::Tile tile({kTile, kTile});
     const uint32_t tile_bytes = tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(weight.dtype()));
 
@@ -111,7 +112,7 @@ Tensor prepare_grouped_matmul_w1_weight(
         bias_buffer = tt::tt_metal::host_buffer::get_host_buffer(bias->cpu());
     }
 
-    const size_t total_bytes = static_cast<size_t>(kGroupedWeightBanks) * chunks.shard_tiles * tile_bytes;
+    const size_t total_bytes = static_cast<size_t>(chunks.banks) * chunks.shard_tiles * tile_bytes;
     std::vector<std::byte> chunked(total_bytes);
     const uint32_t group_tiles = (k_tiles + (has_bias ? 1 : 0)) * chunks.subblock_w;
     for (uint32_t share = 0; share < chunks.num_shares; ++share) {
@@ -133,11 +134,11 @@ Tensor prepare_grouped_matmul_w1_weight(
                     source = bias_buffer->view_bytes().data() + static_cast<size_t>(expert * n_tiles + n) * tile_bytes;
                 }
                 const uint32_t chunk = position / chunk_tiles;
-                const uint32_t bank = (share + chunk + expert) % kGroupedWeightBanks;
+                const uint32_t bank = (share + chunk + expert) % chunks.banks;
                 const size_t target =
                     static_cast<size_t>(bank) * chunks.shard_tiles +
                     static_cast<size_t>(
-                        (expert * chunks.max_chunks + chunk) * chunks.bank_sharers + share / kGroupedWeightBanks) *
+                        (expert * chunks.max_chunks + chunk) * chunks.bank_sharers + share / chunks.banks) *
                         chunk_tiles +
                     position % chunk_tiles;
                 std::memcpy(chunked.data() + target * tile_bytes, source, tile_bytes);
@@ -145,7 +146,7 @@ Tensor prepare_grouped_matmul_w1_weight(
         }
     }
 
-    const ttnn::Shape chunked_shape({1, 1, kTile, kGroupedWeightBanks * chunks.shard_tiles * kTile});
+    const ttnn::Shape chunked_shape({1, 1, kTile, chunks.banks * chunks.shard_tiles * kTile});
     const tt::tt_metal::TensorSpec spec(
         chunked_shape,
         tt::tt_metal::TensorLayout(
@@ -163,11 +164,6 @@ Tensor prepare_grouped_matmul_w1_weight(
     }();
 
     const auto dram = device->dram_grid_size();
-    TT_FATAL(
-        dram.x * dram.y == kGroupedWeightBanks,
-        "prepare_grouped_matmul_w1_weight: the chunk layout assumes {} DRAM banks, the device has {}",
-        kGroupedWeightBanks,
-        dram.x * dram.y);
     const tt::tt_metal::ShardSpec shard_spec(
         CoreRangeSet{CoreRange(CoreCoord(0, 0), CoreCoord(dram.x - 1, dram.y - 1))},
         {kTile, chunks.shard_tiles * kTile},

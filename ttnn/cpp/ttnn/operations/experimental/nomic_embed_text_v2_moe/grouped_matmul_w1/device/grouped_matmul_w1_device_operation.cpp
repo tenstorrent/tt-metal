@@ -243,8 +243,8 @@ GroupedMatmulW1Layout GroupedMatmulW1DeviceOperation::compute_layout(
         num_experts);
     const uint32_t k_tiles = k / kTileSize;
     const uint32_t n_tiles = n / kTileSize;
-    const auto chunks =
-        grouped_weight_chunks(k_tiles, n_tiles, num_experts, has_bias, attributes.weight_chunk_tiles, grid.x);
+    const auto chunks = grouped_weight_chunks(
+        k_tiles, n_tiles, num_experts, has_bias, attributes.weight_chunk_tiles, grid.x, dram_banks(*input.device()));
     const uint32_t dest_tiles = std::min(kMaxSubblockWidth, get_dest_reg_count(attributes.compute_kernel_config));
     TT_FATAL(
         chunks.subblock_w <= dest_tiles,
@@ -269,7 +269,7 @@ GroupedMatmulW1Layout GroupedMatmulW1DeviceOperation::compute_layout(
                 weight.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
             "grouped_matmul_w1: a chunked weight must be TILE and WIDTH_SHARDED in DRAM, as "
             "prepare_grouped_matmul_w1_weight writes it");
-        const uint32_t width = kGroupedWeightBanks * chunks.shard_tiles * kTileSize;
+        const uint32_t width = chunks.banks * chunks.shard_tiles * kTileSize;
         TT_FATAL(
             weight_shape.rank() == 4 && weight_shape[0] == 1 && weight_shape[1] == 1 && weight_shape[2] == kTileSize &&
                 weight_shape[3] == width,
@@ -286,7 +286,7 @@ GroupedMatmulW1Layout GroupedMatmulW1DeviceOperation::compute_layout(
         const auto& shard_spec = weight.memory_config().shard_spec();
         TT_FATAL(
             shard_spec.has_value() && shard_spec->shape[1] == chunks.shard_tiles * kTileSize &&
-                shard_spec->grid.num_cores() == kGroupedWeightBanks,
+                shard_spec->grid.num_cores() == chunks.banks,
             "grouped_matmul_w1: a chunked weight's shards must be {} tiles wide, one a DRAM bank",
             chunks.shard_tiles);
     }
@@ -340,8 +340,15 @@ GroupedMatmulW1Layout GroupedMatmulW1DeviceOperation::compute_layout(
 }
 
 GroupedWeightChunks grouped_weight_chunks(
-    uint32_t k_tiles, uint32_t n_tiles, uint32_t num_experts, bool has_bias, uint32_t chunk_tiles, uint32_t grid_x) {
+    uint32_t k_tiles,
+    uint32_t n_tiles,
+    uint32_t num_experts,
+    bool has_bias,
+    uint32_t chunk_tiles,
+    uint32_t grid_x,
+    uint32_t banks) {
     GroupedWeightChunks chunks;
+    chunks.banks = banks;
     chunks.share_n_tiles = tt::div_up(n_tiles, grid_x);
     chunks.num_shares = tt::div_up(n_tiles, chunks.share_n_tiles);
     chunks.last_share_n_tiles = n_tiles - (chunks.num_shares - 1) * chunks.share_n_tiles;
@@ -353,7 +360,7 @@ GroupedWeightChunks grouped_weight_chunks(
     if (chunk_tiles > 0) {
         const uint32_t slice_tiles = (k_tiles + (has_bias ? 1u : 0u)) * chunks.share_n_tiles;
         chunks.max_chunks = tt::div_up(slice_tiles, chunk_tiles);
-        chunks.bank_sharers = tt::div_up(chunks.num_shares, kGroupedWeightBanks);
+        chunks.bank_sharers = tt::div_up(chunks.num_shares, banks);
         chunks.shard_tiles = num_experts * chunks.max_chunks * chunks.bank_sharers * chunk_tiles;
     }
     return chunks;

@@ -94,8 +94,8 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulW2DeviceOperation::create_descripto
     const uint32_t input_blocks = rows / kTile;
     const uint32_t num_experts = tensor_args.expert_counts.logical_shape()[1];
     const auto map = grouped_matmul_w2_map(input_blocks, grid);
-    const auto chunks =
-        grouped_weight_chunks(k_tiles, n_tiles, num_experts, false, attributes.weight_chunk_tiles, grid.x);
+    const auto chunks = grouped_weight_chunks(
+        k_tiles, n_tiles, num_experts, false, attributes.weight_chunk_tiles, grid.x, dram_banks(*device));
     const uint32_t share_tiles = chunks.share_n_tiles;
     const uint32_t slice_tiles = k_tiles * share_tiles;
     const uint32_t half_tiles = slice_tiles / 2;
@@ -184,6 +184,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulW2DeviceOperation::create_descripto
         {"second_slots", attributes.second_slots},
         {"shard_tiles", chunks.shard_tiles},
         {"bank_sharers", chunks.bank_sharers},
+        {"weight_banks", chunks.banks},
         {"depth", map.column_lanes() ? kWeightDepth : kWeightDepthRowLanesOnly},
         {"counts_page_bytes", counts_page_bytes},
         {"first_half_cb", kFirstHalfRing},

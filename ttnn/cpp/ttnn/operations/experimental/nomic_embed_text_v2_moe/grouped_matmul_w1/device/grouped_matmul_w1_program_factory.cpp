@@ -276,6 +276,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulW1DeviceOperation::create_descripto
         {"max_chunks", layout.chunks.max_chunks},
         {"shard_tiles", layout.chunks.shard_tiles},
         {"bank_sharers", layout.chunks.bank_sharers},
+        {"weight_banks", layout.chunks.banks},
         {"stride_k", attributes.transpose_weight ? 1u : expert_tiles},
         {"stride_n", attributes.transpose_weight ? expert_tiles : 1u},
         {"stride_expert", attributes.transpose_weight ? layout.k_tiles : layout.n_tiles},

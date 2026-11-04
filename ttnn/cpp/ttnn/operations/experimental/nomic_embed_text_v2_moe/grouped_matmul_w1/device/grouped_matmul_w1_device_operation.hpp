@@ -19,8 +19,8 @@ namespace ttnn::experimental::nomic_embed_text_v2_moe {
 // share_n_tiles of an expert's N tiles (the last share last_share_n_tiles); its slice of an expert is
 // (K + bias) x its width tiles in slot order (each output subblock's K rows of subblock_w tiles, then its bias
 // tiles), cut into chunks of chunk_tiles. Chunk j of share s's slice of expert e is the contiguous run of tiles
-//     bank * shard_tiles + ((e * max_chunks + j) * bank_sharers + s / 8) * chunk_tiles
-// of a (1, 1, 32, 8 * shard_tiles * 32) TILE tensor WIDTH_SHARDED over the 8 DRAM banks, bank (s + j + e) % 8, so
+//     bank * shard_tiles + ((e * max_chunks + j) * bank_sharers + s / banks) * chunk_tiles
+// of a (1, 1, 32, 8 * shard_tiles * 32) TILE tensor WIDTH_SHARDED over the DRAM banks, bank (s + j + e) % banks, so
 // the shares read distinct banks at each step.
 struct GroupedWeightChunks {
     uint32_t num_shares = 0;
@@ -31,12 +31,24 @@ struct GroupedWeightChunks {
     uint32_t max_chunks = 0;
     uint32_t bank_sharers = 0;
     uint32_t shard_tiles = 0;
+    uint32_t banks = 0;
 };
 
-inline constexpr uint32_t kGroupedWeightBanks = 8;
+// The chunked weight is width-sharded one shard a DRAM bank.
+template <typename Device>
+uint32_t dram_banks(Device& device) {
+    const auto dram = device.dram_grid_size();
+    return dram.x * dram.y;
+}
 
 GroupedWeightChunks grouped_weight_chunks(
-    uint32_t k_tiles, uint32_t n_tiles, uint32_t num_experts, bool has_bias, uint32_t chunk_tiles, uint32_t grid_x);
+    uint32_t k_tiles,
+    uint32_t n_tiles,
+    uint32_t num_experts,
+    bool has_bias,
+    uint32_t chunk_tiles,
+    uint32_t grid_x,
+    uint32_t banks);
 
 // Sizes of one call and the cores it runs on, derived from its inputs, attributes and device.
 struct GroupedMatmulW1Layout {

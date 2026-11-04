@@ -47,6 +47,7 @@ void kernel_main() {
     constexpr uint32_t max_chunks = get_named_compile_time_arg_val("max_chunks");
     constexpr uint32_t shard_tiles = get_named_compile_time_arg_val("shard_tiles");
     constexpr uint32_t bank_sharers = get_named_compile_time_arg_val("bank_sharers");
+    constexpr uint32_t weight_banks = get_named_compile_time_arg_val("weight_banks");
     // A plain TILE weight: tile (k, n) of expert e is page k * stride_k + n * stride_n + e * stride_expert, the bias
     // tile n of expert e page e * output_n_tiles + n of the bias.
     constexpr uint32_t stride_k = get_named_compile_time_arg_val("stride_k");
@@ -243,9 +244,9 @@ void kernel_main() {
         const uint32_t trid = piece % depth + 1;
         const uint32_t address = piece_address(piece);
         if constexpr (chunked) {
-            const uint32_t bank = (share + chunk + expert) % 8;
-            const uint32_t tile =
-                bank * shard_tiles + ((expert * max_chunks + chunk) * bank_sharers + share / 8) * chunk_tiles;
+            const uint32_t bank = (share + chunk + expert) % weight_banks;
+            const uint32_t tile = bank * shard_tiles +
+                                  ((expert * max_chunks + chunk) * bank_sharers + share / weight_banks) * chunk_tiles;
             noc.async_read<NocOptions::TXN_ID>(
                 weight,
                 CoreLocalMem<uint32_t>(address),

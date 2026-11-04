@@ -116,7 +116,7 @@ tt::tt_metal::MemoryConfig grouped_matmul_w2_input_memory_config(uint32_t rows, 
 
 uint32_t grouped_matmul_w2_circular_buffer_bytes(
     uint32_t k, uint32_t n, uint32_t first_slots, uint32_t second_slots, uint32_t num_experts, const CoreCoord& grid) {
-    const auto chunks = grouped_weight_chunks(k / kTileSize, n / kTileSize, 1, false, 0, grid.x);
+    const auto chunks = grouped_weight_chunks(k / kTileSize, n / kTileSize, 1, false, 0, grid.x, 0);
     const tt::tt_metal::Tile tile({kTileSize, kTileSize});
     const uint32_t bf8_tile = tile.get_tile_size(tt::DataFormat::Bfp8_b);
     const uint32_t bf16_tile = tile.get_tile_size(tt::DataFormat::Float16_b);
@@ -173,8 +173,8 @@ void GroupedMatmulW2DeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(n > 0 && n % kTileSize == 0, "grouped_matmul_w2: weight_n must be whole tiles, got {}", n);
     const uint32_t k_tiles = k / kTileSize;
     const uint32_t n_tiles = n / kTileSize;
-    const auto chunks =
-        grouped_weight_chunks(k_tiles, n_tiles, num_experts, false, attributes.weight_chunk_tiles, grid.x);
+    const auto chunks = grouped_weight_chunks(
+        k_tiles, n_tiles, num_experts, false, attributes.weight_chunk_tiles, grid.x, dram_banks(*input.device()));
     TT_FATAL(
         chunks.num_shares == kShares && chunks.share_n_tiles == kShareTiles && chunks.last_share_n_tiles == kShareTiles,
         "grouped_matmul_w2: the layout takes N as {} shares of {} tiles, got N = {}",
@@ -197,19 +197,19 @@ void GroupedMatmulW2DeviceOperation::validate_on_program_cache_miss(
     const auto& weight_shape = weight.logical_shape();
     TT_FATAL(
         weight_shape.rank() == 4 && weight_shape[0] == 1 && weight_shape[1] == 1 && weight_shape[2] == kTileSize &&
-            weight_shape[3] == kGroupedWeightBanks * chunks.shard_tiles * kTileSize,
+            weight_shape[3] == chunks.banks * chunks.shard_tiles * kTileSize,
         "grouped_matmul_w2: a weight for K = {}, N = {}, {} experts and chunks of {} tiles is 1 x 1 x 32 x {}, got {}; "
         "prepare it with the same arguments",
         k,
         n,
         num_experts,
         attributes.weight_chunk_tiles,
-        kGroupedWeightBanks * chunks.shard_tiles * kTileSize,
+        chunks.banks * chunks.shard_tiles * kTileSize,
         weight_shape);
     const auto& shard_spec = weight.memory_config().shard_spec();
     TT_FATAL(
         shard_spec.has_value() && shard_spec->shape[1] == chunks.shard_tiles * kTileSize &&
-            shard_spec->grid.num_cores() == kGroupedWeightBanks,
+            shard_spec->grid.num_cores() == chunks.banks,
         "grouped_matmul_w2: the weight's shards must be {} tiles wide, one a DRAM bank",
         chunks.shard_tiles);
 

@@ -44,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t second_slots = get_named_compile_time_arg_val("second_slots");
     constexpr uint32_t shard_tiles = get_named_compile_time_arg_val("shard_tiles");
     constexpr uint32_t bank_sharers = get_named_compile_time_arg_val("bank_sharers");
+    constexpr uint32_t weight_banks = get_named_compile_time_arg_val("weight_banks");
     constexpr uint32_t depth = get_named_compile_time_arg_val("depth");
     constexpr uint32_t counts_page_bytes = get_named_compile_time_arg_val("counts_page_bytes");
     constexpr uint32_t first_half_cb_id = get_named_compile_time_arg_val("first_half_cb");
@@ -224,9 +225,9 @@ void kernel_main() {
         rings[half_of(piece)].reserve_back(piece_request(piece));
         const uint32_t expert = taken[piece / pieces_per_slice];
         const uint32_t chunk = piece % pieces_per_slice;
-        const uint32_t bank = (share + chunk + expert) % 8;
-        const uint32_t tile =
-            bank * shard_tiles + ((expert * pieces_per_slice + chunk) * bank_sharers + share / 8) * piece_tiles;
+        const uint32_t bank = (share + chunk + expert) % weight_banks;
+        const uint32_t tile = bank * shard_tiles +
+                              ((expert * pieces_per_slice + chunk) * bank_sharers + share / weight_banks) * piece_tiles;
         noc.async_read<NocOptions::TXN_ID>(
             weight,
             CoreLocalMem<uint32_t>(piece_address(piece)),
