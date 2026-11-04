@@ -36,6 +36,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -175,9 +176,31 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     }
 }
 
+void PrefetcherPipeSpaceImpl::prepare_for_relocation() const {
+    // The arena moves every Program whose program-local L1 sits on the reservation cores above the
+    // new allocation. A recorded trace or CommandList would still replay the old addresses.
+    TT_FATAL(
+        !device_->impl().has_recorded_commands(),
+        "PrefetcherPipeSpace on cores {} lands under program-local L1 that Programs already placed there, and "
+        "moving those Programs would leave a trace or CommandList on MeshDevice {} replaying their old addresses. "
+        "Create PrefetcherPipeSpaces before capturing traces or building CommandLists, or release those first.",
+        reservation_cores_.str(),
+        device_->id());
+    // A launch still in flight may be using the L1 this reservation takes, and the config pages
+    // are written from the host rather than through a command queue, so nothing orders them after
+    // that launch. Wait on every sub-device: Finish without ids waits only on the stall group,
+    // and the affected Program may run outside it.
+    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
+        distributed::Finish(device_->mesh_command_queue(cq_id), device_->get_sub_device_ids());
+    }
+}
+
 void PrefetcherPipeSpaceImpl::setup_reservation() {
     const uint32_t l1_alignment = l1_alignment_for(device_);
     auto& arena = device_->allocator_impl()->persistent_l1();
+    if (arena.would_relocate(reservation_cores_)) {
+        prepare_for_relocation();
+    }
 
     // One ring allocation and one page allocation over the whole domain: every domain core gets
     // the same two addresses, which is the lockstep contract every carved pipe relies on.

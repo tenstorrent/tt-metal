@@ -104,6 +104,10 @@ private:
     // except that its sender is reserved, which the two forms check at different points.
     void validate_dram_pipe_geometry(CoreCoord sender, const CoreRangeSet& receivers) const;
     void setup_reservation();
+    // Runs before an allocation that relocates Programs already placed on the reservation cores:
+    // throws if a trace or CommandList would replay their old addresses, then drains every command
+    // queue.
+    void prepare_for_relocation() const;
     void release_allocations() noexcept;
 
     const distributed::MeshDevice* device_ = nullptr;

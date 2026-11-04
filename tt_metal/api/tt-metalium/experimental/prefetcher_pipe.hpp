@@ -143,8 +143,8 @@ private:
 /**
  * Reservation geometry for a PrefetcherPipeSpace.
  *
- * The space pins persistent L1 on `sender_cores ∪ receiver_domain` before any Program places
- * program-local L1 on those cores. `receiver_domain` is NOT the 1:N map: it is every core that
+ * The space pins persistent L1 on `sender_cores ∪ receiver_domain`, below the program-local L1
+ * of every Program on those cores. `receiver_domain` is NOT the 1:N map: it is every core that
  * MAY later be carved as a receiver (typically the compute/worker grid or a sub-device), because
  * whoever creates the space (the model / a prefetcher) generally does not know the consumer's
  * receiver layout. The consumer carves pipes once it does.
@@ -234,10 +234,16 @@ private:
 /**
  * @brief Reserve persistent L1 for PrefetcherPipes on `config.sender_cores ∪ config.receiver_domain`.
  *
- * Must run before any Program places program-local L1 on those cores (the persistent arena seals
- * a core at that point). Quasar config pages reserve PREFETCHER_PIPE_MAX_CREDIT_LANES credit
- * lanes per receiver slot; the active lane count is a per-Program property set from the receiver
- * kernel's thread count when the pipe is bound.
+ * Programs that already placed program-local L1 (CBs, DFBs, scratchpads) on those cores, for
+ * example ops held by the program cache, are moved: their next enqueue lays that L1 out again
+ * above the reservation. When that happens this call first waits for every command queue of
+ * `device` to finish, so nothing still running can be using the L1 being reserved. Moving a
+ * Program invalidates any trace or CommandList that recorded it, so this throws if a trace,
+ * CommandListBuilder or CommandList exists on `device` at that point: create spaces before
+ * capturing traces, or release the traces first. It also throws if a sub-device manager's local
+ * L1 slab is placed on any of those cores. Quasar config pages reserve
+ * PREFETCHER_PIPE_MAX_CREDIT_LANES credit lanes per receiver slot; the active lane count is a
+ * per-Program property set from the receiver kernel's thread count when the pipe is bound.
  */
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     const distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);

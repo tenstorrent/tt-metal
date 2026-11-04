@@ -154,7 +154,9 @@ void py_module(nb::module_& mod) {
         R"doc(
             Reserve persistent L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
 
-            Must run before any program places program-local L1 on those cores. receiver_domain is
+            Programs (e.g. cached ops) that already placed program-local L1 on those cores are moved
+            above the reservation on their next run; creating the space then waits for the device to
+            finish, and raises if a trace or CommandList exists on the device. receiver_domain is
             every core that MAY later be carved as a receiver, not the 1:N map; pipes are carved
             afterwards with PrefetcherPipeSpace.create_pipe / create_pipes.
 
