@@ -23,18 +23,14 @@ from models.tt_transformers.tt.model import Transformer as TTTransformer
 from models.tt_transformers.tt.model_config import TensorGroup
 
 
-def _take_hidden_and_free(tensor, hidden_size):
-    """Return ``tensor[:, 0:1, :, :hidden_size]`` flattened to 2D, freeing ``tensor`` only when that is safe.
+def _free_unless_aliased(source, view):
+    """Free ``source`` unless ``view`` shares its buffer.
 
-    When the slice covers the whole tensor, ttnn returns a view that shares ``tensor``'s buffer.
-    Deallocating ``tensor`` then frees memory the result still points at (and still reports as
-    allocated), so later allocations silently overwrite it.
+    A full-range slice followed by ``ttnn.reshape`` returns a view of the source buffer, so freeing the
+    source would leave ``view`` reading released memory that later allocations reuse.
     """
-    if tensor.shape[1] == 1 and tensor.shape[-1] == hidden_size:
-        return ttnn.reshape(tensor, (-1, hidden_size))
-    out = ttnn.reshape(tensor[:, 0:1, :, :hidden_size], (-1, hidden_size))
-    ttnn.deallocate(tensor)
-    return out
+    if view.buffer_address() != source.buffer_address():
+        ttnn.deallocate(source)
 
 
 def _mesh_partition_and_free(tensor, dim):
@@ -326,11 +322,14 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Extract the relevant output part and adjust shape (matching test logic)
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            final_output = _take_hidden_and_free(tt_out, out_hidden_size)
+            final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+            _free_unless_aliased(tt_out, final_output)
             deepstack_visual_embeds_output = [
-                _take_hidden_and_free(deepstack_visual_embeds[i], out_hidden_size)
+                ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
                 for i in range(len(deepstack_visual_embeds))
             ]
+            for src, out in zip(deepstack_visual_embeds, deepstack_visual_embeds_output):
+                _free_unless_aliased(src, out)
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
@@ -445,12 +444,15 @@ class DropInVisionTransformer(torch.nn.Module):
 
         # Postprocessing - extract relevant output and adjust shape
         out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
-        final_output = _take_hidden_and_free(tt_out, out_hidden_size)
+        final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+        _free_unless_aliased(tt_out, final_output)
 
         deepstack_visual_embeds_output = [
-            _take_hidden_and_free(deepstack_visual_embeds[i], out_hidden_size)
+            ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
             for i in range(len(deepstack_visual_embeds))
         ]
+        for src, out in zip(deepstack_visual_embeds, deepstack_visual_embeds_output):
+            _free_unless_aliased(src, out)
 
         if self.debug:
             logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
