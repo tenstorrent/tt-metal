@@ -29,10 +29,13 @@ gates:
     arches:
       # Blocks a merge on a regression that stage 2 confirms (#64226).
       blackhole: {threshold: 0.02, run_types: [L1_TO_L1], stage2: true, block: true}
+      # Blocks too, with stage 2, now that same-code Wormhole runs repeat bit-exact (#60314).
       wormhole:
         threshold: 0.13
         modules: {perf_matmul: 0.25, perf_math_matmul: 0.25}
         run_types: [L1_TO_L1]
+        stage2: true
+        block: true
 
   # The pinned runs: move a pin by measuring with pipeline=baseline (llk-perf.yaml, upload on)
   # and changing its run id here, in a reviewed PR.
