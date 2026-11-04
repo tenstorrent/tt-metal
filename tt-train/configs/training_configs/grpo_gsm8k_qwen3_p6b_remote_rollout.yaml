@@ -3,7 +3,7 @@
 # Launch with grpo/run_remote_rollout.sh --example gsm8k.
 
 training_config:
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b_memory_efficient.yaml"
 
   # HuggingFace Hub id of the SFT'd think-tagged Qwen3 checkpoint (the GRPO starting point).
   model_source: "ichovpanTT/qwen3-0.6b-base-think-sft"
