@@ -41,8 +41,6 @@ void check_device_scalar(
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
-// Kernels that carry the recurrent state in FP32 through DST (UnpackToDest) need a 32-bit DST.
-void check_fp32_dest_acc(const DeviceComputeKernelConfig& config, std::string_view operation_name);
 
 // Affine summaries are one tensor [S, N, K, K+V] holding K rows of [A | B] per transform: slot 0 holds head
 // transforms and slot 1, when present, tail transforms. Kernels address it by page through TensorAccessor.

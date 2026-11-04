@@ -156,14 +156,7 @@ PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_v
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name) {
     TT_FATAL(
         !config.packer_l1_acc,
-        "{}: packer_l1_acc=true is unsupported; kernels that accumulate in L1 enable it themselves",
-        operation_name);
-}
-
-void check_fp32_dest_acc(const DeviceComputeKernelConfig& config, std::string_view operation_name) {
-    TT_FATAL(
-        config.fp32_dest_acc_en,
-        "{}: fp32_dest_acc_en=false is unsupported because the recurrent state is carried in FP32 through DST",
+        "{}: packer_l1_acc=true is unsupported because the compute kernel does not accumulate through L1",
         operation_name);
 }
 

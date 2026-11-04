@@ -66,7 +66,7 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 * ``q_decay[H,N,32,K]``
                 * ``intra[H,N,32,32]``
                 * ``k_dec_t[H,N,K,32]``
-                * ``final_decay[H,N,K,1]``: ``expm1(G_last) = exp(G_last) - 1`` (complement form)
+                * ``final_decay[H,N,K,1]``
                 * ``t_inv[H,N,32,32]``
 
         Note:
