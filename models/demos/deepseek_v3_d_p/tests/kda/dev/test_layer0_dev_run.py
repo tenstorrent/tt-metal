@@ -159,7 +159,8 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     sp_size = tuple(mesh_device.shape)[sp_axis]
     program_config = _override(
         kimi_k3_program_config(
-            active_seq_len_local=_CALL // sp_size, tp_ccl_topology=per_axis_topology()[tensor_parallel_axis]
+            active_seq_len_local=_CALL // sp_size,
+            tp_ccl_topology=per_axis_topology(mesh_device=mesh_device)[tensor_parallel_axis],
         ),
         overrides,
     )
@@ -183,7 +184,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
         "high_power": is_high_power(),
         "mesh": list(mesh_device.shape),
         "layout": f"SP{sp_size}xTP{tuple(mesh_device.shape)[tensor_parallel_axis]}",
-        "fabric_config": ttnn.get_fabric_config().name,
+        "fabric_config": ttnn.get_fabric_config(mesh_device).name,
         "tp_axis_wrapped": tp_axis_is_wrapped(mesh_device),
         "call_tokens": _CALL,
         "tokens": tokens,

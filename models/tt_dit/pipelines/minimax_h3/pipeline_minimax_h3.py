@@ -653,7 +653,7 @@ class MiniMaxH3Pipeline:
         num_links = preset["num_links"] if num_links is None else num_links
         if topology is None:
             # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
-            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            fabric_is_line = ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")

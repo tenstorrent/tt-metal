@@ -277,7 +277,7 @@ def test_kimi_k3_state_adapter_cost(
     result = {
         "layout": layout,
         "sequence": _SEQUENCE,
-        "fabric_config": ttnn.get_fabric_config().name,
+        "fabric_config": ttnn.get_fabric_config(mesh_device).name,
         "pcc": pcc,
         "bit_identical_round_trips": True,
         "geometry": {

@@ -328,7 +328,7 @@ Tensor sparse_kv_push(
             .part = part,
             .num_links = num_links,
             .core_grid = grid,
-            .fabric_config = tt::tt_fabric::GetFabricConfig(),
+            .fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device),
             .ready_semaphore = ready_semaphore,
             .done_semaphore = done_semaphore,
             .batch_index = batch_index,

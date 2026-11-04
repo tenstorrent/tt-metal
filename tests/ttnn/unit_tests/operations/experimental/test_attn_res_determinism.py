@@ -120,7 +120,7 @@ def _block_stats(mesh_device, sealed, queries, gathered, semaphore):
         gathered=gathered,
         cluster_axis=TP_AXIS,
         semaphore=semaphore,
-        topology=per_axis_topology()[TP_AXIS],
+        topology=per_axis_topology(mesh_device=mesh_device)[TP_AXIS],
         num_links=_num_links(mesh_device),
         compute_kernel_config=STATS_FIDELITY,
     )
@@ -246,7 +246,7 @@ def test_attn_res_gather_softmax_repeats(mesh_device, device_params):
                 semaphore,
                 site=site,
                 cluster_axis=TP_AXIS,
-                topology=per_axis_topology()[TP_AXIS],
+                topology=per_axis_topology(mesh_device=mesh_device)[TP_AXIS],
                 inv_hidden_size=1.0 / HIDDEN_SIZE,
                 eps=EPS,
                 pending=pending,

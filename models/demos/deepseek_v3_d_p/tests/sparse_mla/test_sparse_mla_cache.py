@@ -574,7 +574,10 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
     mla.sp_axis = 0
     mla.tp_axis = 1
     monkeypatch.setattr(mla, "_declared_seq_shard_factor", lambda _: 4)
-    monkeypatch.setattr(ttnn, "get_fabric_config", lambda: fabric)
+    mla.mesh_device = object()
+    monkeypatch.setattr(
+        ttnn, "get_fabric_config", lambda mesh_device: fabric if mesh_device is mla.mesh_device else None
+    )
     mla.sp_factor = 2
     mla.tp_factor = 2
     mla.ccl_num_links = 2
