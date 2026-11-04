@@ -35,6 +35,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 from collections import defaultdict
 from pathlib import Path
 from typing import Generator, NamedTuple, Optional, Union
@@ -402,6 +403,32 @@ def _check_rank_captures_complete(report_path: Path, rank_captures: list[_Report
 def _unchanged_database_note(db_path: Path, db_existed: bool) -> str:
     """Tail for an import error message: an earlier import's database is still there, and this one did not change it."""
     return f". {db_path} was not updated" if db_existed else ""
+
+
+def _importing_path(path: Path) -> Path:
+    """Hidden sibling of ``path`` that an import writes first and moves onto ``path`` only once it succeeds.
+
+    Per process and thread, so overlapping imports into the same directory don't share one.
+    """
+    return path.with_name(f".{path.name}.importing-{os.getpid()}-{threading.get_ident()}")
+
+
+def _unlink_sqlite_database(path: Path) -> None:
+    """Remove a SQLite database file and any journal a crashed writer left beside it."""
+    for name in (path.name, f"{path.name}-journal", f"{path.name}-wal", f"{path.name}-shm"):
+        path.with_name(name).unlink(missing_ok=True)
+
+
+def _stage_file(staged_files: dict[Path, Path], path: Path, text: str) -> bool:
+    """Write ``text`` for ``path`` under its importing name, to be published along with the database.
+
+    The first capture of an import that carries the file wins; returns whether this call wrote it.
+    """
+    if path in staged_files:
+        return False
+    staged_files[path] = _importing_path(path)
+    staged_files[path].write_text(text)
+    return True
 
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
@@ -2383,15 +2410,17 @@ def import_report(
     Raises:
         ValueError: If the ``graph_capture_<r>_of_<N>.json`` captures in a directory don't hold every rank of one
             run exactly once (a rank missing, ranks from runs of different sizes, a rank outside 1..N, or a rank
-            named twice), if a capture's metadata rank or world size disagrees with its file name, or if one of
-            those captures has an unsupported version. No database is created, and one that was already in
-            ``output_dir`` is left as it was. When the error comes after the import has started, files written beside
-            the database for the captures already read (``*.tensor_lifetime.json``, the cluster descriptor and mesh
-            mapping YAMLs, SVGs) are kept.
+            named twice), if a capture's metadata rank or world size disagrees with its file name, if one of
+            those captures has an unsupported version, or if there is no capture to import (none found, or every
+            loose capture skipped for its version). No database is created, and one that was already in
+            ``output_dir`` is left as it was, as are the cluster descriptor and mesh mapping YAMLs beside it. When the
+            error comes after the import has started, other files written beside the database for the captures
+            already read (``*.tensor_lifetime.json``, SVGs) are kept.
 
     Each import writes a new database, built beside the target and moved over it only once the import succeeds: a
     finished import holds only these captures, never rows left from an earlier import into the same directory, and a
-    failed one leaves whatever database ``output_dir`` already held as it was.
+    failed one leaves whatever database ``output_dir`` already held as it was. The cluster descriptor and mesh
+    mapping YAMLs are staged and published the same way.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
@@ -2406,8 +2435,10 @@ def import_report(
 
     db_existed = db_path.exists()
     # Built under a temporary name and moved over db_path at the end, so a reader never sees a partial database.
-    importing_db_path = db_path.with_name(f".{db_name}.importing-{os.getpid()}")
-    importing_db_path.unlink(missing_ok=True)
+    importing_db_path = _importing_path(db_path)
+    _unlink_sqlite_database(importing_db_path)
+    # YAMLs that go beside the database (final path -> importing path), published along with it.
+    staged_files: dict[Path, Path] = {}
 
     # Create graphs directory if generating SVGs
     graphs_dir = None
@@ -2415,8 +2446,7 @@ def import_report(
         graphs_dir = output_dir / "graphs"
         graphs_dir.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(importing_db_path)
-    cursor = conn.cursor()
+    conn = None
     imported = False
 
     try:
@@ -2424,6 +2454,9 @@ def import_report(
         _prev_profile = sys.getprofile()
         sys.settrace(None)
         sys.setprofile(None)
+
+        conn = sqlite3.connect(importing_db_path)
+        cursor = conn.cursor()
 
         create_database_schema(cursor)
         save_database_schema_version(cursor)
@@ -2585,9 +2618,7 @@ def import_report(
             if "cluster_descriptor" in report and report["cluster_descriptor"]:
                 cd_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
                 cluster_path = output_dir / f"cluster_descriptor{cd_suffix}.yaml"
-                if not cluster_path.exists():  # Only write once
-                    with open(cluster_path, "w") as f:
-                        f.write(report["cluster_descriptor"])
+                if _stage_file(staged_files, cluster_path, report["cluster_descriptor"]):
                     total_stats["cluster_descriptor"] = True
 
             # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
@@ -2595,9 +2626,7 @@ def import_report(
                 mesh_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
                 mesh_name = f"physical_chip_mesh_coordinate_mapping{mesh_suffix}.yaml"
                 mesh_path = output_dir / mesh_name
-                if not mesh_path.exists():  # Only write once
-                    with open(mesh_path, "w") as f:
-                        f.write(report["mesh_coordinate_mapping"])
+                if _stage_file(staged_files, mesh_path, report["mesh_coordinate_mapping"]):
                     total_stats["mesh_coordinate_mapping"] = True
 
             # Import buffer chunks (collapsed per-(op, device, addr, bank, core)).
@@ -2726,7 +2755,13 @@ def import_report(
 
             total_stats["files"] += 1
 
+        if total_stats["files"] == 0:
+            # Publishing would replace an earlier import's database with an empty one.
+            raise ValueError(
+                f"No graph captures were imported from {report_path}" + _unchanged_database_note(db_path, db_existed)
+            )
         conn.commit()
+        imported = True
         summary = [f"Imported {total_stats['files']} report(s) into {db_path}"]
         summary.append(f"  - {total_stats['devices']} devices")
         summary.append(f"  - {total_stats['operations']} operations")
@@ -2758,16 +2793,20 @@ def import_report(
         if generate_svgs:
             summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
         logger.info("\n".join(summary))
-        imported = True
 
     finally:
         sys.settrace(_prev_trace)
         sys.setprofile(_prev_profile)
-        conn.close()
+        if conn is not None:
+            conn.close()
         if imported:
+            for path, staged in staged_files.items():
+                os.replace(staged, path)
             os.replace(importing_db_path, db_path)
         else:
-            importing_db_path.unlink(missing_ok=True)
+            for staged in staged_files.values():
+                staged.unlink(missing_ok=True)
+            _unlink_sqlite_database(importing_db_path)
 
     return db_path
 

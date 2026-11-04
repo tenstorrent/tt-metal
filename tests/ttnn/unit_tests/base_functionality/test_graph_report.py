@@ -714,6 +714,121 @@ class TestImportReportFreshDatabase:
         graph_report.import_report(report_path, tmp_path / "output")
         assert self._row_counts(db_path) == once
 
+    @staticmethod
+    def _tensor_graph(op_name, input_shape, with_output):
+        """One operation reading tensor 42 with ``input_shape``, optionally producing tensor 101."""
+        nodes = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": input_shape},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": op_name, "inputs": "1"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": op_name},
+                "connections": [3] if with_output else [],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        if not with_output:
+            del nodes[3]
+        return nodes
+
+    def test_importing_a_different_capture_keeps_only_its_rows(self, tmp_path):
+        """A rerun of an edited test reuses operation and tensor ids with a different payload: neither the rows the
+        earlier import replaced or ignored on a conflict nor the ones only it had may survive."""
+        report_dir = tmp_path / "reports_in"
+        first = _make_report(self._tensor_graph("ttnn.first", "[1,1,32,32]", with_output=True))
+        _write_reports(report_dir, [("graph_capture.json", first)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT COUNT(*) FROM output_tensors") == [(1,)]
+        second = _make_report(self._tensor_graph("ttnn.second", "[1,1,64,64]", with_output=False))
+        _write_reports(report_dir, [("graph_capture.json", second)])
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT name FROM operations") == [("ttnn.second",)]
+        assert _query_db(db_path, "SELECT tensor_id, shape FROM tensors") == [(42, "[1,1,64,64]")]
+        assert _query_db(db_path, "SELECT tensor_id FROM input_tensors") == [(42,)]
+        assert _query_db(db_path, "SELECT COUNT(*) FROM output_tensors") == [(0,)]
+
+    @pytest.mark.parametrize(
+        "loose_files",
+        [
+            [("graph_capture.json", {**_make_report(_minimal_single_op_graph()), "version": 99})],
+            [
+                (
+                    "graph_capture.json",
+                    {k: v for k, v in _make_report(_minimal_single_op_graph()).items() if k != "version"},
+                )
+            ],
+            [("config.json", {})],
+        ],
+        ids=["unsupported_version", "no_version", "only_config"],
+    )
+    def test_importing_no_capture_leaves_the_existing_db_unchanged(self, tmp_path, expect_error, loose_files):
+        """A database of no captures would otherwise replace the earlier import's."""
+        output_dir = tmp_path / "output"
+        _write_reports(tmp_path / "first", [("graph_capture.json", _make_report(_minimal_single_op_graph()))])
+        db_path = graph_report.import_report(tmp_path / "first", output_dir)
+        before = db_path.read_bytes()
+        _write_reports(tmp_path / "second", loose_files)
+        with expect_error(ValueError, "No graph captures were imported from") as excinfo:
+            graph_report.import_report(tmp_path / "second", output_dir)
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    def test_importing_no_capture_creates_no_db(self, tmp_path, expect_error):
+        _write_reports(tmp_path / "reports_in", [("config.json", {})])
+        with expect_error(ValueError, "No graph captures were imported from") as excinfo:
+            graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        assert "was not updated" not in str(excinfo.value)
+        assert list((tmp_path / "output").iterdir()) == []
+
+    def test_yamls_are_published_with_the_database(self, tmp_path, expect_error):
+        """The cluster descriptor and mesh mapping YAMLs come from the import that wrote the database beside them:
+        a later import replaces them, and a failed one leaves them as they were."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        suffix = graph_report._rank_file_suffix(0, 2)
+        yamls = [
+            output_dir / f"cluster_descriptor{suffix}.yaml",
+            output_dir / f"physical_chip_mesh_coordinate_mapping{suffix}.yaml",
+        ]
+
+        def write_run(text, rank_1_metadata_rank=1):
+            name_0, report_0 = _rank_capture(0, 2)
+            report_0["cluster_descriptor"] = f"cluster: {text}"
+            report_0["mesh_coordinate_mapping"] = f"mesh: {text}"
+            rank_1 = _make_report(_minimal_single_op_graph(), metadata={"rank": rank_1_metadata_rank, "world_size": 2})
+            _write_reports(report_dir, [(name_0, report_0), ("graph_capture_2_of_2.json", rank_1)])
+
+        write_run("first")
+        graph_report.import_report(report_dir, output_dir)
+        write_run("second")
+        graph_report.import_report(report_dir, output_dir)
+        assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
+        write_run("third", rank_1_metadata_rank=0)
+        with expect_error(ValueError, "according to its metadata"):
+            graph_report.import_report(report_dir, output_dir)
+        assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
+        assert [p.name for p in output_dir.iterdir() if ".importing-" in p.name] == []
+
     def test_import_replaces_an_older_schema_db(self, tmp_path):
         report_dir = tmp_path / "reports_in"
         _write_reports(report_dir, [_rank_capture(0, 1)])
