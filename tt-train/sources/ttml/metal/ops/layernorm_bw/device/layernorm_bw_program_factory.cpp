@@ -325,22 +325,16 @@ tt::tt_metal::ProgramDescriptor LayerNormBackwardProgramFactory::create_descript
     tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
-    desc.kernels.push_back(make_reader_kernel_descriptor(
-        all_cores,
-        reader_compile_time_args,
-        select_defines(defines, {kMaskWDefineKey, kEverythingFitsInL1DefineKey, kComputeGradInputDefineKey}),
-        kReaderKernelPath));
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
     // A skipped output's nullptr buffer appends a null accessor, so the writer's accessor offsets do not depend on the
     // flags.
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(dx_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dgamma_components_buffer).append_to(writer_compile_time_args);
-    desc.kernels.push_back(make_writer_kernel_descriptor(
-        all_cores,
-        writer_compile_time_args,
-        select_defines(defines, {kComputeGradInputDefineKey, kComputeGradGammaDefineKey}),
-        kWriterKernelPath));
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels

@@ -9,7 +9,8 @@
 
 namespace ttml::metal::ops::sdpa_bw::device::q {
 
-// Which outputs to produce. The gate outputs default off because they need a gate.
+// Which outputs to produce. The gate outputs default off because they need a gate; ttnn::prim::ttml_sdpa_q_bw turns
+// them on for a gated call that leaves its `outputs` unset.
 struct SDPABackwardQOutputs {
     bool grad_query{true};
     bool u_scaler{true};

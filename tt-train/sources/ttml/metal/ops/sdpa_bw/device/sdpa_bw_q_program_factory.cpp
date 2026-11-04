@@ -164,7 +164,7 @@ void assign_per_core_runtime_args_balanced(
                 value_buffer->address(),
                 0U,  // mask_addr unused for balanced causal
                 intermediates_buffer->address(),
-                gate_buffer != nullptr ? gate_buffer->address() : 0U,  // gate buffer address
+                get_address_or_zero(gate_buffer),  // gate buffer address
                 num_pairs,
                 start_pair_idx,
             });
@@ -175,11 +175,10 @@ void assign_per_core_runtime_args_balanced(
             kernels.writer,
             core,
             {
-                grad_query_buffer != nullptr ? grad_query_buffer->address() : 0U,
-                u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
-                grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,  // grad_gate buffer address
-                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address()
-                                                    : 0U,  // gated dO buffer address
+                get_address_or_zero(grad_query_buffer),
+                get_address_or_zero(u_scaler_buffer),
+                get_address_or_zero(grad_gate_buffer),          // grad_gate buffer address
+                get_address_or_zero(gated_grad_output_buffer),  // gated dO buffer address
                 num_pairs,
                 start_pair_idx,
             });
@@ -707,19 +706,19 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                      query_buffer->address(),
                      key_buffer->address(),
                      value_buffer->address(),
-                     attn_mask_buffer != nullptr ? attn_mask_buffer->address() : 0U,
+                     get_address_or_zero(attn_mask_buffer),
                      intermediates_buffer->address(),
-                     gate_buffer != nullptr ? gate_buffer->address() : 0U,
+                     get_address_or_zero(gate_buffer),
                      num_rows,
                      start_row});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
                     core,
-                    {grad_query_buffer != nullptr ? grad_query_buffer->address() : 0U,
-                     u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
-                     grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
-                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U,
+                    {get_address_or_zero(grad_query_buffer),
+                     get_address_or_zero(u_scaler_buffer),
+                     get_address_or_zero(grad_gate_buffer),
+                     get_address_or_zero(gated_grad_output_buffer),
                      num_rows,
                      start_row});
                 SetRuntimeArgs(
@@ -784,19 +783,18 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             runtime_args[kQueryBufferIdx] = query_buffer->address();
             runtime_args[kKeyBufferIdx] = key_buffer->address();
             runtime_args[kValueBufferIdx] = value_buffer->address();
-            runtime_args[kAttnMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0U;
+            runtime_args[kAttnMaskBufferIdx] = get_address_or_zero(mask_buffer);
             runtime_args[kIntermediatesBufferIdx] = intermediates_buffer->address();
-            runtime_args[kGateBufferIdx] = gate_buffer != nullptr ? gate_buffer->address() : 0U;
+            runtime_args[kGateBufferIdx] = get_address_or_zero(gate_buffer);
         }
 
         // Update output buffers for writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kGradQueryBufferIdx] = grad_query_buffer != nullptr ? grad_query_buffer->address() : 0U;
-            runtime_args[kUScalerOutputBufferIdx] = u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U;
-            runtime_args[kGradGateBufferIdx] = grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U;
-            runtime_args[kGatedGradOutputBufferIdx] =
-                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U;
+            runtime_args[kGradQueryBufferIdx] = get_address_or_zero(grad_query_buffer);
+            runtime_args[kUScalerOutputBufferIdx] = get_address_or_zero(u_scaler_buffer);
+            runtime_args[kGradGateBufferIdx] = get_address_or_zero(grad_gate_buffer);
+            runtime_args[kGatedGradOutputBufferIdx] = get_address_or_zero(gated_grad_output_buffer);
         }
     });
 }
