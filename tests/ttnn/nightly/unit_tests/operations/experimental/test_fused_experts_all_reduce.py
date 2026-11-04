@@ -39,8 +39,8 @@ def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, 
     ring = submesh.get_num_devices()
     grid = submesh.compute_with_storage_grid_size()
     grid_y = 8 if (intermediate // TILE) % 16 == 0 else 9
-    if grid.x < 13 or grid.y < grid_y:
-        pytest.skip(f"needs the 12x{grid_y} expert grid plus a free sender column, got {grid.x}x{grid.y}")
+    if grid.x < 12 or grid.y <= grid_y:
+        pytest.skip(f"needs the 12x{grid_y} expert grid plus a free sender row, got {grid.x}x{grid.y}")
 
     torch.manual_seed(0)
     num_experts, top_k = 16, 6
