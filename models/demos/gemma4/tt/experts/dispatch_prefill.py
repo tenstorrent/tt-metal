@@ -156,20 +156,21 @@ def combine_fwd_vc_pages(
 ) -> int:
     """combine_fabric2d's pages per forwarding channel, from GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1).
 
-    The variable is the divisor the op once took (#61858), so it is converted here, where it is read: the pages
-    one stream's forwarding buffer needed to hold its worst case before the op had channels and credits, divided by
-    the reduction and rounded up. The arguments are the ones the combine call passes; ring_extent is the mesh's size
-    along the dispatch axis."""
+    The variable is the divisor the op once took (#61858), so it is converted here, where it is read, the way the op
+    converted it: the pages one stream's forwarding buffer needed to hold its worst case before the op had channels
+    and credits, divided by the reduction and by the stream's channel count, rounded up. The arguments are the ones
+    the combine call passes; ring_extent is the mesh's size along the dispatch axis."""
     reduction = max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
     per_destination = seq_len_per_chip * num_experts_per_tok
     half_extent = ring_extent // 2
     relay_chunks = half_extent * (half_extent - 1) // 2
+    channels_per_stream = relay_chunks  # one per movement class
     worst_case = (
         (half_extent - 2) * (per_destination // num_links)
         + per_destination // (2 * num_links)
         + relay_chunks * experts_per_chip
     )
-    return -(-worst_case // reduction)
+    return -(-worst_case // (reduction * channels_per_stream))
 
 
 def small_rows_admit(rows: int, lo: int, hi: int) -> bool:

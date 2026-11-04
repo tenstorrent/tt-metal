@@ -370,16 +370,16 @@ def test_fused_decode_falls_back_below_the_tile_multiple(monkeypatch):
 def test_ring_combine_fwd_reduction_converts_to_pages_per_vc(monkeypatch):
     # Ring of 8, 512 rows a chip, top-8, 4 experts a chip, one link. Before channels and credits a stream held
     # 2 * 4096 (the two nearer destinations) + 4096 / 2 (the farthest, split over both streams) + 6 relay chunks
-    # * 4 experts = 10264 pages.
+    # * 4 experts = 10264 pages; a ring of 8 splits a stream into 6 channels.
     args = (8, 512, 8, 4, 1)
     monkeypatch.delenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", raising=False)
-    assert combine_fwd_vc_pages(*args) == 10264
+    assert combine_fwd_vc_pages(*args) == 1711  # 10264 / 6, rounded up
     monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "4")
-    assert combine_fwd_vc_pages(*args) == 2566
+    assert combine_fwd_vc_pages(*args) == 428  # 10264 / 24, rounded up
     monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "3")
-    assert combine_fwd_vc_pages(*args) == 3422  # 10264 / 3, rounded up
+    assert combine_fwd_vc_pages(*args) == 571  # 10264 / 18, rounded up
     monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "0")
-    assert combine_fwd_vc_pages(*args) == 10264  # read as 1, as before
+    assert combine_fwd_vc_pages(*args) == 1711  # read as 1, as before
 
 
 # ===== merged from tests/unit/test_moe_decode_registry_host.py: The decode MoE module's registry rule (``Gemma4MoEDecode``): one shared module per mesh, built once every layer of
