@@ -51,6 +51,10 @@ BankRequest compute_bank_request(
 }
 
 std::vector<NodeCoord> per_node_allocation_nodes(const std::optional<ShardSpecBuffer>& shard_spec) {
+    // Every shard grid node gets an address, even where cores_with_data() of a distribution spec
+    // is smaller, unlike range_lockstep_allocation_nodes(). Callers rely on it: the fast-dispatch
+    // preflight, get_shard_base_address() and per-node kernel bindings look up an address on any
+    // node of the shard grid. The nodes without data waste their reservation.
     TT_FATAL(shard_spec.has_value(), "per_core_allocation requires a shard_spec with core grid");
     std::vector<NodeCoord> nodes = shard_grid_nodes(*shard_spec);
     TT_FATAL(!nodes.empty(), "per_core_allocation: shard grid resolved to zero cores");
