@@ -471,53 +471,48 @@ std::pair<double, Parts> head_cost(
 std::vector<HeadPlanned> head_plan_layouts(
     const HeadShape& shape, const ArenaMax& arena_max, bool keep_unfit, bool xdram, uint32_t min_router_iters) {
     const uint32_t GXe = engine_width(shape);
-    // the router stage in one go (NIT 1) wherever a layout fits that way; router iterations only when none does
-    auto pass = [&](uint32_t max_nit) {
-        std::vector<HeadPlanned> out;
-        for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
-            for (uint32_t kb : k_steps(shape)) {
-                // (the fewest router iterations that fit, up to max_nit: NIT divides the row chunks)
-                for (uint32_t nit = min_router_iters; nit <= std::min(NCH, max_nit); ++nit) {
-                    if (NCH % nit) {
-                        continue;
-                    }
-                    const std::vector<bool> compacts = shape.rs_dim() == -2 && shape.G <= 4
-                                                           ? std::vector<bool>{false, true}
-                                                           : std::vector<bool>{false};
-                    HeadLayout lay;
-                    HeadSized sized;
-                    for (bool compact : compacts) {
-                        lay = HeadLayout{
-                            .GY = GY,
-                            .MT = MT,
-                            .NCH = NCH,
-                            .KB = kb,
-                            .GX = GXe,
-                            .compact = compact,
-                            .xdram = xdram,
-                            .NIT = nit};
-                        sized = head_size(shape, lay, arena_max(kb));
-                        if (sized.eng) {
-                            break;
-                        }
-                    }
-                    if (!sized.eng) {
-                        if (keep_unfit) {
-                            out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, kInf, {}, sized.why});
-                        }
-                        continue;
-                    }
-                    auto [t, parts] = head_cost(shape, lay, *sized.eng);
-                    out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
-                    break;
+    // each layout with the fewest router iterations (from min_router_iters) that fit - for one layout more iterations
+    // only add router chains and barriers - and the layouts ranked by cost: a layout that needs router iterations wins
+    // where its matmul cores outweigh them (e.g. 10x10 MT 2 at 1280 rows on a 10-wide grid over 10x8 MT 1 in 5 chunks)
+    std::vector<HeadPlanned> out;
+    for (const auto& [GY, MT, NCH] : head_layouts(shape)) {
+        for (uint32_t kb : k_steps(shape)) {
+            // (the fewest router iterations that fit: NIT divides the row chunks)
+            for (uint32_t nit = min_router_iters; nit <= NCH; ++nit) {
+                if (NCH % nit) {
+                    continue;
                 }
+                const std::vector<bool> compacts = shape.rs_dim() == -2 && shape.G <= 4
+                                                       ? std::vector<bool>{false, true}
+                                                       : std::vector<bool>{false};
+                HeadLayout lay;
+                HeadSized sized;
+                for (bool compact : compacts) {
+                    lay = HeadLayout{
+                        .GY = GY,
+                        .MT = MT,
+                        .NCH = NCH,
+                        .KB = kb,
+                        .GX = GXe,
+                        .compact = compact,
+                        .xdram = xdram,
+                        .NIT = nit};
+                    sized = head_size(shape, lay, arena_max(kb));
+                    if (sized.eng) {
+                        break;
+                    }
+                }
+                if (!sized.eng) {
+                    if (keep_unfit) {
+                        out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, kInf, {}, sized.why});
+                    }
+                    continue;
+                }
+                auto [t, parts] = head_cost(shape, lay, *sized.eng);
+                out.push_back(HeadPlanned{lay, sized.arena, sized.sizes, t, parts, ""});
+                break;
             }
         }
-        return out;
-    };
-    std::vector<HeadPlanned> out = pass(min_router_iters);
-    if (std::none_of(out.begin(), out.end(), [](const HeadPlanned& p) { return p.t != kInf; })) {
-        out = pass(std::numeric_limits<uint32_t>::max());
     }
     std::stable_sort(out.begin(), out.end(), [](const HeadPlanned& a, const HeadPlanned& b) {
         return std::make_pair(a.t, -int64_t(a.lay.KB)) < std::make_pair(b.t, -int64_t(b.lay.KB));
