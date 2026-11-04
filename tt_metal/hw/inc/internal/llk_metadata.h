@@ -49,6 +49,13 @@ struct LLKMetadata {
 // Runtime callers retain the configured device assertion behavior.
 inline void data_format_metadata_not_set() { ASSERT(false); }
 
+// Checks that data format metadata is present.
+constexpr void assert_dataformat_set(const LLKMetadata& metadata) {
+    if (metadata.format == LLKMetadata::kNoFormat) {
+        data_format_metadata_not_set();
+    }
+}
+
 // Deliberately non-constexpr so unsupported or missing tile sizes fail constant evaluation.
 inline void tile_size_metadata_not_set() { ASSERT(false); }
 
