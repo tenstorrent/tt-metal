@@ -78,12 +78,16 @@ def prefill_forward(x, cos, sin, weights, config, device, ckc, *args, **kwargs):
         # Bonsai: q_proj stored as [q heads | gate heads] (models/demos/blackhole/bonsai2/tt/attn_qg.py)
         import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention as _attn_mod
 
-        _orig = _attn_mod.ttnn
-        _attn_mod.ttnn = stand_in if stand_in is not None else QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        _orig, _orig_rope = _attn_mod.ttnn, _attn_mod.apply_rotary_pos_emb_ttnn
+        si = stand_in if stand_in is not None else QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        _attn_mod.ttnn = si
+        # Bonsai: q / k norm + RoPE in one op when the stand-in deferred the norms (attn_qg.QGSplitTtnn.apply_rope)
+        _attn_mod.apply_rotary_pos_emb_ttnn = lambda q, k, c, s: si.apply_rope(q, k, c, s, _orig_rope)
         try:
             return _prefill_forward_impl(x, cos, sin, weights, config, device, ckc, *args, **kwargs)
         finally:
             _attn_mod.ttnn = _orig
+            _attn_mod.apply_rotary_pos_emb_ttnn = _orig_rope
 
 
 def _prefill_forward_impl(

@@ -4,6 +4,8 @@
 k and v (one ternary pass, split into two outputs) on the rotated hidden state, o on the rotated attention output.
 The converter kept every attention weight as is (no row or column reorder)."""
 
+import os
+
 import numpy as np
 
 import ttnn
@@ -104,6 +106,11 @@ class TernaryAttentionPrefillTtnn:
         self._w, self._t = weights, ternary
         self._xr = self._v = None
 
+    @property
+    def qkr(self):
+        """{id(norm weight): QKNormRope} for the fused q / k norm + RoPE (attn_qg.QGSplitTtnn.apply_rope)."""
+        return getattr(self._t, "pre_qkr", None)
+
     def __getattr__(self, name):
         return getattr(ttnn, name)
 
@@ -202,3 +209,12 @@ def swap_in_ternary_attention(model, gguf, rotations, cache_dir=None, prefill_ro
         )  # fmt: skip
         if prefill_rotations is not None:
             _PREFILL[id(w)] = attn.ternary
+            if os.environ.get("BONSAI_PREFILL_QKR", "1") == "1":
+                # q / k per-head norm + partial RoPE in one op (tprefill/qk_rope.py); consts built now, not in a trace
+                from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import QKNormRope
+
+                eps = attn.config.norm_eps
+                attn.ternary.pre_qkr = {
+                    id(nw): QKNormRope(device, ttnn.to_torch(nw).float().reshape(-1)[: attn.config.head_dim], eps)
+                    for nw in (w.q_norm, w.k_norm)
+                }

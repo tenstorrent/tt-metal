@@ -341,3 +341,30 @@ def test_prefill_norm_rot_time(device):
         f"NROT_MS attn {_time(device, lambda: op(a, want_n=True)):.3f} ffn {_time(device, lambda: op(a, b)):.3f} "
         f"xr-only {_time(device, lambda: op(a)):.3f}"
     )
+
+
+@pytest.mark.parametrize("H", [24, 4])
+def test_qk_norm_rope(device, H):
+    """qk_rope.QKNormRope against torch: rms_norm(x) * w over each head's 256, then partial RoPE on the first 64."""
+    from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import QKNormRope
+
+    T, D, R = 2048, 256, 64
+    x = (torch.randn(1, H, T, D) * 2).bfloat16()
+    w = (1.0 + 0.3 * torch.randn(D)).bfloat16().float()
+    ang = torch.arange(T).float()[:, None] * (1.0 / 10000 ** (torch.arange(0, R, 2).float() / R))[None]
+    emb = torch.cat([ang, ang], -1)
+    cos, sin = emb.cos().bfloat16(), emb.sin().bfloat16()
+    xf = x.float()
+    n = xf / torch.sqrt((xf * xf).mean(-1, keepdim=True) + 1e-6) * w
+    r, p = n[..., :R], n[..., R:]
+    rh = torch.cat([-r[..., R // 2 :], r[..., : R // 2]], -1)
+    ref = torch.cat([r * cos.float() + rh * sin.float(), p], -1)
+    tt = lambda v: ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    op = QKNormRope(device, w, 1e-6)
+    y = ttnn.to_torch(op(tt(x), tt(cos.reshape(1, T, R)), tt(sin.reshape(1, T, R)))).float()
+    rel = ((y - ref).norm() / ref.norm()).item()
+    xt = tt(x)
+    print(
+        f"QKR H={H} rel {rel:.5f} time {_time(device, lambda: op(xt, tt(cos.reshape(1, T, R)), tt(sin.reshape(1, T, R)))):.3f} ms"
+    )
+    assert rel < 0.01, rel

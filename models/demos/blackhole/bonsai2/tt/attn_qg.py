@@ -48,8 +48,9 @@ class HeadMajor:
     code's reshaped [B, T, heads, D] tensor: its reshape and transpose(1, 2) become no-ops and its per-head rms_norm
     runs on the head-major tensor (the same rows)."""
 
-    def __init__(self, t):
+    def __init__(self, t, pending=None):
         self.t = t
+        self.pending = pending  # a deferred per-head norm (+ RoPE): tprefill/qk_rope.QKNormRope, applied by apply_rope
 
 
 class QGHeads:
@@ -79,6 +80,9 @@ class QGSplitTtnn:
         return ttnn.reshape(t, shape, *args, **kwargs)
 
     def rms_norm(self, t, *args, **kwargs):
+        qkr = getattr(self._inner, "qkr", None) or {}
+        if isinstance(t, HeadMajor) and id(kwargs.get("weight")) in qkr:
+            return HeadMajor(t.t, pending=qkr[id(kwargs["weight"])])  # norm + RoPE together in apply_rope
         if isinstance(t, HeadMajor):
             y = ttnn.rms_norm(t.t, *args, **kwargs)
             ttnn.deallocate(t.t)
@@ -87,8 +91,18 @@ class QGSplitTtnn:
 
     def transpose(self, t, *args, **kwargs):
         if isinstance(t, HeadMajor):
-            return t.t  # already [B, heads, T, D]
+            return t if t.pending is not None else t.t  # already [B, heads, T, D]
         return ttnn.transpose(t, *args, **kwargs)
+
+    def apply_rope(self, q, k, cos, sin, orig):
+        """Stands in for the shared apply_rotary_pos_emb_ttnn: deferred head-major norms run fused with the RoPE."""
+        if isinstance(q, HeadMajor) and q.pending is not None and isinstance(k, HeadMajor) and k.pending is not None:
+            out = []
+            for t in (q, k):
+                out.append(t.pending(t.t, cos, sin))
+                ttnn.deallocate(t.t)
+            return tuple(out)
+        return orig(q, k, cos, sin)
 
     def chunk(self, t, n, dim=-1):
         if not isinstance(t, _QG):
