@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 template <uint32_t Vt, uint32_t H, uint32_t Mt, uint32_t gate_row_tiles, uint32_t gate_offset_tiles>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
@@ -18,13 +19,9 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer ones(dfb::ones);
     Noc noc;
 
-    // A BF16 tile of ones: the exact right operand of the compute kernel's row-sum matmul.
-    ones.reserve_back(1);
-    volatile tt_l1_ptr uint32_t* ones_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
-    for (uint32_t j = 0; j < ones.get_entry_size() / sizeof(uint32_t); j++) {
-        ones_ptr[j] = 0x3F803F80;
-    }
-    ones.push_back(1);
+    // The compute kernel's row-sum scaler: an exact 1.0.
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb::ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(ones);
 
     weight.reserve_back(Vt);
     for (uint32_t vt = 0; vt < Vt; vt++) {

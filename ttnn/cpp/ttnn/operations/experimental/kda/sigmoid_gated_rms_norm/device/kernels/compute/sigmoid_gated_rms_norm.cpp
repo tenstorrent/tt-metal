@@ -8,18 +8,18 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/bcast.h"
-#include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // Precision contract: the FPU truncates a source-register operand to the multiplier's width (SrcA keeps 8 explicit
 // mantissa bits, SrcB 10), which biases a product's magnitude low. So every elementwise product runs on the SFPU in
-// FP32 DST, with FP32 operands unpacked to DST losslessly. The one FPU product is the row sum of squares: x^2 (exact
-// in FP32 for BF16 x) enters the matmul as in0, i.e. SrcB, where it is truncated to TF32, against an exact all-ones
-// tile in SrcA, accumulating in FP32 DST. That leaves a ~2e-4 low bias in the sum of squares, below a BF16 ulp, and
-// needs HiFi3+ so SrcB's low mantissa bits take part.
+// FP32 DST, with FP32 operands unpacked to DST losslessly. The one FPU product is the row sum of squares, the reduce
+// LLK's REDUCE_ROW SUM: x^2 (exact in FP32 for BF16 x) sits in SrcB, where it is truncated to TF32, against an exact
+// 1.0 scaler in SrcA, accumulating in FP32 DST. That leaves a ~2e-4 low bias in the sum of squares, below a BF16 ulp,
+// and needs HiFi3+ so SrcB's low mantissa bits take part.
 
 // tmp[i] = x[i]^2 in FP32 (exact for BF16 x).
 template <uint32_t Vt, typename DFB>
@@ -41,27 +41,24 @@ FORCE_INLINE void square(DFB& tmp) {
     tmp.push_back(Vt);
 }
 
-// inv = rsqrt(sum_j x_j^2 * inverse_width + epsilon), the row value replicated across every column.
-template <uint32_t Vt, uint32_t inverse_width_bits, uint32_t epsilon_bits, typename DFB>
-FORCE_INLINE void inverse_rms(DFB& inv) {
-    inv.reserve_back(1);
-    pack_reconfig_data_format(dfb::inv);
-    reconfig_data_format(dfb::ones, dfb::tmp);
-    matmul_init(dfb::tmp, dfb::ones);
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < Vt; i++) {
-        matmul_tiles(dfb::tmp, dfb::ones, i, 0, 0);
-    }
-    binop_with_scalar_tile_init();
-    mul_unary_tile(0, inverse_width_bits);
-    add_unary_tile(0, epsilon_bits);
-    rsqrt_tile_init();
-    rsqrt_tile(0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, dfb::inv, 0);
-    tile_regs_release();
-    inv.push_back(1);
+// inv = rsqrt(sum_j x_j^2 * inverse_width + epsilon), valid in column 0 (the reduce leaves the other columns
+// unspecified, so the epilogue runs on the faces holding column 0, and the COL broadcast reads only that column).
+template <uint32_t Vt, uint32_t inverse_width_bits, uint32_t epsilon_bits, typename DFB0, typename DFB1, typename DFB2>
+FORCE_INLINE void inverse_rms(DFB0& tmp, DFB1& ones, DFB2& inv) {
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::ones, dfb::inv>(
+        tmp,
+        ones,
+        inv,
+        compute_kernel_lib::ReduceInputBlockShape::row(Vt),
+        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+        compute_kernel_lib::NoAccumulation{},
+        [](uint32_t dst) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst, inverse_width_bits, VectorMode::C);
+            add_unary_tile(dst, epsilon_bits, VectorMode::C);
+            rsqrt_tile_init();
+            rsqrt_tile(dst, VectorMode::C);
+        });
 }
 
 // out[i] = x[i] * inv * weight[i] * sigmoid(gate[i]), all products in FP32 DST on the SFPU.
@@ -74,7 +71,8 @@ FORCE_INLINE void normalize_and_gate(DFB& out) {
         reconfig_data_format_srca(dfb::x);
         copy_init(dfb::x);
         copy_tile(dfb::x, i, 0);
-        // FP32 inv broadcasts via unpack-to-DST (the SrcA path); BF16 weight broadcasts via SrcB.
+        // inv's column 0 broadcasts across the row; FP32 inv goes through unpack-to-DST (the SrcA path), the BF16
+        // weight's row 0 through SrcB.
         reconfig_data_format_srca(dfb::inv);
         unary_bcast_init<BroadcastType::COL>(dfb::inv);
         unary_bcast<BroadcastType::COL>(dfb::inv, 0, 1);
@@ -116,9 +114,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         x.wait_front(Vt);
         gate.wait_front(Vt);
         square<Vt>(tmp);
-        tmp.wait_front(Vt);
-        inverse_rms<Vt, inverse_width_bits, epsilon_bits>(inv);
-        tmp.pop_front(Vt);
+        inverse_rms<Vt, inverse_width_bits, epsilon_bits>(tmp, ones, inv);
         inv.wait_front(1);
         normalize_and_gate<Vt>(out);
         inv.pop_front(1);

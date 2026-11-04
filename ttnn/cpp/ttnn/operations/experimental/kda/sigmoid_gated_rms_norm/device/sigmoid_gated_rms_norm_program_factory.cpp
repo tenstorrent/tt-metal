@@ -3,7 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.hpp"
 
-#include <cstring>
+#include <bit>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -82,12 +82,6 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         make_dfb(ONES_DFB, 1, tt::DataFormat::Float16_b),
     };
 
-    uint32_t eps_bits = 0;
-    std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
-    const float inverse_width = 1.0F / static_cast<float>(attrs.value_dim);
-    uint32_t inverse_width_bits = 0;
-    std::memcpy(&inverse_width_bits, &inverse_width, sizeof(float));
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -130,7 +124,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
-    // See the compute kernel's precision contract: x^2 feeds the row-sum matmul through SrcB; x and inv reach the
+    // See the compute kernel's precision contract: x^2 feeds the row-sum reduce through SrcB; x and inv reach the
     // SFPU products through DST losslessly (an FP32 x or inv is unpacked to DST; a BF16 x is exact either way).
     unpack_modes[TMP_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[INV_DFB] = UnpackMode::UnpackToDest;
@@ -156,7 +150,10 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ONES_DFB, "ones", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}, {"inverse_width_bits", inverse_width_bits}, {"epsilon_bits", eps_bits}},
+        .compile_time_args =
+            {{"Vt", Vt},
+             {"inverse_width_bits", std::bit_cast<uint32_t>(1.0F / static_cast<float>(attrs.value_dim))},
+             {"epsilon_bits", std::bit_cast<uint32_t>(attrs.epsilon)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };
