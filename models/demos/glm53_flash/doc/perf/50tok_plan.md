@@ -256,3 +256,9 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   shared 33, add 3, fabric all-reduce 24 (composite 39). The 37.7 ms step follows (34 x 0.776 + 11 DSA layers). What
   is left per KDA layer: experts ~50 us over the bfp8 floor, KDA decode ~28 over, mHC ~100 over a merged target,
   the four exchanges ~160 (skew-bound), router + shared 66 in 8 programs.
+* 00:54 **DSA+MoE layer with the fabric knobs** (`tracy_l3_b4_fab`): 65 programs, 1167 us (tip 1316): the attention
+  block is still 50 programs (~550 us: the decode-state generic op 133, flash-MLA 73, o-proj 44, the q / absorb
+  matmuls 49 + 21 + 32 + 20 + 19, a layer norm 19, a view 20, ~38 small ops), fabric all-reduces 48 + 21, mHC 143, router
+  30, fabric gather 58, experts 198, fabric combine 64, shared 33. The fused decode-state block that exists behind
+  `GLM53_DSA_DECODE_STATE=1` (29 + 8 ops -> 1 + 2) measured -0.7 ms per step on 2026-11-03 but moved the decode chain
+  (pcc 0.847 vs 0.860 at S = 16); its decode gate runs after the combine diagnostics.
