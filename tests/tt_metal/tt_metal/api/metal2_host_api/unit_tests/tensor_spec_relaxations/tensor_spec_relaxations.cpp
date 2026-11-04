@@ -305,8 +305,8 @@ TEST(TensorSpecRelaxations, CPU_MatchPageSizeIsNoOpOnTiled) {
 }
 
 // dynamic_tensor_shape alone PINS the alignment. A tensor with the declared logical shape, padded to
-// a coarser alignment, is rejected: the padded shape is pinned to the logical shape rounded up to
-// the DECLARED alignment, a rule an op may rely on.
+// a coarser alignment, is rejected: the padded shape is pinned to the one the DECLARED alignment
+// derives from the logical shape, a rule an op may rely on.
 TEST(TensorSpecRelaxations, CPU_DynamicTensorShapeStillPinsAlignment) {
     const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
     const auto a = make_spec(Shape{1, 1, 30, 30});                                      // pads to {..,32,32}

@@ -94,15 +94,11 @@ struct TensorSpecRelaxations {
     // This is intended to be used in conjunction with dynamic_tensor_shape.
     // (The flag is inert if dynamic_tensor_shape is not set.)
     //
-    // NOTE: This is the alignment returned by TensorLayout::get_alignment(): the per-dimension
-    // granularity that the logical shape is padded up to (by default, the tile dims for TILE, the
-    // shard width for sharded ROW-MAJOR, and 1 for interleaved ROW-MAJOR). It is NOT the allocator
-    // alignment that aligned_page_size refers to.
+    // NOTE: This is the alignment returned by TensorLayout::get_alignment(), which determines how the
+    // logical shape is padded. It is NOT the allocator alignment that aligned_page_size refers to.
     //
-    // A tensor padded beyond the default carries a non-default alignment. For example, a TILE tensor
-    // with logical shape [30, 30] padded to [64, 64] has alignment [64, 64]. Under dynamic_tensor_shape
-    // alone, the padded shape is always the logical shape rounded up to the DECLARED alignment. This
-    // flag also admits tensors that are padded differently.
+    // In practice, this admits tensors that are padded differently from the declared one, such as a
+    // TILE tensor padded past the next tile boundary.
     //
     // CAUTION: With this flag set, the padded shape is no longer a function of the logical shape.
     // Your kernel and host logic must take the page count from the tensor argument's padded shape or
