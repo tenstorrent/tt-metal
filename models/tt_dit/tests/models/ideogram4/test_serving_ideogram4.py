@@ -31,11 +31,11 @@ from loguru import logger
 
 import ttnn
 
+from ....pipelines.events import SectionTimer
 from ....pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline
 from ....pipelines.ideogram4.sampler import PRESETS
 from ....utils.test import ring_params
 from ....utils.tracing import Tracer
-from .test_perf_ideogram4_gpu_bench import SectionTimer
 
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
