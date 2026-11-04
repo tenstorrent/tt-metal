@@ -53,6 +53,16 @@ std::optional<tt::tt_metal::ShardSpec> shrink_shard_for_rm_page_alignment(
     tt::tt_metal::TensorMemoryLayout memory_layout,
     RmPageAlignmentMode mode = RmPageAlignmentMode::Strict);
 
+bool rm_shard_page_valid(const tt::tt_metal::ShardSpec& spec, uint32_t element_size_bytes, uint64_t tensor_width);
+
+std::optional<tt::tt_metal::ShardSpec> rm_block_shard_spec_or_fallback(
+    const tt::tt_metal::ShardSpec& rm_spec,
+    const tt::tt_metal::ShardSpec& tile_spec,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    bool whole_row_shards_only = false);
+
 // Rescales a true-ND shard spec to fit a sliced output shape, keeping the orientation/distribution
 // strategy and (where possible) the per-dimension shard count.
 //

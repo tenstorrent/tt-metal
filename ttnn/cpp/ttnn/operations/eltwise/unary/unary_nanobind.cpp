@@ -34,7 +34,7 @@ void bind_unary_clamp(nb::module_& mod) {
         Keyword args:
             min (ttnn.Tensor or number): Minimum value. Defaults to `None`.
             max (ttnn.Tensor or number): Maximum value. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
@@ -95,7 +95,7 @@ void bind_unary_clip(nb::module_& mod) {
         Keyword args:
             min (float or ttnn.Tensor): Minimum value. Defaults to `None`.
             max (float or ttnn.Tensor): Maximum value. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -159,7 +159,7 @@ void bind_unary_operation_subcoregrids(
             input_tensor (ttnn.Tensor): the input tensor. {3}
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -279,7 +279,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
 
         Keyword Args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -350,7 +350,7 @@ void bind_unary_operation_with_float_parameter(
             {2} (float): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -422,7 +422,7 @@ void bind_unary_operation_with_scalar_parameter(
             {2} (float or int): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -487,7 +487,7 @@ void bind_unary_operation_with_float_parameter_default(
 
         Keyword Args:
             {2} (float): Defaults to `{3}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -551,7 +551,7 @@ void bind_unary_operation_with_int_parameter(
             {2} (int): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -661,7 +661,7 @@ void bind_softplus(nb::module_& mod) {
         Keyword Args:
             beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
             threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -712,7 +712,7 @@ void bind_xielu(nb::module_& mod) {
         Keyword Args:
             alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
             alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -765,7 +765,7 @@ void bind_unary_rdiv(
 
         Keyword Args:
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -823,7 +823,7 @@ void bind_tanh_like(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
@@ -875,7 +875,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
             fast_and_approximate_mode (bool, optional): Enables fast and approximate mode for exponential operation. When False, uses the accurate version of exponential algorithm. Defaults to `False`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -925,7 +925,7 @@ void bind_gelu(nb::module_& mod) {
                 - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
                 - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32 — matches torch.nn.functional.gelu(approximate="tanh").
             fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -1060,7 +1060,7 @@ void bind_sigmoid(nb::module_& mod) {
         Keyword Args:
             vector_mode (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
             mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -1116,7 +1116,7 @@ void bind_unary_chain(nb::module_& mod) {
             ops_chain (list[ttnn.UnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to be used for the operation. Defaults to `None`.
 
@@ -1161,7 +1161,7 @@ void bind_identity(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. A ROW_MAJOR BLOCK_SHARDED config without a shard spec may return an INTERLEAVED tensor if no shard spec spanning the full row fits the shape.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 

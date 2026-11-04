@@ -186,4 +186,23 @@ ShardSpec generate_transpose_shard_spec(
     return spec;
 }
 
+std::optional<ShardSpec> generate_transpose_rm_shard_spec(
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    TensorMemoryLayout memory_layout,
+    std::optional<ShardOrientation> orientation_hint) {
+    auto rm_spec = generate_transpose_shard_spec(
+        input_tensor, padded_out_shape, memory_layout, orientation_hint, OutputTiling::RowMajor);
+    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return rm_spec;
+    }
+    return common::rm_block_shard_spec_or_fallback(
+        rm_spec,
+        generate_transpose_shard_spec(
+            input_tensor, padded_out_shape, memory_layout, orientation_hint, OutputTiling::Tile),
+        input_tensor.element_size(),
+        static_cast<uint64_t>(padded_out_shape[-1]),
+        memory_layout);
+}
+
 }  // namespace ttnn::operations::data_movement::transpose
