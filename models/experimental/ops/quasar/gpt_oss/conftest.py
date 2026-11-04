@@ -19,8 +19,8 @@ def quasar_host_cast_fp32_to_bf16(monkeypatch):
     When the source is float32 and the target dtype is bfloat16, from_torch converts on the device: it
     tilizes in float32 and then typecasts. The float32 tilize faults on Quasar with UNPACKER_0
     ILLEGAL_FORMAT_CONVERSION (issue #57780). Casting on the host makes the source dtype match the
-    target dtype, so the upload runs no device conversion. ttnn.as_tensor calls ttnn.from_torch, so
-    weight uploads are covered too.
+    target dtype, so the upload runs neither the float32 tilize nor a device typecast. ttnn.as_tensor
+    calls ttnn.from_torch, so weight uploads are covered too.
     """
     if not is_quasar():
         return
@@ -47,15 +47,20 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
 
     Quasar does not support the Bfp8_b and Bfp4_b data formats, so any op that sets up a dataflow
     buffer in one of them fails program validation. The model sets these dtypes at many call sites,
-    so the wrappers below change them where they reach ttnn: tensor uploads, and the ops that take an
-    output dtype. This fixture depends on quasar_host_cast_fp32_to_bf16 so that its from_torch wrapper
-    is the outer one: it changes the dtype to bfloat16 first, and the float32 host cast then applies. It
-    depends on quasar_ops so that it wraps the Quasar versions of the ops that quasar_ops routes.
+    so the wrappers below change them where they reach ttnn: tensor uploads, and the listed ops that take
+    an output dtype. This fixture depends on quasar_host_cast_fp32_to_bf16 so that the from_torch wrapper
+    of this fixture is the outer one: it changes the dtype to bfloat16, and then the inner wrapper from
+    quasar_host_cast_fp32_to_bf16 does the float32 host cast. This fixture depends on quasar_ops so that
+    it wraps the Quasar versions of the ops that quasar_ops routes.
 
-    bfloat16 weights take about 1.9x (Bfp8_b) to 3.6x (Bfp4_b) more DRAM. They are cached in a separate
-    weight cache directory. A directory that a block float build marked complete makes the model skip
-    loading the original weights (see ModelArgs.weight_cache_is_complete), but it holds no bfloat16
-    files, so every weight would be missing.
+    bfloat16 weights take about 1.9x (Bfp8_b) to 3.6x (Bfp4_b) as much DRAM. They are cached in a directory
+    of their own. The weight cache directory is named after the dtype that the model requests (bfloat8_b),
+    so a Quasar run would otherwise share a directory with a block float run on another device that uses the
+    same cache location. If that run marked the directory complete (see ModelArgs.weight_cache_is_complete),
+    a Quasar run would skip loading the original weights, and ttnn.as_tensor would then find no bfloat16 file
+    for a weight that the model asks for in a block float format. weight_cache_is_complete also gets its
+    directory from weight_cache_path, so on Quasar it looks for the marker in the bfloat16 directory, which
+    only Quasar runs write to.
     """
     if not is_quasar():
         return
@@ -89,9 +94,7 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
         ("linear", None),
         ("sparse_matmul", None),
     ):
-        op = getattr(ttnn, name, None)
-        if op is not None:
-            monkeypatch.setattr(ttnn, name, _wrap(op, dtype_arg_index))
+        monkeypatch.setattr(ttnn, name, _wrap(getattr(ttnn, name), dtype_arg_index))
 
     orig_weight_cache_path = ModelArgs.weight_cache_path
 
@@ -106,38 +109,35 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
 
 @pytest.fixture(autouse=True)
 def quasar_ops(monkeypatch):
-    """On Quasar, route the mainline ops that Quasar cannot run to their ttnn.experimental.quasar versions.
+    """On Quasar, route the mainline ops below, which Quasar rejects, to their ttnn.experimental.quasar versions.
 
-    The program factories of these mainline ops build DataMovementKernel kernels, which Quasar does not
-    support. ttnn.linear fails the same way when it has a bias, because it adds the bias with the mainline
-    binary op. The Quasar versions take the same arguments: the binary ops accept a scalar second input and
-    output_tensor, and the SDPA ops accept attention_sink. All Quasar op routing is done here, so the
-    model code keeps calling the mainline ops, as in models/demos/gpt_oss.
+    Experimental ops maintain the same API as the mainline ops, so the model code needs no change.
     """
     if not is_quasar():
         return
 
-    quasar_ops = ttnn.experimental.quasar
+    quasar = ttnn.experimental.quasar
     routes = (
         # (module the model calls, op name there, Quasar module, Quasar op name)
-        (ttnn, "add", quasar_ops, "add"),
-        (ttnn, "mul", quasar_ops, "multiply"),
-        (ttnn, "multiply", quasar_ops, "multiply"),
-        (ttnn, "subtract", quasar_ops, "subtract"),
-        (ttnn, "sub", quasar_ops, "subtract"),
-        (ttnn, "linear", quasar_ops, "linear"),
-        (ttnn, "sparse_matmul", quasar_ops, "sparse_matmul"),
-        (ttnn.transformer, "scaled_dot_product_attention", quasar_ops.transformer, "scaled_dot_product_attention"),
+        (ttnn, "add", quasar, "add"),
+        (ttnn, "mul", quasar, "multiply"),
+        (ttnn, "multiply", quasar, "multiply"),
+        (ttnn, "subtract", quasar, "subtract"),
+        (ttnn, "sub", quasar, "subtract"),
+        # The mainline linear adds some biases with a C++ call to the mainline binary add. The "add" route above
+        # does not reach that call, so linear is routed to experimental version as a whole.
+        (ttnn, "linear", quasar, "linear"),
+        (ttnn.transformer, "scaled_dot_product_attention", quasar.transformer, "scaled_dot_product_attention"),
         (
             ttnn.transformer,
             "scaled_dot_product_attention_decode",
-            quasar_ops.transformer,
+            quasar.transformer,
             "scaled_dot_product_attention_decode",
         ),
         (
             ttnn.transformer,
             "paged_scaled_dot_product_attention_decode",
-            quasar_ops.transformer,
+            quasar.transformer,
             "paged_scaled_dot_product_attention_decode",
         ),
     )

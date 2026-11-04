@@ -123,7 +123,8 @@ def prepare_gpt_oss_generator_args(
     # Quasar bring-up knob: build only the first N decoder layers. Each layer's experts cost
     # ~448 MB (down_proj is 32 x 2880 x 2880 at bf4 = 149 MB, gate_up twice that), so the full
     # 24-layer gpt-oss-20b needs ~10.7 GB of expert weights alone and a 1x1 mesh runs out of DRAM
-    # on the last layer. ModelArgs stamps n_layers into the weight-cache metadata
+    # on the last layer. On Quasar, where the model uses bfloat16, each layer's experts cost ~1.6 GB.
+    # ModelArgs stamps n_layers into the weight-cache metadata
     # (model_config.py:349), so a partial build cannot be mistaken for a full one. Generated text
     # is meaningless with N < n_layers -- this is for getting ops to run, not for accuracy.
     n_layers_override = os.getenv("QSR_N_LAYERS")

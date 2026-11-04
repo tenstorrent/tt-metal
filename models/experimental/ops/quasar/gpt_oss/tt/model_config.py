@@ -412,7 +412,9 @@ def determine_device_name(mesh_device):
     if num_devices == 0:
         return "CPU"
 
-    if is_blackhole():
+    # Quasar has no product names yet. It takes the Blackhole names, so it also gets the configs keyed on them.
+    # TODO: when Quasar products get names, give Quasar its own entries and update the configs keyed on them.
+    if is_blackhole() or is_quasar():
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
@@ -427,11 +429,6 @@ def determine_device_name(mesh_device):
             4: "N150x4",
             8: "T3K",
             32: "TG",
-        }
-    elif is_quasar():
-        # Only single-device Quasar targets (emulator, craq-sim) are supported.
-        dict_device_names = {
-            1: "QSR",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
