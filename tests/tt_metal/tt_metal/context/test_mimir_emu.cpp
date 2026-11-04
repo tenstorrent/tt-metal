@@ -27,8 +27,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "mimir_contract.hpp"
-#include "umd/device/types/arch.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -41,7 +41,7 @@ using namespace mimir_contract;
 std::shared_ptr<distributed::MeshDevice> open_unit_mesh() { return distributed::MeshDevice::create_unit_mesh(0); }
 
 IDevice* physical_device(distributed::MeshDevice& mesh) {
-    return mesh.get_device(distributed::MeshCoordinate::zero_coordinate(mesh.shape().dims()));
+    return &slow_dispatch::physical_device_from_unit_mesh(mesh);
 }
 
 void LaunchProgram(distributed::MeshDevice& mesh, Program& program) {

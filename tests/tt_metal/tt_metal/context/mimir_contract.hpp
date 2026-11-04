@@ -26,8 +26,8 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "umd/device/soc_arch_descriptor.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/soc_arch_descriptor.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 namespace mimir_contract {
@@ -96,7 +96,7 @@ inline const metal_SocDescriptor& configured_soc_desc() {
         const char* path = selected_soc_desc_path();
         TT_FATAL(path != nullptr, "No package descriptor selected");
         auto arch = std::make_shared<tt::umd::SocArchDescriptor>(std::string(path));
-        return metal_SocDescriptor(tt::umd::SocDescriptor(std::move(arch)), tt::BoardType::UNKNOWN);
+        return metal_SocDescriptor(tt::umd::SocDescriptor(std::move(arch)), tt::BoardType::UNKNOWN, std::nullopt);
     }();
     return desc;
 }

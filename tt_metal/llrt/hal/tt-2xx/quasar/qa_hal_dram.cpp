@@ -20,7 +20,7 @@ using namespace tt::tt_metal::quasar::dram;
 #include "hostdev/cce_spa_routes.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_CCE_MAILBOX_ADDRESS_HOST(x) \
     (reinterpret_cast<std::uint64_t>(&(reinterpret_cast<mailboxes_t*>(MEM_CCE_MAILBOX_BASE)->x)))
