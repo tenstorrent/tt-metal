@@ -321,7 +321,7 @@ Program& persistent_run_on_mesh_device(
 // alive its Program keeps that program-local L1 placed, as an op held in the program cache does.
 distributed::MeshWorkload run_program_with_cb(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& cores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         blank_kernel_path,
