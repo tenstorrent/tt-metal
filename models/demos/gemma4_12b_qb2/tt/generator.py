@@ -1096,8 +1096,8 @@ def build_generator(model_dir, mesh_device, **kwargs) -> Gemma4Generator:
     """Readiness factory: the full 48-layer model on the open QB2 ``[1, 4]`` ring mesh.
 
     kwargs: ``num_blocks`` (KV blocks per layer, default one 262144-token request + 2 reserved), ``max_context``,
-    ``layer_indices`` (reduced model), ``precision`` (precision config: default the datatype sweep's
-    ``doc/datatype_sweep/selected_precision_config.json``, ``"baseline"`` the stage-7 policy; ``tt/precision.py``),
+    ``layer_indices`` (reduced model), ``precision`` (precision config: default
+    ``tt/precision_config.json``; ``tt/precision.py``),
     ``policy`` / ``lm_head`` overrides on top of it, ``decode_buckets``, ``trace_prefill``, ``sampler`` (default: the
     precision config's ``sampling.sampler``, ``"split_topk"``; ``"ttsampling"`` the stock module), ``prepare``.
     """

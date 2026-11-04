@@ -16,7 +16,7 @@ tenstorrent/tt-agentic-bringup-qb2#93.
 | `tt/optimized_decoder.py`, `tt/fused_decoder.py`, `tt/functional_decoder.py` | Single-chip layer programs, policies and constants the TP4 layer builds on |
 | `tt/generator.py`, `tt/sampling.py` | Traced decode, chunked prefill, on-device sampling (top_k 1..32) |
 | `tt/generator_vllm.py` | vLLM adapter (`Gemma4_12BQB2ForCausalLM`), vLLM-owned hybrid KV cache, decode-input reload contract v1 |
-| `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision: BFP8 weights, BFP4 LoFi LM head, BFP8 KV cache. `GEMMA4_PRECISION_CONFIG=baseline` restores the pre-sweep policy (`doc/datatype_sweep/configs/baseline_stage7.json`) |
+| `tt/precision.py`, `tt/precision_config.json` | Selected precision: BFP8 weights on every layer, the exact (tanh) GELU, BFP4 LoFi LM head, BFP8 KV cache; the config's `selection` block records how it was chosen. `GEMMA4_PRECISION_CONFIG=<path>` loads another config |
 | `vllm_metadata.json` | Architecture registration for `EXTRA_MODELS_DIR` |
 | `tests/test_vllm_adapter.py` | Device test of the adapter: resident-input decode vs reload, chunked prefill, seeded rows |
 

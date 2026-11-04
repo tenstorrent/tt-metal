@@ -4,7 +4,7 @@
 
 The single-chip baseline is ``optimized_decoder.OptimizedDecoder``: same op graph, precision policy (including the
 per-layer BFP4 exceptions), program-config rules and paged-cache contract. This class shards it 4 ways over the
-mesh's one axis (README):
+mesh's one axis:
 
 Weights (one DRAM width-sharded copy per chip, as on one chip)
 * QKV column-parallel by head: chip ``d`` owns Q heads ``4d..4d+3`` and, on sliding layers, KV heads ``2d, 2d+1``.
@@ -47,30 +47,29 @@ NUM_LINKS = 2
 
 # Multichip geometry over the single-chip policy. Per-chip matmuls are 4x smaller; one residual grid (15 cores x 8
 # tiles) and one MLP grid (60 cores x 2 tiles) serve every layer, so a layer stack never reshards between layers.
-# Measured on BFP8 (0, 5) and BFP4 (13, 25, 35) layers at B=1/32 (README "Decode"): 2-tile MLP shards -2 us (BFP8) /
+# Measured on BFP8 (0, 5) and BFP4 (13, 25, 35) layers at B=1/32: 2-tile MLP shards -2 us (BFP8) /
 # -6..-13 us (BFP4) vs 5; gate/up in0_block_w 8 -8 us on BFP4 layers vs the single-chip 4 (24 / 40: -5.5 / -3.3); a
 # 40-core residual -1 us on BFP4 but +8..+12 us on BFP8 layers, 24 / 30 / 60 cores slower on both.
 MULTICHIP_POLICY = {
     "residual_cores": 15,
     "mlp_shard_tiles": 2,
     # decode in0_block_w: 8 everywhere (the auto value of the BFP8 layers); on BFP4 layers gate/up 8 is -8 us vs the
-    # single-chip 4, QKV / o_proj 8 is -0.6..-3.3 us vs the auto 40 / 32 (README "Decode")
+    # single-chip 4, QKV / o_proj 8 is -0.6..-3.3 us vs the auto 40 / 32
     # down 8 (auto: 12): -1.0 us on BFP8 layers 0 / 5, -3.1 us on BFP4-down layers 13 / 17, -4.1 us on layer 25
-    # (optimized-multichip README "Decode matmul geometry")
     "in0": {"qkv": 8, "o": 8, "gate": 8, "up": 8, "down": 8},
     # 2D-multicast / minimal_matmul prefill crossover for every layer (the single chip used 1024 on BFP4-MLP layers):
     # within +-0.06 ms of 1024 on BFP4-MLP layers; after the fused gate|up change 1024 is +0.02..+0.06 ms on BFP8
-    # layers 0 / 5 and -0.02..-0.05 ms on layer 13 at 1152-1280 rows (README "Prefill"; stage-5 candidate)
+    # layers 0 / 5 and -0.02..-0.05 ms on layer 13 at 1152-1280 rows
     "prefill_linear_max_rows": 1280,
     # decode all-reduce payload: "bf16" or "bfp8" (o_proj / down partial sums). BFP8 halves the persistent scratch
-    # (2 x 34 KB instead of 2 x 64 KB per residual core) and is 5.4 us faster per layer (README "Decode").
+    # (2 x 34 KB instead of 2 x 64 KB per residual core) and is 5.4 us faster per layer.
     "ar_dtype": {"o": "bfp8", "down": "bfp8"},
     # sliding prefill SDPA with 4 local heads: 128-row Q chunks over 4096-row query blocks keep the 110 cores busy
-    # (single chip: q256 over 2048-row blocks, 16 heads); -0.8 ms at 4096 tokens (README "Prefill")
+    # (single chip: q256 over 2048-row blocks, 16 heads); -0.8 ms at 4096 tokens
     "sdpa_prefill_q_chunk": {"sliding": 128, "full": 64},
     "sliding_attn_block": 4096,
     # per-chip prefill minimal_matmul blocking: gate/up [M, 3840] x [3840, 3840] run 12 x 4 x 12 (single chip:
-    # 8 x 4 x 16 for 15360 columns); -60 us each at 4096 rows, within the L1 headroom (README "Prefill")
+    # 8 x 4 x 16 for 15360 columns); -60 us each at 4096 rows, within the L1 headroom
     "prefill_blocks": {"gate": (12, 4, 12, 2, 4), "up": (12, 4, 12, 2, 4)},
     # prefill chunks on the minimal_matmul path (more than prefill_linear_max_rows rows): the input norm's all-gather
     # fused into the QKV matmul (all_gather_minimal_matmul_async on an 11 x 9 matmul grid; the ring muxes take the
@@ -78,13 +77,13 @@ MULTICHIP_POLICY = {
     "prefill_ag_qkv_fused": True,
     # the same for gate/up on layers whose long-chunk MLP branch is BFP8: one fused all-gather + matmul over a
     # prefill-only packed [gate | up] weight copy (per chip [3840, 7680], +31 MB BFP8), split into the two BFP8 outputs
-    # by the op; -0.05..-0.46 ms (2-6%) per layer at 1344-8192 tokens (README "Prefill"). Decode keeps the separate
+    # by the op; -0.05..-0.46 ms (2-6%) per layer at 1344-8192 tokens. Decode keeps the separate
     # gate and up weights.
     "prefill_ag_gate_up_fused": True,
     "prefill_agmm_blocks": {"sliding": (8, 5, 16, 2, 4), "full": (8, 5, 16, 2, 4), "gate_up": (8, 10, 16, 2, 4)},
     # prefill o_proj output and its reduce-scatter payload: None (BF16) or "bfp8" (cast back to BF16 for the
     # distributed norm). "bfp8" is a further -0.04..-0.16 ms at 2048-8192 tokens but costs up to 0.0011 worst-row PCC
-    # vs HF on layer 5 (README "Prefill activation / CCL dtype"); kept BF16
+    # vs HF on layer 5; kept BF16
     "prefill_o_dtype": None,
     # long chunks (fused all-gather + matmul path): dtype of the input norm output (gathered QKV activation, "qkv") and
     # of the pre-FFN norm output (gathered gate/up activation, "gate_up"); None (BF16) or "bfp8" (half the
@@ -93,7 +92,7 @@ MULTICHIP_POLICY = {
     # full-attention decode at batch >= this (and a multiple of 4): each chip attends B/4 users with all 16 Q heads
     # instead of all users with its 4 heads (the one KV head is replicated, so this cuts each chip's cache reads 4x);
     # None = never. Layer 5 at position 4096: B=32 708 -> 530 us, B=16 509 -> 446, B=8 415 -> 410; at 16384: B=32
-    # 1776 -> 804, B=8 695 -> 479; B=4 loses 32 us at 4096 (README "User-split full-layer attention")
+    # 1776 -> 804, B=8 695 -> 479; B=4 loses 32 us at 4096
     "decode_user_split_min_batch": 8,
     # SDPA cores per (local user, KV head) in the user-split path, {max local users: cores} (smallest key >= users
     # wins); the unsplit path keeps ``sdpa_decode_max_cores``
@@ -110,7 +109,7 @@ MULTICHIP_POLICY = {
     "decode_split_ag_mem": "dram",
     # decode_user_split_min_position: {max batch: position} from which the split wins (use_user_split, smallest key
     # >= batch). Layer 5: B=8 split +23 us at 2048, -4 us at 4096; B=16 +36 at 1024, -4 at 2048; B=32 +13 at 1024,
-    # -51 at 2048; B=4 +32 at 4096, -63 at 16384 (README "User split and context length")
+    # -51 at 2048; B=4 +32 at 4096, -63 at 16384
     "decode_user_split_min_position": {4: 8192, 8: 4096, 16: 2048, 32: 1280},
     # chunks on the 2D-matmul path (<= prefill_linear_max_rows): all-gathered QKV / gate-up input in "dram" or "l1"
     # (interleaved)
@@ -733,7 +732,7 @@ class MultichipDecoder(OptimizedDecoder):
             # The op builds its all-gather intermediate with the requested output dtype (all_gather_minimal_matmul_async
             # compute_output_specs), so a BFP8 output without a gather buffer would corrupt BF16 gathered rows; the
             # per-call gather buffer (_ag_matmul) keeps the gathered rows in the input's dtype (BFP8 by default,
-            # prefill_norm_dtype["gate_up"]; multichip work log item 17).
+            # prefill_norm_dtype["gate_up"]).
             gate, up = self._ag_matmul(
                 h_local, self.w_gate_up_packed, "gate", "gate_up", chunks=2, dtype=mid, gather_buffer=True
             )
@@ -815,7 +814,7 @@ class MultichipDecoder(OptimizedDecoder):
             dtype=dtype,
             # Without a persistent gather buffer the op needs its barrier semaphore: it keeps a fast chip from
             # writing gathered rows into a slow chip's freshly allocated buffer while that memory is still in use
-            # (op contract; without it, prefill under the watcher was not deterministic, work log item 12).
+            # (op contract; without it, prefill under the watcher was not deterministic).
             persistent_output_buffer=gathered,
             barrier_semaphore=self.ccl._next("barrier", self.ccl._barrier),
             multi_device_global_semaphore=self.ccl._next("ag", self.ccl._ag),

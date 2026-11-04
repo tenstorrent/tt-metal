@@ -3,13 +3,11 @@
 """Precision policy of the Gemma 4 12B full model, read from a JSON precision config.
 
 ``Gemma4Model`` (and therefore ``build_generator`` and every adapter built on them) loads
-``DEFAULT_PRECISION_CONFIG`` (``doc/datatype_sweep/selected_precision_config.json``, the datatype sweep's selection)
-unless the caller passes ``precision=`` or sets ``GEMMA4_PRECISION_CONFIG``. The file is required: a missing or
-malformed config raises instead of silently falling back to hard-coded dtypes. ``precision="baseline"`` selects the
-optimized-full-model (stage 7) policy (``BASELINE_PRECISION_CONFIG``), the safe fallback; ``precision="legacy"`` skips
-the config and keeps the decoder's hard-coded per-layer policy (``multichip_layer_policy``; equivalence check only).
+``DEFAULT_PRECISION_CONFIG`` (``tt/precision_config.json``; its ``selection`` block records how it was chosen) unless
+the caller passes ``precision=`` or sets ``GEMMA4_PRECISION_CONFIG``. The file is required: a missing or malformed
+config raises instead of silently falling back to hard-coded dtypes.
 
-Every swept field is turned into decoder / LM-head construction arguments here (``layer_policy``, ``lm_head_policy``),
+Every field is turned into decoder / LM-head construction arguments here (``layer_policy``, ``lm_head_policy``),
 so a value in the JSON is a value in the built tensors and compute configs:
 
 * ``weights``: weight dtype per matmul group (``qkv``, ``o``, ``gate_up`` = gate and up, ``down``) with per-layer
@@ -17,7 +15,7 @@ so a value in the JSON is a value in the built tensors and compute configs:
 * ``compute_fidelity``: decode / prefill matmul fidelity per group with per-layer exceptions, LM head, SDPA decode /
   prefill. ``fixed`` lists the fidelities the decoder does not expose (norms, RoPE, short-chunk SDPA); they are
   validated against the implementation.
-* ``approximations`` (optional; absent = the decoder defaults ``"fast"`` / ``false`` / sliding ``true``): the gated
+* ``approximations`` (optional; absent = the decoder defaults ``"tanh"`` / ``false`` / sliding ``true``): the gated
   MLP's GELU (``"fast"``: ttnn GELU with its fast approximation, ``"tanh"``: gelu_pytorch_tanh as the checkpoint
   defines it) and the exp approximation of decode / prefill SDPA (``sdpa_decode_exp_approx``,
   ``sdpa_prefill_exp_approx`` per sliding / full).
@@ -38,9 +36,7 @@ from pathlib import Path
 import ttnn
 
 SCHEMA = "gemma4_12b_precision/v1"
-MODEL_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_PRECISION_CONFIG = MODEL_DIR / "doc/datatype_sweep/selected_precision_config.json"
-BASELINE_PRECISION_CONFIG = MODEL_DIR / "doc/datatype_sweep/configs/baseline_stage7.json"
+DEFAULT_PRECISION_CONFIG = Path(__file__).resolve().parent / "precision_config.json"
 PRECISION_ENV = "GEMMA4_PRECISION_CONFIG"
 
 GROUPS = ("qkv", "o", "gate_up", "down")
@@ -61,8 +57,7 @@ FIXED_ASSUMPTIONS = {
     ("sampling", "sampler"): "split_topk",
     ("sampling", "input_dtype"): "bf16",
 }
-# DRAM reader cores per bank for BFP4 weights (optimized-decoder README "Per-layer BFP4 MLP"): MLP 3 for every MLP
-# matmul of a layer with a BFP4 MLP group, o_proj 3, QKV 2 (sliding: 32 tiles per bank) / 3 (full: 36)
+# DRAM reader cores per bank for BFP4 weights: MLP 3 for every MLP matmul of a layer with a BFP4 MLP group, o_proj 3, QKV 2 (sliding: 32 tiles per bank) / 3 (full: 36)
 BFP4_READERS = {"mlp": 3, "o": 3, "qkv_sliding": 2, "qkv_full": 3}
 
 
@@ -112,16 +107,12 @@ def _per_layer(section, field, num_layers, legal, what):
 
 
 class PrecisionConfig:
-    """A validated precision config (see the module docstring); ``None`` = the decoder's hard-coded policy."""
+    """A validated precision config (see the module docstring)."""
 
     def __init__(self, cfg, source="<dict>", num_layers=48):
         self.source = str(source)
-        self.legacy = cfg is None
         self.num_layers = num_layers
         self.raw = cfg
-        if self.legacy:
-            self.config_id = "legacy_hardcoded"
-            return
         _require(cfg.get("schema") == SCHEMA, f"{source}: schema must be {SCHEMA}")
         self.config_id = cfg["config_id"]
         self.weights = _per_layer(cfg["weights"], "dtype", num_layers, WEIGHT_DTYPES, "weights")
@@ -199,12 +190,9 @@ class PrecisionConfig:
     # ------------------------------------------------------------------ loading
     @classmethod
     def load(cls, precision=None, num_layers=48):
-        """``precision``: None (``$GEMMA4_PRECISION_CONFIG`` or ``DEFAULT_PRECISION_CONFIG``), a path, a dict,
-        ``"baseline"`` (the stage-7 policy) or ``"legacy"`` (no config: the decoder's hard-coded policy)."""
+        """``precision``: None (``$GEMMA4_PRECISION_CONFIG`` or ``DEFAULT_PRECISION_CONFIG``), a path or a dict."""
         if isinstance(precision, PrecisionConfig):
             return precision
-        if precision == "legacy":
-            return cls(None, "legacy", num_layers)
         if isinstance(precision, dict):
             return cls(precision, "<dict>", num_layers)
         if precision is None:
@@ -215,22 +203,17 @@ class PrecisionConfig:
                     stacklevel=2,
                 )
             precision = os.environ.get(PRECISION_ENV) or DEFAULT_PRECISION_CONFIG
-        if precision == "baseline":
-            precision = BASELINE_PRECISION_CONFIG
         path = Path(precision)
         if not path.is_file():
             raise FileNotFoundError(
-                f"precision config {path} not found: the model's dtype / fidelity policy is read from it; "
-                f"pass precision='baseline' for the stage-7 policy"
+                f"precision config {path} not found: the model's dtype / fidelity policy is read from it"
             )
         return cls(json.loads(path.read_text()), path, num_layers)
 
     # ------------------------------------------------------------------ construction arguments
     def layer_policy(self, layer_idx, layer_type):
         """Decoder policy overrides for one layer (``MultichipDecoder.from_state_dict(policy=...)``): every precision
-        field of the decoder policy, so none of its hard-coded per-layer defaults survives. ``{}`` for legacy."""
-        if self.legacy:
-            return {}
+        field of the decoder policy, so none of its hard-coded per-layer defaults survives."""
         w = self.weights[layer_idx]
         dtype = {r: WEIGHT_DTYPES[w[g]] for g in GROUPS for r in GROUP_ROLES[g]}
         return {
@@ -256,9 +239,7 @@ class PrecisionConfig:
         return {"qkv": qkv, "o": BFP4_READERS["o"] if w["o"] == "bfp4" else 1, "gate": mlp, "up": mlp, "down": mlp}
 
     def lm_head_policy(self):
-        """LM head dtype / fidelity (``Gemma4Model``'s ``LM_HEAD_POLICY`` overrides); ``{}`` for legacy."""
-        if self.legacy:
-            return {}
+        """LM head dtype / fidelity (``Gemma4Model``'s ``LM_HEAD_POLICY`` overrides)."""
         return {"dtype": WEIGHT_DTYPES[self.lm_head_dtype], "fidelity": self.lm_head_fid}
 
     @property
@@ -275,8 +256,6 @@ class PrecisionConfig:
     def verify(self, summary):
         """Raise if a built model (``built_precision_summary``) holds other weight / KV / all-reduce / prefill
         activation dtypes, reader counts or matmul / SDPA / LM-head fidelities than this config prescribes."""
-        if self.legacy:
-            return
         dt = {"bf16": "BFLOAT16", "bfp8": "BFLOAT8_B", "bfp4": "BFLOAT4_B"}
         fid = {f: f.replace("hifi", "HiFi").replace("lofi", "LoFi").replace("fp32", "+fp32") for f in MATMUL_FIDELITIES}
         errs = []
@@ -328,7 +307,7 @@ def deep_merge(base, over):
 
 def built_precision_summary(model):
     """What the built model actually holds: per-layer weight / KV dtypes, reader counts and compute-kernel fidelities
-    read back from the constructed tensors and configs (the propagation evidence of the datatype sweep)."""
+    read back from the constructed tensors and configs (evidence that every config value reached the build)."""
 
     def dt(t):
         return str(t.dtype).split(".")[-1]

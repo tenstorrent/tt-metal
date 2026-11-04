@@ -88,8 +88,7 @@ PREFILL_BUCKETS = (128, 256, 512, 1024, 2048, 4096, 8192)
 #   probe);
 # * BFP4: the DRAM-sharded program with 3 reader cores per bank (columns padded to 66048 per chip so each bank shard
 #   splits over its readers) and in0_block_w 1 on the L1 width-sharded normalized hidden state: 403 us vs 525 us for the
-#   best 1D-multicast geometry; 4 readers exceed the op's limit (workers_per_bank <= 3), in0_block_w 8 overflows L1
-#   (bring-up datatype sweep).
+#   best 1D-multicast geometry; 4 readers exceed the op's limit (workers_per_bank <= 3), in0_block_w 8 overflows L1.
 LM_HEAD_POLICY = {"dtype": ttnn.bfloat8_b, "fidelity": "hifi2", "in0_block_w": 8, "program": None, "readers": 3}
 LM_HEAD_PROGRAM_BY_DTYPE = {ttnn.bfloat8_b: "mcast1d", ttnn.bfloat4_b: "dram_sharded", ttnn.bfloat16: "mcast1d"}
 _DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
@@ -188,7 +187,7 @@ class Gemma4Model:
         self.eps = c.rms_norm_eps
         self.layer_indices = list(range(c.num_hidden_layers)) if layer_indices is None else list(layer_indices)
         ckpt = checkpoint if isinstance(checkpoint, Checkpoint) else Checkpoint(checkpoint)
-        # precision policy (tt/precision.py): the selected datatype-sweep config unless ``precision`` names another;
+        # precision policy (tt/precision.py): tt/precision_config.json unless ``precision`` names another;
         # ``policy`` / ``lm_head`` stay as explicit experiment overrides on top of it
         self.precision = PrecisionConfig.load(precision, c.num_hidden_layers)
         log(f"precision config: {self.precision.config_id} ({self.precision.source})")

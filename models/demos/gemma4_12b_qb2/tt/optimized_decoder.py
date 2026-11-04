@@ -68,7 +68,7 @@ FIDELITY = {
     "hifi4fp32": (ttnn.MathFidelity.HiFi4, True, False),
 }
 
-# Matmul roles: qkv, o, gate, up, down. Every entry is measured; see README "Chosen configuration".
+# Matmul roles: qkv, o, gate, up, down. Every entry is measured.
 # fmt: off
 DEFAULT_POLICY = {
     # weight dtypes
@@ -91,7 +91,7 @@ DEFAULT_POLICY = {
     # prefill chunks of at most this many rows run their matmuls (except the sliding QKV split) as ttnn.linear
     # with a 2D multicast program config (M over the grid rows, N over the columns), where it beats
     # minimal_matmul by 10-40% at <= 1024 rows and 2-5% at 1152-1280 (per_core_M <= 4); from 1312 rows
-    # (per_core_M 5) minimal_matmul with BFP8 MLP intermediates is 3-10% faster (README "Prefill crossover")
+    # (per_core_M 5) minimal_matmul with BFP8 MLP intermediates is 3-10% faster
     "prefill_linear_max_rows": 1280,
     # 2D-multicast prefill grid width: the most columns whose output subblock is at least this wide (4 = widest
     # subblock first); 3 puts the full-layer QKV (288 N tiles) on 11 columns with 1x3 subblocks instead of 9 with 1x4
@@ -109,9 +109,10 @@ DEFAULT_POLICY = {
     "prefill_mlp_act_dtype": {"gate_up": "bfp8", "product": "bfp8"},
     # prefill: GELU(tanh) as the gate matmul's fused activation instead of the multiply's input activation
     "prefill_gelu_in_gate": False,
-    # gate activation applied in the gated multiply: "tanh" (exact gelu_pytorch_tanh) or "fast" (ttnn GELU
-    # with its fast approximation; 0.64% vs 0.21% relative error of the gated product, README)
-    "gelu": "fast",
+    # gate activation applied in the gated multiply: "tanh" (gelu_pytorch_tanh, as the checkpoint defines it) or
+    # "fast" (ttnn GELU with its fast approximation: 0.64% vs 0.21% relative error of the gated product, and about 4x
+    # the full model's divergence from HF on long reasoning text)
+    "gelu": "tanh",
     # DRAM reader cores per bank (1..3) per role; the bank shard width must divide by it
     "readers": {"qkv": 1, "o": 1, "gate": 1, "up": 1, "down": 1},
     # decode in0_block_w per role (None: largest legal value within the L1 budget)
@@ -141,14 +142,14 @@ DEFAULT_POLICY = {
     # prefill Q chunk: the largest chunk up to the cap that divides the chunk start and the (64-aligned) row count
     # (FusedDecoder rule). A floor (min_rows, q) raises a smaller chunk to q when the SDPA call has more than
     # min_rows rows; the op then pads the last Q chunk internally. None = no floor. Sliding: rows that are 64 mod
-    # 128 would otherwise run 64-row Q chunks; above 512 rows a padded 128-row chunk is 2-6% faster per layer
-    # (README "Prefill SDPA Q chunk"); full layers already run 64-row chunks.
+    # 128 would otherwise run 64-row Q chunks; above 512 rows a padded 128-row chunk is 2-6% faster per layer;
+    # full layers already run 64-row chunks.
     "sdpa_prefill_q_floor": {"sliding": (512, 128), "full": None},
 }
 # fmt: on
 
 # Per-layer weight exceptions (google/gemma-4-12B-it): layers whose real-activation worst-row PCC vs HF
-# stays >= 0.998 with BFP4 MLP weights on two different real prompts (README "Per-layer BFP4 MLP"); every
+# stays >= 0.998 with BFP4 MLP weights on two different real prompts; every
 # other layer keeps BFP8 (BFP4 there drops some layers below the 0.995 bar, e.g. 0.979 at layer 6).
 MLP_BFP4_GATE_UP_DOWN_LAYERS = frozenset(range(13, 25))
 MLP_BFP4_GATE_UP_LAYERS = frozenset({25, 26, 35, 36, 37, 38, 39})
@@ -180,12 +181,11 @@ _ATTN_BFP4_FULL_QKV_READERS = 3
 
 # Layers whose long-chunk prefill MLP intermediates stay BF16: with BFP8 gate/up outputs and product their
 # real-activation worst row (4096-token prefill, two prompts) drops by more than 0.0005 (worst over both
-# prompts: layer 10: -0.0022, layer 11: -0.0010); elsewhere the drop is <= 0.0005 for -6..-11% layer prefill
-# (README "Prefill matmul").
+# prompts: layer 10: -0.0022, layer 11: -0.0010); elsewhere the drop is <= 0.0005 for -6..-11% layer prefill.
 MLP_BF16_INTERMEDIATE_LAYERS = frozenset({10, 11})
 
 # Layers whose prefill matmuls keep HiFi2 instead of LoFi: the last layer has the narrowest margin
-# (real-activation prefill worst row 0.99555 with LoFi, 0.99720 with HiFi2; README "Per-layer exceptions").
+# (real-activation prefill worst row 0.99555 with LoFi, 0.99720 with HiFi2).
 PREFILL_HIFI2_LAYERS = frozenset({47})
 
 
@@ -648,7 +648,7 @@ class OptimizedDecoder(FusedDecoder):
         def sub_w(per_core_n):
             return max(w for w in range(1, min(per_core_n, 4) + 1) if per_core_n % w == 0)
 
-        # More columns win once the subblock is at least prefill_2d_sub_w_target wide (README "Prefill matmul")
+        # More columns win once the subblock is at least prefill_2d_sub_w_target wide
         target = self.policy["prefill_2d_sub_w_target"]
         cols = max(range(1, self.grid.x + 1), key=lambda c: (min(sub_w(-(-nt // c)), target), c))
         per_core_n = -(-nt // cols)

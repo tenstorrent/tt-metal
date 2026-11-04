@@ -6,7 +6,7 @@ The adapter only translates the plugin's model interface (``docs/MODEL_INTERFACE
 low-level API of ``tt/generator.py``; every device program, trace, cache layout and the sampler are the generator's:
 
 * ``initialize_vllm_model`` builds ``Gemma4Model`` with the selected precision config
-  (``doc/datatype_sweep/selected_precision_config.json``, verified against the built model) and **no** KV cache.
+  (``tt/precision_config.json``, verified against the built model) and **no** KV cache.
 * KV cache: vLLM owns it. ``get_kv_cache_spec`` declares vLLM hybrid KV groups: sliding-window layers
   ``SlidingWindowSpec(1024)``, full-attention layers ``FullAttentionSpec``, block 64. The full layers' single KV head is
   replicated on the 4 chips, so their spec declares 4 KV heads: one per chip, which is both the physical per-mesh
