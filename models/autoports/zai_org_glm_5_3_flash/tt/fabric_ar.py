@@ -94,7 +94,10 @@ class FabricPhase:
         assert len(self.lanes) == 2
         self.brows = b if b <= 16 else 32
         # Stage 14c: cb mode, both rounds, B > 16: SEND / OWN2 alias the own-index round-2 slot (_cb_roles)
-        self.alias = mode == "cb" and self.R > 1 and self.C > 1 and b > 16
+        # (both rounds in cb mode: the own-index round-2 slot also serves as SEND / OWN2 at any B — the reduce packs the
+        # round-1 result once and the second index only advances pointers; 2 slots fewer on the lanes: at B = 16 on the
+        # 8x4 the 16 x 64 KB lane CBs otherwise end 26 KB above the layer's L1 floor, 2026-11-04)
+        self.alias = mode == "cb" and self.R > 1 and self.C > 1
         self.v = packed_bytes_per_tile(b)
         self.ch = 32 * self.brows  # bytes of one face's valid rows (B <= 16)
         self.pt = LANE_TILES * self.v // TB  # pseudo-tiles per lane
