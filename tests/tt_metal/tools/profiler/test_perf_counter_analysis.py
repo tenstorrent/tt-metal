@@ -28,6 +28,7 @@ from tracy.perf_counter_analysis import (
     quasar_l1_client_label,
 )
 from tracy.perf_counter_multipass import plan_perf_counter_capture, split_l1_client_selection
+from tracy.process_device_log import get_ops
 
 QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "INSTISSUE", "MATH", "UNPACK", "PACK")
 
@@ -99,6 +100,11 @@ QUASAR_EXPECTED_METRICS = [
     "T3 Instrn Per Issue-Ready Cycle",
     "L1_CLIENT_UNPACK0_IF0_SBANK3_SBANK_POP Rate",
 ]
+
+
+def fw_zone(run_id, ts, phase, core):
+    timer = {"id": 1, "zone_name": "BRISC-FW", "type": phase, "run_host_id": run_id}
+    return (timer, ts, 0, "BRISC", core)
 
 
 def make_capture(counter_types, risc_fmt, num_riscs):
@@ -327,3 +333,29 @@ def test_bad_l1_client_requests_are_rejected(monkeypatch, request_groups, arch):
     monkeypatch.setenv("TT_METAL_PROFILE_PERF_COUNTERS", "0")
     with pytest.raises(ValueError):  # allow-pytest.raises: host option parsing, not a device error
         plan_perf_counter_capture(request_groups, False, True)
+
+
+def test_get_ops_duplicate_start_reports_the_offending_core():
+    timeseries = [
+        fw_zone(1, 100, "ZONE_START", core=(1, 1)),
+        fw_zone(1, 110, "ZONE_START", core=(9, 9)),
+        fw_zone(1, 120, "ZONE_END", core=(1, 1)),
+        fw_zone(1, 130, "ZONE_START", core=(1, 1)),
+    ]
+
+    message = r"Unexpected FW start, core \(1, 1\), risc BRISC is reporting a second start of FW for op 1"
+    with pytest.raises(AssertionError, match=message):  # allow-pytest.raises: host parser assertion, not a device error
+        get_ops(timeseries)
+
+
+def test_get_ops_duplicate_end_formats_the_diagnostic_values():
+    timeseries = [
+        fw_zone(1, 100, "ZONE_START", core=(1, 1)),
+        fw_zone(1, 110, "ZONE_START", core=(9, 9)),
+        fw_zone(1, 120, "ZONE_END", core=(1, 1)),
+        fw_zone(1, 130, "ZONE_END", core=(1, 1)),
+    ]
+
+    message = r"Unexpected FW end, core \(1, 1\), risc BRISC is reporting a second end of FW for op 1"
+    with pytest.raises(AssertionError, match=message):  # allow-pytest.raises: host parser assertion, not a device error
+        get_ops(timeseries)
