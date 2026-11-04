@@ -158,3 +158,30 @@ slower than one 256 KB x_g write plus 88 independent 256 KB reads. The multicast
 where the per-core reads spread over 88 NIUs; keep the x_g path. The resident-x code stays on arg/glm53_persistent2
 (bit-exact, `resident_x=False` is step 1's behaviour) in case a cheaper landing (one multicast from a staging core,
 or the readers pulling from the workers' L1) is worth a later test.
+
+### Finding (2026-11-04 07:52): the expert op's fixed cost is the x delivery
+
+Profiler zones in the expert kernels (device 0, 8-user shape, expert op 146 us), critical gate|up core:
+
+| zone | span |
+|---|---|
+| GU_W_X (writer reads 256 KB of x from the L1-interleaved x_g) | 1.3 -> 85.8 us |
+| GU_C_X (compute waits for x) | ends 95 us |
+| GU_C_EXPERT x 2 (compute per expert) | 95 -> 118 us (10-13 us each) |
+| GU_R_COL (reader's weight columns, stalled behind the compute) | 28 + 62 us |
+| DN_W_ARRIVE (down cores waiting on gate|up outputs) | up to 96 us |
+
+Every one of the 88 gate|up cores reads the whole x (22 MB per chip per layer as an all-to-all over the NOC), and
+nothing starts before it lands. Step 2's multicast tried to replace it and was slower still. The structural fix is
+not to deliver x to 88 cores at all:
+
+**Split-K expert phase.** The 11 cores of a bank share the bank's column pair of every active expert by K: core j
+streams rows [j*K/11, (j+1)*K/11) of the pair (bfp8, ~25 KB per expert per core instead of 272 KB) and holds only
+its 23 KB slice of x; it computes the partial [32 x 64] product for every active expert (no expert-rank imbalance:
+each core does the same work), and the bank's 11 partials are summed on an owner core (NOC writes of 8 KB fp32
+each, a semaphore count) before the SwiGLU and the hand-off to the down cores. Costs: one extra NOC hop and a
+10-way fp32 add per expert per bank (~2-3 us, overlapped), x delivered once per bank (8 x 256 KB = 2 MB). Expected:
+the expert phase at 8 users from ~190 to ~60-80 us (the weights at bandwidth: 45 MB / 450 GB/s = 100 us on all
+chips in parallel, minus nothing serial), at 32 users from ~215 to ~150. Rounding: the K-split changes the fp32
+accumulation order of the gate|up products (partial sums) -- not bit-identical to today; judged by the chain pcc band
+and the served evals.

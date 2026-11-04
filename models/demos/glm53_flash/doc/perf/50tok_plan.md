@@ -404,3 +404,12 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   across the 32 chips at 8 users; the row reduce absorbs the skew (experts + reduce ~210 us on every chip) and the
   slowest chip sets the step. The per-chip spread (+-25 us for ~15 +-3 active experts) is itself a target: the block
   must balance the expert work across the readers, not only speed it up.
+- 2026-11-04 07:52 `tracy_zones_t1` (profiler zones inside the expert kernels, device 0, the 8-user shape, expert
+  op 146 us): on the critical gate|up core the WRITER'S X FETCH (256 KB from the L1-interleaved x_g) runs 1.3 ->
+  85.8 us; the compute idles until x lands (95 us), then two experts at 10-13 us each; the reader's weight columns
+  stall behind the compute (its ring holds 3 columns); the down cores wait on the gate|up side (DN_W_ARRIVE up to
+  96 us). 88 cores x 256 KB = 22 MB of all-to-all NOC reads per chip per layer is the expert op's fixed cost at BOTH
+  batches (~85 of 190 us at 8 users, ~85 of 215 at 32). A/B queued: x_g in DRAM (`GLM53_STREAM_X_L1=0`, chain_xdram).
+  Structural fix (next build): split K over each bank's 11 cores -- every core streams a 372-row slice of every
+  active expert's pair (x slice 23 KB per core, 11x less x traffic, no expert-rank imbalance, 11x parallel streaming
+  per expert) and the bank's partial [32 x 64] products are summed on an owner core before the SwiGLU.
