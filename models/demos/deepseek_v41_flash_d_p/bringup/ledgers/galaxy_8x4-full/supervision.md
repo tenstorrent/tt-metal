@@ -1498,3 +1498,11 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   test_window_ring.py (3 chunks + a follow-up vs golden, e2e limits) and test_dram.py both sides; A/B at 51200 /
   512000. Serving's per-position window tests and the tt-d-gen runner tests are out of its gate (tt-d-gen change
   pending). run_ds41_8x4.sh now --until P.32 (the running orchestrator stops at X.3; relaunch then).
+- 18:55 OWNER: add the last-chunk timing to P.32. Its gate now also profiles one 5k chunk at 51200 / 512000 as the
+  last chunk under DECODER_SKIP=replay128 (BRINGUP_CHUNK_LAST=1) and as a non-last chunk under exact (=0), metrics
+  chunk_wall_ms_p<pos>_last / _nonlast. Framework change needed first (at the X.3 stop, before P.32): profile.py's
+  position suffix gets _last / _nonlast from BRINGUP_CHUNK_LAST (else both overwrite _p<pos>); selftest.
+- 19:05 FIX.22 gate PASS efbfd578f22 (EXPERTS_IMPL default bfp4 -> bfp4_mse; units P.28#test_ladder / #test_profile run
+  by the agent on the changed tree, kept). STOPPED only for "files outside its paths": tasks.yaml, my own P.32 edits
+  made while its agent ran (my error: tasks.yaml is edited at a pause). Kept; resumed --until X.3 (P.32 waits for the
+  profile suffix change).
