@@ -2540,3 +2540,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: commit_pending joins SIDE_KEYS (history_state.json, uncommitted; state() merges it back); state.json keeps
   metrics at 6 significant digits (results/ keeps the full values). DeepSeek-V4.1's state.json: ~431 KB.
 - Selftest: test_core.py::test_a_refused_commit_record_and_long_floats_stay_out_of_state_json.
+
+## F247: a knowledge-file format slip does not cost a perf attempt (DeepSeek-V4.1 P.30, 2026-11-03)
+- Problem: P.30's agent added DS41-201 without 'Found:' and with a detail heading that did not match; the perf loop
+  treated the format check's lines as a failed attempt and started a whole second agent attempt for two markdown lines.
+- Fix: Orchestrator.is_knowledge_format (the lines knowledge_errors produces); a perf attempt whose only problems are
+  those records them for review (state: review) and goes on to its A/B, as a passing gate already did (FIX.21).
+- Selftest: test_perf_ab.py::test_a_knowledge_format_slip_does_not_cost_a_perf_attempt.

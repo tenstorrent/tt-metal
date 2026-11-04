@@ -591,6 +591,21 @@ def test_a_switch_only_accept_keeps_the_shipped_default(mk, sandbox, monkeypatch
     assert o.led.status("P.1") == "PASS"
 
 
+def test_a_knowledge_format_slip_does_not_cost_a_perf_attempt(mk):
+    """F247 (DeepSeek-V4.1 P.30): a perf agent's new known_issues.md entry lacked 'Found:'; the format check made the
+    attempt fail and a whole second agent attempt ran. The slip is recorded for review and the A/B goes on."""
+    from models.demos.common.bringup.orchestrator import rel
+
+    o = mk([pick()], CHANGE)
+    bad = f"{rel(o.spec, o.spec.bringup_dir)}/known_issues.md: entry 'x' lacks ['Found:']"
+    assert o.is_knowledge_format(bad) and not o.is_knowledge_format("changed files outside the paths: a.py")
+    seen = iter([[], [bad]])
+    o.knowledge_errors = lambda: next(seen, [bad])
+    assert o.run() == HUMAN, mk.lines
+    assert mk.agents() == ["P.1.perf.1.md bringup-engineer"], mk.agents()
+    assert o.led.state()["P.1"].get("review") == [bad]
+
+
 def test_adding_keep_default_after_the_ab_keeps_its_report(mk, sandbox):
     """F241: keep_default only says what the accept ships; set after the A/B ran (DeepSeek-V4.1 P.28), the report and
     its decision still match the task."""
