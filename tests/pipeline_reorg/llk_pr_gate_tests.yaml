@@ -24,7 +24,7 @@
     set -euo pipefail
     cd tests/python_tests
     pytest --collect-only -q --override-ini=log_cli=false test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy | grep '::' | awk 'NR%40==1' > /tmp/hang_dc.txt
-    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 4,5p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
+    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 4,5p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
     cat /tmp/hang_order.txt
     pytest @/tmp/hang_order.txt -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-wormhole-1.xml
   skus:
@@ -61,7 +61,7 @@
     set -euo pipefail
     cd tests/python_tests
     pytest --collect-only -q --override-ini=log_cli=false test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy | grep '::' | awk 'NR%40==1' > /tmp/hang_dc.txt
-    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 4,5p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
+    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 4,5p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
     cat /tmp/hang_order.txt
     pytest @/tmp/hang_order.txt -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-blackhole-1.xml
   skus:
