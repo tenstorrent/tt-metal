@@ -16,7 +16,7 @@ from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from ....utils.test import skip_if_unsupported_num_links
-from .device_params import line_params_flux2, line_params_flux2_transformer
+from .device_params import line_params_flux2, line_params_flux2_klein
 
 
 @pytest.mark.parametrize(
@@ -141,9 +141,9 @@ def test_pipeline(
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
-        [(2, 4), line_params_flux2_transformer],
-        [(2, 2), line_params_flux2_transformer],
-        [(4, 8), line_params_flux2_transformer],
+        [(2, 4), line_params_flux2_klein],
+        [(2, 2), line_params_flux2_klein],
+        [(4, 8), line_params_flux2_klein],
     ],
     ids=["2x4", "2x2", "4x8"],
     indirect=["mesh_device", "device_params"],
