@@ -58,9 +58,9 @@ runtime:
   # one-token chunk is prefill work); then branch resident-mu-sched: a80d7a7 (prefill gangs, prefill_gang_tokens /
   # prefill_gang_idle_tokens), ae93205 (a request with no decode step yet does not cap the next gang), docs; merged with
   # fix-ttft2's resident-mu-ttft2 6641c17 as resident-mu-sched-ttft2 d5e699c (profiles/resident/sched/
-  # plugin_ttft2_merge_note.txt). single-user uses upstream paths only (adaptive block output for DFlash2; the chunk
-  # core is off at max_num_seqs 1). Pin = d5e699c once pushed to the fork.
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: d5e699c_TBD_PUSH}
+  # plugin_ttft2_merge_note.txt), pushed to the fork as branch resident-mu-sched-ttft2. single-user uses upstream paths
+  # only (adaptive block output for DFlash2; the chunk core is off at max_num_seqs 1).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: d5e699c4dca06b1468e6c0f51bdffbdf67820d95}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
@@ -107,10 +107,6 @@ serve_profiles:
       # its cache has no refs/main). `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68a...` once before
       # `tt-model serve` (quickstart). Also the code default (qwen36_resident.dflash.DRAFTER_WEIGHTS).
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
-      # PENDING (lane prefill session 9, DFlash2 acceptance A/B of the prefill SDPA default, HiFi2 + exp_approx since
-      # dc5da2e5c5c): if DFlash2 keeps the previous prefill numerics, they go here, for this profile only:
-      #   RESIDENT_PP_SDPA_FIDELITY: HiFi4
-      #   RESIDENT_PP_SDPA_EXP_APPROX: "0"
   - name: multi-user
     description: 1-16 concurrent requests on the rows-mode resident engine (one KV pool shared by the users, device sampling, full sampling controls); waiting prompts prefill together before their decodes start, so each user decodes at the decode-step speed. TTFT-first scheduling is an option (prefill_gang_tokens 0).
     max_num_seqs: 16                     # two launches of 8
