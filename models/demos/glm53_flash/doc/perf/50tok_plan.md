@@ -417,3 +417,7 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   device output (chips 0-5 pass; the model's 8-user gates are bit-exact). Likely an expert-output row of a user with
   no routed expert on that chip left uninitialised in `out` and summed by the reduce; to be checked (the fused op's
   `out` initialisation) before the split-K build, since split-K rewrites that path.
+- 2026-11-04 08:01 `gate84_B1_fabar_xdram` (`GLM53_STREAM_X_L1=0`: the gathered x in DRAM): 8 users 31.99 vs 32.95 ms
+  (-0.96 ms, 31.3 tok/s/u), ids identical. The 88 cores' x reads are cheaper from the 8 DRAM banks than from 120 L1
+  banks all-to-all; ~21 us/layer, a fraction of the 84 us fetch (the DRAM path is bandwidth-shared with the weight
+  streams). 32 users next (the default flips if neutral or better).
