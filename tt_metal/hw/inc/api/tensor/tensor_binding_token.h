@@ -55,6 +55,8 @@ private:
     template <uint32_t Cta, uint32_t Addr>
     friend constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token);
     template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
     friend constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token);
     template <uint32_t Cta, uint32_t Addr>
     friend constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token);
@@ -115,6 +117,17 @@ constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token
     return token.llk_metadata_.num_faces_c_dim;
 }
 
+// Returns the tile storage size in bytes.
+// precondition: The token has format metadata and a supported tile storage size.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token) {
+    (void)get_dataformat(token);
+    if (token.llk_metadata_.tile_size_bytes == 0) {
+        binding_details::tile_size_metadata_not_set();
+    }
+    return token.llk_metadata_.tile_size_bytes;
+}
+
 // Returns the tile height in elements.
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_r_dim(const TensorBindingToken<Cta, Addr>& token) {
@@ -172,6 +185,8 @@ private:
     template <uint32_t Cta, uint32_t Addr>
     friend constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token);
     template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
     friend constexpr uint8_t get_face_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
     template <uint32_t Cta, uint32_t Addr>
     friend constexpr uint8_t get_face_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
@@ -206,6 +221,17 @@ constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return token.llk_metadata_.num_faces_c_dim;
+}
+
+// Returns the tile storage size in bytes.
+// precondition: The token has format metadata and a supported tile storage size.
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token) {
+    (void)get_dataformat(token);
+    if (token.llk_metadata_.tile_size_bytes == 0) {
+        binding_details::tile_size_metadata_not_set();
+    }
+    return token.llk_metadata_.tile_size_bytes;
 }
 
 // Returns the tile height in elements.
