@@ -194,6 +194,7 @@ void MetalContext::initialize(
     set_l1_ecc_halt_detected(false);
 
     initialized_ = true;
+
     // Store the resolved config
     dispatch_core_config_ = resolved_config;
     num_hw_cqs_ = num_hw_cqs;
@@ -229,8 +230,8 @@ void MetalContext::initialize(
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
     // Build the single canonical DispatchMemMap for the core type we actually dispatch on. On Quasar the dispatch
-    // engine runs on DISPATCH cores (resolved per-device from the soc descriptor), which differs from the
-    // WORKER/ETH config core type; elsewhere the resolved type matches the config core type.
+    // engine runs on DISPATCH cores (resolved per-device from the soc descriptor), which differs from the WORKER/ETH
+    // config core type; elsewhere the resolved type matches the config core type.
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config_);
     const auto& cluster = get_cluster();
     if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
@@ -290,9 +291,8 @@ void MetalContext::initialize(
         // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
         if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
             !get_cluster().is_galaxy_cluster()) {
-            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig
-            // (e.g. by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it
-            // here.
+            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g.
+            // by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
             this->initialize_fabric_config();
             // Pin UMD's remote-transfer cores here, before the watcher attaches and firmware launches: UMD does not
             // lock its core list against concurrent remote transfers.
@@ -503,6 +503,9 @@ void MetalContext::register_handlers_locked() {
             // client isn't holding onto devices on process exit.
             MetalContext::destroy_all_instances(false);
         });
+        // Registered last so it runs before destroy_all_instances, and a signal arriving during that
+        // teardown bounds it instead of starting a second exit.
+        install_simulator_exit_guard();
         registered_handlers = true;
     }
 }
@@ -582,7 +585,7 @@ dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     if (!dispatch_core_manager_) {
         constexpr const char* reason = "Trying to get dispatch_core_manager before initializing it.";
         // The context is already unusable. Throwing lets gtest continue and hold the Zebu job.
-        (void)release_simulator_session(1, reason);
+        (void)release_simulator_session(1 /*exit_code*/, reason);
         TT_FATAL(false, "{}", reason);
     }
     return *dispatch_core_manager_;

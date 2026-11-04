@@ -4,6 +4,7 @@
 
 #include "simulator_termination.hpp"
 
+#include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -18,18 +19,33 @@
 namespace tt::tt_metal {
 namespace {
 
-// Default bound on MetalContext teardown after Ctrl-C. A second SIGINT/SIGTERM kills immediately.
+// Bound on teardown once shutdown starts. A second termination signal kills immediately.
 // Override with TT_METAL_SIMULATOR_TERMINATION_GRACE_SECONDS.
 constexpr unsigned int kDefaultGraceSeconds = 30;
 
+// Read from signal handlers and from ordinary code on other threads, so plain sig_atomic_t would be
+// a data race. These types are lock-free, which is what makes them usable from a handler.
+using AtomicFlag = std::atomic<int>;
+static_assert(AtomicFlag::is_always_lock_free, "signal handlers need a lock-free flag");
+
 unsigned int grace_seconds = kDefaultGraceSeconds;
-volatile std::sig_atomic_t termination_signal = 0;
-volatile std::sig_atomic_t shutdown_exit_code = 0;
-volatile std::sig_atomic_t shutdown_tid = 0;
+AtomicFlag shutdown_requested{0};
+AtomicFlag shutdown_exit_code{0};
+// Set once exit() has started running handlers, with the thread that is running them.
+AtomicFlag exit_in_progress{0};
+AtomicFlag teardown_tid{0};
 sem_t shutdown_semaphore;
 bool handlers_installed = false;
+bool exit_guard_installed = false;
+bool installed_sigint = false;
+bool installed_sigterm = false;
 
-pid_t current_tid() { return static_cast<pid_t>(::syscall(SYS_gettid)); }
+int current_tid() { return static_cast<int>(::syscall(SYS_gettid)); }
+
+bool simulator_configured() {
+    const char* simulator = std::getenv("TT_METAL_SIMULATOR");
+    return simulator != nullptr && simulator[0] != '\0';
+}
 
 void write_stderr(const char* data, size_t size) {
     const int saved_errno = errno;
@@ -67,7 +83,13 @@ void write_stderr_number(const char* prefix, long number, const char* suffix) {
     write_stderr(suffix);
 }
 
-extern "C" void handle_simulator_teardown_alarm(int signal_number);
+extern "C" void handle_simulator_teardown_alarm(int /*signal_number*/) {
+    write_stderr_number(
+        "[tt-metal] simulator teardown did not finish within ",
+        static_cast<long>(grace_seconds),
+        "s; the emulator may still be held.\n");
+    _exit(shutdown_exit_code.load());
+}
 
 void arm_teardown_alarm() {
     struct sigaction alarm_action{};
@@ -77,59 +99,67 @@ void arm_teardown_alarm() {
     ::alarm(grace_seconds);
 }
 
-extern "C" void handle_simulator_teardown_alarm(int /*signal_number*/) {
-    write_stderr_number(
-        "[tt-metal] simulator teardown did not finish within ",
-        static_cast<long>(grace_seconds),
-        "s; the emulator may still be held.\n");
-    _exit(shutdown_exit_code != 0 ? shutdown_exit_code : 128 + termination_signal);
+// Only the thread running exit() can make progress once teardown starts. Any other thread that
+// faults would kill the process before the simulator is told to exit, so it waits here instead.
+[[noreturn]] void park_until_process_exits() {
+    for (;;) {
+        ::pause();
+    }
 }
 
-// Teardown has to take SimulationChip::device_lock. The thread that received the signal is often
-// inside a device read, already holding that non-recursive mutex. Exiting on that thread deadlocks
-// and libttsim_exit never runs. Posting here lets that call return and drop the lock; the shutdown
-// thread then exits between device calls.
-// A fault on the test thread must not kill the process. Teardown runs on the shutdown thread via
-// std::exit, and the test thread is still inside the test. Once the cluster is gone that thread
-// faults in get_cluster(), and the default SIGSEGV action kills teardown before DEVICE_COMMAND_EXIT
-// is sent. Park every thread except the one actually exiting. Same idea as the hang-app handler,
-// which parks a thread whose device call fails while shutdown is in progress.
+bool is_teardown_thread() { return current_tid() == teardown_tid.load(); }
+
+bool shutdown_started() { return shutdown_requested.load() != 0 || exit_in_progress.load() != 0; }
+
 extern "C" void handle_fault_during_shutdown(int signal_number) {
-    if (termination_signal != 0 && shutdown_tid != 0 && current_tid() != shutdown_tid) {
-        for (;;) {
-            ::pause();
-        }
+    if (shutdown_started() && !is_teardown_thread()) {
+        write_stderr_number("[tt-metal] signal ", signal_number, " during teardown; parking this thread.\n");
+        park_until_process_exits();
     }
     std::signal(signal_number, SIG_DFL);
     ::raise(signal_number);
 }
 
-extern "C" void handle_simulator_termination(int signal_number) {
-    termination_signal = signal_number;
-    shutdown_exit_code = 128 + signal_number;
-    write_stderr_number(
-        "[tt-metal] signal ", signal_number, ": releasing the simulator (interrupt again to kill immediately).\n");
-
-    // Return to the interrupted call so it can drop SimulationChip::device_lock. The second signal
-    // restores the default action and kills the process. Faults on any other thread park instead.
-    std::signal(signal_number, SIG_DFL);
+// Async-signal-safe: installs the fault handlers, bounds teardown, and wakes the shutdown thread.
+void begin_shutdown(int exit_code) {
+    shutdown_exit_code.store(exit_code);
     std::signal(SIGSEGV, handle_fault_during_shutdown);
     std::signal(SIGABRT, handle_fault_during_shutdown);
     arm_teardown_alarm();
     (void)::sem_post(&shutdown_semaphore);
 }
 
-[[noreturn]] void park_until_process_exits() {
-    write_stderr("[tt-metal] a device call failed while the simulator was shutting down; waiting for teardown.\n");
-    for (;;) {
-        ::pause();
+extern "C" void handle_simulator_termination(int signal_number) {
+    // Whoever is signalling has stopped waiting for a clean release.
+    if (shutdown_requested.exchange(1) != 0) {
+        std::signal(signal_number, SIG_DFL);
+        ::raise(signal_number);
+        return;
     }
+    std::signal(signal_number, SIG_DFL);
+
+    // exit() is already running the teardown. Starting a second one concurrently is undefined and
+    // races the handler that releases the simulator, so only bound the one in flight.
+    if (exit_in_progress.load() != 0) {
+        write_stderr_number(
+            "[tt-metal] signal ", signal_number, ": already releasing the simulator (signal again to kill).\n");
+        shutdown_exit_code.store(128 + signal_number);
+        arm_teardown_alarm();
+        return;
+    }
+
+    write_stderr_number(
+        "[tt-metal] signal ", signal_number, ": releasing the simulator (signal again to kill immediately).\n");
+    // Return so the interrupted call can drop SimulationChip::device_lock, which teardown needs.
+    begin_shutdown(128 + signal_number);
 }
 
 std::terminate_handler previous_terminate = nullptr;
 
 void handle_terminate_during_shutdown() {
-    if (termination_signal != 0) {
+    // Parking the thread that is running teardown would stall the release it is performing.
+    if (shutdown_started() && !is_teardown_thread()) {
+        write_stderr("[tt-metal] a call failed while the simulator was shutting down; waiting for teardown.\n");
         park_until_process_exits();
     }
     if (previous_terminate != nullptr) {
@@ -139,46 +169,50 @@ void handle_terminate_during_shutdown() {
 }
 
 void report_simulator_released() {
-    if (termination_signal != 0) {
+    if (shutdown_requested.load() != 0) {
         write_stderr("[tt-metal] simulator released.\n");
     }
 }
 
-void run_shutdown_thread() {
-    shutdown_tid = current_tid();
-    while (::sem_wait(&shutdown_semaphore) != 0) {
-        if (errno != EINTR) {
-            _exit(128 + SIGINT);
-        }
-    }
-    // std::exit runs MetalContext's atexit handler, which destroys the cluster and calls libttsim_exit
-    // (or sends DEVICE_COMMAND_EXIT). Returning from main would not: the signal interrupted it.
-    std::exit(shutdown_exit_code != 0 ? shutdown_exit_code : 128 + termination_signal);
+void note_exit_started() {
+    teardown_tid.store(current_tid());
+    exit_in_progress.store(1);
 }
 
-// fork() does not duplicate the shutdown thread. Restart it in the child or Ctrl-C there is swallowed.
-void restart_shutdown_thread_after_fork() {
+void run_shutdown_thread() {
+    while (::sem_wait(&shutdown_semaphore) != 0) {
+        if (errno != EINTR) {
+            _exit(shutdown_exit_code.load());
+        }
+    }
+    // std::exit runs MetalContext's atexit handler, which destroys the cluster and tells the
+    // simulator to exit. Returning from main would not: the signal interrupted it.
+    std::exit(shutdown_exit_code.load());
+}
+
+void restore_default_disposition(int signal_number) {
+    struct sigaction action{};
+    action.sa_handler = SIG_DFL;
+    ::sigemptyset(&action.sa_mask);
+    (void)::sigaction(signal_number, &action, nullptr);
+}
+
+// A forked child shares the parent's simulator session but does not own it, and fork() does not
+// copy the shutdown thread. Running teardown there would release the parent's session, so restore
+// what the child had before this handler existed. Only async-signal-safe calls until exec.
+void restore_defaults_in_fork_child() {
     if (!handlers_installed) {
         return;
     }
-    termination_signal = 0;
-    shutdown_exit_code = 0;
-    shutdown_tid = 0;
-    // The parent's waiter was not duplicated, so this copy has no waiters. Re-init it for a new thread.
-    ::sem_destroy(&shutdown_semaphore);
-    if (::sem_init(&shutdown_semaphore, 0, 0) != 0) {
-        std::signal(SIGINT, SIG_DFL);
-        std::signal(SIGTERM, SIG_DFL);
-        handlers_installed = false;
-        return;
+    if (installed_sigint) {
+        restore_default_disposition(SIGINT);
     }
-    try {
-        std::thread(run_shutdown_thread).detach();
-    } catch (...) {
-        std::signal(SIGINT, SIG_DFL);
-        std::signal(SIGTERM, SIG_DFL);
-        handlers_installed = false;
+    if (installed_sigterm) {
+        restore_default_disposition(SIGTERM);
     }
+    handlers_installed = false;
+    shutdown_requested.store(0);
+    shutdown_exit_code.store(0);
 }
 
 bool disposition_is_default(int signal_number) {
@@ -204,18 +238,14 @@ bool install_handler(int signal_number) {
 }  // namespace
 
 void install_simulator_termination_handler() {
-    if (handlers_installed) {
-        return;
-    }
-    const char* simulator = std::getenv("TT_METAL_SIMULATOR");
-    if (simulator == nullptr || simulator[0] == '\0') {
+    if (handlers_installed || !simulator_configured()) {
         return;
     }
 
     const bool sigint_default = disposition_is_default(SIGINT);
     const bool sigterm_default = disposition_is_default(SIGTERM);
-    // Python (and the hang apps) already turn these into a normal shutdown. Replacing that handler
-    // would skip their cleanup.
+    // Python (and the hang apps) already turn these into a normal shutdown; replacing their handler
+    // would skip that cleanup.
     if (!sigint_default && !sigterm_default) {
         return;
     }
@@ -227,7 +257,7 @@ void install_simulator_termination_handler() {
         }
     }
 
-    if (::sem_init(&shutdown_semaphore, 0, 0) != 0) {
+    if (::sem_init(&shutdown_semaphore, 0 /*pshared*/, 0 /*value*/) != 0) {
         return;
     }
     try {
@@ -236,27 +266,34 @@ void install_simulator_termination_handler() {
         return;
     }
 
-    bool installed_one = false;
-    if (sigint_default) {
-        installed_one = install_handler(SIGINT) || installed_one;
-    }
-    if (sigterm_default) {
-        installed_one = install_handler(SIGTERM) || installed_one;
-    }
-    if (!installed_one) {
+    installed_sigint = sigint_default && install_handler(SIGINT);
+    installed_sigterm = sigterm_default && install_handler(SIGTERM);
+    if (!installed_sigint && !installed_sigterm) {
         return;
     }
 
     handlers_installed = true;
-    // Registered before MetalContext::destroy_all_instances, so it runs after that teardown.
+    // Registered before MetalContext's teardown, so it runs after it.
     std::atexit(report_simulator_released);
     previous_terminate = std::set_terminate(handle_terminate_during_shutdown);
-    (void)::pthread_atfork(nullptr, nullptr, restart_shutdown_thread_after_fork);
+    (void)::pthread_atfork(nullptr, nullptr, restore_defaults_in_fork_child);
+}
+
+void install_simulator_exit_guard() {
+    if (exit_guard_installed || !simulator_configured()) {
+        return;
+    }
+    exit_guard_installed = true;
+    // Registered after MetalContext's teardown, so it runs before it.
+    std::atexit(note_exit_started);
 }
 
 bool release_simulator_session(int exit_code, const char* reason) {
-    const char* simulator = std::getenv("TT_METAL_SIMULATOR");
-    if (simulator == nullptr || simulator[0] == '\0') {
+    if (!simulator_configured()) {
+        return false;
+    }
+    // exit() is already releasing the simulator; exiting again from inside it is undefined.
+    if (exit_in_progress.load() != 0) {
         return false;
     }
 
@@ -264,23 +301,16 @@ bool release_simulator_session(int exit_code, const char* reason) {
     write_stderr(reason);
     write_stderr(" Releasing the simulator.\n");
 
-    // The shutdown thread is what makes Ctrl-C safe. A fatal error is on a normal call stack, so exiting
-    // here still runs atexit. Prefer that thread when it exists, so a second failure during teardown parks
-    // instead of aborting past libttsim_exit.
+    // Without the shutdown thread there is nothing to hand over to, and this is an ordinary call
+    // stack rather than a signal handler, so exiting here still runs atexit.
     if (!handlers_installed) {
         std::exit(exit_code);
     }
-    if (termination_signal == 0) {
-        termination_signal = 1;
+    if (shutdown_requested.exchange(1) == 0) {
+        begin_shutdown(exit_code);
     }
-    shutdown_exit_code = exit_code;
-    std::signal(SIGSEGV, handle_fault_during_shutdown);
-    std::signal(SIGABRT, handle_fault_during_shutdown);
-    arm_teardown_alarm();
-    (void)::sem_post(&shutdown_semaphore);
-    for (;;) {
-        ::pause();
-    }
+    // The context is unusable, so this thread has nothing left to do but let teardown finish.
+    park_until_process_exits();
 }
 
 }  // namespace tt::tt_metal
