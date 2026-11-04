@@ -39,7 +39,7 @@ std::optional<std::string> operand_hard_reject_reason(
         return fmt::format(
             "{} operation requires {} to be on Device, got storage_type={}", op_name, role, tensor.storage_type());
     }
-    if (tensor.buffer() == nullptr) {
+    if (!tensor.is_allocated()) {
         return fmt::format(
             "{} operation requires {} to be allocated in a buffer on the device; buffer is null", op_name, role);
     }
