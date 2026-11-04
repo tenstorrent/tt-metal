@@ -347,10 +347,11 @@
     )
 
     k3_kda() (
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "SP8xTP4 and not perf" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
       '
@@ -378,7 +379,7 @@
 
     echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + layer-1 real weights ====="
+    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
     echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
@@ -391,9 +392,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 12 + 12 + 12),
+      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12),
       # with 2 min added to [1/4] for the AttnRes determinism tests.
-      timeout: 48
+      timeout: 54
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -412,6 +413,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
