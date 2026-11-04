@@ -12,7 +12,7 @@ Usage:
     finally:
         ttnn.deallocate(tokens)
 
-This module imports ttnn, so import it only where the chip is used, such as in load().
+This module imports ttnn, so import it only where the chip is used, as the media module's load() does.
 The first image of each patch count compiles the chip's programs, which is slow. Later images of that count reuse them.
 forward does not support trace capture, as each call uploads its input to new buffers. The encoder also keeps the
 RoPE tables of recent grids on the chip, where a trace replay may overwrite them.
