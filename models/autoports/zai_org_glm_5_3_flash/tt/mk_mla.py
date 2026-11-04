@@ -1560,7 +1560,12 @@ class MkMla(_MlaBase):
         32 lanes 1022; t = 16: 8 lanes 721, 16 lanes 699"""
         if self.dsa is not None:  # rev 40: t > 4 lanes with their own select coordinators (the reserved cores)
             p, cap = 1, _dsa_lanes_at(t)
-            while t > DSA_T_MAX and p * 2 <= min(len(self.co_cores), t, cap):
+            # GLM53_MLA_DSA_LANES_T4 = P (default 0 = off): token lanes at t <= 4 too (TP32 marks 2026-11-04: the 4
+            # users' attention ran one after another, ~150 us of a 1-token context's 400-us MLA program)
+            # default 4 (32-chip replica 2026-11-04: layers 0-3 at B = 4 1886.2 -> lanes 2 1763.5 -> lanes 4 1711.9 us:
+            # -174 us per DSA layer); GLM53_MLA_DSA_LANES_T4=1 = the sequential A/B
+            t4 = int(os.environ.get("GLM53_MLA_DSA_LANES_T4", "4")) if t <= DSA_T_MAX else 0
+            while (t > DSA_T_MAX or p * 2 <= t4) and p * 2 <= min(len(self.co_cores), t, cap):
                 p *= 2
             return p
         if t <= DSA_T_MAX:  # GLM53_MLA_ATT_LANES_T4 = P (t <= 4, default 0 = off): P lanes of C / P cores (t = 1: one

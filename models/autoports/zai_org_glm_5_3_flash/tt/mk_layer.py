@@ -484,7 +484,10 @@ def decode_probe(probe_host, assign, *, k_cores=64, mhz=1350.0) -> dict:
 
     out = dict(owner_brisc=med(range(k_cores)), root_ncrisc=med([64]),
                owner_ncrisc_leaders=med([96 + k for k in range(k_cores) if k % 8 == 0]),
-               owner_ncrisc_members=med([96 + k for k in range(k_cores) if k % 8]))  # fmt: skip
+               owner_ncrisc_members=med([96 + k for k in range(k_cores) if k % 8]),
+               # the kda_rec head cores (owner k < heads x spread x user groups: at TP32 only cores 0-1 recur, so the
+               # medians above hide the recurrence): cores 0 and 1 alone
+               owner_brisc_c0=med([0]), owner_brisc_c1=med([1]), owner_ncrisc_c0=med([96]), owner_ncrisc_c1=med([97]))  # fmt: skip
     for idx in sorted({i for _, _, i in assign}):
         rows = [n for n, (_, _, i) in enumerate(assign) if i == idx]
         out[f"reader{idx}_w"] = med([160 + 2 * n for n in rows])

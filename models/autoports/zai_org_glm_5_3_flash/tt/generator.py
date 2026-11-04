@@ -614,6 +614,10 @@ def _mock_dram_point(backend, label: str):
     return mock_dram.point(backend.mesh, label)
 
 
+GLM53_DECODE_LOOKAHEAD = os.environ.get("GLM53_DECODE_LOOKAHEAD", "1") == "1"  # generate_batch: step i + 1 enqueued
+# before step i's tokens are collected (backends with read_async / collect)
+
+
 class Glm53Generator(_ReadinessGenerator):
     def __init__(
         self,
@@ -671,6 +675,7 @@ class Glm53Generator(_ReadinessGenerator):
                 "decode_trace_replays",
                 "sampling_trace_replays",
                 "fused_sampling_steps",
+                "token_readback_async",
                 "eager_decode_steps",
                 "token_refresh",
                 "pos_refresh",
@@ -966,11 +971,9 @@ class Glm53Generator(_ReadinessGenerator):
         fill = b.dev_ok & (b.tok_val < 0)
         b.tok_val = torch.where(fill, dev, b.tok_val)
 
-    def _sync_tokens(self, b: _CacheBinding, want: dict[int, int]):
-        """Make the device token buffer hold, for every slot decoding this step (`want`), its next input:
-        `want[s] >= 0` = that token, `-1` = the slot's current next input (its device row if still valid, else the
-        host value; neither -> ValueError). The buffer is written only when a decoding row needs it; rows whose only
-        copy is on device are read back first, so the whole-buffer write loses nothing."""
+    def _token_targets(self, b: _CacheBinding, want: dict[int, int]) -> dict[int, int]:
+        """the rows of the device token buffer `_sync_tokens(b, want)` has to (re)write: slot -> token (empty: the
+        device rows already hold every decoding slot's next input)"""
         target = {}
         for s, t in want.items():
             if t < 0:
@@ -981,6 +984,22 @@ class Glm53Generator(_ReadinessGenerator):
                 target[s] = int(b.tok_val[s])
             elif not (b.dev_ok[s] and b.tok_val[s] == t):
                 target[s] = int(t)
+        return target
+
+    def _step_needs_writes(self, b: _CacheBinding, pos: torch.Tensor, want: dict[int, int]) -> bool:
+        """whether the next step's host bookkeeping writes device state (positions, token rows, sampling params):
+        a look-ahead step may be enqueued ahead of the previous step's tokens only when it does not"""
+        if not torch.equal(pos, b.pos_shadow) or self._token_targets(b, want):
+            return True
+        vals = [b.slots[s].params.device_values() if b.slots[s].active else (1, 0.0, 1.0) for s in range(b.max_batch)]
+        return vals != b.params_shadow
+
+    def _sync_tokens(self, b: _CacheBinding, want: dict[int, int]):
+        """Make the device token buffer hold, for every slot decoding this step (`want`), its next input:
+        `want[s] >= 0` = that token, `-1` = the slot's current next input (its device row if still valid, else the
+        host value; neither -> ValueError). The buffer is written only when a decoding row needs it; rows whose only
+        copy is on device are read back first, so the whole-buffer write loses nothing."""
+        target = self._token_targets(b, want)
         if not target:
             return
         if any(bool(b.dev_ok[s]) and b.tok_val[s] < 0 and s not in target for s in range(b.max_batch)):
@@ -1871,6 +1890,51 @@ class Glm53Generator(_ReadinessGenerator):
         self._after_sample(b, live, tok)
         return tok
 
+    def _decode_enqueue(self, b: _CacheBinding, live: Sequence[int], *, enable_trace: bool, mode: str):
+        """Look-ahead decode (generate_batch): the device half of `_decode_step` for a device-sampled step (the
+        replay(s) and the bookkeeping that needs no sampled token) plus the non-blocking read of the sampled rows
+        (backend.read_async: (pending, events)). The caller enqueues the NEXT step before `_decode_collect` waits for
+        this one, so the device runs the steps back to back; the live rows' host token values stay unknown (-1:
+        device-only) until a whole-buffer write reads them back."""
+        assert mode is not None and not self.host_sampling
+        self._preserve_offstep_tokens(b, live)
+        width = self.decode_width(b, live)
+        spw = int(getattr(self, "spec_lone_width", 0) or 0)
+        if spw and spw in b.widths and len(live) == 1 and spw > width:
+            width = spw
+        if enable_trace:
+            if width not in b.decode_traces:
+                raise RuntimeError("traced decode requested but no decode trace is captured (call warmup())")
+            self.backend.replay(b.decode_traces[width])
+            self.counters["decode_trace_replays"] += 1
+        else:
+            self.backend.decode(b.io, b.kv_cache, width)
+            self.counters["eager_decode_steps"] += 1
+        b.width_replays[width] += 1
+        b.step += 1
+        b.pos_shadow = torch.where(b.pos_shadow >= 0, b.pos_shadow + 1, b.pos_shadow)  # advanced on device
+        if enable_trace and self.fused_sampling:
+            self.counters["fused_sampling_steps"] += 1
+        elif enable_trace:
+            self.backend.replay(b.sampling_traces[mode])
+            self.counters["sampling_trace_replays"] += 1
+        else:
+            self.backend.sample(b.io, mode)
+        self._after_sample(b, live, None)
+        self.counters["token_readback_async"] += 1
+        return self.backend.read_async(b.io.sampled)
+
+    def _decode_collect(self, b: _CacheBinding, handle) -> torch.Tensor:
+        """the sampled rows of a `_decode_enqueue` step ([max_batch] tokens): waits for the read's events, then
+        backend.finish_read (what read() would have returned at the enqueue point)"""
+        pending, events = handle
+        if events:
+            import ttnn
+
+            for ev in events:
+                ttnn.event_synchronize(ev)
+        return self.backend.finish_read(b.io.sampled, pending).to(torch.int64).reshape(-1)
+
     def decode_forward(
         self,
         tokens: torch.Tensor,
@@ -2347,24 +2411,67 @@ class Glm53Generator(_ReadinessGenerator):
                 else:
                     p0 = self._prefill_user(b, s, ids, sample=params[i])
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
-            # ---- decode loop: replay decode + sampler; refresh only scheduler changes and forced tokens
+            # ---- decode loop: replay decode + sampler; refresh only scheduler changes and forced tokens.
+            # Look-ahead (device sampling, no teacher forcing): step i + 1 is enqueued BEFORE step i's tokens are
+            # collected, so the device never waits for the host read-back / loop between steps (every row keeps
+            # decoding its device-fed token; a row that stops at step i wastes one step). A step whose bookkeeping
+            # writes device state (a stopped row's position, a forced token, new params) first collects the step in
+            # flight; a row that reaches its token budget at the step in flight is not enqueued again.
+            lookahead = (GLM53_DECODE_LOOKAHEAD and next_input is None and not self.host_sampling
+                         and getattr(self.backend, "decode_lookahead", False))  # fmt: skip
+            inflight: Optional[tuple[list[int], Any]] = None  # (live rows, read handle) of the step enqueued ahead
+
+            def collect(settled: bool):
+                """the step in flight: its tokens emitted (a row stopped by an earlier step's token: its extra step
+                dropped); `settled` = no later step was enqueued, so the device token rows hold exactly these values
+                (known to the host from here on: no readback before a whole-buffer write)"""
+                nonlocal inflight
+                live_i, handle = inflight
+                inflight = None
+                tok = self._decode_collect(b, handle)
+                for s in live_i:
+                    if not b.slots[s].finished:
+                        self._emit(b, s, outputs[user_of[s]], int(tok[s]), next_input, user_of, feed)
+                    if settled:
+                        b.tok_val[s] = int(tok[s])
+
             while any(b.slots[s].active and not b.slots[s].finished for s in slots):
+                ahead = set(inflight[0]) if inflight is not None else set()
                 pos = torch.full((b.max_batch,), -1, dtype=torch.int64)
                 want = {}
                 for s in range(b.max_batch):
                     st = b.slots[s]
-                    if st.active and not st.finished:
+                    if not (st.active and not st.finished):
+                        continue
+                    if s in ahead:
+                        if len(outputs[user_of[s]]) + 1 >= st.max_new_tokens:
+                            continue  # its step in flight is its last: not enqueued again (collected below)
+                        pos[s], want[s] = st.seq_len, -1  # the device row (its step in flight) feeds it
+                    else:
                         pos[s], want[s] = st.seq_len, feed[s]
+                if inflight is not None and (not want or self._step_needs_writes(b, pos, want)):
+                    collect(settled=True)  # the host writes (or the stop) need the step in flight settled first
+                    continue
                 self._check_decode_rows(b, {s: int(pos[s]) for s in want})
                 self._write_positions(b, pos)
                 self._sync_tokens(b, want)
                 self._write_params(b)
                 live = list(want)
                 mode = "greedy" if all(b.slots[s].params.is_greedy for s in live) else "sample"
+                if lookahead:
+                    handle = self._decode_enqueue(b, live, enable_trace=enable_trace, mode=mode)
+                    for s in live:
+                        b.slots[s].seq_len += 1  # the device advanced its position
+                    if inflight is not None:
+                        collect(settled=False)  # the step just enqueued overwrites the token rows
+                    inflight = (live, handle)
+                    continue
                 sampled = self._decode_step(b, live, enable_trace=enable_trace, mode=mode)
                 for s in live:
                     b.slots[s].seq_len += 1
                     self._emit(b, s, outputs[user_of[s]], int(sampled[s]), next_input, user_of, feed)
+            if inflight is not None:
+                collect(settled=True)  # the last step ahead (its rows stopped meanwhile: nothing emitted)
         finally:
             for s in slots:
                 b.slots[s].active = False

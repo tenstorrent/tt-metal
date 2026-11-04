@@ -343,6 +343,8 @@ class TPDsaLayer:
         if cls is not TPM.TPMla:  # (GLM53_DSA_SHARD_SHARE_SYNC: the first layer's stream sync tensors)
             ix = dict(ix, stream_share=share.mla if share is not None and isinstance(share.mla, cls) else None)
         kb_mla = MLA_KB_SHARD if int(mesh.get_num_devices()) <= 8 else MLA_KB_SHARD_WIDE
+        if os.environ.get("GLM53_MLA_PROBE") == "1":  # per-phase marks of the MLA program (mk_mla.decode_probe; eager
+            ix = dict(ix, probe=True)  # steps only: read chip 0's shard of MkMla.probe after a decode step)
         mla = cls(mesh, mhc_host_args(source, cfg, layer, "attn"), attn, kb=kb_mla,
                   rings=rings, fabrics=share.mla.fabrics if share else None,
                   ts=ts, host_full=host_full, keep_full=keep_full, **ix)  # fmt: skip

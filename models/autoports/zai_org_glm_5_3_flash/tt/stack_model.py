@@ -198,6 +198,11 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
         os.environ.update(KNOBS_7A283)
         if t > 4:
             os.environ.update({"GLM53_REC_V2_UG": "1", "GLM53_REC_UGROUPS": "8"})
+    if tp > 1 and key in (False, True) and 1 < t <= 4 and "GLM53_REC_UGROUPS" not in prof[key]:
+        # 2026-11-04 (32-chip replica, B = 4): the rows' recurrence items ran in series on the chip's 2 head cores;
+        # one user group per row (its own copy of the head cores, the same arithmetic) = -38 us per KDA layer
+        # (dense 0-2 1222.6 -> 1107.4 us, sparse alike). GLM53_STACK_KNOB_SET="d:GLM53_REC_UGROUPS=1" = the A/B.
+        os.environ.update({"GLM53_REC_V2_UG": "1", "GLM53_REC_UGROUPS": str(min(4, t))})
     if prof is KNOBS_TP and key is True and t > 1:
         # 4-row chunks: the sparse stack's 4-slot expert ring (14's B=1 default) puts the reader CBs 5 KB above the
         # step's L1 floor (0x1466c0 > 0x145400 in mock); 3 slots fit (7a's serving value)
@@ -327,6 +332,7 @@ class StackBackend(ModelBackend):
     continuation_align = BLOCK_SIZE
     width_bucketed_decode = False  # one decode trace for every live count (the full width does the work anyway)
     samples_in_decode_trace = True
+    decode_lookahead = True  # generator.generate_batch may enqueue step i + 1 before collecting step i (read_async)
     copy_slot_keeps_sampler_rng = True  # the RNG row moves with the slot (copy_slot); False without device sampling
 
     @property
@@ -635,9 +641,11 @@ class StackBackend(ModelBackend):
         return seq, dsa_share
 
     def _runs(self):
+        max_run = int(os.environ.get("GLM53_STACK_MAX_RUN", "0") or 0)  # > 0: at most this many layers per program
         runs, cur = [], []
         for i, e in enumerate(self.seq):
-            if cur and (self.seq[cur[-1]]["sparse"] != e["sparse"] or e["sparse"] == "dsa"):  # dsa: runs of 1
+            if cur and (self.seq[cur[-1]]["sparse"] != e["sparse"] or e["sparse"] == "dsa"  # dsa: runs of 1
+                        or (max_run and len(cur) >= max_run)):  # fmt: skip
                 runs.append(cur)
                 cur = []
             cur.append(i)

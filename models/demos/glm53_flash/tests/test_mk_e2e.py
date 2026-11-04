@@ -51,9 +51,11 @@ def _layers() -> list[int]:
     return out
 
 
-def chat_prompt(tok, isl: int) -> list[int]:
+def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
     """a chat-rendered prompt of (about) isl tokens: filler text cut to the token budget + a question; or the text of
-    GLM53_MK_PROMPT (=@file) as the whole user message (the HF greedy reference's prompt: ISL = its length)"""
+    GLM53_MK_PROMPT (=@file) as the whole user message (the HF greedy reference's prompt: ISL = its length).
+    GLM53_MK_DISTINCT=1: user u's filler starts 7 u tokens into the text (the users route to different experts:
+    every user of a batch with the same prompt picks the same experts, which flatters the EP expert phase)."""
     fixed = os.environ.get("GLM53_MK_PROMPT", "")
     if fixed.startswith("@"):
         with open(fixed[1:]) as f:
@@ -62,7 +64,8 @@ def chat_prompt(tok, isl: int) -> list[int]:
         return tok.encode_chat([{"role": "user", "content": fixed}])
     overhead = len(tok.encode_chat([{"role": "user", "content": QUESTION}]))
     budget = max(8, isl - overhead - 2)
-    filler_ids = tok.encode(FILLER * (budget // 16 + 2))[:budget]
+    skip = 7 * user if os.environ.get("GLM53_MK_DISTINCT", "0") == "1" else 0
+    filler_ids = tok.encode(FILLER * ((budget + skip) // 16 + 2))[skip : skip + budget]
     content = tok.decode(filler_ids) + "\n\n" + QUESTION
     ids = tok.encode_chat([{"role": "user", "content": content}])
     return ids
@@ -98,8 +101,9 @@ def test_mk_e2e(mesh_device, monkeypatch):
     ttnn.synchronize_device(mesh_device)
     logger.info(f"generator warm-up (prefill buckets, decode, traces) {time.perf_counter() - t0:.1f} s")
     ids = chat_prompt(tok, ISL)
-    prompts = [list(ids) for _ in range(B)]
-    logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}); OSL {OSL}; cache {B} x {SEQ}")
+    prompts = [list(chat_prompt(tok, ISL, user=u)) for u in range(B)]
+    logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}; per user {[len(p) for p in prompts]}); OSL {OSL}; "
+                f"cache {B} x {SEQ}; distinct {os.environ.get('GLM53_MK_DISTINCT', '0')}")  # fmt: skip
     # TTFT: prefill of every user + the first token (the generator's prefill chunks + one sampler step)
     t0 = time.perf_counter()
     first = gen.generate_batch(prompts, 1, enable_trace=True)

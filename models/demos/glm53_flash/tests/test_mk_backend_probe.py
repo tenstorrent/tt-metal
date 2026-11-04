@@ -193,6 +193,19 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     backend.decode(io, kv, B)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"first eager step {time.perf_counter() - t0:.1f} s")
+    if os.environ.get("GLM53_MLA_PROBE") == "1":  # the DSA layers' MLA program marks (chip 0) after the eager step
+        from models.autoports.zai_org_glm_5_3_flash.tt import mk_mla as MKMLA
+
+        for i, e in enumerate(backend.seq):
+            mk = getattr(e.get("mla"), "mk", None)
+            if mk is None or getattr(mk, "probe", None) is None:
+                continue
+            try:
+                pt = ttnn.to_torch(ttnn.get_device_tensors(mk.probe)[0])
+                marks = MKMLA.decode_probe(pt, len(mk.readers(backend.chunk).assign))  # readers(t): per row count
+                logger.info(f"MK_BACKEND_MLA_MARKS: layer {layers[i]}: {marks}")
+            except Exception as ex:  # noqa: BLE001
+                logger.info(f"MK_BACKEND_MLA_MARKS: layer {layers[i]}: unreadable ({ex})")
     if os.environ.get("GLM53_STACK_PROBE") == "1":  # the stacks' per-phase probe marks (chip 0) after the eager step
         for r, stk in kv.stacks[0]:
             if stk is None or not hasattr(stk, "probe_marks") or getattr(stk, "probe", None) is None:

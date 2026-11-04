@@ -475,5 +475,8 @@ class MkStack:
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_layer import decode_probe
 
         L0 = self.layers[0]
-        p = ttnn.to_torch(self.probe).reshape(self.n, L0.PROBE_ROWS, 16)
+        t = self.probe
+        if hasattr(ttnn, "get_device_tensors"):  # a mesh: chip 0's marks (every chip runs the same stack program)
+            t = ttnn.get_device_tensors(t)[0]
+        p = ttnn.to_torch(t).reshape(self.n, L0.PROBE_ROWS, 16)
         return p, decode_probe(p[layer], L0.readers.assign, k_cores=len(L0.place["k"]))
