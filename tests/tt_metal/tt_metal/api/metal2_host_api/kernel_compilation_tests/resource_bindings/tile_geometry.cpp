@@ -74,6 +74,19 @@ void kernel_main() {{
         geometry.columns / face[1]);
 }
 
+std::string MakeNonPublicTileFlagQuerySource(const char* getter, uint32_t expected) {
+    std::string source = "#include <type_traits>\nvoid kernel_main() {\n";
+    for (const char* token : {"dfb::input_dfb", "scratch::pad", "tensor::local"}) {
+        source += fmt::format(
+            "static_assert(std::is_same_v<decltype({0}({1})), uint32_t>);\n"
+            "static_assert({0}({1}) == {2}u);\n",
+            getter,
+            token,
+            expected);
+    }
+    return source + "}\n";
+}
+
 class BindingTokenGeometry : public test_helpers::ProgramSpecTestBlackhole,
                              public ::testing::WithParamInterface<GeometryCase> {
 protected:
@@ -171,34 +184,18 @@ void kernel_main() {{
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// A bound resource reports partial height using the same tile-height threshold as the host Tile.
+// A bound resource exposes its partial-height flag as uint32_t with the expected 0/1 value.
 TEST_P(BindingTokenGeometry, PartialFace) {
     const GeometryCase geometry = GetParam();
-    const std::string source = fmt::format(
-        R"(
-void kernel_main() {{
-    static_assert(get_partial_face(dfb::input_dfb) == {0});
-    static_assert(get_partial_face(scratch::pad) == {0});
-    static_assert(get_partial_face(tensor::local) == {0});
-}}
-)",
-        geometry.partial);
+    const std::string source = MakeNonPublicTileFlagQuerySource("get_partial_face", geometry.partial);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// A bound resource reports narrow width independently of whether its height is partial.
+// A bound resource exposes its narrow-width flag as uint32_t with the expected 0/1 value.
 TEST_P(BindingTokenGeometry, NarrowTile) {
     const GeometryCase geometry = GetParam();
-    const std::string source = fmt::format(
-        R"(
-void kernel_main() {{
-    static_assert(get_narrow_tile(dfb::input_dfb) == {0});
-    static_assert(get_narrow_tile(scratch::pad) == {0});
-    static_assert(get_narrow_tile(tensor::local) == {0});
-}}
-)",
-        geometry.narrow);
+    const std::string source = MakeNonPublicTileFlagQuerySource("get_narrow_tile", geometry.narrow);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
