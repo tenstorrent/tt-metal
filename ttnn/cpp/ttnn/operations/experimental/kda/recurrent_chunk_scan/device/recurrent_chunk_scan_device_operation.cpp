@@ -185,7 +185,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
         };
     } else {
         // As in the recurrence, the state update adds no FPU work beyond its matmul and multiply; publishing
-        // A = (A + B) - B is an SFPU subtraction, which this FPU model does not count.
+        // E = (A + B) - B - I takes SFPU subtractions, which this FPU model does not count.
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,

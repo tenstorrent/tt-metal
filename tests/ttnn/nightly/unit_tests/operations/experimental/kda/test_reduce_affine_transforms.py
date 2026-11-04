@@ -17,6 +17,8 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_perfor
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     group_summary_nd_sharded,
+    pack_summary_slots,
+    unpack_summary,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -163,23 +165,17 @@ def _oracle(
     return torch.stack(reduced_a), torch.stack(reduced_b)
 
 
-def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
-    """Packed [slots, N, K, K+V] summaries of complement-form [E | B] rows, E = A - I. A tail slot is NaN: the
-    reduction must never read it."""
-    head = torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1)
-    return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
-
-
 def _split(output: ttnn.Tensor | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """The packed [1, B*H, K, K+V] rows [E | B] as the transform (A, B), A = E + I (exact in FP32 for BF16 E).
 
     Accuracy is judged on A, whose error the HiFi2 composition sets; relative to the smaller E the same error reads
-    several times larger. The complement form's own precision is covered in test_padding_prefix.py.
+    several times larger. test_padding_prefix.py checks only that identity transforms publish E = 0 exactly and that a
+    single group passes through bit for bit; the precision of a composed E is not tested here (it belongs to the
+    complement-form composition follow-up).
     """
     host = (ttnn.to_torch(output) if isinstance(output, ttnn.Tensor) else output).float()
     assert host.dim() == 4 and host.shape[0] == 1, f"packed output shape {tuple(host.shape)}"
-    key_dim = host.shape[2]
-    return host[0, :, :, :key_dim] + torch.eye(key_dim), host[0, :, :, key_dim:]
+    return unpack_summary(host[0])
 
 
 def _summary_memory_config(
@@ -205,7 +201,7 @@ def _device_summaries(
 ) -> ttnn.Tensor:
     transforms, key_dim, value_dim = a.shape[0], a.shape[1], b.shape[-1]
     memory_config = _summary_memory_config(placement, device, slots, transforms, key_dim, value_dim)
-    return _to_device(_pack(a, b, slots=slots), device, dtype, memory_config=memory_config)
+    return _to_device(pack_summary_slots(a, b, slots=slots), device, dtype, memory_config=memory_config)
 
 
 def _to_device(
@@ -610,7 +606,7 @@ def test_reduce_affine_transforms_rejects_invalid_inputs(
 ) -> None:
     a, b = _host_inputs(1, 4, 32, 32)
     groups_per_head = 4
-    packed = _pack(a, b)
+    packed = pack_summary_slots(a, b)
     summaries_tt = _to_device(packed, device)
 
     if case == "host":
@@ -665,7 +661,7 @@ def test_reduce_affine_transforms_rejects_unsupported_input_sharding(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
-    summaries_tt = _to_device(_pack(a, b), device, memory_config=unsupported)
+    summaries_tt = _to_device(pack_summary_slots(a, b), device, memory_config=unsupported)
 
     with expect_error(RuntimeError, "summaries must use interleaved, height-sharded or ND-sharded memory"):
         _run(summaries_tt, 4, actual_start=zero_actual_start)

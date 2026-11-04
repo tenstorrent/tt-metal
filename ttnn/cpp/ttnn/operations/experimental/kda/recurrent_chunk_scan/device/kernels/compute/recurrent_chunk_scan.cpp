@@ -17,6 +17,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
@@ -180,9 +181,8 @@ template <
     uint32_t PacketRows,
     typename DFBCarry,
     typename DFBOut,
-    typename DFBIdentity = DataflowBuffer>
-FORCE_INLINE void extract_paths(
-    DFBCarry& carry, DFBOut& output, DFBIdentity* identity = nullptr, uint32_t value_block = 0) {
+    typename DFBIdentity>
+FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& identity, uint32_t value_block) {
     static_assert(Kt % PacketRows == 0);
     const uint32_t carry_id = carry.get_id();
     const uint32_t output_id = output.get_id();
@@ -200,7 +200,7 @@ FORCE_INLINE void extract_paths(
                     sub_binary_tile_init();
                     sub_binary_tile(0, 1, 0);
                     if (first_row + row == value_block * Vt + value) {
-                        kda::apply_identity<true>(*identity, carry_id, 0, 2, 0);
+                        kda::a_to_complement(identity, carry_id, 0, 2, 0);
                     }
                 } else {
                     copy_tile(carry_id, b_tile, 0);
@@ -215,31 +215,6 @@ FORCE_INLINE void extract_paths(
     }
 }
 
-// Copy an UnpackToDest source exactly into each FP32 destination, releasing the source: the seeds into the ring (the
-// matmul view of the state) and the FP32 carry, and the carry into the final state.
-template <uint32_t Count, typename DFBIn, typename DFBOut, typename... DFBMore>
-FORCE_INLINE void copy_exact(DFBIn& in, DFBOut& out, DFBMore&... more) {
-    const uint32_t in_id = in.get_id();
-    in.wait_front(Count);
-    out.reserve_back(Count);
-    (more.reserve_back(Count), ...);
-    pack_reconfig_data_format(out.get_id());
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
-    for (uint32_t tile = 0; tile < Count; ++tile) {
-        tile_regs_acquire();
-        copy_tile(in_id, tile, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, out.get_id(), tile);
-        (pack_tile(0, more.get_id(), tile), ...);
-        tile_regs_release();
-    }
-    out.push_back(Count);
-    (more.push_back(Count), ...);
-    in.pop_front(Count);
-}
-
 // Replace the one state held by the ring and the carry with an exact copy of seed.
 template <uint32_t Tiles, typename DFBSeed, typename DFBRing, typename DFBCarry>
 FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
@@ -247,7 +222,7 @@ FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
     carry.wait_front(Tiles);
     ring.pop_front(Tiles);
     carry.pop_front(Tiles);
-    copy_exact<Tiles>(seed, ring, carry);
+    kda::copy_exact<Tiles>(seed, ring, carry);
 }
 
 // S_{n+1} = S_n + (final_decay * S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Only the
@@ -365,7 +340,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     identity.wait_front(1);
-    copy_exact<key_pair_tiles>(state, state_ring, state_carry);
+    kda::copy_exact<key_pair_tiles>(state, state_ring, state_carry);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
@@ -384,8 +359,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_carry.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output, &identity, value_block);
-            extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state);
+            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output, identity, value_block);
+            extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state, identity, value_block);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
             reseed_state<key_pair_tiles>(state, state_ring, state_carry);
@@ -399,8 +374,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
     state_ring.wait_front(key_pair_tiles);
     state_carry.wait_front(key_pair_tiles);
     pack_reconfig_data_format(output.get_id());
-    extract_paths<true, Kt, Vt, Kt>(state_carry, output, &identity, value_block);
-    extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state);
+    extract_paths<true, Kt, Vt, Kt>(state_carry, output, identity, value_block);
+    extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state, identity, value_block);
     state_ring.pop_front(key_pair_tiles);
     state_carry.pop_front(key_pair_tiles);
 }
@@ -431,7 +406,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
-    copy_exact<key_value_tiles>(state, state_ring, state_carry);
+    kda::copy_exact<key_value_tiles>(state, state_ring, state_carry);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         // A chronological split restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
@@ -488,7 +463,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     // The final state leaves exactly: copied from the FP32 carry straight into DST.
     state_ring.wait_front(key_value_tiles);
     state_ring.pop_front(key_value_tiles);
-    copy_exact<key_value_tiles>(state_carry, final_state);
+    kda::copy_exact<key_value_tiles>(state_carry, final_state);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
