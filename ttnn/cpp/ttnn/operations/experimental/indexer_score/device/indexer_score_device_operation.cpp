@@ -1317,7 +1317,7 @@ ttnn::Tensor ring_indexer_score_dsa(
             "extent; got {} and {}",
             q.logical_shape()[2],
             weights.logical_shape()[2]);
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),

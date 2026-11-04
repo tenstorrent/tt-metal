@@ -303,7 +303,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
     const auto mesh_shape = mesh_device->shape();
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{

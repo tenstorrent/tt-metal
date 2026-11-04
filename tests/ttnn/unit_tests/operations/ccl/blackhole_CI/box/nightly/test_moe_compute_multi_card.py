@@ -46,7 +46,7 @@ DEVICE_PARAMS_FABRIC_1D = {
 def _skip_unless_line_of_four_with_fabric(mesh_device):
     if mesh_device.get_num_devices() < 4:
         pytest.skip("needs four devices opened as a 1x4 line")
-    if ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
+    if ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.DISABLED:
         pytest.skip("needs the fabric enabled (FABRIC_1D)")
 
 

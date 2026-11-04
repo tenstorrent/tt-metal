@@ -79,7 +79,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.tt.v4.runtime import TtV4Runtime
         from models.demos.deepseek_v3_d_p.tt.v4.weights import V4CheckpointLayers, v4_model_from_checkpoint
 
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
         checkpoint = self.checkpoint_path()
         logger.info(f"DeepSeek-V4 per-axis CCL topology (sp, tp) = {topology}; checkpoint {checkpoint}")
 

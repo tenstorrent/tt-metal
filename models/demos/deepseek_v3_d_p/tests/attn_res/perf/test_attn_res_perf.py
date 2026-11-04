@@ -367,7 +367,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("ordinary", median_layers[1])
 
     margin = _MARGIN[mode]
-    fabric = ttnn.get_fabric_config().name
+    fabric = ttnn.get_fabric_config(mesh_device).name
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
         f"{num_tokens} tokens, {layout} {fabric}, {mode}:"

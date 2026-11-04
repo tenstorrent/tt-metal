@@ -459,8 +459,8 @@ def test_the_route_to_a_peer_contradicts_its_rank_once_the_tp_axis_wraps(mesh_de
     assert forward != backward, "row 0 routes both ways along TP over one direction"
 
     wrapped = route(0, 0, far) == backward
-    assert wrapped == (ttnn.get_fabric_config() in TP_AXIS_WRAPPED), (
-        f"{ttnn.get_fabric_config()} was requested but the TP axis came up "
+    assert wrapped == (ttnn.get_fabric_config(mesh_device) in TP_AXIS_WRAPPED), (
+        f"{ttnn.get_fabric_config(mesh_device)} was requested but the TP axis came up "
         f"{'wrapped' if wrapped else 'unwrapped'}; an arm running on a fabric it did not ask "
         f"for proves nothing about the one it did -- check the wrap cabling"
     )

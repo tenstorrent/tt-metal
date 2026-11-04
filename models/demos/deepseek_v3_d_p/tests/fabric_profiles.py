@@ -177,7 +177,7 @@ def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
     short one wrap link therefore answers a torus request with an unwrapped fabric and runs
     the arm to green on the single topology that arm exists to exercise.
     """
-    if ttnn.get_fabric_config() not in _REQUESTS_TP_WRAP:
+    if ttnn.get_fabric_config(mesh_device) not in _REQUESTS_TP_WRAP:
         return
 
     _, cols = tuple(mesh_device.shape)
@@ -187,6 +187,6 @@ def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
         return
 
     assert tp_axis_is_wrapped(mesh_device), (
-        f"{ttnn.get_fabric_config()} was requested but the TP axis came up unwrapped; "
+        f"{ttnn.get_fabric_config(mesh_device)} was requested but the TP axis came up unwrapped; "
         f"this box cannot gate a wrap-direction bug -- check the wrap cabling"
     )

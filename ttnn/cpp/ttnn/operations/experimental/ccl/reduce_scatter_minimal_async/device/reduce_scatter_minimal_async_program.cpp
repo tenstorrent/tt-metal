@@ -2091,7 +2091,8 @@ auto build_line_reduce_scatter_program_impl(
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     const bool use_fabric_2d_neighbor_barrier =
-        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+        topology == ccl::Topology::Linear &&
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     // A logical line embedded in a 2D fabric can turn at an intermediate device. A single line
     // multicast range follows the physical direction selected by its first hop, so it cannot
     // represent such a turn. The reduce-scatter data path already relays through immediate logical

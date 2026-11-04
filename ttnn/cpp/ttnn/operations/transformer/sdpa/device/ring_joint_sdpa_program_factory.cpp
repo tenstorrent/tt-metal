@@ -210,6 +210,7 @@ constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
 // Program creation and the per-dispatch patch both go through plan_halo_exchanges, since the exchange
 // list fixes the kernel count and order. Only a 1D fabric's line multicast takes a start distance.
 std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
+    const ttnn::MeshDevice& mesh_device,
     const ttnn::prim::RingJointSDPAParams& args,
     const ring_joint::ChunkedSlidingHaloLayout& layout,
     uint32_t transport_rank) {
@@ -217,7 +218,7 @@ std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
         layout,
         transport_rank,
         args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
-        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
 }
 
 // A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
@@ -665,7 +666,8 @@ ag_dyn::SemaphoreArgPatch record_ring_joint_semaphore_arg_patch(
         const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
         const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
         const auto halo_layout = build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
-        const auto halo_exchanges = plan_halo_exchanges(args, *halo_layout, ring_write_plan.transport_rank);
+        const auto halo_exchanges =
+            plan_halo_exchanges(*tensor_args.input_k.device(), args, *halo_layout, ring_write_plan.transport_rank);
         for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
             ag_dyn::record_semaphore_arg_slot(
                 patch,
@@ -719,8 +721,10 @@ void apply_ring_joint_scalar_runtime_args(
     const std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout =
         build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
-        runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
-                            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
+        runtime_halo_layout
+            ? plan_halo_exchanges(
+                  *tensor_args.input_k.device(), args, *runtime_halo_layout, ring_write_plan.transport_rank)
+            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -3516,7 +3520,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // plan_chunked_sliding_halo_exchanges groups the hops into exchanges.
         const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
         const auto& ag_attrs = args.all_gather_operation_attributes;
-        const auto halo_exchanges = plan_halo_exchanges(args, chunked_sliding_halo_layout, transport_rank);
+        const auto halo_exchanges =
+            plan_halo_exchanges(*mesh_device, args, chunked_sliding_halo_layout, transport_rank);
         // The first exchange's workers collect every arrival (RingAttentionNeighborHaloConfig::collects_arrivals).
         TT_FATAL(halo_exchanges.front().hop == 1, "The first sliding halo exchange must cover hop 1");
         const bool halo_multicast = halo_exchanges.front().multicast;

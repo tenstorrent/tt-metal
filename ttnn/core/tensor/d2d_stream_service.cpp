@@ -877,7 +877,7 @@ RelayPlan make_relay_plan(
     bool is_sender) {
     using tt::tt_fabric::RoutingDirection;
     const auto& shape = mesh.shape();
-    const auto fabric = tt::tt_fabric::GetFabricConfig();
+    const auto fabric = tt::tt_fabric::GetFabricConfig(mesh);
     const auto& local_nodes = is_sender ? sender_nodes : receiver_nodes;
     const auto& peer_nodes = is_sender ? receiver_nodes : sender_nodes;
 
@@ -1898,7 +1898,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
     TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService relay: stage_gate is not supported");
     TT_FATAL(cfg.extra_tensors.empty(), "D2DStreamService relay: extra_tensors is not supported");
     TT_FATAL(
-        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh)),
         "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
 
     auto relay = std::make_shared<RelayLocal>();

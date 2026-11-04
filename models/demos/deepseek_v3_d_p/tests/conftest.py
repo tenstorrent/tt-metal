@@ -378,11 +378,11 @@ def _assert_certified_torus_profile(request):
         return
     if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1":
         return
-    request.getfixturevalue("mesh_device")
-    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    mesh_device = request.getfixturevalue("mesh_device")
+    assert ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-    assert per_axis_topology() == (ttnn.Topology.Ring, ttnn.Topology.Ring)
+    assert per_axis_topology(mesh_device=mesh_device) == (ttnn.Topology.Ring, ttnn.Topology.Ring)
 
 
 @pytest.fixture

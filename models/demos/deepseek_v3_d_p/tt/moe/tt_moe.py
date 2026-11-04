@@ -513,7 +513,8 @@ class TtMoe(LightweightModule):
             and not axis_wired_into_ring(self.tt_expert_dispatch_table, cluster_axis=0)
         ):
             fabric2d_error = (
-                f"the fabric {ttnn.get_fabric_config()} came up without a wrap link on axis 0; check the wrap cabling"
+                f"the fabric {ttnn.get_fabric_config(mesh_device)} came up without a wrap link on axis 0; "
+                "check the wrap cabling"
             )
         if fabric2d_error is not None and moe_transport == "fabric2d":
             raise ValueError(f"TtMoe: moe_transport 'fabric2d': {fabric2d_error}")
@@ -652,7 +653,7 @@ class TtMoe(LightweightModule):
         # the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
-        ring_axis_wraps = ttnn.get_fabric_config() in (
+        ring_axis_wraps = ttnn.get_fabric_config(mesh_device) in (
             ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         )

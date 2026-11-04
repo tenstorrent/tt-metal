@@ -8,7 +8,6 @@ This module implements a multi-device broadcast operation where a sender device
 broadcasts data to all other devices in a mesh using a neighbor-exchange topology.
 """
 
-
 from dataclasses import dataclass
 
 import ttnn
@@ -95,7 +94,7 @@ class BroadcastConfig:
         self.bcast_cb_id = int(bcast_cb_id)
         self.num_links = int(num_links)
         # When callers omit fabric_config, derive it from current global runtime state.
-        self.fabric_config = fabric_config if fabric_config is not None else ttnn.get_fabric_config()
+        self.fabric_config = fabric_config if fabric_config is not None else ttnn.get_fabric_config(mesh_device)
         self.broadcast_topology_override = broadcast_topology_override
         if self.num_links <= 0:
             raise ValueError("num_links must be greater than zero")

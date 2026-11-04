@@ -392,7 +392,7 @@ def make_kimi_k3_device_case(
         tp_ccl_topology=(
             ttnn.Topology.Ring
             if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
-            else per_axis_topology()[tensor_parallel_axis]
+            else per_axis_topology(mesh_device=mesh_device)[tensor_parallel_axis]
         ),
     )
     if summary_group_chunks is not None:

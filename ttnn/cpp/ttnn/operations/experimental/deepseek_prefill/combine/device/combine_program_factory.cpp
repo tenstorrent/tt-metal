@@ -190,7 +190,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
     // per-direction array connection. Must match the writer kernel's #ifdef FABRIC_2D gating.
-    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     TT_FATAL(
         !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
         "FABRIC_2D combine requires cluster_axis 0 or 1; got {}",

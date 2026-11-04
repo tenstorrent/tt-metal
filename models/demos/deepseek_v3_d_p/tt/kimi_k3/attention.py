@@ -259,7 +259,7 @@ def build_attention(
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 
-    topology = topology if topology is not None else per_axis_topology()
+    topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
     tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
 
     if schedule.is_mla(layer_idx):

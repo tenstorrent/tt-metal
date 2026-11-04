@@ -220,7 +220,7 @@ std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     if (shape.dims() != 2) {
         return std::nullopt;
     }
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     if (!cluster_axis.has_value() && !tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         if (log_rejection) {
             log_warning(

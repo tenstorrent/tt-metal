@@ -991,7 +991,7 @@ def _run_high_bw_all_gather_perf(
         pages_per_device = rows_per_device
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
-        f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
+        f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config(mesh_device)} dtype={dtype} "
         f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} "
         f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
@@ -1357,7 +1357,7 @@ def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
 
     _run_high_bw_all_gather_test_cases(rank_line, min_bandwidth_gbps, cluster_axis)
-    if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
+    if ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D_RING:
         # Cover the Blackhole four-worker region without another device setup. The old 4.5 MB/link heuristic chose
         # eight workers here and measured below this floor; four bank-owning workers sustain more than 60 GB/s.
         if ttnn.device.IsProgramRealtimeProfilerActive():
@@ -2145,7 +2145,7 @@ def _run_high_bw_all_gather_token_sweep(
         ).split(",")
     ]
     axis_size = mesh_device.shape[cluster_axis]
-    fabric_config = str(ttnn.get_fabric_config()).removeprefix("FabricConfig.")
+    fabric_config = str(ttnn.get_fabric_config(mesh_device)).removeprefix("FabricConfig.")
 
     for global_tokens in token_sizes:
         assert global_tokens % axis_size == 0

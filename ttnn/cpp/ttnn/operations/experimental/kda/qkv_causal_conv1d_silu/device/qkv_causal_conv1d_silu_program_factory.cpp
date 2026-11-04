@@ -106,7 +106,7 @@ void add_history_exchange(
     // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
     // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
     TT_FATAL(
-        sp_size == 1 || !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+        sp_size == 1 || !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(device)) ||
             ttnn::ccl::is_axis_straight(device, axis),
         "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;

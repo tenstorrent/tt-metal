@@ -169,7 +169,7 @@ def _run_reshard(mesh_device, case):
             "reference={:.3f}GB/s minimum={:.3f}GB/s samples_us={}".format(
                 case.name,
                 mesh_device.shape[0],
-                ttnn.get_fabric_config(),
+                ttnn.get_fabric_config(mesh_device),
                 ttnn.get_tt_fabric_max_payload_size_bytes(),
                 _NUM_LINKS,
                 case.local_input_shape,
@@ -206,7 +206,7 @@ def test_all_to_all_async_generic_production_perf_and_accuracy(mesh_device):
     """Verify both GLM reshards on the complete physical Ring and gate their traced device bandwidth."""
     require_realtime_profiler("generic all-to-all production perf checks")
     assert ttnn.get_num_devices() == math.prod(mesh_device.shape)
-    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    assert ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == _MAX_PACKET_PAYLOAD_SIZE
 
     for case in _reshard_cases(mesh_device.shape[0]):

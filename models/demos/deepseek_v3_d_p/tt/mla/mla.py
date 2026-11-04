@@ -660,7 +660,7 @@ class ttMLA:
             # both mesh axes, so only a 2D fabric can route it -- a narrowing introduced when the SP-only
             # (single-axis, 1D-routable) gather was removed. The gather asserts this too, but that fires on
             # the first chunk, which on a deep model is a long weight load later; fail at construction.
-            _fabric = ttnn.get_fabric_config()
+            _fabric = ttnn.get_fabric_config(mesh_device)
             assert _fabric in (
                 ttnn.FabricConfig.FABRIC_2D,
                 ttnn.FabricConfig.FABRIC_2D_TORUS_X,
@@ -2322,7 +2322,7 @@ class ttMLA:
                 f"dense tp_shard_kv needs the cache to hold a whole number of chunks: seq_len {self.max_seq_len} "
                 f"is not a multiple of chunk {self.active_seq_len}"
             )
-            _fabric = ttnn.get_fabric_config()
+            _fabric = ttnn.get_fabric_config(self.mesh_device)
             assert _fabric in (
                 ttnn.FabricConfig.FABRIC_2D,
                 ttnn.FabricConfig.FABRIC_2D_TORUS_X,
@@ -2551,7 +2551,7 @@ class ttMLA:
         )
         # One snake across both mesh axes, so only Fabric2D can route it. FABRIC_1D reaches the op and
         # fails its generic neighbor proof instead, which names the symptom rather than this cause.
-        fabric = ttnn.get_fabric_config()
+        fabric = ttnn.get_fabric_config(self.mesh_device)
         assert fabric in (
             ttnn.FabricConfig.FABRIC_2D,
             ttnn.FabricConfig.FABRIC_2D_TORUS_X,

@@ -133,7 +133,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         # Per-axis CCL topology derived from the opened fabric: Ring on a physically-wrapped axis
         # (FABRIC_2D_TORUS_{X,Y,XY}), Linear otherwise. Querying the active fabric keeps topology
         # consistent with what open_mesh_device set. (sp_axis_0, tp_axis_1).
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
         logger.info(f"Per-axis CCL topology (sp, tp) = {topology}")
 
         runtime_config = TtPrefillRuntimeConfig(

@@ -130,9 +130,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // --- Data sizes ---
@@ -174,7 +176,6 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     }
     // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their
     // bandwidths sum and their fills sum (the totals compete in the final max() below).
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const auto [rs_bw_cycles, rs_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, fabric_config, clock_rate_mhz, rs_bottleneck_bytes, num_links, num_hops);
     const auto [ag_bw_cycles, ag_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(

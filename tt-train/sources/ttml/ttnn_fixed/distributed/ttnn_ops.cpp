@@ -40,8 +40,8 @@ tt::tt_fabric::FabricType get_fabric_type_from_config(tt::tt_fabric::FabricConfi
 
 // Helper function to determine if a cluster axis is a ring (has wraparound connections)
 // cluster_axis: 0 = Y axis (rows, N-S direction), 1 = X axis (columns, E-W direction)
-bool is_cluster_axis_ring(uint32_t cluster_axis) {
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+bool is_cluster_axis_ring(const ttnn::distributed::MeshDevice& mesh_device, uint32_t cluster_axis) {
+    auto fabric_config = tt::tt_fabric::GetFabricConfig(mesh_device);
     auto fabric_type = get_fabric_type_from_config(fabric_config);
 
     if (cluster_axis == 0) {
@@ -58,9 +58,9 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 // The options are Linear, Ring, based on where the fabric was initialized with
 // wrap around connections along the axis.
 ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
+    const auto& mesh_device = ttml::autograd::ctx().get_device();
     if (!cluster_axis.has_value()) {
-        auto* mesh_device = &ttml::autograd::ctx().get_device();
-        const auto& mesh_shape = mesh_device->shape();
+        const auto& mesh_shape = mesh_device.shape();
 
         TT_FATAL(
             mesh_shape.is_line_topology(),
@@ -71,7 +71,7 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
         // Find the only non-trivial axis (dimension > 1)
         for (size_t i = 0; i < mesh_shape.dims(); ++i) {
             if (mesh_shape[i] > 1) {
-                return is_cluster_axis_ring(i) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
+                return is_cluster_axis_ring(mesh_device, i) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
             }
         }
         // All dimensions are 1 (single device case) - use Linear
@@ -79,7 +79,8 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     }
 
     // cluster_axis is specified - check if that axis has ring connectivity
-    return is_cluster_axis_ring(cluster_axis.value()) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
+    return is_cluster_axis_ring(mesh_device, cluster_axis.value()) ? ttnn::ccl::Topology::Ring
+                                                                   : ttnn::ccl::Topology::Linear;
 }
 
 }  // namespace
@@ -204,8 +205,8 @@ ttnn::Tensor ring_shift(
     TT_FATAL(
         (cluster_axis.has_value() && cluster_axis.value() < mesh_shape.dims() && cluster_axis.value() >= 0) ||
             (!cluster_axis.has_value() &&
-             (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-              tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING)),
+             (tt::tt_fabric::GetFabricConfig(*mesh_device_ptr) == tt::tt_fabric::FabricConfig::FABRIC_1D ||
+              tt::tt_fabric::GetFabricConfig(*mesh_device_ptr) == tt::tt_fabric::FabricConfig::FABRIC_1D_RING)),
         "cluster_axis must be either >= 0 and < {} for 2D mesh or nullopt for 1D mesh and linear topology",
         mesh_shape.dims());
 
