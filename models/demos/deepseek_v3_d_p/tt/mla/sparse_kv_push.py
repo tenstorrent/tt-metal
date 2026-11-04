@@ -175,8 +175,20 @@ class SparseKvPushPlanner:
         reused by every chunk."""
         key = (parity, rows, like.shape[-1], like.dtype)
         if key not in self._buffers:
+            # Zeros in the target dtype where torch has it: a float32 host tensor for a bf16 target makes from_torch
+            # convert on device, staging the buffer as float32 (twice the bf16 size) first. FP8 is built on the host
+            # from float32 (from_torch's only FP8 input), so it uploads only the final buffer.
+            host_dtype = torch.bfloat16 if like.dtype == ttnn.bfloat16 else torch.float32
             self._buffers[key] = _replicated(
-                self.mesh_device, torch.zeros(1, 1, rows, like.shape[-1]), like.dtype, like.layout
+                self.mesh_device, torch.zeros(1, 1, rows, like.shape[-1], dtype=host_dtype), like.dtype, like.layout
+            )
+            _b = self._buffers[key]  # SCRATCH bf16 probe
+            _page = _b.buffer_aligned_page_size()
+            print(
+                f"PUSHSIZE alloc parity={parity} rows={rows} shape={tuple(_b.shape)} dtype={_b.dtype} "
+                f"layout={_b.layout} page={_page} bytes_per_chip={rows * _page} "
+                f"bytes_per_bank={rows * _page // 8} like_shape={tuple(like.shape)}",
+                flush=True,
             )
         return self._buffers[key]
 

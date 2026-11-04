@@ -711,6 +711,11 @@ class ttMLA:
             # The push buffers are created on the first push (the warm pass, before any trace capture), so models
             # whose layers all compute their own top-k never allocate one.
             self._push_reuses_dense = self._push_rows <= dense.shape[2]
+            print(  # SCRATCH bf16 probe
+                f"PUSHSIZE init layer={self.layer_idx} query_rows={query_rows} topk={topk} dense_shape={tuple(dense.shape)} "
+                f"page_bytes={self._push_page_bytes} push_rows={self._push_rows} reuses_dense={self._push_reuses_dense}",
+                flush=True,
+            )
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
