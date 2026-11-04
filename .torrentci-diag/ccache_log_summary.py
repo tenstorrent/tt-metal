@@ -64,9 +64,17 @@ for cat, values in sorted(by_category.items(), key=lambda kv: -sum(kv[1])):
 print("\ntop templates by time until the next line (count, sum_s, mean_ms):")
 for name, (count, total) in sorted(by_template.items(), key=lambda kv: -kv[1][1])[:45]:
     print(f"{count:6} {total:8.1f} {1000 * total / count:8.1f}  {name}")
+mismatch = collections.Counter()
+for lines in procs.values():
+    for _, message in lines:
+        if message.startswith("Mismatch for "):
+            mismatch[message.split(" hash ", 1)[0][13:]] += 1
+print(f"\ndirect-mode include mismatches by file ({sum(mismatch.values())} total, {len(mismatch)} files):")
+for name, count in mismatch.most_common(30):
+    print(f"{count:6}  {name}")
 for cat in ("preprocessed_cache_hit", "cache_miss"):
     for lines in examples.get(cat, [])[:1]:
         print(f"\nexample {cat}:")
         base = lines[0][0]
-        for when, message in lines[:80]:
+        for when, message in [item for item in lines if not item[1].startswith("Config:")][:150]:
             print(f"  +{when - base:7.3f} {message[:200]}")
