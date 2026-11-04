@@ -875,8 +875,8 @@ class TestTriage:
         incremented_semaphore = next(
             row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
         )
-        args = {check.risc_name: check.result.kernel_args for check in filtered_results}
-        writer, reader = args["brisc"], args["ncrisc"]
+        args = {check.result.dispatcher_core_data.kernel_name: check.result.kernel_args for check in filtered_results}
+        writer, reader, compute = args["writer_1_tile"], args["reader_binary_1_tile"], args["add_2_tiles_hang"]
         assert named(writer.compile_time_args) == [
             ("tensor::out[0]", 2),
             ("tensor::out[1]", 2048),
@@ -893,9 +893,7 @@ class TestTriage:
         ]
         assert reader.runtime_args == []
         assert [arg.name for arg in reader.common_runtime_args] == ["tensor::in0", "tensor::in1"]
-        for risc_name in ("trisc0", "trisc1", "trisc2"):
-            compute = args[risc_name]
-            assert (compute.compile_time_args, compute.runtime_args, compute.common_runtime_args) == ([], [], [])
+        assert (compute.compile_time_args, compute.runtime_args, compute.common_runtime_args) == ([], [], [])
 
     def skip_unless_circular_buffers(self, result) -> None:
         """Skip where dump_circular_buffers has nothing to read: it covers Gen1 circular buffers only.
