@@ -236,7 +236,7 @@ def test_routed_experts_precedence_source():
 # ------------------------------------------------------------------------------------ H1 / H2 knobs
 def test_hybrid_knob_plumbing():
     assert (
-        M.hybrid_gather_mode({}) == "compact" and M.hybrid_combine_mode({}) == "allreduce"
+        M.hybrid_gather_mode({}) == "fabric" and M.hybrid_combine_mode({}) == "fabric"
     )  # the defaults since 2026-10-29
     assert (
         M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": "padded"}) == "padded"
@@ -259,7 +259,7 @@ def test_decode_glue_modes_gate():
     on = {"GLM53_HYBRID_GATHER": "compact", "GLM53_HYBRID_COMBINE": "allreduce"}
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
     assert M.decode_glue_modes(2, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
-    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "allreduce")  # the defaults
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "fabric")  # the defaults
     fab = {"GLM53_HYBRID_GATHER": "fabric", "GLM53_HYBRID_COMBINE": "fabric"}  # the fabric programs: compact-class
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=fab) == (True, "fabric")
     assert M.decode_glue_modes(8, 64, has_idx=False, in_prefill=False, env=fab) == (False, "rs")

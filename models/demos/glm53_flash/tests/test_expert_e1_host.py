@@ -544,7 +544,7 @@ def test_e1_knobs_and_layout_rule():
     assert M.prefill_experts_for(False, True, {"GLM53_PREFILL_EXPERTS": "regions"}) == "regions"
     # the decode glue defaults since 2026-10-29 (H1 / H2: the compact gather + the all-reduce combine); the padded
     # gather + reduce-scatter stays the explicit opt-out
-    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "allreduce")
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "fabric")
     assert M.decode_glue_modes(
         8, 4, has_idx=False, in_prefill=False, env={"GLM53_HYBRID_GATHER": "padded", "GLM53_HYBRID_COMBINE": "rs"}
     ) == (False, "rs")

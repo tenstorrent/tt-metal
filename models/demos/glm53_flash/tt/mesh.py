@@ -439,7 +439,7 @@ class GLMMesh:
         bit-identical. Read per call like ``async_ccl``; the choice is a function of the env and the (static)
         shape, so a captured trace replays the mode it was captured in. Decode shapes only (<= 32 rows: at
         prefill widths the gather moves 3 partials per chip where the composite moves 1.5)."""
-        return not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "gather"
+        return not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "fabric") == "gather"
 
     @property
     def reduce_ckc(self):
@@ -589,7 +589,9 @@ class GLMMesh:
         unicasts between the row's columns (``custom_ops/row_exchange`` mode ``allreduce``: every column owns a
         quarter of the hidden columns, sums the partials there in fp32 DST and fans the sums out). Read per call
         like ``tp_allreduce_gather``: a function of the env and the static shape (trace-safe)."""
-        return not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "fabric"
+        return (
+            not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "fabric") == "fabric"
+        )  # the default since 2026-11-04
 
     def _fabric_ar_shape(self, x: ttnn.Tensor) -> tuple[int, int] | None:
         """``(T, W)`` of a decode activation the fabric all-reduce covers: a 4-D ``[1, 1, T, W]`` bf16 TILE

@@ -299,3 +299,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   (`gate84_B4_persist`) must reproduce the all-fabric run's ids bit for bit (the same math, one program less two).
   Next phases: the gathered rows multicast straight into the expert cores' L1 (no x_g tensor), then the attention
   half (pre-block -> qkv -> KDA recurrence -> o-proj -> all-reduce -> post-mix) on the same pattern.
+* 04:43 **GPQA Diamond, all 198 questions, served with the three fabric programs** (`served_fabric_gpqa_full2`, 1 M
+  profile, 32 concurrent): exact match **0.869 +- 0.024**. The release flow's CI subset (10 questions) scored 9 / 10
+  on both the tip and this branch; the full set has no tip reference run (the tt-shield releases run the subset). With
+  the per-call agreement, the unchanged prefill chain and the served smoke, the fabric gather, combine and TP
+  all-reduce become the defaults (`GLM53_HYBRID_GATHER=fabric`, `GLM53_HYBRID_COMBINE=fabric`,
+  `GLM53_TP_ALLREDUCE=fabric`; the composites stay behind the knobs). Step on the (8, 4) at 32 users: **37.7 ms,
+  26.5 tok/s per user** (tip 44.2 / 22.6); served decode at 32 users 19.5 tok/s per user (tip 16-17).

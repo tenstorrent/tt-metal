@@ -180,7 +180,9 @@ HYBRID_COMBINE_MODES = ("rs", "allreduce", "allreduce_ccl", "fabric")
 
 def hybrid_gather_mode(env=None) -> str:
     env = os.environ if env is None else env
-    mode = env.get(HYBRID_GATHER_ENV, "compact")  # the default since 2026-10-29 (the H1 gate: pcc 0.9952, top-1 93.0 %)
+    mode = env.get(
+        HYBRID_GATHER_ENV, "fabric"
+    )  # fabric since 2026-11-04 (bit-identical to compact, 40 us for 113); compact: the 2026-10-29 H1 default
     if mode not in HYBRID_GATHER_MODES:
         raise ValueError(f"{HYBRID_GATHER_ENV}={mode!r}: expected one of {HYBRID_GATHER_MODES}")
     return mode
@@ -188,7 +190,9 @@ def hybrid_gather_mode(env=None) -> str:
 
 def hybrid_combine_mode(env=None) -> str:
     env = os.environ if env is None else env
-    mode = env.get(HYBRID_COMBINE_ENV, "allreduce")  # the default since 2026-10-29 (the H2 gate with H1: 48.7 ms step)
+    mode = env.get(
+        HYBRID_COMBINE_ENV, "fabric"
+    )  # fabric since 2026-11-04 (within 1 ulp of allreduce on every call, 41 us for 74); allreduce: the 2026-10-29 H2 default
     if mode not in HYBRID_COMBINE_MODES:
         raise ValueError(f"{HYBRID_COMBINE_ENV}={mode!r}: expected one of {HYBRID_COMBINE_MODES}")
     return mode
