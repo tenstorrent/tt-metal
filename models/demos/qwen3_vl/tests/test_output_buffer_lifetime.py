@@ -4,7 +4,7 @@
 """Vision outputs must survive later device allocations.
 
 DropInVisionTransformer slices each output to ``out_hidden_size`` and mesh-partitions it before
-returning it. A full-width slice is a view of its source, and mesh_partition returns its input on a
+returning it. A full-width slice is (today) a view of its source, and mesh_partition returns its input on a
 1-device mesh, so freeing either source frees the returned tensor's memory. Nothing raises at that
 point; the next allocation reuses the buffer and overwrites the output. Each case below therefore
 allocates and fills another tensor before checking the returned values.
@@ -24,7 +24,7 @@ HIDDEN = 2560
 @pytest.mark.parametrize(
     "source_width",
     [HIDDEN, HIDDEN + 64],
-    ids=["full_width_view", "padded_width_copy"],
+    ids=["full_width", "padded_width"],
 )
 def test_vision_output_survives_reallocation(mesh_device, source_width):
     torch.manual_seed(0)
@@ -51,9 +51,8 @@ def test_vision_output_survives_reallocation(mesh_device, source_width):
     actual = ttnn.to_torch(output).reshape(SEQ_LEN, HIDDEN)
     assert torch.equal(actual, expected), f"output overwritten: {(actual == 7.0).float().mean():.1%} of values are 7"
 
-    # The full-width slice must be a view (the case that used to break); the padded one a copy whose
-    # source is freed so it does not leak.
-    assert aliased == (source_width == HIDDEN)
+    # The source must be freed exactly when the output does not share its buffer: kept alive for a view
+    # (today the full-width slice), freed for a copy so it does not leak.
     assert source.is_allocated() == aliased
 
     ttnn.deallocate(filler)

@@ -34,10 +34,12 @@ def _free_unless_aliased(source, view):
 
 
 def _mesh_partition_and_free(tensor, dim):
-    """ttnn.mesh_partition returns the input itself on a 1-device mesh; only free the input when it is a copy."""
+    """Partition ``tensor`` across the mesh and free it unless the result shares its buffer.
+
+    ``ttnn.mesh_partition`` returns the input itself on a 1-device mesh.
+    """
     partitioned = ttnn.mesh_partition(tensor, dim)
-    if tensor.device().get_num_devices() > 1:
-        ttnn.deallocate(tensor)
+    _free_unless_aliased(tensor, partitioned)
     return partitioned
 
 
@@ -357,7 +359,6 @@ class DropInVisionTransformer(torch.nn.Module):
         tt_out = ttnn.concat(final_outputs, dim=0)
         for i in range(len(deepstack_visual_embeds_list)):
             deepstack_visual_embeds_list[i] = ttnn.concat(deepstack_visual_embeds_list[i], dim=0)
-        (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
         return tt_out, deepstack_visual_embeds_list
 
     def forward_single_user(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
