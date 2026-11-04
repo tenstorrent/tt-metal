@@ -74,7 +74,7 @@ public:
     virtual uint32_t fixed_subblock_w(uint32_t /*tiles*/) const { return 0; }
 
     // Compute continues one recurrent state across every active ring iteration and normalizes only on the
-    // last: streaming compute, no LSE / accumulator DRAM staging.
+    // last: streaming compute, no accumulator DRAM staging.
     virtual bool resident_ring_state() const { return false; }
 
     // First CB index for the ring dataflow CBs (above any fixed compute layout).

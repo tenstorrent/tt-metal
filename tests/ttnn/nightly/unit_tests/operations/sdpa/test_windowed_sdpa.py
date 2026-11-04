@@ -62,8 +62,8 @@ from tests.ttnn.unit_tests.operations.sdpa.windowed_sdpa_test_utils import (
     ],
     ids=["bf16", "bf8"],
 )
-# Both dest-accumulation modes are covered: fp32_dest_acc_en selects different compute paths
-# (False -> streaming on Blackhole, True -> standard), so both must stay correct.
+# Both dest-accumulation modes are covered: fp32_dest_acc_en=True runs the ACCURATE recipe, False the streaming
+# kernel, so both must stay correct.
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32acc", "no_fp32acc"])
 @pytest.mark.parametrize("is_causal", [False, True], ids=["bidir", "causal"])
 def test_windowed_sdpa_smoke(
