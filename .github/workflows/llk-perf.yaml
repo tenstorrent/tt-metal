@@ -1,4 +1,4 @@
-name: "LLK perf: merge-gate stage 2 end-to-end trial (do not merge)"
+name: "LLK perf: merge-gate stage 2 capacity + blocking trial (do not merge)"
 on:
   workflow_dispatch:
     inputs:
@@ -69,7 +69,8 @@ jobs:
       min_cycles: ${{ fromJSON(needs.changes.outputs.thresholds).min_cycles }}
       measure_result: ${{ needs.measure.result }}
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      fail_on_regression: false
+      fail_on_regression: ${{ inputs.arch == 'blackhole' }}
+      fail_without_baseline: true
       slack: false
       slack_on_pass: false
     secrets: inherit
