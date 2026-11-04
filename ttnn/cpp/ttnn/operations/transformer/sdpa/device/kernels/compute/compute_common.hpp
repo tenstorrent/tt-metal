@@ -562,7 +562,11 @@ void rescale_accumulate_fp32(uint32_t prev_cb, uint32_t prev_u2d, uint32_t cur_c
     cb_prev.wait_front(num_tiles);
     cb_cur.wait_front(num_tiles);
     cb_e.wait_front(rows);
-    // The alias views have their own read pointers; align them with the accumulators' current front.
+    // The alias views have their own read pointers; align them with the accumulators' current front. Each
+    // accumulator CB holds exactly num_tiles (out_im: Sq_chunk_t * vDHt, sum: Sq_chunk_t; program factory) and is
+    // produced and consumed num_tiles at a time, so a full front starts at the CB base and base + idx never wraps.
+    // The pop_front(1) / reserve_back(1) pair below advances both pointers one tile per iteration and returns
+    // them to the base after num_tiles iterations.
     UNPACK((get_local_cb_interface(prev_u2d).fifo_rd_ptr = get_local_cb_interface(prev_cb).fifo_rd_ptr));
     UNPACK((get_local_cb_interface(cur_u2d).fifo_rd_ptr = get_local_cb_interface(cur_cb).fifo_rd_ptr));
     pack_reconfig_data_format(cur_cb);
@@ -571,15 +575,15 @@ void rescale_accumulate_fp32(uint32_t prev_cb, uint32_t prev_u2d, uint32_t cur_c
             const uint32_t idx = i * cols + j;
             tile_regs_acquire();
             reconfig_data_format_srca(prev_u2d);
-            copy_tile_to_dst_init_short(prev_u2d);
+            copy_init(prev_u2d);
             copy_tile(prev_u2d, idx, 0);
             reconfig_data_format_srca(e_cb);
-            copy_tile_to_dst_init_short(e_cb);
+            copy_init(e_cb);
             copy_tile(e_cb, i, 1);
             sfpu_mul_bcast_col_init();
             sfpu_mul_bcast_col(0, 1);
             reconfig_data_format_srca(cur_u2d);
-            copy_tile_to_dst_init_short(cur_u2d);
+            copy_init(cur_u2d);
             copy_tile(cur_u2d, idx, 1);
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
@@ -1008,11 +1012,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument

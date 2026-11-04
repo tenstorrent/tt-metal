@@ -133,7 +133,7 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     CreateKernel(
         program,
@@ -166,7 +166,7 @@ TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     CreateKernel(
         program,
@@ -215,7 +215,7 @@ TEST_F(KernelSizeTestDefaultBuffer, KernelSizesBoundaryConditions) {
 
         auto& device = devices_[0];
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*device);
 
         CreateKernel(
             program,
@@ -244,7 +244,7 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     // Get unreserved L1 base address - this is where we can safely write
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);

@@ -18,7 +18,7 @@ inline void bitwise_not_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_not() {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // Load/store as two's-complement int32 (sfpi DataLayout::I32 == InstrModLoadStore::INT32),
         // matching the original TTI path. A plain vInt load would read the raw sign-magnitude dest

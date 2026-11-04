@@ -25,9 +25,9 @@ branch per layer), no two-stage proposals, no losses or assigners. The BEV encod
 ``PerceptionTransformer`` (BEV queries, positional encoding, can bus, previous BEV) is not
 part of this module.
 
-Parameter names follow the BEVFormer checkpoint's ``pts_bbox_head``: ``query_embedding``,
-``cls_branches`` and ``reg_branches`` load unchanged, and ``transformer.reference_points``
-and ``transformer.decoder`` load into ``reference_points`` and ``decoder``. The rest of
+Parameter names follow upstream's ``pts_bbox_head``: ``query_embedding``, ``cls_branches`` and
+``reg_branches`` as they are, and ``transformer.reference_points`` and ``transformer.decoder`` as
+``reference_points`` and ``decoder``. The rest of
 ``pts_bbox_head`` (``bev_embedding``, ``positional_encoding``, and ``transformer``'s
 ``encoder``, ``level_embeds``, ``cams_embeds`` and ``can_bus_mlp``) is the encoder side's
 and is left out.
@@ -45,8 +45,15 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevf
 import torch
 import torch.nn as nn
 
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
-from models.experimental.bevformer.config.head_config import NUM_CLASSES, PC_RANGE
+from models.experimental.bevformer.model_config import (
+    CODE_SIZE,
+    CODE_XY,
+    CODE_Z,
+    EMBED_DIMS,
+    NUM_CLASSES,
+    NUM_QUERY,
+    PC_RANGE,
+)
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 
 
@@ -68,7 +75,7 @@ class BEVFormerHead(nn.Module):
         num_query (int): Object queries.
         num_classes (int): Class logits per query.
         embed_dims (int): Channels of the queries and of the BEV features.
-        code_size (int): Box code channels, see ``config/decoder_config.py``.
+        code_size (int): Box code channels, see ``model_config.py``'s box code.
         pc_range (tuple[float]): Box center range in metres the [0, 1] reference points map to.
         decoder (dict, optional): ``DetectionTransformerDecoder`` arguments; BEVFormer's by default.
 
@@ -80,9 +87,9 @@ class BEVFormerHead(nn.Module):
         self,
         bev_h,
         bev_w,
-        num_query=900,
+        num_query=NUM_QUERY,
         num_classes=NUM_CLASSES,
-        embed_dims=256,
+        embed_dims=EMBED_DIMS,
         code_size=CODE_SIZE,
         pc_range=PC_RANGE,
         decoder=None,
@@ -103,7 +110,7 @@ class BEVFormerHead(nn.Module):
         """``bev_embed`` is the encoder output ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)`` and box
-        predictions ``(L, bs, num_query, code_size)``: ``config/decoder_config.py``'s code layout
+        predictions ``(L, bs, num_query, code_size)``: ``model_config.py``'s box code layout
         with cx, cy and cz in metres.
         """
         bs = bev_embed.shape[0]

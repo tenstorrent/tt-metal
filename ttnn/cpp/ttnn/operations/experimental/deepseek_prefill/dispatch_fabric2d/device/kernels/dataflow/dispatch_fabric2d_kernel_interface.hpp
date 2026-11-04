@@ -27,6 +27,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 struct L1Layout {
     uint32_t pkt_hdr_signal;
+    uint32_t pkt_hdr_credit;  // the credit courier's own header
     uint32_t drain_sink;
     uint32_t queue;          // queue_depth tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_queue;  // one prebuilt packet header per entry
@@ -40,10 +41,20 @@ struct KernelPlan {
     StreamId stream = 0;
     uint32_t extent = 0;
     uint32_t fwd_pages_per_stream = 0;
+    // Pages one channel of a stream's section holds. The section is num_vcs of these, so a page is found
+    // by (channel, running count within it) rather than by a per-chunk offset.
+    uint32_t vc_pages = 0;
     uint32_t queue_filled_addr = 0;
     uint32_t queue_freed_addr = 0;
-    uint32_t fwd_arrived_addr = 0;
+    uint32_t final_arrived_addr = 0;
     uint32_t launch_credit_addr = 0;
+    // The reader raises this when it will queue no more credits, so the opposite sender's courier knows
+    // it may stop carrying them.
+    uint32_t credit_done_addr = 0;
+    // One per forwarding channel, in channel order.
+    std::vector<uint32_t> vc_arrived_addr;
+    std::vector<uint32_t> vc_freed_addr;
+    std::vector<uint32_t> vc_outbox_addr;
     // Tile rows the untilizer pool must deliver to this core before it may read a token, and the counter
     // it signals them on. Zero tile rows means the input is row-major and there is no pool.
     uint32_t untilize_sem_addr = 0;
@@ -98,6 +109,21 @@ constexpr uint32_t kRiscFilled = 2;
 // the same size as a forwarding page.
 constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 
+// Pages a reader frees in one channel before it posts them back to the chip that wrote them. Bigger means
+// fewer credit packets on the cable and more pages the writer cannot see are free. Not tied to the reader's
+// batch: a credit is owed the moment a page is lifted, whichever loop lifted it.
+constexpr uint32_t CREDIT_RETURN_BATCH = 16;
+
+// Channels a forwarding region is split into, at most. The real count is half_extent*(half_extent-1)/2,
+// six for the extent-8 production ring; this only bounds the per-channel arrays the kernels carry.
+constexpr uint32_t MAX_VCS = 16;
+// "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
+constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
+
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and
+// a channel shallower than a read batch spends all its time announcing.
+constexpr uint32_t MIN_VC_PAGES = 4;
+
 // fwd_meta: the routing data a queue entry carries after its token, at entry_base + token_size_bytes.
 // The reader fills it and the sender consumes it. The field order is wire format.
 //
@@ -119,11 +145,19 @@ struct FwdMetadata {
     uint64_t dst_chip;            // destination chip id
     uint64_t cmd;
     uint64_t this_addr;  // the address this hop writes to
+    // Channel the page lands in on the next chip, so the sender knows which arrival counter to bump. Set by
+    // whichever phase aimed the page and read only on this chip; the receiving chip derives the channel it
+    // forwards into from its own tables and overwrites this before its own send.
+    uint64_t vc;
 };
 
 // Bytes of fwd_meta a forward hop sends: all of it, so a forwarded packet fills exactly one fwd_section
 // page, the unit the next hop reads back, and its length stays a multiple of the 64 B DRAM alignment.
 constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
+
+// The struct is the forwarding page, so it must not outgrow it. It is exactly full at 64 bytes: adding a
+// field means widening FORWARDING_METADATA_SIZE, which changes the wire format and the page stride.
+static_assert(sizeof(FwdMetadata) <= FORWARDING_METADATA_SIZE);
 
 // Bytes of fwd_meta the next hop reads. Used only by the static_asserts below, which pin the layout.
 constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
@@ -156,7 +190,6 @@ static_assert(METADATA_WIRE_BYTES <= FORWARDING_METADATA_SIZE);
 constexpr uint64_t CMD_END = 0;          // end of stream; the entry carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload and metadata to their pages
 constexpr uint64_t CMD_FORWARD = 2;      // push one page further along the stream
-constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of its chunk
 
 // One (origin chip, destination chip) term of a stream's fwd_section, narrowed to the share the two chips
 // agreed on. The chip that writes the section and the chip that reads it generate the same list, so the
@@ -193,8 +226,6 @@ enum ScratchBlock : uint32_t {
     kBlkBucketStart,
     kBlkRecords,
     kBlkPadding,
-    kBlkInStart,
-    kBlkOutStart,
     // Per routing-index RISC: routed picks per bucket over its token slice, plus its next_page and
     // next_record cursors. The later RISCs and the reader read its counts after the exchange; the cursors
     // are private to the RISC.
@@ -216,7 +247,6 @@ struct ScratchGeometry {
 };
 
 // Chunk starts: one per (forward descriptor, expert), which is also what the outgoing list expands to.
-constexpr uint32_t chunk_start_count(const ScratchGeometry& g) { return g.num_forward * g.experts_per_chip; }
 
 constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {
     switch (block) {
@@ -241,8 +271,6 @@ constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t bl
             return 4u * g.seq_len * record_words() * g.topk;  // one per pick
         // Reserved even with no padding config, so the host and kernel lists never differ.
         case kBlkPadding: return PADDING_CONFIG_BYTES;
-        case kBlkInStart:
-        case kBlkOutStart: return 4u * chunk_start_count(g);
         case kBlkRisc: return 4u * INDEX_RISCS * index_risc_words(g.extent * g.experts_per_chip);
         default: return 0u;
     }

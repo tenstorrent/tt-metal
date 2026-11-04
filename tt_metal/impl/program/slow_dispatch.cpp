@@ -32,7 +32,6 @@
 #include "program_impl.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tracy/Tracy.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/program.hpp>
@@ -108,6 +107,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
 #endif
 
     try {
+        program.impl().prepare_ephemeral_allocation(validation_device);
         program.impl().allocate_circular_buffers(validation_device);
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
@@ -189,7 +189,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                 }
 
                 if (!dfbs_on_core.empty()) {
-                    log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
 
@@ -197,15 +196,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         logical_core, dfbs_on_core, dfb_config_vec);
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
-                    log_info(
-                        tt::LogMetal,
-                        "Writing DFB config to core {} at addr 0x{:x} (kernel_config_base=0x{:x}, dfb_offset=0x{:x}) "
-                        "size: {}",
-                        physical_core.str(),
-                        addr,
-                        kernel_config_base,
-                        program.impl().get_program_config(index).dfb_offset,
-                        bytes_written);
                     metal_ctx.get_cluster().write_core(
                         device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }

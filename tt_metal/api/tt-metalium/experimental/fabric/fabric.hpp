@@ -35,7 +35,8 @@ class ControlPlane;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
-size_t get_tt_fabric_channel_buffer_size_bytes();
+// Maximum buffer size of one full-size fabric channel in `mesh_device`'s context.
+size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 
@@ -50,6 +51,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // it adds SemaphoreDescriptors instead of creating semaphores.
 //
 // Inputs:
+// mesh_device: the mesh device whose fabric (context) the connection is resolved in
 // src_chip_id: physical chip id/device id of the sender chip
 // dst_chip_id: physical chip id/device id of the receiver chip
 // link_idx: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
@@ -67,6 +69,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // connection is indeed a 1D connection b/w all the workers.
 template <typename ProgramOrDescriptor = tt::tt_metal::Program>
 void append_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
@@ -96,6 +99,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
 // api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -110,6 +114,7 @@ void append_routing_plane_connection_manager_rt_args(
 // convenience function using RoutingDirection's
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<eth_chan_directions>& attempted_directions,
     const std::vector<uint32_t>& connection_link_indices,
@@ -122,8 +127,11 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
+// `mesh_device` selects the context the fabric is resolved in; src and dst need not belong to it.
 std::vector<uint32_t> get_forwarding_link_indices(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id);
 
 // returns the logical ethernet core on src that link_idx forwards through toward dst, for a link index
 // from get_forwarding_link_indices. Resolved in the mesh device's context.
@@ -137,7 +145,12 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 std::vector<FabricType> get_all_mgd_fabric_types();
 
-tt::tt_fabric::Topology get_fabric_topology();
+// The fabric topology of `mesh_device`'s context.
+tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// True when the fabric built for `mesh_device`'s context carries inter-mesh traffic on VC0, with no VC1.
+// TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 asks for it; the builder keeps VC1 when meshes need pass-through.
+bool is_intermesh_vc_disabled(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 struct FabricEriscDatamoverKernelConfig {
     tt::tt_metal::Program& program;
@@ -285,7 +298,30 @@ public:
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
+    // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address once it is ready for traffic.
+    // A circular buffer added later on a mux core must use another index. Persistent L1 on those
+    // cores, such as a PrefetcherPipe ring, then stays below the map instead of under it.
+    //
+    // The config must be built with base_l1_address = 0, so every address getter returns an offset into the map.
+    // A client passes those offsets and get_l1_base_semaphore_id(), in place of get_status_address(), to
+    // build_connection_to_program_local_fabric_mux() (tt_fabric_mux_interface.hpp), which waits for the map's address
+    // and adds it to them.
+    // Worker muxes only. Call before get_fabric_mux_compile_time_args().
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
+
+    bool is_in_program_local_l1() const;
+
+    // Semaphore, the same id on every mux core, in which a mux placed in program-local L1 publishes the L1 address of
+    // its map. Requires is_in_program_local_l1().
+    uint32_t get_l1_base_semaphore_id() const;
+
 private:
+    // Checks that this config can move to program-local L1 and returns the size of the circular buffer that holds it.
+    uint32_t validate_program_local_l1_placement() const;
+
     // Returns the base compile time args without stream IDs
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
@@ -344,6 +380,11 @@ private:
     MemoryRegion header_only_channels_region_{};
 
     size_t memory_map_end_address_;
+
+    // Set by place_in_program_local_l1.
+    bool in_program_local_l1_ = false;
+    uint8_t program_local_l1_cb_index_ = 0;
+    uint32_t l1_base_semaphore_id_ = 0;
 };
 
 /*
@@ -388,6 +429,17 @@ public:
     // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
     size_t get_memory_map_end_address() const;
 
+    // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address when it starts. A circular
+    // buffer added later on a mux core must use another index. Persistent L1 on those cores, such as
+    // a PrefetcherPipe ring, then stays below the map instead of under it. The config must be built with
+    // base_l1_address = 0. Clients need no change: append_client_connection_rt_args passes the semaphore, and
+    // FabricMuxV2Sender adds the published address before it opens. Call before add_fabric_mux_v2_to_program for
+    // any of `mux_cores`.
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
+
 private:
     friend void add_fabric_mux_v2_to_program(
         tt::tt_metal::Program& program,
@@ -396,6 +448,7 @@ private:
         const std::vector<uint32_t>& downstream_sender_rt_args,
         tt::tt_metal::NOC forwarder_noc);
     friend void add_fabric_mux_v2_to_program(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         tt::tt_metal::Program& program,
         const FabricMuxV2Config& config,
         const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -410,6 +463,7 @@ private:
         const std::vector<uint32_t>& downstream_sender_rt_args,
         tt::tt_metal::NOC forwarder_noc);
     friend void add_fabric_mux_v2_to_program(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         tt::tt_metal::ProgramDescriptor& desc,
         const FabricMuxV2Config& config,
         const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -420,6 +474,8 @@ private:
 
     std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
     void validate_logical_channel_id(uint8_t logical_channel_id) const;
+    // Checks that this config can move to program-local L1 and returns the size of the circular buffer that holds it.
+    uint32_t validate_program_local_l1_placement() const;
 
     struct MemoryRegion {
         size_t base_address = 0;
@@ -450,6 +506,11 @@ private:
     MemoryRegion credit_notify_scratch_region_;
 
     size_t memory_map_end_address_ = 0;
+
+    // Set by place_in_program_local_l1.
+    bool in_program_local_l1_ = false;
+    uint8_t program_local_l1_cb_index_ = 0;
+    uint32_t l1_base_semaphore_id_ = 0;
 };
 
 void add_fabric_mux_v2_to_program(
@@ -460,6 +521,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -479,6 +541,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
