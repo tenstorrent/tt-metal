@@ -62,12 +62,17 @@ class TT_Patch_Embed(Module):
         self.pos_emb_weight = torch.load(Path(directory) / f"{prefix}pos_emb.weight.pt")
 
     def forward(self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor) -> ttnn.Tensor:
-        """patches [1, 1, S/sp, padded_patch_dim] bf16, pos_emb [1, 1, S/sp, hidden] fp32 ->
+        """patches [1, 1, S/sp, padded_patch_dim] bf16 row major, pos_emb [1, 1, S/sp, hidden] fp32 ->
         [1, 1, S/sp, hidden] fp32, the encoder's fp32 residual stream.
 
-        `patches` and `pos_emb` are left allocated: they are the caller's (per-image `DeviceInput`s
-        in the full model)."""
-        x = self.proj(patches)
+        `patches` is uploaded row major and tiled here: tiling on the host costs ~100 ms at full size,
+        on device it is lost in the noise. `patches` and `pos_emb` are left allocated: they are the
+        caller's (per-image `DeviceInput`s in the full model)."""
+        if patches.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(f"patches must be row major, got {patches.layout}")
+        tiled = ttnn.to_layout(patches, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = self.proj(tiled)
+        ttnn.deallocate(tiled)
         out = ttnn.add(x, pos_emb, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         return out
