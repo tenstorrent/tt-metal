@@ -8,20 +8,20 @@
 
 namespace ttml::schedulers {
 
-class LinearScheduler : public LRSchedulerBase {
+class LinearScheduler : public ClosedFormLRScheduler {
 public:
     LinearScheduler(optimizers::OptimizerBase *optimizer, float start_factor, float end_factor, size_t total_steps);
 
-    void step() override;
-
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
-    void set_state_dict(const serialization::StateDict &dict) override;
+
+protected:
+    [[nodiscard]] float compute_lr(float base_lr) const override;
+
+    void restore_own_state(const serialization::StateDict &dict) override;
 
 private:
-    float m_base_lr = 0.F;
     float m_start_factor = 0.F;
     float m_end_factor = 0.F;
     int m_total_steps = 0;
-    size_t m_last_step = 0;
 };
 }  // namespace ttml::schedulers

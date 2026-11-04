@@ -23,7 +23,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, is_tp_deduped_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
 
 # Production chunk_size_global only (chunk_local = 5120/8 = 640). At this csg a 128-pad window never
 # crosses a chip border, so every case below lands its window on a single chip; the op's multi-chip
@@ -75,6 +76,7 @@ def _init_cache_filled_with_ones(
     layout,
     num_layers=1,
     num_users=1,
+    tp_axis=None,
 ):
     """Initialize a block-cyclic cache and overwrite every physical row with one."""
     mesh_shape = list(mesh_device.shape)
@@ -88,6 +90,7 @@ def _init_cache_filled_with_ones(
         num_users=num_users,
         dtype=dtype,
         layout=layout,
+        tp_axis=tp_axis,
     )
     assert cache.dtype == dtype
     assert cache.layout == layout
@@ -118,22 +121,19 @@ def _init_cache_filled_with_ones(
                     num_layers=num_layers,
                     kv_actual_global=kv_actual_global,
                     cluster_axis=sp_axis,
+                    tp_axis=tp_axis,
                 )
     ttnn.synchronize_device(mesh_device)
     return cache
 
 
-def _cache_in_natural_order(cache, mesh_device, *, chunk_size_global, seq_len_cache, sp_axis):
+def _cache_in_natural_order(cache, mesh_device, *, chunk_size_global, seq_len_cache, sp_axis, tp_shard_kv=False):
     """Gather a block-cyclic mesh cache and restore natural token order."""
-    mesh_shape = list(mesh_device.shape)
-    cache_shard_order = ttnn.to_torch(
-        cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:, :1]
-    positions = blockcyclic_positions(mesh_shape[sp_axis], chunk_size_global, seq_len_cache)
+    cache_shard_order, stripes = gather_cache_natural(cache, mesh_device, tp_shard_kv)
+    positions = blockcyclic_positions(stripes, chunk_size_global, seq_len_cache)
     natural = torch.empty(cache_shard_order.shape[0], seq_len_cache, cache_shard_order.shape[-1], dtype=torch.bfloat16)
     for batch_idx in range(cache_shard_order.shape[0]):
-        natural[batch_idx, positions] = cache_shard_order[batch_idx, 0]
+        natural[batch_idx, positions] = cache_shard_order[batch_idx].to(torch.bfloat16)
     return natural
 
 
@@ -146,6 +146,7 @@ def _assert_cache_windows(
     sp_axis,
     num_layers,
     windows,
+    tp_shard_kv=False,
 ):
     """Check exact zero windows while requiring every other cache element to remain one."""
     natural = _cache_in_natural_order(
@@ -154,6 +155,7 @@ def _assert_cache_windows(
         chunk_size_global=chunk_size_global,
         seq_len_cache=seq_len_cache,
         sp_axis=sp_axis,
+        tp_shard_kv=tp_shard_kv,
     )
     expected = torch.ones_like(natural)
     for (slot_idx, layer_idx), (start, end) in windows.items():
@@ -535,3 +537,89 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     logger.success("tensor-path program reused across chunks; second (cache-hit) call zeroed its own window")
     for t in (slot_ta, valid_ta, slot_tb, valid_tb):
         ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_tensor_args", [False, True], ids=["scalar", "tensor"])
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_tp_deduped(mesh_device, use_tensor_args):
+    """TP-deduped cache: block-cyclic over sp*tp = 8 stripes of 96 rows, so 128-aligned windows can cross one."""
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    chunk_size_global = 768
+    seq_len_cache = 1536
+    num_layers, num_users = 2, 2
+
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=64,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        num_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis,
+    )
+    assert is_tp_deduped_kv_cache(cache, mesh_shape)
+
+    mesh_device.enable_program_cache()
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    windows = {
+        (0, 1): (180, 256),  # crosses 192: chip (0,1) -> (0,2)
+        (1, 0): (450, 512),  # crosses 480: chip (1,0) -> (1,1)
+        (1, 1): (1000, 1024),  # second chunk slab, chip (0,2)
+    }
+    for (slot_idx, layer_idx), (valid_global, _pad_end) in windows.items():
+        if use_tensor_args:
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                cache,
+                _make_scalar_tensor(mesh_device, slot_idx),
+                _make_scalar_tensor(mesh_device, valid_global),
+                layer_idx,
+                num_layers,
+                chunk_size_global,
+                sp_axis,
+                128,
+                tp_axis=tp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                cache,
+                slot_idx,
+                layer_idx,
+                num_layers,
+                valid_global,
+                chunk_size_global,
+                sp_axis,
+                128,
+                tp_axis=tp_axis,
+            )
+    ttnn.synchronize_device(mesh_device)
+
+    assert is_tp_deduped_kv_cache(cache, mesh_shape), "the op must keep the cache's deduped topology"
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        windows=windows,
+        tp_shard_kv=True,
+    )
+    # layer_idx is hashed, slot and valid_global are not.
+    num_layers_used = len({layer_idx for _slot, layer_idx in windows})
+    assert mesh_device.num_program_cache_entries() == cache_entries_before + num_layers_used

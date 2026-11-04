@@ -42,10 +42,8 @@
 #include "impl/buffers/semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -494,7 +492,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        extract_context_id(mesh_device),
+        mesh_device->impl().get_context_id(),
         mesh_device,
         kernels_getter,
         kernel_groups_getter,
@@ -554,7 +552,7 @@ namespace tt::tt_metal::experimental::program_preparation {
 
 void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
-    TT_FATAL(!mesh_device.get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
+    TT_FATAL(!mesh_device.get_device_ids().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
     // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");

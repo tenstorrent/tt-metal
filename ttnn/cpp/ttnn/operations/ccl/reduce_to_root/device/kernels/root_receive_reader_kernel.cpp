@@ -102,8 +102,10 @@ void kernel_main() {
 
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(fabric_ct_idx);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(fabric_ct_idx + 1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(fabric_ct_idx + 2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
+    // The muxes sit in program-local L1: their addresses here and in the runtime args are offsets from the map
+    // address each publishes in semaphore fabric_mux_l1_base_semaphore_id.
+    constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(fabric_ct_idx + 2);
+    constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
     size_t arg_idx = 0;
@@ -124,11 +126,11 @@ void kernel_main() {
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
@@ -145,23 +147,26 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
-    mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    uint32_t fabric_mux_l1_base = 0;
+    // Waits for the mux to be ready to accept connections.
+    mux_connection = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_id,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_channel_base_address,
-        fabric_mux_connection_info_address,
-        fabric_mux_connection_handshake_address,
-        fabric_mux_flow_control_address,
-        fabric_mux_buffer_index_address,
+        fabric_mux_l1_base_semaphore_id,
+        fabric_mux_channel_base_offset,
+        fabric_mux_connection_info_offset,
+        fabric_mux_connection_handshake_offset,
+        fabric_mux_flow_control_offset,
+        fabric_mux_buffer_index_offset,
         local_flow_control_address,
         local_teardown_address,
-        local_buffer_index_address);
+        local_buffer_index_address,
+        local_fabric_mux_status_address,
+        fabric_mux_l1_base);
     mux_connection_handle = &mux_connection;
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
@@ -207,7 +212,8 @@ void kernel_main() {
     if (is_termination_master) {
         Semaphore<> termination_sync(termination_sync_id);
         termination_sync.wait(num_mux_clients - 1);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        tt::tt_fabric::fabric_endpoint_terminate(
+            fabric_mux_x, fabric_mux_y, fabric_mux_l1_base + fabric_mux_termination_signal_offset);
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
@@ -260,11 +266,11 @@ void kernel_main() {
     const bool is_termination_master2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
     const uint8_t fabric_mux_x2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
     const uint8_t fabric_mux_y2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
-    const size_t fabric_mux_channel_base_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
-    const size_t fabric_mux_connection_info_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
-    const size_t fabric_mux_connection_handshake_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
-    const size_t fabric_mux_flow_control_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
-    const size_t fabric_mux_buffer_index_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    const size_t fabric_mux_channel_base_offset2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    const size_t fabric_mux_connection_info_offset2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    const size_t fabric_mux_connection_handshake_offset2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    const size_t fabric_mux_flow_control_offset2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    const size_t fabric_mux_buffer_index_offset2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
     const uint8_t fabric_mux_channel_id2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
 
     uint32_t termination_sync_id2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
@@ -280,24 +286,26 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle2;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection2;
 
-    mux_connection2 = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    uint32_t fabric_mux_l1_base2 = 0;
+    mux_connection2 = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x2,
         fabric_mux_y2,
         fabric_mux_channel_id2,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_channel_base_address2,
-        fabric_mux_connection_info_address2,
-        fabric_mux_connection_handshake_address2,
-        fabric_mux_flow_control_address2,
-        fabric_mux_buffer_index_address2,
+        fabric_mux_l1_base_semaphore_id,
+        fabric_mux_channel_base_offset2,
+        fabric_mux_connection_info_offset2,
+        fabric_mux_connection_handshake_offset2,
+        fabric_mux_flow_control_offset2,
+        fabric_mux_buffer_index_offset2,
         local_flow_control_address2,
         local_teardown_address2,
-        local_buffer_index_address2);
+        local_buffer_index_address2,
+        local_fabric_mux_status_address,
+        fabric_mux_l1_base2);
     mux_connection_handle2 = &mux_connection2;
 
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x2, fabric_mux_y2, fabric_mux_status_address, local_fabric_mux_status_address);
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle2);
 
     packet_header_cb.reserve_back(1);
@@ -322,7 +330,8 @@ void kernel_main() {
     if (is_termination_master) {
         Semaphore<> termination_sync2(termination_sync_id2);
         termination_sync2.wait(num_mux_clients - 1);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x2, fabric_mux_y2, fabric_mux_termination_signal_address);
+        tt::tt_fabric::fabric_endpoint_terminate(
+            fabric_mux_x2, fabric_mux_y2, fabric_mux_l1_base2 + fabric_mux_termination_signal_offset);
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x2, termination_master_noc_y2, termination_sync_address2, 0);

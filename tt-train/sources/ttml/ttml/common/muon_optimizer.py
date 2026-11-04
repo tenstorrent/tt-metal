@@ -14,10 +14,12 @@ import ttml
 
 # Module names whose weights should use AdamW instead of Muon.
 # Embeddings and LM head don't benefit from orthogonalization.
-# Fused KV/QKV linears concatenate multiple matrices that should be
-# orthogonalized separately.
-# Splitting, applying step and concatenating is not yet supported for these parameters.
-DEFAULT_ADAMW_MODULES = {"tok_emb", "pos_emb", "fc", "kv_linear", "qkv_linear"}
+# Fused linears concatenate multiple matrices that should be orthogonalized
+# separately: qkv_linear ([Q|K|V], NanoGPT and Llama), w_gate_up ([gate|up], Llama)
+# and kv_linear ([K|V], the C++ Llama).
+# TODO(https://github.com/tenstorrent/tt-metal/issues/60893): apply Muon per block,
+# rather than sending them to AdamW.
+DEFAULT_ADAMW_MODULES = {"tok_emb", "pos_emb", "fc", "kv_linear", "qkv_linear", "w_gate_up"}
 
 
 def _is_muon_param(name, adamw_modules):
@@ -32,7 +34,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
 
         optimizer:
           type: MuonWithAdamW
-          adamw_modules: [tok_emb, pos_emb, fc, kv_linear, qkv_linear]
+          adamw_modules: [tok_emb, pos_emb, fc, kv_linear, qkv_linear, w_gate_up]
           muon:
             lr: 0.02
             momentum: 0.95
@@ -41,35 +43,22 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
             lr: 0.0003
             weight_decay: 0.01
 
-    LR scheduling contract: this optimizer holds TWO learning rates, so LR
-    schedulers must be attached to the inner optimizers individually — one to
-    ``muon_optimizer()`` and one to ``adamw_optimizer()`` (mirroring PyTorch's
-    idiom of a separate ``torch.optim.Muon`` and ``torch.optim.AdamW``, each
-    with its own scheduler). Attaching a scheduler to the wrapper itself
-    raises. Example:
+    Param groups: the Muon optimizer's groups followed by the AdamW optimizer's
+    (``get_param_groups``, ``get_group_lrs``, ``set_group_lrs`` and
+    ``get_initial_group_lrs`` all use that order). So one LR scheduler attached
+    to the wrapper schedules every group of both, each from its own base LR,
+    like a PyTorch scheduler over one optimizer with several param groups:
 
         opt = MuonWithAdamW(config, params)
-        muon_sched = CosineAnnealingScheduler(opt.muon_optimizer(), T_max=1000)
-        adamw_sched = CosineAnnealingScheduler(opt.adamw_optimizer(), T_max=1000)
-        ...
-        opt.step()
-        muon_sched.step()
-        adamw_sched.step()
+        sched = CosineAnnealingScheduler(opt, T_max=1000)
+
+    To give Muon and AdamW different schedules, attach one scheduler to
+    ``muon_optimizer()`` and another to ``adamw_optimizer()`` instead.
 
     Each inner optimizer records and checkpoints its own ``initial_lr``
     (nested in this wrapper's state dict), so schedulers re-attached after a
-    resume see the correct per-optimizer base LRs.
+    resume see the correct base LRs.
     """
-
-    # TODO(https://github.com/tenstorrent/tt-metal/issues/56027): what contract should get_lr/set_lr (and
-    # get_adamw_lr/set_adamw_lr) honor on this fused optimizer? Today they
-    # address only one of the two internal LRs, which is why schedulers are
-    # rejected on the wrapper (see supports_lr_scheduling) — but the same
-    # hazard exists for any generic code that calls set_lr directly (e.g.
-    # grpo_trainer's manual warmup) or logs get_lr. Candidates: raise on both,
-    # or make set_lr scale both LRs proportionally from their bases.
-    supports_lr_scheduling = False
-    lr_scheduling_hint = "Attach one scheduler to .muon_optimizer() and another to .adamw_optimizer() instead."
 
     def __init__(self, config, params):
         super().__init__(params)
@@ -77,6 +66,11 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
         adamw_modules = set(config.get("adamw_modules", DEFAULT_ADAMW_MODULES))
         muon_cfg = config.get("muon", {})
         adamw_cfg = config.get("adamw", {})
+        # Set at the top level by trainers under pipeline parallelism; the groups it applies to live in the inner
+        # sections, so pass it down to both.
+        if config.get("allow_empty_param_groups"):
+            muon_cfg = {**muon_cfg, "allow_empty_param_groups": True}
+            adamw_cfg = {**adamw_cfg, "allow_empty_param_groups": True}
 
         # Split parameters
         muon_params = {}
@@ -89,14 +83,8 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
                 adamw_params[name] = tensor
 
         # TODO: add FSDP-aware Muon.
-        self._muon = ttml.optimizers.MuonComposite(
-            muon_params,
-            ttml.optimizers.MuonConfig.make(
-                lr=muon_cfg.get("lr", 0.02),
-                momentum=muon_cfg.get("momentum", 0.95),
-                ns_steps=muon_cfg.get("ns_steps", 5),
-            ),
-        )
+        muon_dict = {"type": "MuonComposite", "lr": 0.02, "momentum": 0.95, "ns_steps": 5, **muon_cfg}
+        self._muon = ttml.optimizers.create_optimizer(muon_dict, muon_params)
 
         adamw_dict = {"type": "AdamW", **adamw_cfg}
         self._adamw = ttml.optimizers.create_optimizer(adamw_dict, adamw_params)
@@ -140,17 +128,38 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
         """Inner AdamW optimizer (embeddings, norms, biases, LM head). Attach its LR scheduler here."""
         return self._adamw
 
-    def get_lr(self):
-        return self._muon.get_lr()
+    def get_param_groups(self):
+        return self._muon.get_param_groups() + self._adamw.get_param_groups()
 
-    def set_lr(self, lr):
-        self._muon.set_lr(lr)
+    def get_group_options(self, key):
+        # Raises for an option one of the inner optimizers lacks (Muon has no weight_decay, AdamW no momentum).
+        return self._muon.get_group_options(key) + self._adamw.get_group_options(key)
 
-    def get_adamw_lr(self):
-        return self._adamw.get_lr()
+    def set_group_options(self, key, values):
+        num_muon_groups = len(self._muon.get_param_groups())
+        num_groups = num_muon_groups + len(self._adamw.get_param_groups())
+        if len(values) != num_groups:
+            raise ValueError(f"MuonWithAdamW has {num_groups} param groups, but got {len(values)} values for '{key}'")
+        # Pre-check only: raises if either inner optimizer lacks `key`, before Muon is changed and AdamW then rejects it.
+        self.get_group_options(key)
+        self._muon.set_group_options(key, list(values[:num_muon_groups]))
+        self._adamw.set_group_options(key, list(values[num_muon_groups:]))
 
-    def set_adamw_lr(self, lr):
-        self._adamw.set_lr(lr)
+    def set_param_group_option(self, group_idx, key, value):
+        num_muon_groups = len(self._muon.get_param_groups())
+        if group_idx < num_muon_groups:
+            self._muon.set_param_group_option(group_idx, key, value)
+        else:
+            self._adamw.set_param_group_option(group_idx - num_muon_groups, key, value)
+
+    def get_group_lrs(self):
+        return self.get_group_options("lr")
+
+    def set_group_lrs(self, lrs):
+        self.set_group_options("lr", lrs)
+
+    def get_initial_group_lrs(self):
+        return self._muon.get_initial_group_lrs() + self._adamw.get_initial_group_lrs()
 
     def print_param_groups(self):
         print(f"  Muon parameters ({len(self._muon_param_names)}):")

@@ -19,6 +19,7 @@
 
 #include "internal/tt-2xx/quasar/noc/att/temporary_programming/grendel_qsr1_att_data.h"
 #include "internal/tt-2xx/quasar/noc/att/temporary_programming/quasar_aether_2x3_att_data.h"
+#include "internal/tt-2xx/quasar/noc/att/temporary_programming/quasar_aether_2x3_uncapped_att_data.h"
 
 namespace {
 
@@ -180,6 +181,73 @@ TEST(QuasarAttImageAether, EndpointEntriesMatchTheConfigTable) {
 
     // Selector zero of the translating local window resolves through the per-initiator entry 0.
     EXPECT_EQ(program.local_endpoint_index, quasar_aether_2x3_att_config::LOCAL_WINDOW.endpoint_table_offset);
+}
+
+// ---------------------------------------------------------------------------
+// Aether uncapped compact program vs the base program and the uncapped configuration
+// ---------------------------------------------------------------------------
+
+TEST(QuasarAttImageAetherUncapped, MaskEntriesAreTheBaseProgramsPlusTheDramWindow) {
+    const noc_att::Program& program = quasar_aether_2x3_uncapped_att_program::PROGRAM_IMAGE;
+    const noc_att::Program& base = quasar_aether_2x3_att_program::PROGRAM_IMAGE;
+    ASSERT_EQ(program.mask_count, 3u);
+    for (std::uint32_t i = 0; i < base.mask_count; ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_EQ(program.masks[i].slot, base.masks[i].slot);
+        EXPECT_EQ(
+            noc_att::mask_entry_control_word(program.masks[i].window),
+            noc_att::mask_entry_control_word(base.masks[i].window));
+        EXPECT_EQ(program.masks[i].window.compare, base.masks[i].window.compare);
+        EXPECT_EQ(program.masks[i].bar, base.masks[i].bar);
+    }
+
+    const Window& dram = quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW;
+    EXPECT_EQ(program.masks[2].slot, 2);
+    EXPECT_EQ(noc_att::mask_entry_control_word(program.masks[2].window), noc_att::mask_entry_control_word(dram));
+    EXPECT_EQ(program.masks[2].window.compare, dram.compare);
+    EXPECT_EQ(program.masks[2].bar, 0u);
+    NOC_ADDRESS_TRANSLATION_TABLE_MASK_TABLE_ENTRY_reg_u decoded;
+    decoded.val = noc_att::mask_entry_control_word(program.masks[2].window);
+    EXPECT_EQ(decoded.f.mask, dram.mask_bits);
+    EXPECT_EQ(decoded.f.ep_id_idx, dram.endpoint_shift);
+    EXPECT_EQ(decoded.f.ep_id_size, dram.endpoint_size);
+    EXPECT_EQ(decoded.f.table_offset, dram.endpoint_table_offset);
+    EXPECT_EQ(decoded.f.translate_addr, 1u);
+
+    EXPECT_EQ(program.local_endpoint_index, quasar_aether_2x3_uncapped_att_config::LOCAL_WINDOW.endpoint_table_offset);
+}
+
+TEST(QuasarAttImageAetherUncapped, EndpointEntriesMatchTheConfigTables) {
+    const noc_att::Program& program = quasar_aether_2x3_uncapped_att_program::PROGRAM_IMAGE;
+    const std::uint16_t remote_offset = quasar_aether_2x3_uncapped_att_config::REMOTE_WINDOW.endpoint_table_offset;
+    const std::uint16_t dram_offset = quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW.endpoint_table_offset;
+    constexpr std::uint32_t full_tile_count =
+        sizeof(quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS) / sizeof(std::uint16_t);
+    constexpr std::uint32_t dram_count =
+        sizeof(quasar_aether_2x3_uncapped_att_config::ATT_DRAM_ENDPOINT_WORDS) / sizeof(std::uint16_t);
+
+    ASSERT_EQ(program.endpoint_count, full_tile_count + dram_count);
+    std::uint32_t seen_full_tile = 0, seen_dram = 0;
+    for (std::uint32_t i = 0; i < program.endpoint_count; ++i) {
+        const noc_att::EndpointEntry& entry = program.endpoints[i];
+        const std::uint32_t word = (std::uint32_t{entry.y} << 6) | entry.x;
+        ASSERT_GE(entry.index, remote_offset);
+        if (entry.index < dram_offset) {
+            const std::uint32_t selector = entry.index - remote_offset;
+            ASSERT_LT(selector, full_tile_count);
+            EXPECT_EQ(word, quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[selector])
+                << "remote selector " << selector;
+            ++seen_full_tile;
+        } else {
+            const std::uint32_t selector = entry.index - dram_offset;
+            ASSERT_LT(selector, dram_count);
+            EXPECT_EQ(word, quasar_aether_2x3_uncapped_att_config::ATT_DRAM_ENDPOINT_WORDS[selector])
+                << "dram selector " << selector;
+            ++seen_dram;
+        }
+    }
+    EXPECT_EQ(seen_full_tile, full_tile_count);
+    EXPECT_EQ(seen_dram, dram_count);
 }
 
 }  // namespace

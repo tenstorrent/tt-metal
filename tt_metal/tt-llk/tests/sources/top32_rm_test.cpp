@@ -350,7 +350,7 @@ inline void top32_pre_sorted_final(std::uint32_t dst_tile)
 inline void math_transpose_init(std::uint32_t math_format)
 {
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, math_format);
+        ckernel::DEFAULT_TENSOR_SHAPE, math_format);
     if constexpr (unpack_to_dest)
     {
         _llk_math_transpose_dest_init_<false /* transpose_of_faces */, true /* is_32bit */>();

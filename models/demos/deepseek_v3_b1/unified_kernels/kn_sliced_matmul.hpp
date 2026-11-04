@@ -27,7 +27,7 @@ namespace deepseek_b1_ops {
 //
 // Each core takes a slice of the shared activation buffer (via k_offset) and
 // multiplies it against its local weight shard, producing out_w output tiles.
-// Fixed properties: transpose=false, split_acc=true, dense_packing=true.
+// Fixed properties: transpose=false, DEST layout DenseSplitAcc.
 //
 // CB States:
 //   NCRISC: No-op (weights setup done externally via setup_sharded_buffer)
@@ -103,16 +103,14 @@ struct KNSlicedMatmul {
             // TRISC (Compute)
             // ================================================================
             constexpr bool transpose = false;
-            constexpr bool split_acc = true;
-            constexpr bool dense_packing = true;
+            constexpr auto dest_layout = CustomMmDestLayout::DenseSplitAcc;
             constexpr bool finalize = true;
             constexpr uint32_t out_w = CTArgs::out_w;
 
             reconfig_full_operand<SrcOrder::Reverse>(args.act_cb, args.weights_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-                args.act_cb, args.weights_cb, args.out_cb, out_w);
+            custom_mm_block_init_short<transpose, dest_layout>(args.act_cb, args.weights_cb, args.out_cb, out_w);
             pack_block_contiguous_init(args.out_cb);
 
             // Wait for all activation tiles and weight tiles
@@ -127,7 +125,8 @@ struct KNSlicedMatmul {
             cb_reserve_back(args.out_cb, out_w);
 
             tile_regs_acquire();
-            custom_mm_block<finalize, false>(args.act_cb, args.weights_cb, args.k_offset, 0, 0, args.k_per_core, out_w);
+            custom_mm_block<dest_layout, finalize>(
+                args.act_cb, args.weights_cb, args.k_offset, 0, 0, args.k_per_core, out_w);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -135,7 +134,7 @@ struct KNSlicedMatmul {
             cb_push_back(args.out_cb, out_w);
             tile_regs_release();
 
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dest_layout>(args.out_cb);
 
             // Pop inputs
             if constexpr (pop_act) {

@@ -18,8 +18,8 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
+#include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -27,8 +27,8 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>          // CoreType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
 #include <bitset>
@@ -51,6 +51,7 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class MeshTensor;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -206,6 +207,18 @@ public:
     bool contains(IDevice* device);
 };
 
+// The device memory a bound TensorParameter occupies, whether or not an allocation backs it.
+struct BoundTensorFootprint {
+    BufferType buffer_type = BufferType::DRAM;
+    DeviceAddr address = 0;
+    DeviceAddr size_per_bank = 0;
+    // Buffer::unique_id() of the allocation that backed the tensor when it was bound. Empty when the tensor does not
+    // own its allocation.
+    std::optional<size_t> buffer_id;
+};
+
+BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
+
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
@@ -267,13 +280,15 @@ public:
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
+    // Call before allocate_circular_buffers, allocate_dataflow_buffers and allocate_scratchpads.
+    // Seals the program's cores in the device's persistent L1 and sets the base address of every registered region.
+    void prepare_ephemeral_allocation(const IDevice* device);
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
-    DeviceAddr reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -551,6 +566,14 @@ public:
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
+    // True if any static CB region of this program covers a core claimed through ServiceCoreManager on
+    // any physical device behind `device`. False (and cheap) when nothing is claimed.
+    bool cb_regions_touch_service_cores(const IDevice* device) const;
+    // Records the lockstep fast-path state after a full validation (see simple_l1_validation_cached_).
+    void cache_simple_l1_validation(const IDevice* device);
+    // True if a cached compile_and_allocate on `device` may replace the full CB/DFB validation with the
+    // lockstep L1 frontier check.
+    bool simple_l1_validation_usable(const IDevice* device) const;
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
@@ -612,6 +635,10 @@ public:
     // name is unknown; the caller validates known-ness separately).
     experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
+    // the getter returns nullptr if no tensor has been bound.
+    void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
+    const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
     // bound to `tensor_parameter_name`.
@@ -638,6 +665,16 @@ public:
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
+        // Array arg name -> its slots in the dispatch buffer: [first_slot, first_slot + size).
+        // The arrays follow the scalars in the named section. (Copied from the kernel's ArrayArgLayouts:
+        // first_slot is their word_offset.)
+        struct ArraySlots {
+            size_t first_slot = 0;
+            size_t size = 0;
+        };
+        std::unordered_map<std::string, ArraySlots> runtime_array_arg_slots;
+        std::unordered_map<std::string, ArraySlots> common_runtime_array_arg_slots;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
@@ -680,30 +717,6 @@ private:
     // This way we can cache it agnostic of the device
     std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-    struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
-
-        // Circular buffers are created and allocated at core range granularity
-        CoreRange core_range;
-
-        // Holds vector of addresses where circular buffers are allocated [start, end)
-        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
-        // multiple cores must share the same address To enable this, circular buffer address is the maximum address
-        // amongst all of its target cores This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
-
-        // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the
-        // last L1 region
-        uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
-
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
-
-        // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions.clear(); }
-    };
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
@@ -721,8 +734,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
-    std::vector<CircularBufferAllocator> cb_allocators_;
+    EphemeralAllocationMetadata cb_allocation_metadata_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
 
@@ -748,8 +760,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
-    std::vector<CircularBufferAllocator> dfb_allocators_;
-    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
+    EphemeralAllocationMetadata dfb_allocation_metadata_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.
@@ -765,6 +776,7 @@ private:
         struct RegisteredTensorParameter {
             TensorSpec spec;
             experimental::TensorSpecRelaxations relaxations;
+            std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -793,11 +805,16 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
-    // For lockstep allocation without service-core claims, a single live L1 frontier
-    // check covers every static CB and DFB region validated during layout.
+    // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
+    // region validated during layout. Service-core claims only add checks for CB regions that sit
+    // on a claimed core, so the shortcut also holds while services run, for any program whose CBs
+    // touch no claimed core. That answer depends only on which cores are claimed, so it is cached
+    // against the ServiceCoreManager claims generation and recomputed when the claims change.
     bool simple_l1_validation_cached_{false};
     SubDeviceManagerId simple_l1_validation_manager_id_;
     uint64_t simple_l1_validation_region_end_{0};
+    uint64_t simple_l1_validation_claims_gen_{0};
+    bool simple_l1_validation_touches_service_{false};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

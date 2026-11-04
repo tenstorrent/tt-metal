@@ -23,6 +23,12 @@
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 
+// The shared layout header spells out the tile geometry so it stays kernel-includable; keep it in step with the host.
+static_assert(qkv_conv::tile_height == tt::constants::TILE_HEIGHT);
+static_assert(qkv_conv::tile_width == tt::constants::TILE_WIDTH);
+static_assert(qkv_conv::face_height == tt::constants::FACE_HEIGHT);
+static_assert(qkv_conv::face_width == tt::constants::FACE_WIDTH);
+
 namespace ttnn::experimental::prim {
 
 namespace {
@@ -518,7 +524,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         attrs.sequence_parallel_axis,
         attrs.sequence,
         // The writer stages the exchanged rows, so it needs the same chronology as the reader.
-        {reader_kernel_name, writer_kernel_name});
+        {reader_kernel_name, writer_kernel_name},
+        // The history exchange gives each device its own fabric connections.
+        exchange ? kda_factory_detail::ChronologyPrograms::per_device
+                 : kda_factory_detail::ChronologyPrograms::per_sp_rank);
     if (exchange) {
         add_history_exchange(workload, attrs, in, predecessor_name, outputs[3], dist.cores, exchange_core, Ct);
     }

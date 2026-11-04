@@ -17,7 +17,7 @@ namespace ttnn::operations::moreh::moreh_cumsum {
 void bind_moreh_cumsum_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_cumsum">(
         mod,
-        "Moreh Cumsum Operation",
+        "Deprecated in favor of ttnn.cumsum. Will be removed after 2026-11-26.",
         &ttnn::moreh_cumsum,
         nb::arg("input"),
         nb::arg("dim"),

@@ -10,7 +10,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -224,7 +224,7 @@ inline void write_row_major_block_from_dfb(
     const Block& block) {
     // Compute produces block_size tiles (full_block_size) in dfb_out_rm; the last block
     // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
-    dfb_out_rm.wait_front(block.full_block_size());
+    dfb_out_rm.wait_front(static_cast<uint16_t>(block.full_block_size()));
 
     // Column byte offset in the output row where this block starts.
     const uint32_t col_byte_offset = block.start() * tile_width_bytes;
@@ -240,7 +240,7 @@ inline void write_row_major_block_from_dfb(
             {.page_id = abs_row_base + r, .offset_bytes = col_byte_offset});
     }
     noc.async_write_barrier();
-    dfb_out_rm.pop_front(block.full_block_size());
+    dfb_out_rm.pop_front(static_cast<uint16_t>(block.full_block_size()));
 }
 
 /**
