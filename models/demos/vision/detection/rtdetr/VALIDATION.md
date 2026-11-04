@@ -4,9 +4,9 @@
 
 | Item | Value |
 |---|---|
-| Hardware | Tenstorrent P150a |
-| Git base commit | `b1d4b7a2106b4ebe16f6a42ebcc63755146b3df4` |
-| Python | 3.10.19 |
+| Hardware | Tenstorrent Blackhole P100a, full 11×10 grid |
+| Git base commit | `02f968e1daa4dab70aadcc3f13fd97c037687000` |
+| Python | 3.10.21 |
 | PyTorch | 2.11.0+cpu |
 | Transformers | 5.12.1 |
 | Input | Batch 1, 640×640, BF16 |
@@ -15,7 +15,7 @@
 | RT-DETRv2 checkpoint | `PekingU/rtdetr_v2_r50vd` |
 | Validation data | First 500 COCO `val2017` images in sorted filename order |
 
-The recorded runs used the listed base commit with uncommitted RT-DETR validation changes.
+The recorded runs used the RT-DETR commits of this change on top of the listed base commit, in a Release build.
 
 ### COCO Validation Data
 
@@ -49,10 +49,13 @@ Decoder queries shared by both implementations were aligned by proposal index be
 
 | Output | RT-DETR v1 | RT-DETRv2 |
 |---|---:|---:|
-| Last hidden state | 0.9693 | 0.9699 |
-| Intermediate hidden states | 0.9667 | 0.9705 |
-| Intermediate logits | 0.9375 | 0.9545 |
-| Intermediate reference points | 0.9802 | 0.9512 |
+| Shared top-k proposals | 298 / 300 | 297 / 300 |
+| Last hidden state | 0.9963 | 0.9888 |
+| Intermediate hidden states | 0.9962 | 0.9918 |
+| Intermediate logits | 0.9942 | 0.9872 |
+| Intermediate reference points | 0.9972 | 0.9848 |
+
+All 25 tests in `tests/pcc.py` pass, on the full grid and on a 2-core grid (`TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0`). Thresholds are 0.999 for single ops, 0.99 for blocks and 0.95 for the full model.
 
 ## Detection Correctness
 
@@ -67,13 +70,13 @@ PyTorch and TTNN detections used a confidence threshold of `0.5`. Boxes were gre
 |---|---:|---:|
 | Images | 500 | 500 |
 | PyTorch detections | 2,763 | 3,550 |
-| TTNN detections | 2,752 | 3,558 |
-| Matched detections | 2,644 | 3,377 |
-| Matched ratio | 95.69% | 94.91% |
-| Label agreement | 99.74% | 98.46% |
-| Mean matched IoU | 0.9577 | 0.9521 |
-| Minimum matched IoU | 0.5196 | 0.5383 |
-| Mean confidence-score error | 0.0210 | 0.0221 |
+| TTNN detections | 2,683 | 3,418 |
+| Matched detections | 2,658 | 3,368 |
+| Matched ratio | 96.20% | 94.87% |
+| Label agreement | 99.77% | 99.08% |
+| Mean matched IoU | 0.9639 | 0.9601 |
+| Minimum matched IoU | 0.6194 | 0.5988 |
+| Mean confidence-score error | 0.0115 | 0.0131 |
 
 ## Model Latency
 
@@ -86,20 +89,20 @@ Each test performs one warmup, captures the model, and measures eight trace repl
 
 | Metric | RT-DETR v1 | RT-DETRv2 |
 |---|---:|---:|
-| Mean latency | 23.78 ms | 23.77 ms |
-| Median latency | 23.78 ms | 23.78 ms |
-| Throughput | 42.05 FPS | 42.07 FPS |
+| Mean latency | 24.53 ms | 24.53 ms |
+| Median latency | 24.53 ms | 24.52 ms |
+| Throughput | 40.77 FPS | 40.77 FPS |
 
-## Video Throughput
+## End-to-End Latency
 
 ```bash
-python demo.py --video <path-or-direct-url> --model_version 1
+pytest tests/latency.py::test_rtdetr_batch_1_e2e_latency -sv
 ```
 
-Video throughput includes decoding, preprocessing, input transfer, trace replay, output transfer, postprocessing, drawing, and H.264 encoding. Model initialization, warmup, and trace capture are excluded.
+The test replays the captured trace on eight images. Timing covers preprocessing, input transfer, trace replay, output transfer and postprocessing.
 
-| Metric | Result |
+| Metric | RT-DETR v1 |
 |---|---:|
-| Mean throughput | 27.83 FPS |
-| Minimum throughput | 25.34 FPS |
-| Maximum throughput | 29.19 FPS |
+| Mean latency | 32.79 ms |
+| Median latency | 32.91 ms |
+| Throughput | 30.50 FPS |
