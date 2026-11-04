@@ -176,7 +176,7 @@ class BatchedOProj:
     the bias added, i.e. the all-reduce's input precision, so no typecast / slice follows. Weight and bias are cut from
     the decode tensors once, on device; the decode tensors stay (prefill uses them)."""
 
-    CORES = 8  # divides K = 32 tiles; the measured best for [32, 1024] x [1024, 2880]
+    CORES = 8  # divides K (32 tiles at TP=4, 64 at TP=2); the measured best for [32, 1024] x [1024, 2880] (TP=4)
     WORKERS = 2
 
     def __init__(self, mesh_device, o_proj, o_proj_bias, hidden, tokens=32):
@@ -193,6 +193,7 @@ class BatchedOProj:
             self.weight = ttnn.to_memory_config(sliced, weight_memory_config)
             sliced.deallocate(True)
         b_shape = list(o_proj_bias.shape)
+        # At TP=2 this is o_proj_bias itself (nothing to cut), so self.bias is never freed.
         self.bias = ttnn.slice(o_proj_bias, [0] * len(b_shape), b_shape[:-1] + [hidden])
         cores = ttnn.num_cores_to_corerangeset(self.CORES, grid, row_wise=True)
         per_core_n = -(-hidden // (tile * self.CORES))
