@@ -215,7 +215,7 @@ def build_route_constants(
 ) -> dict:
     """Host constants of the route program (torch fp32), derived from build_constants.
 
-    const_or [S,1,nqc_pad,n_blocks_pad]: the threshold-independent part of block01 (band | sink | dense-prefix rows,
+    const_or [S,1,nqc_pad,n_blocks_pad]: the threshold-independent part of the block mask (band | sink | dense-prefix rows,
       OR-ed over the Q blocks of each chunk, | forced block 0 per shard) & full blocks -- exactly what
       the routing rule produces when no score passes the threshold.
     colconst [1,1,S*32,nb_pad]: per shard s, 32 identical rows of its full-block column constant (a tile operand
@@ -245,8 +245,8 @@ def build_route_constants(
         ksel[0, 0, b, (b * geo.block) // geo.k_chunk] = 1.0
     ones = torch.zeros(1, 1, TILE, TILE)
     ones[0, 0, 0, :] = 1.0
-    # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard ps = 4t + q at
-    # rows q*8 + n (n = moment tile 0..7: DT sums, DT sums of squares); selector tile n has ones at row 0, columns
+    # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard 4t + q at
+    # rows q*8 + n (n = moment tile 0..7: head_dim_tiles sums, head_dim_tiles sums of squares); selector tile n has ones at row 0, columns
     # q*8 + n, so selector[n] @ gather[t] puts the sum over that tile's shards of moment n in row 0, accumulated over t.
     # Each gather tile holds 4 shards, so S must fill those tiles (a partial tile's unread rows are stale: 0 * NaN = NaN).
     # The exchange itself runs only for 4 or 8 shards. 32 shards (a 4x32 mesh) are a full 8 tiles, but that mesh uses
@@ -407,10 +407,9 @@ class SolPrepass(Module):
         self._reuse_left = 0
 
     def _cores(self):
-        g = self.mesh_device.compute_with_storage_grid_size()
-        nx, ny = g.x, g.y
-        ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(nx - 1, ny - 1))])
-        return nx, ny, ranges
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        return grid.x, grid.y, ranges
 
     @staticmethod
     def _cb(idx: int, pages: int, cores, page_size: int = TILE_BYTES, dtype=ttnn.bfloat16) -> ttnn.CBDescriptor:
@@ -433,7 +432,7 @@ class SolPrepass(Module):
     def _compute_config(full_sync: bool):
         # fp32 DST holds 4 tiles per section in half-sync mode and 8 in full-sync mode
         # (tests/ttnn/unit_tests/kernel_lib/test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must
-        # run full-sync; the pool kernel uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
+        # run full-sync; the pool kernel uses head_dim_tiles (<= 4) tiles and keeps the math/pack overlap of half-sync.
         return ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -445,11 +444,14 @@ class SolPrepass(Module):
 
     def _pool_program(self, x: ttnn.Tensor, geo_t: ttnn.Tensor, outs: list[ttnn.Tensor]) -> ttnn.ProgramDescriptor:
         geo = self.geo
-        _, H, R, D = x.shape
-        assert R == geo.rows and R % TILE == 0 and D % TILE == 0
-        RT, DT, NBPT = R // TILE, D // TILE, geo.nb_pad // TILE
-        nx, ny, cores = self._cores()
-        ct = [H, RT, DT, NBPT, R, nx, ny, 3 * H * NBPT]  # grid + unit count: kernels derive their unit range per core
+        _, num_heads, shard_rows, head_dim = x.shape
+        assert shard_rows == geo.rows and shard_rows % TILE == 0 and head_dim % TILE == 0
+        shard_row_tiles, head_dim_tiles = shard_rows // TILE, head_dim // TILE
+        shard_block_tiles = geo.nb_pad // TILE
+        grid_x, grid_y, cores = self._cores()
+        num_units = 3 * num_heads * shard_block_tiles  # (tensor, head, group) units
+        # Compile-time args, named as in sol_pool_units.hpp; kernels derive their unit range per core from the grid.
+        ct = [num_heads, shard_row_tiles, head_dim_tiles, shard_block_tiles, shard_rows, grid_x, grid_y, num_units]
         acc_in = [a for _ in range(3) for a in ttnn.TensorAccessorArgs(x).get_compile_time_args()]
         acc_in += list(ttnn.TensorAccessorArgs(geo_t).get_compile_time_args())
         acc_out = [a for o in outs for a in ttnn.TensorAccessorArgs(o).get_compile_time_args()]
@@ -457,12 +459,12 @@ class SolPrepass(Module):
         # (pooling tiles) so two can be in flight on the NoC while compute consumes the third; cb 5 holds the 32
         # standard pooling tiles built once per core.
         cbs = [
-            self._cb(0, 3 * 4 * DT, cores),
+            self._cb(0, 3 * 4 * head_dim_tiles, cores),
             self._cb(2, 3 * 4, cores),
             self._cb(3, 1, cores),
             self._cb(4, 1, cores, page_size=128, dtype=ttnn.uint32),
             self._cb(5, 32, cores),
-            self._cb(16, 2 * DT, cores),
+            self._cb(16, 2 * head_dim_tiles, cores),
         ]
         reader = self._kernel("sol_pool_reader.cpp", cores, ct + acc_in, [0, 0, 0, 0], ttnn.ReaderConfigDescriptor())
         writer = self._kernel("sol_pool_writer.cpp", cores, ct + acc_out, [0, 0, 0], ttnn.WriterConfigDescriptor())
@@ -510,78 +512,87 @@ class SolPrepass(Module):
 
     def _route_program(self, q_bar, kc, mask) -> ttnn.ProgramDescriptor:
         st, geo = self._state, self.geo
-        _, H, _, D = q_bar.shape
-        S, DT, NBPT, NQCT = geo.shards, D // TILE, geo.nb_pad // TILE, geo.nqc_pad // TILE
-        NKCLT = st["nkcl"] // TILE
-        NBGT = S * NBPT
-        assert NBPT * DT <= 8 * 32 and DT <= 4 and NKCLT <= 7, (NBPT, DT, NKCLT)
+        _, num_heads, _, head_dim = q_bar.shape
+        # Names match the compile-time args of sol_route_compute.cpp.
+        num_shards, head_dim_tiles = geo.shards, head_dim // TILE
+        shard_block_tiles = geo.nb_pad // TILE  # blocks per shard, padded, / 32
+        shard_q_chunk_tiles = geo.nqc_pad // TILE  # Q chunks per shard, padded, / 32
+        shard_k_chunk_tiles = st["nkcl"] // TILE  # K chunks per shard, padded, / 32
+        all_block_tiles = num_shards * shard_block_tiles
+        assert shard_block_tiles * head_dim_tiles <= 8 * 32 and head_dim_tiles <= 4 and shard_k_chunk_tiles <= 7, (
+            shard_block_tiles,
+            head_dim_tiles,
+            shard_k_chunk_tiles,
+        )
         mode = 0 if self.mode == "chunk" else 1  # kernel MODE: 0 = K-chunk mask, 1 = block mask
         log2_scale = st["scale"] * LOG2E
-        TQ = geo.q_chunk // geo.block  # Q-block tile rows per Q-chunk tile row
-        assert geo.q_chunk % geo.block == 0 and 1 <= TQ <= 8, geo.q_chunk
+        blocks_per_q_chunk = geo.q_chunk // geo.block  # Q-block tile rows per Q-chunk tile
+        assert geo.q_chunk % geo.block == 0 and 1 <= blocks_per_q_chunk <= 8, geo.q_chunk
         ct = [
-            H,
-            S,
-            NBPT,
-            DT,
-            NQCT,
-            NKCLT,
-            geo.nqc,
-            geo.nkc,
-            geo.nkc_pad,
-            mode,
-            _f32_bits(self.tau),
-            _f32_bits(VAR_EPS / (log2_scale * log2_scale)),
-            _f32_bits(NEG),
-            _f32_bits(1.0 / st["n_valid_blocks"]),
-            TQ,
+            num_heads,  # 0 NUM_HEADS
+            num_shards,  # 1 NUM_SHARDS
+            shard_block_tiles,  # 2 SHARD_BLOCK_TILES
+            head_dim_tiles,  # 3 HEAD_DIM_TILES
+            shard_q_chunk_tiles,  # 4 SHARD_Q_CHUNK_TILES
+            shard_k_chunk_tiles,  # 5 SHARD_K_CHUNK_TILES
+            geo.nqc,  # 6 SHARD_Q_CHUNKS
+            geo.nkc,  # 7 SHARD_K_CHUNKS
+            geo.nkc_pad,  # 8 ALL_K_CHUNKS_PADDED
+            mode,  # 9 MODE
+            _f32_bits(self.tau),  # 10 TAU
+            _f32_bits(VAR_EPS / (log2_scale * log2_scale)),  # 11 VARIANCE_EPSILON
+            _f32_bits(NEG),  # 12 NEG_INF
+            _f32_bits(1.0 / st["n_valid_blocks"]),  # 13 INV_NUM_VALID_BLOCKS
+            blocks_per_q_chunk,  # 14 BLOCKS_PER_Q_CHUNK
         ]
         ins = [q_bar, kc, st["const_or"], st["colconst"], st["qsel"], st["ksel"], st["ones"]]
         acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         # The writer's second accessor (the chunk-union output of an earlier variant) is kept pointed at the mask.
         acc_out = [a for t in (mask, mask) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
-        nx, ny, cores = self._cores()
-        # Unit = (head, shard): H*S units, which keeps the core grid filled when NQCT is small. The chunk-form mask
+        grid_x, grid_y, cores = self._cores()
+        # Unit = (head, shard): num_heads * num_shards units, which keeps the core grid filled when
+        # shard_q_chunk_tiles is small. The chunk-form mask
         # (MODE 0) assembles whole rows from every shard in the writer's L1 row buffer (their per-shard word ranges
-        # are not NoC-aligned), so it keeps the (head, Q-chunk tile row) unit with H*NQCT units; the kernels
+        # are not NoC-aligned), so it keeps the (head, Q-chunk tile) unit with num_heads * shard_q_chunk_tiles units; the kernels
         # static_assert the same rule. The partial-moment exchange packs at most 8 shards, so a 32-shard mesh
         # (4x32) stays on the all-shard layout, which reads every shard's pooled K.
-        units_per_shard = int(mode == 1 and S <= 8 and H * S <= nx * ny)
-        units = H * S if units_per_shard else H * NQCT
-        self.route_units = (units, units_per_shard)
-        ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core
-        mask_t = NKCLT if mode == 0 else NBPT  # per shard
-        # (head, shard) units read only their shard's pooled K and exchange partial moments between the S cores of
-        # a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime args
+        units_per_shard = int(mode == 1 and num_shards <= 8 and num_heads * num_shards <= grid_x * grid_y)
+        num_units = num_heads * num_shards if units_per_shard else num_heads * shard_q_chunk_tiles
+        self.route_units = (num_units, units_per_shard)
+        # 15 GRID_X, 16 GRID_Y, 17 NUM_UNITS, 18 UNITS_PER_SHARD; kernels derive their unit range per core.
+        ct += [grid_x, grid_y, num_units, units_per_shard]
+        mask_tiles_per_shard = shard_k_chunk_tiles if mode == 0 else shard_block_tiles
+        # (head, shard) units read only their shard's pooled K and exchange partial moments between the num_shards
+        # cores of a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime args
         # 8..) and a semaphore; cb 23 receives the peers' partial moments (gather tiles), 24 ships this unit's,
         # 26 holds the reader's copy of the mask tiles and 29 the shard-row selectors. The head's pooled Q is read
-        # from DRAM by its shard-0 core and shipped to the other S-1 cores over the NoC (reader semaphore 1).
-        core_xy = self._core_noc_xy(nx, ny) if units_per_shard else []
+        # from DRAM by its shard-0 core and shipped to the other num_shards - 1 cores over the NoC (reader semaphore 1).
+        core_xy = self._core_noc_xy(grid_x, grid_y) if units_per_shard else []
         st["route_core_xy"] = core_xy
         sizes = {
-            0: (NBPT if units_per_shard else NBGT) * DT,
-            1: NBPT * DT,
-            2: 1,
-            3: NQCT * NBPT,
-            4: NBPT * NKCLT,
-            6: NBPT,
-            7: NBPT,
-            8: 8,
-            9: 8,
-            10: TQ * DT,
-            11: TQ,
-            12: TQ,
-            13: TQ * NBPT,
-            14: NBPT,
-            16: mask_t,
-            20: DT,
-            21: NKCLT,
+            0: (shard_block_tiles if units_per_shard else all_block_tiles) * head_dim_tiles,  # k_pooled
+            1: shard_block_tiles * head_dim_tiles,  # q_pooled
+            2: 1,  # ones
+            3: shard_q_chunk_tiles * shard_block_tiles,  # q_select
+            4: shard_block_tiles * shard_k_chunk_tiles,  # k_select
+            6: shard_block_tiles,  # const_or
+            7: shard_block_tiles,  # valid_blocks
+            8: 8,  # partial_moments
+            9: 8,  # moments
+            10: blocks_per_q_chunk * head_dim_tiles,  # q_squared
+            11: blocks_per_q_chunk,  # threshold_col
+            12: blocks_per_q_chunk,  # threshold
+            13: blocks_per_q_chunk * shard_block_tiles,  # block_hits
+            14: shard_block_tiles,  # block_mask
+            16: mask_tiles_per_shard,  # mask_out
+            20: head_dim_tiles,  # variance
+            21: shard_k_chunk_tiles,  # union_out
         }
         mask_rows_bytes = (
             32 * geo.nb_pad * 4
-        )  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (it, sp)
+        )  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (q_chunk_tile, shard)
         if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 29: shsel; 16 becomes the row page
-            sizes.update({23: (S + 3) // 4, 24: 8, 29: 8})
+            sizes.update({23: (num_shards + 3) // 4, 24: 8, 29: 8})
             del sizes[16]
         cbs = [self._cb(i, n, cores) for i, n in sizes.items()]
         if units_per_shard:
@@ -610,11 +621,13 @@ class SolPrepass(Module):
         )
         return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs)
 
-    def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
-        """NoC coordinates (x | y << 8) of every logical worker core, index y*nx + x. One program with common runtime
+    def _core_noc_xy(self, grid_x: int, grid_y: int) -> list[int]:
+        """NoC coordinates (x | y << 8) of every logical worker core, index y * grid_x + x. One program with common runtime
         args runs on every chip of the mesh; the virtual worker coordinates are the same on every chip."""
         xy = [
-            self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for y in range(ny) for x in range(nx)
+            self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            for y in range(grid_y)
+            for x in range(grid_x)
         ]
         return [w.x | (w.y << 8) for w in xy]
 

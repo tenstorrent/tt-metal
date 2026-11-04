@@ -4,17 +4,18 @@
 
 // Sol-Attn pre-pass, pool step, reader kernel.
 //
-// Pooling = the mean of every 64-token block of Q, K and V. A unit is (tensor, head, output tile row g): 32 blocks.
-// For each tile row k of the unit the reader sends compute the DT data tiles (cb_x) and one pooling tile P[k]
-// (cb_ps): a 32x32 tile with 1/len in the block's row, so compute just accumulates P[k] @ X[k]. Rows past the shard's
-// valid end get zero tiles instead of DRAM reads. The valid token count comes from the geo tensor (word 0).
+// Pooling = the mean of every 64-token block of Q, K and V. A unit is (tensor, head, group): 32 blocks.
+// For each tile row of the unit the reader sends compute the HEAD_DIM_TILES data tiles (cb_data) and one pooling tile
+// (cb_pool_tiles): a 32x32 tile with 1/len in the block's row, so compute just accumulates pool_tile @ data. Rows past
+// the shard's valid end get zero tiles instead of DRAM reads. The valid token count comes from the geo tensor (word 0).
 //
-// The 32 standard pooling tiles are built once per core (cb_ptab) and copied per row with a local NoC copy; only the
-// rows of a partial last block are built in place. Data is read in batches of 4 rows with two batches in flight
+// The 32 standard pooling tiles are built once per core (cb_pool_table) and copied per row with a local NoC copy; only
+// the rows of a partial last block are built in place. Data is read in batches of 4 rows with two batches in flight
 // (transaction ids 1 and 2) while compute works on a third.
 //
-// Compile-time args: 0 H, 1 RT (tile rows per shard), 2 DT, 3 NBPT (output tile rows per head), 4 R, 5 NX, 6 NY,
-// 7 UNITS, then TensorAccessorArgs of x0, x1, x2, geo. Common runtime args: 0..2 x0..x2 addresses, 3 geo address.
+// Compile-time args: 0 NUM_HEADS, 1 SHARD_ROW_TILES (tile rows per shard), 2 HEAD_DIM_TILES, 3 SHARD_BLOCK_TILES
+// (output tile rows per head), 4 SHARD_ROWS, 5 GRID_X, 6 GRID_Y, 7 NUM_UNITS, then TensorAccessorArgs of q_in, k_in,
+// v_in, geo. Common runtime args: 0..2 the Q, K, V input addresses, 3 geo address.
 
 #include <cstdint>
 
@@ -27,9 +28,10 @@
 #include "sol_pool_units.hpp"
 
 namespace {
-constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_geo = 4, cb_ptab = 5;
+constexpr uint32_t cb_data = 0, cb_pool_tiles = 2, cb_zero = 3, cb_geo = 4, cb_pool_table = 5;
 constexpr uint32_t TILE_BYTES = 2048;
-constexpr uint32_t BLOCK = sol_pool::BLOCK;
+constexpr uint32_t BLOCK_TOKENS = sol_pool::BLOCK_TOKENS;
+constexpr uint32_t TILE_ROWS_PER_GROUP = sol_pool::TILE_ROWS_PER_GROUP;
 constexpr uint32_t GEO_BYTES = 128;
 constexpr uint32_t ROWS_PER_BATCH = 4;
 constexpr uint32_t BATCHES_IN_CB = 3;  // three batches per CB (SolPrepass._pool_program)
@@ -42,23 +44,23 @@ constexpr uint16_t RECIP_BF16[65] = {
     0x3cd2, 0x3ccd, 0x3cc8, 0x3cc3, 0x3cbf, 0x3cba, 0x3cb6, 0x3cb2, 0x3cae, 0x3cab, 0x3ca7, 0x3ca4, 0x3ca1,
     0x3c9e, 0x3c9b, 0x3c98, 0x3c95, 0x3c92, 0x3c90, 0x3c8d, 0x3c8b, 0x3c89, 0x3c86, 0x3c84, 0x3c82, 0x3c80};
 
-// Index of element (r, c) in a 32x32 bf16 tile (four 16x16 faces).
-inline uint32_t tile_elem(uint32_t r, uint32_t c) {
-    const uint32_t face = ((r >> 4) << 1) | (c >> 4);
-    return face * 256 + (r & 15) * 16 + (c & 15);
+// Index of element (row, col) in a 32x32 bf16 tile (four 16x16 faces).
+inline uint32_t tile_elem(uint32_t row, uint32_t col) {
+    const uint32_t face = ((row >> 4) << 1) | (col >> 4);
+    return face * 256 + (row & 15) * 16 + (col & 15);
 }
 
-// Set the first ncols columns of row r to v (two elements per word).
-inline void write_row(uint32_t addr, uint32_t r, uint32_t ncols, uint16_t v) {
-    CoreLocalMem<volatile uint32_t> w(addr);
-    const uint32_t vv = (static_cast<uint32_t>(v) << 16) | v;
-    uint32_t c = 0;
-    for (; c + 1 < ncols; c += 2) {
-        w[tile_elem(r, c) >> 1] = vv;
+// Set the first num_cols columns of tile row `row` to value (two elements per word).
+inline void write_row(uint32_t tile_addr, uint32_t row, uint32_t num_cols, uint16_t value) {
+    CoreLocalMem<volatile uint32_t> words(tile_addr);
+    const uint32_t value_pair = (static_cast<uint32_t>(value) << 16) | value;
+    uint32_t col = 0;
+    for (; col + 1 < num_cols; col += 2) {
+        words[tile_elem(row, col) >> 1] = value_pair;
     }
-    if (c < ncols) {
-        CoreLocalMem<volatile uint16_t> e(addr);
-        e[tile_elem(r, c)] = v;
+    if (col < num_cols) {
+        CoreLocalMem<volatile uint16_t> elems(tile_addr);
+        elems[tile_elem(row, col)] = value;
     }
 }
 
@@ -66,176 +68,188 @@ inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t RT = get_compile_time_arg_val(1);
-    constexpr uint32_t DT = get_compile_time_arg_val(2);
-    constexpr uint32_t NBPT = get_compile_time_arg_val(3);
-    constexpr auto x0_args = TensorAccessorArgs<8>();
-    constexpr auto x1_args = TensorAccessorArgs<x0_args.next_compile_time_args_offset()>();
-    constexpr auto x2_args = TensorAccessorArgs<x1_args.next_compile_time_args_offset()>();
-    constexpr auto geo_args = TensorAccessorArgs<x2_args.next_compile_time_args_offset()>();
+    constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(0);
+    constexpr uint32_t SHARD_ROW_TILES = get_compile_time_arg_val(1);
+    constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(2);
+    constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(3);
+    constexpr auto q_in_args = TensorAccessorArgs<8>();
+    constexpr auto k_in_args = TensorAccessorArgs<q_in_args.next_compile_time_args_offset()>();
+    constexpr auto v_in_args = TensorAccessorArgs<k_in_args.next_compile_time_args_offset()>();
+    constexpr auto geo_args = TensorAccessorArgs<v_in_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t NX = get_compile_time_arg_val(5);
-    constexpr uint32_t NY = get_compile_time_arg_val(6);
-    constexpr uint32_t UNITS = get_compile_time_arg_val(7);
-    constexpr uint32_t NCORES = NX * NY;
-    using Layout = sol_pool::Layout<H, RT, NBPT>;
-    static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
-    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(5);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(6);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(7);
+    constexpr uint32_t NUM_CORES = GRID_X * GRID_Y;
+    using Layout = sol_pool::Layout<NUM_HEADS, SHARD_ROW_TILES, SHARD_BLOCK_TILES>;
+    static_assert(Layout::NUM_UNITS == NUM_UNITS, "host unit count must match the kernel layout");
+    const uint32_t core_index = static_cast<uint32_t>(get_absolute_logical_y()) * GRID_X + get_absolute_logical_x();
     uint32_t unit_start, unit_count;
-    Layout::range(ci, NCORES, unit_start, unit_count);
+    Layout::range(core_index, NUM_CORES, unit_start, unit_count);
     if (unit_count == 0) {
         return;
     }
-    const auto x0 = TensorAccessor(x0_args, get_common_arg_val<uint32_t>(0));
-    const auto x1 = TensorAccessor(x1_args, get_common_arg_val<uint32_t>(1));
-    const auto x2 = TensorAccessor(x2_args, get_common_arg_val<uint32_t>(2));
+    const auto q_in = TensorAccessor(q_in_args, get_common_arg_val<uint32_t>(0));
+    const auto k_in = TensorAccessor(k_in_args, get_common_arg_val<uint32_t>(1));
+    const auto v_in = TensorAccessor(v_in_args, get_common_arg_val<uint32_t>(2));
     const auto geo = TensorAccessor(geo_args, get_common_arg_val<uint32_t>(3));
 
     Noc noc;
-    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbg(cb_geo), cbt(cb_ptab);
+    CircularBuffer data_cb(cb_data), pool_tiles_cb(cb_pool_tiles), zero_cb(cb_zero), geo_cb(cb_geo),
+        pool_table_cb(cb_pool_table);
     const PrecomposedUnicastEndpoint local;
 
     // This shard's valid token count.
-    cbg.reserve_back(1);
-    noc.async_read(geo, cbg, GEO_BYTES, {.page_id = 0}, {.offset_bytes = 0});
+    geo_cb.reserve_back(1);
+    noc.async_read(geo, geo_cb, GEO_BYTES, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    const uint32_t valid_end = CoreLocalMem<volatile uint32_t>(cbg.get_write_ptr())[0];
+    const uint32_t valid_end = CoreLocalMem<volatile uint32_t>(geo_cb.get_write_ptr())[0];
 
-    // The zero tile and the table of the 32 standard pooling tiles (1/64 in row r). The table is built while the
-    // first batch's reads are in flight.
-    cbz.reserve_back(1);
-    const uint32_t zero_addr = cbz.get_write_ptr();
-    cbt.reserve_back(32);
-    const uint32_t tab = cbt.get_write_ptr();
+    // The zero tile and the table of the 32 standard pooling tiles (1/64 in row r of tile r). The table is built while
+    // the first batch's reads are in flight.
+    zero_cb.reserve_back(1);
+    const uint32_t zero_tile_addr = zero_cb.get_write_ptr();
+    pool_table_cb.reserve_back(32);
+    const uint32_t table_addr = pool_table_cb.get_write_ptr();
     bool table_built = false;
     auto build_table = [&]() {
-        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_addr), TILE_BYTES);
-        for (uint32_t r = 0; r < 32; ++r) {
-            noc.async_write_zeros(CoreLocalMem<uint32_t>(tab + r * TILE_BYTES), TILE_BYTES);
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_tile_addr), TILE_BYTES);
+        for (uint32_t row = 0; row < 32; ++row) {
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(table_addr + row * TILE_BYTES), TILE_BYTES);
         }
         noc.write_zeros_l1_barrier();
-        for (uint32_t r = 0; r < 32; ++r) {
-            write_row(tab + r * TILE_BYTES, r, 32, RECIP_BF16[BLOCK]);
+        for (uint32_t row = 0; row < 32; ++row) {
+            write_row(table_addr + row * TILE_BYTES, row, 32, RECIP_BF16[BLOCK_TOKENS]);
         }
-        cbz.push_back(1);
-        cbt.push_back(32);  // never popped: resident for the whole program
+        zero_cb.push_back(1);
+        pool_table_cb.push_back(32);  // never popped: resident for the whole program
         table_built = true;
     };
 
-    constexpr uint32_t NT = ROWS_PER_BATCH * DT;  // data pages per batch
-    constexpr uint32_t X_BYTES = BATCHES_IN_CB * NT * TILE_BYTES;
-    constexpr uint32_t P_BYTES = BATCHES_IN_CB * ROWS_PER_BATCH * TILE_BYTES;
-    const uint32_t x_base = cbx.get_write_ptr();
-    const uint32_t p_base = cbps.get_write_ptr();
+    constexpr uint32_t DATA_PAGES_PER_BATCH = ROWS_PER_BATCH * HEAD_DIM_TILES;
+    constexpr uint32_t DATA_CB_BYTES = BATCHES_IN_CB * DATA_PAGES_PER_BATCH * TILE_BYTES;
+    constexpr uint32_t POOL_TILES_CB_BYTES = BATCHES_IN_CB * ROWS_PER_BATCH * TILE_BYTES;
+    const uint32_t data_cb_base = data_cb.get_write_ptr();
+    const uint32_t pool_tiles_cb_base = pool_tiles_cb.get_write_ptr();
 
     bool pending = false;  // a batch on the NoC, not yet pushed
-    uint32_t pend_trid = 2;
+    uint32_t pending_trid = 2;
     auto finish_pending = [&]() {
-        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = pend_trid});
-        cbps.push_back(ROWS_PER_BATCH);
-        cbx.push_back(NT);
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = pending_trid});
+        pool_tiles_cb.push_back(ROWS_PER_BATCH);
+        data_cb.push_back(DATA_PAGES_PER_BATCH);
         pending = false;
     };
     // Copy one pooling tile from local L1 (the table or the zero tile) into the batch.
-    auto copy_ptile = [&](uint32_t src, uint32_t dst, uint32_t trid) {
+    auto copy_pool_tile = [&](uint32_t src_addr, uint32_t dst_addr, uint32_t trid) {
         noc.async_read<NocOptions::TXN_ID>(
-            local, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.noc_addr = get_noc_addr(src)}, {}, {.trid = trid});
+            local,
+            CoreLocalMem<uint32_t>(dst_addr),
+            TILE_BYTES,
+            {.noc_addr = get_noc_addr(src_addr)},
+            {},
+            {.trid = trid});
     };
 
-    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const sol_pool::Unit un = Layout::decode(u);
-        const uint32_t t = un.t, h = un.h, g = un.g;
-        const uint32_t k_begin = g * BLOCK;
-        const uint32_t k_end = min_u(k_begin + BLOCK, RT);
+    for (uint32_t unit = unit_start; unit < unit_start + unit_count; ++unit) {
+        const sol_pool::Unit coords = Layout::decode(unit);
+        const uint32_t first_row = coords.group * TILE_ROWS_PER_GROUP;
+        const uint32_t end_row = min_u(first_row + TILE_ROWS_PER_GROUP, SHARD_ROW_TILES);
 
-        auto read_page = [&](uint32_t page, uint32_t dst, uint32_t trid) {
-            if (t == 0) {
+        auto read_page = [&](uint32_t page, uint32_t dst_addr, uint32_t trid) {
+            if (coords.tensor == 0) {
                 noc.async_read<NocOptions::TXN_ID>(
-                    x0, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
-            } else if (t == 1) {
+                    q_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+            } else if (coords.tensor == 1) {
                 noc.async_read<NocOptions::TXN_ID>(
-                    x1, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+                    k_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
             } else {
                 noc.async_read<NocOptions::TXN_ID>(
-                    x2, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+                    v_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
             }
         };
 
-        for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
-            const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
+        for (uint32_t batch_row = first_row; batch_row < end_row; batch_row += ROWS_PER_BATCH) {
+            const uint32_t rows_in_batch = min_u(ROWS_PER_BATCH, end_row - batch_row);
             // Reserve two batches so the slot after the pending batch is free.
-            cbx.reserve_back(2 * NT);
-            cbps.reserve_back(2 * ROWS_PER_BATCH);
-            uint32_t xa = cbx.get_write_ptr(), pa = cbps.get_write_ptr();
+            data_cb.reserve_back(2 * DATA_PAGES_PER_BATCH);
+            pool_tiles_cb.reserve_back(2 * ROWS_PER_BATCH);
+            uint32_t data_slot = data_cb.get_write_ptr(), pool_tiles_slot = pool_tiles_cb.get_write_ptr();
             if (pending) {
-                xa += NT * TILE_BYTES;
-                if (xa >= x_base + X_BYTES) {
-                    xa -= X_BYTES;
+                data_slot += DATA_PAGES_PER_BATCH * TILE_BYTES;
+                if (data_slot >= data_cb_base + DATA_CB_BYTES) {
+                    data_slot -= DATA_CB_BYTES;
                 }
-                pa += ROWS_PER_BATCH * TILE_BYTES;
-                if (pa >= p_base + P_BYTES) {
-                    pa -= P_BYTES;
+                pool_tiles_slot += ROWS_PER_BATCH * TILE_BYTES;
+                if (pool_tiles_slot >= pool_tiles_cb_base + POOL_TILES_CB_BYTES) {
+                    pool_tiles_slot -= POOL_TILES_CB_BYTES;
                 }
             }
-            const uint32_t trid = pending ? 3 - pend_trid : 1;  // alternate 1, 2
+            const uint32_t trid = pending ? 3 - pending_trid : 1;  // alternate 1, 2
 
             // Pooling tiles: copied from the table, or the zero tile past the valid end; the rows of a partial last
             // block are built in place.
-            uint32_t tail_rows = 0;
-            bool zeros = false;
-            auto issue_ptiles = [&]() {
-                for (uint32_t kk = 0; kk < nk; ++kk) {
-                    const uint32_t k = k0 + kk;
-                    const uint32_t prow = pa + kk * TILE_BYTES;
-                    if (32 * k >= valid_end) {
-                        copy_ptile(zero_addr, prow, trid);
+            uint32_t partial_block_rows = 0;  // bit i: row i of the batch needs its pooling tile built in place
+            bool zeros_issued = false;
+            auto issue_pool_tiles = [&]() {
+                for (uint32_t row_in_batch = 0; row_in_batch < rows_in_batch; ++row_in_batch) {
+                    const uint32_t tile_row = batch_row + row_in_batch;
+                    const uint32_t pool_tile_addr = pool_tiles_slot + row_in_batch * TILE_BYTES;
+                    if (32 * tile_row >= valid_end) {
+                        copy_pool_tile(zero_tile_addr, pool_tile_addr, trid);
                     } else {
-                        const uint32_t b = k >> 1;
-                        const uint32_t len = min_u(BLOCK, valid_end - b * BLOCK);
-                        const uint32_t ncols = min_u(32, valid_end - 32 * k);
-                        if (len == BLOCK && ncols == 32) {
-                            copy_ptile(tab + (b & 31) * TILE_BYTES, prow, trid);
+                        const uint32_t block = tile_row >> 1;  // two tile rows per 64-token block
+                        const uint32_t block_len = min_u(BLOCK_TOKENS, valid_end - block * BLOCK_TOKENS);
+                        const uint32_t valid_cols = min_u(32, valid_end - 32 * tile_row);
+                        if (block_len == BLOCK_TOKENS && valid_cols == 32) {
+                            copy_pool_tile(table_addr + (block & 31) * TILE_BYTES, pool_tile_addr, trid);
                         } else {
-                            noc.async_write_zeros(CoreLocalMem<uint32_t>(prow), TILE_BYTES);
-                            zeros = true;
-                            tail_rows |= 1u << kk;
+                            noc.async_write_zeros(CoreLocalMem<uint32_t>(pool_tile_addr), TILE_BYTES);
+                            zeros_issued = true;
+                            partial_block_rows |= 1u << row_in_batch;
                         }
                     }
                 }
             };
             // Data pages, zero past the valid end.
-            auto issue_pages = [&]() {
-                uint32_t off = 0;
-                for (uint32_t kk = 0; kk < nk; ++kk) {
-                    const uint32_t k = k0 + kk;
-                    for (uint32_t n = 0; n < DT; ++n) {
-                        if (32 * k < valid_end) {
-                            read_page((h * RT + k) * DT + n, xa + off, trid);
+            auto issue_data_pages = [&]() {
+                uint32_t offset = 0;
+                for (uint32_t row_in_batch = 0; row_in_batch < rows_in_batch; ++row_in_batch) {
+                    const uint32_t tile_row = batch_row + row_in_batch;
+                    for (uint32_t dim_tile = 0; dim_tile < HEAD_DIM_TILES; ++dim_tile) {
+                        if (32 * tile_row < valid_end) {
+                            read_page(
+                                (coords.head * SHARD_ROW_TILES + tile_row) * HEAD_DIM_TILES + dim_tile,
+                                data_slot + offset,
+                                trid);
                         } else {
-                            noc.async_write_zeros(CoreLocalMem<uint32_t>(xa + off), TILE_BYTES);
-                            zeros = true;
+                            noc.async_write_zeros(CoreLocalMem<uint32_t>(data_slot + offset), TILE_BYTES);
+                            zeros_issued = true;
                         }
-                        off += TILE_BYTES;
+                        offset += TILE_BYTES;
                     }
                 }
             };
             if (table_built) {
-                issue_ptiles();
-                issue_pages();
+                issue_pool_tiles();
+                issue_data_pages();
             } else {  // first batch: issue the reads, then build the table
-                issue_pages();
+                issue_data_pages();
                 build_table();
-                issue_ptiles();
+                issue_pool_tiles();
             }
-            if (zeros) {
+            if (zeros_issued) {
                 noc.write_zeros_l1_barrier();
-                for (uint32_t kk = 0; kk < nk; ++kk) {
-                    if (tail_rows & (1u << kk)) {
-                        const uint32_t k = k0 + kk;
-                        const uint32_t b = k >> 1;
-                        const uint32_t len = min_u(BLOCK, valid_end - b * BLOCK);
-                        write_row(pa + kk * TILE_BYTES, b & 31, min_u(32, valid_end - 32 * k), RECIP_BF16[len]);
+                for (uint32_t row_in_batch = 0; row_in_batch < rows_in_batch; ++row_in_batch) {
+                    if (partial_block_rows & (1u << row_in_batch)) {
+                        const uint32_t tile_row = batch_row + row_in_batch;
+                        const uint32_t block = tile_row >> 1;
+                        const uint32_t block_len = min_u(BLOCK_TOKENS, valid_end - block * BLOCK_TOKENS);
+                        write_row(
+                            pool_tiles_slot + row_in_batch * TILE_BYTES,
+                            block & 31,
+                            min_u(32, valid_end - 32 * tile_row),
+                            RECIP_BF16[block_len]);
                     }
                 }
             }
@@ -243,7 +257,7 @@ void kernel_main() {
                 finish_pending();
             }
             pending = true;
-            pend_trid = trid;
+            pending_trid = trid;
         }
     }
     if (pending) {
@@ -251,9 +265,9 @@ void kernel_main() {
     }
     if (!table_built) {
         // An all-empty core skips the row loop, but compute still waits for cb_zero.
-        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_addr), TILE_BYTES);
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_tile_addr), TILE_BYTES);
         noc.write_zeros_l1_barrier();
-        cbz.push_back(1);
+        zero_cb.push_back(1);
     }
     // Leave the NoC transaction id at 0 for the next kernel on this core.
     noc_async_read_set_trid(0, noc.get_noc_id());

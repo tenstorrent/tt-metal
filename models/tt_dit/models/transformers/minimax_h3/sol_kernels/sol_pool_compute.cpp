@@ -4,10 +4,11 @@
 
 // Sol-Attn pre-pass, pool step, compute kernel.
 //
-// Per unit: O[n] = sum_k P[k] @ X[k, n] over the unit's tile rows, accumulated in fp32 DST; units with no rows output
-// zero tiles. Units and per-core ranges: sol_pool_units.hpp.
+// Per unit: out[dim_tile] = sum over tile rows r of pool_tile[r] @ data[r, dim_tile], accumulated in fp32 DST; units
+// with no rows output zero tiles. Units and per-core ranges: sol_pool_units.hpp.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS.
+// Compile-time args: 0 NUM_HEADS, 1 SHARD_ROW_TILES, 2 HEAD_DIM_TILES, 3 SHARD_BLOCK_TILES, 4 SHARD_ROWS, 5 GRID_X,
+// 6 GRID_Y, 7 NUM_UNITS.
 
 #include <cstdint>
 
@@ -20,69 +21,69 @@
 #include "sol_pool_units.hpp"
 
 namespace {
-constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_out = 16;
-constexpr uint32_t BLOCK = sol_pool::BLOCK;
+constexpr uint32_t cb_data = 0, cb_pool_tiles = 2, cb_zero = 3, cb_out = 16;
+constexpr uint32_t TILE_ROWS_PER_GROUP = sol_pool::TILE_ROWS_PER_GROUP;
 constexpr uint32_t ROWS_PER_BATCH = 4;
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t RT = get_compile_time_arg_val(1);
-    constexpr uint32_t DT = get_compile_time_arg_val(2);
-    constexpr uint32_t NBPT = get_compile_time_arg_val(3);
-    static_assert(DT <= 4, "DT output tiles must fit the half-sync fp32 DST (4 tiles)");
+    constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(0);
+    constexpr uint32_t SHARD_ROW_TILES = get_compile_time_arg_val(1);
+    constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(2);
+    constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(3);
+    static_assert(HEAD_DIM_TILES <= 4, "HEAD_DIM_TILES output tiles must fit the half-sync fp32 DST (4 tiles)");
 
-    constexpr uint32_t NX = get_compile_time_arg_val(5);
-    constexpr uint32_t NY = get_compile_time_arg_val(6);
-    constexpr uint32_t UNITS = get_compile_time_arg_val(7);
-    constexpr uint32_t NCORES = NX * NY;
-    using Layout = sol_pool::Layout<H, RT, NBPT>;
-    static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
-    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(5);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(6);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(7);
+    constexpr uint32_t NUM_CORES = GRID_X * GRID_Y;
+    using Layout = sol_pool::Layout<NUM_HEADS, SHARD_ROW_TILES, SHARD_BLOCK_TILES>;
+    static_assert(Layout::NUM_UNITS == NUM_UNITS, "host unit count must match the kernel layout");
+    const uint32_t core_index = static_cast<uint32_t>(get_absolute_logical_y()) * GRID_X + get_absolute_logical_x();
     uint32_t unit_start, unit_count;
-    Layout::range(ci, NCORES, unit_start, unit_count);
+    Layout::range(core_index, NUM_CORES, unit_start, unit_count);
     if (unit_count == 0) {
         return;
     }
-    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbo(cb_out);
+    CircularBuffer data_cb(cb_data), pool_tiles_cb(cb_pool_tiles), zero_cb(cb_zero), out_cb(cb_out);
 
-    compute_kernel_hw_startup(cb_ps, cb_x, cb_out);
-    cbz.wait_front(1);
+    compute_kernel_hw_startup(cb_pool_tiles, cb_data, cb_out);
+    zero_cb.wait_front(1);
 
-    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const uint32_t g = Layout::decode(u).g;
-        const uint32_t k_begin = g * BLOCK;
-        const uint32_t k_end = min_u(k_begin + BLOCK, RT);
+    for (uint32_t unit = unit_start; unit < unit_start + unit_count; ++unit) {
+        const uint32_t group = Layout::decode(unit).group;
+        const uint32_t first_row = group * TILE_ROWS_PER_GROUP;
+        const uint32_t end_row = min_u(first_row + TILE_ROWS_PER_GROUP, SHARD_ROW_TILES);
 
         tile_regs_acquire();
-        if (k_end <= k_begin) {
+        if (end_row <= first_row) {
             copy_init(cb_zero);
-            for (uint32_t n = 0; n < DT; ++n) {
-                copy_tile(cb_zero, 0, n);
+            for (uint32_t dim_tile = 0; dim_tile < HEAD_DIM_TILES; ++dim_tile) {
+                copy_tile(cb_zero, 0, dim_tile);
             }
         } else {
-            matmul_init(cb_ps, cb_x);
-            for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
-                const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
-                cbx.wait_front(ROWS_PER_BATCH * DT);  // batches are always full
-                cbps.wait_front(ROWS_PER_BATCH);
-                for (uint32_t kk = 0; kk < nk; ++kk) {
-                    for (uint32_t n = 0; n < DT; ++n) {
-                        matmul_tiles(cb_ps, cb_x, kk, kk * DT + n, n);
+            matmul_init(cb_pool_tiles, cb_data);
+            for (uint32_t batch_row = first_row; batch_row < end_row; batch_row += ROWS_PER_BATCH) {
+                const uint32_t rows_in_batch = min_u(ROWS_PER_BATCH, end_row - batch_row);
+                data_cb.wait_front(ROWS_PER_BATCH * HEAD_DIM_TILES);  // batches are always full
+                pool_tiles_cb.wait_front(ROWS_PER_BATCH);
+                for (uint32_t row = 0; row < rows_in_batch; ++row) {
+                    for (uint32_t dim_tile = 0; dim_tile < HEAD_DIM_TILES; ++dim_tile) {
+                        matmul_tiles(cb_pool_tiles, cb_data, row, row * HEAD_DIM_TILES + dim_tile, dim_tile);
                     }
                 }
-                cbps.pop_front(ROWS_PER_BATCH);
-                cbx.pop_front(ROWS_PER_BATCH * DT);
+                pool_tiles_cb.pop_front(ROWS_PER_BATCH);
+                data_cb.pop_front(ROWS_PER_BATCH * HEAD_DIM_TILES);
             }
         }
         tile_regs_commit();
         tile_regs_wait();
-        cbo.reserve_back(DT);
-        for (uint32_t n = 0; n < DT; ++n) {
-            pack_tile<true>(n, cb_out, n);
+        out_cb.reserve_back(HEAD_DIM_TILES);
+        for (uint32_t dim_tile = 0; dim_tile < HEAD_DIM_TILES; ++dim_tile) {
+            pack_tile<true>(dim_tile, cb_out, dim_tile);
         }
-        cbo.push_back(DT);
+        out_cb.push_back(HEAD_DIM_TILES);
         tile_regs_release();
     }
 }
