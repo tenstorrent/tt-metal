@@ -14,8 +14,11 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 
+#include <fmt/format.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -28,11 +31,6 @@ namespace plan_detail {
 using Core = tt::tt_metal::CoreCoord;
 
 constexpr uint32_t MT_MAX = 4;
-// L1 per core for the arena: the Blackhole L1 bank (1427 KB) less the program's static CBs (meta 2 KB, dynamic counts
-// 4 x dyn_half, the gate/up 2 KB pack CB: one address range on every core) and the 2 KB done words and 2 KB relay
-// scratch words (same address on every core), all below / beside the arena
-constexpr uint32_t L1_BANK_BYTES = 1427 * 1024;
-constexpr uint32_t GU_L1_BUDGET = 1400 * 1024;  // gate/up core: weight ring + x ring
 constexpr uint32_t D_CHAINS = 7;
 constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
@@ -171,8 +169,15 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
     return tt::tt_metal::CoreRangeSet(rects);
 }
 
-FlatRoutedExpertPlan make_flat_routed_expert_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg) {
+namespace plan_detail {
+// The plan at at most mt_max row tiles a sub-block and hbuf_max down-core h buffers, its arena under `budget` bytes a
+// core where it can (the caller checks the arena against the budget).
+FlatRoutedExpertPlan make_plan(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FlatRoutedExpertConfig& cfg,
+    uint32_t budget,
+    uint32_t mt_max,
+    uint32_t hbuf_max) {
     auto* device = &mesh_device;
     const FlatLayoutOptions& lo = cfg.layout;
     FlatRoutedExpertPlan p;
@@ -229,8 +234,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         const bool pairs = per % 2 == 0 && p.It % np == 0 && (p.It / np) % 16 == 0;
         for (uint32_t xs : {24u, 16u, 12u}) {
             const uint32_t dst = pairs ? gu_dst(np, p.Ht, xs).first : gu_dst((per + 1) / 2, p.Ht, xs, true).first;
-            const uint32_t mt_ = std::min(dst / per, MT_MAX);
-            if (mt_ >= 1 && 2 * p.Ht * per * p.w_tile + xs * mt_ * kKBlk * kBf8Tile <= GU_L1_BUDGET) {
+            const uint32_t mt_ = std::min(dst / per, mt_max);
+            // (a gate/up core's arena: the weight ring and the x ring)
+            if (mt_ >= 1 && 2 * p.Ht * per * p.w_tile + xs * mt_ * kKBlk * kBf8Tile <= budget) {
                 p.np = pairs ? np : 0;
                 p.nu = pairs ? 0 : per;
                 p.hg = !pairs;
@@ -281,21 +287,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     }
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst((p.gwt + 1) / 2, p.Ht, p.x_slots, p.nu != 0);
     const uint32_t mt_cap = std::min(p.dst_tiles / p.gwt, MT_MAX);
-    p.mt = std::min(mt_cap, std::max(1u, p.m / 32));
+    p.mt = std::min({mt_cap, mt_max, std::max(1u, p.m / 32)});
     TT_FATAL(
         lo.gu_read_pieces < 0 || lo.gu_read_pieces == 1 || lo.gu_read_pieces == 2 || lo.gu_read_pieces == 4,
         "flat layout gu_read_pieces {}: 1, 2 or 4",
         lo.gu_read_pieces);
     if (lo.gu_read_pieces > 0) {
         p.gu_pieces = lo.gu_read_pieces;
-    }
-    // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
-    // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
-    // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us); the
-    // smaller x / h buffers are also what fits the MoE block's flat arena next to the combine's (GLM-5.3 8x4 chunk
-    // 5120)
-    if (lo.rows_hint > 0 && lo.rows_hint <= 320 && p.gu_rp && p.mt == 4) {
-        p.mt = 2;
     }
     // wide gate/up blocks (gwt > 4) with row passes: gate/up in a full-sync DST
     p.gu_full_sync = p.gwt > 4 && p.gu_rp && p.mt * p.gwt > 4;
@@ -534,10 +532,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     while (dyn_half < (p.NG * 4 + 63) / 64 * 64 + (4 * p.E + 63) / 64 * 64) {
         dyn_half *= 2;
     }
-    p.hbuf = p.h_off + al(3 * p.h_tiles * kBf8Tile) + out_bytes + 2048 <= L1_BANK_BYTES ? 3 : 2;
+    p.hbuf = hbuf_max >= 3 && p.h_off + al(3 * p.h_tiles * kBf8Tile) + out_bytes + 2048 <= budget ? 3 : 2;
     p.o_off = p.h_off + al(p.hbuf * p.h_tiles * kBf8Tile);
-    const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, L1_BANK_BYTES);
-    TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= L1_BANK_BYTES, "flat_routed_expert: down core arena does not fit");
+    const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, budget);
+    TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= budget, "flat_routed_expert: down core arena does not fit");
     const uint32_t gu_bytes = p.hl_off;
     {  // (the program factory's static CBs, an upper bound)
         const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
@@ -545,7 +543,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
         p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 2048 + a64(p.hbuf * p.mt * p.hpc * kBf8Tile);
     }
-    TT_FATAL(gu_bytes <= L1_BANK_BYTES, "flat_routed_expert: gate/up core arena does not fit");
+    TT_FATAL(gu_bytes <= budget, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % kKBlk == 0) {
             p.sbt = t;
@@ -575,7 +573,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             (x1 - x0 + 1) * (y1 - y0 + 1));
     }
     const uint32_t relay_bytes = p.land_off + al(2 * p.land_slots * p.mt * p.sbt * kBf8Tile);
-    TT_FATAL(relay_bytes <= L1_BANK_BYTES, "flat_routed_expert: relay arena does not fit");
+    TT_FATAL(relay_bytes <= budget, "flat_routed_expert: relay arena does not fit");
     p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes}) + 2047) / 2048;
     p.gu_bytes = gu_bytes;
     p.dn_bytes = dn_bytes;
@@ -611,7 +609,42 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     }
     return p;
 }
+}  // namespace plan_detail
 
+FlatRoutedExpertPlan make_flat_routed_expert_plan(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg) {
+    // The arena's budget a core: the allocator's L1 bank, or less (layout.arena_bytes: the MoE block's combine arena).
+    // The plan fits it keeping the 128-row sub-blocks first - 3 down-core h buffers, then 2 - and only then halves the
+    // sub-block rows (GLM-5.3 at Galaxy loads, flat us uniform / hot: 128 rows + 2 h buffers 531.5 / 540.2, 64 rows + 3
+    // 532.0 / 563.2 - and 128 rows + 3 do not fit the block's arena at 8x4 chunk 5120)
+    const uint32_t bank = static_cast<uint32_t>(mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1));
+    const int32_t want = cfg.layout.arena_bytes;
+    const uint32_t budget = want > 0 ? std::min<uint32_t>(bank, static_cast<uint32_t>(want)) : bank;
+    std::string tried;
+    for (uint32_t mt = MT_MAX; mt >= 1; mt /= 2) {
+        for (uint32_t hbuf : {3u, 2u}) {
+            try {
+                auto p = make_plan(mesh_device, cfg, budget, mt, hbuf);
+                if (p.arena_tiles * 2048 <= budget) {
+                    return p;
+                }
+                tried += fmt::format(
+                    "{}{} rows {} h buffers: {} B", tried.empty() ? "" : "; ", p.mt * 32, p.hbuf, p.arena_tiles * 2048);
+                if (p.mt < mt) {  // (fewer rows than mt: the rows a sub-block were already at their least)
+                    mt = p.mt;
+                }
+            } catch (const std::exception& e) {
+                tried += fmt::format(
+                    "{}{} rows {} h buffers: {}",
+                    tried.empty() ? "" : "; ",
+                    mt * 32,
+                    hbuf,
+                    std::string(e.what()).substr(0, 160));
+            }
+        }
+    }
+    TT_THROW("flat_routed_expert: no plan fits the arena's {} B a core ({})", budget, tried);
+}
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& c) {
     // (the plan ignores the program-only fields: activation, y formats, fidelity, the combine overlap)

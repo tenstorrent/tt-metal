@@ -23,10 +23,11 @@ constexpr uint32_t kRelayWordsBytes = 496;
 // fed along unicast snakes.
 struct FlatLayoutOptions {
     uint32_t pin_ratio = 8;  // pin only an expert this many times the next one's rows (0: always pin)
-    // expected rows per expert (-1: unknown); <= 320 takes 64-row sub-blocks on plans with gate/up row passes (the MoE
-    // block: round(chunk x top_k / experts) - its flat arena then fits next to the combine's)
-    int32_t rows_hint = -1;
-    // each gate/up weight block read as this many pieces, 1 / 2 / 4 (the reads in flight count pieces; -1: 1)
+    // the arena's L1 budget, bytes a core (-1: the L1 bank). The plan fits it: 128-row sub-blocks with 3 down-core h
+    // buffers, then 2 h buffers, then fewer sub-block rows (the MoE block: the combine's arena)
+    int32_t arena_bytes = -1;
+    // each gate/up weight block read as this many pieces, 1 / 2 / 4 (the reads in flight count pieces; -1: the plan's
+    // choice from the block's bytes)
     int32_t gu_read_pieces = -1;
 
     // every field, for the plan cache key and the program hashes

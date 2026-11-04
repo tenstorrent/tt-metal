@@ -59,6 +59,12 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["col0s"] = p.col0s;
     d["banks"] = p.banks;
     d["wd_rot_tiles"] = p.w_tile ? p.wd_rot_region / p.w_tile : 0;
+    d["hbuf"] = p.hbuf;
+    d["gu_pieces"] = p.gu_pieces;
+    d["gu_kg"] = p.gu_kg;
+    d["d_ch"] = p.d_ch;
+    d["arena_bytes"] = p.arena_tiles * 2048;
+    d["static_l1_bytes"] = p.static_l1_bytes;
     d["coords"] = cores(p.coords);
     d["gu"] = cores(p.gu);
     d["relays"] = cores(p.relays);
@@ -77,22 +83,23 @@ void bind_flat_routed_expert(nb::module_& mod) {
 
         Keyword Args:
             pin_ratio (int): pin an expert only at this many times the next one's rows (0: always pin).
-            rows_hint (int): expected mean rows per local expert (-1: unknown); <= 320 takes 64-row sub-blocks on
-                plans with gate/up row passes.
-            gu_read_pieces (int): each gate/up weight block read as 1 / 2 / 4 pieces (-1: 1).
+            arena_bytes (int): the arena's L1 budget, bytes a core (-1: the L1 bank); the plan fits it (3 down-core
+                h buffers, then 2, then fewer sub-block rows).
+            gu_read_pieces (int): each gate/up weight block read as 1 / 2 / 4 pieces (-1: the plan's choice, pieces of
+                at least 6 KB).
     )doc")
         .def(
             "__init__",
-            [](FlatLayoutOptions* self, uint32_t pin_ratio, int32_t rows_hint, int32_t gu_read_pieces) {
-                new (self)
-                    FlatLayoutOptions{.pin_ratio = pin_ratio, .rows_hint = rows_hint, .gu_read_pieces = gu_read_pieces};
+            [](FlatLayoutOptions* self, uint32_t pin_ratio, int32_t arena_bytes, int32_t gu_read_pieces) {
+                new (self) FlatLayoutOptions{
+                    .pin_ratio = pin_ratio, .arena_bytes = arena_bytes, .gu_read_pieces = gu_read_pieces};
             },
             nb::kw_only(),
             nb::arg("pin_ratio") = 8,
-            nb::arg("rows_hint") = -1,
+            nb::arg("arena_bytes") = -1,
             nb::arg("gu_read_pieces") = -1)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
-        .def_rw("rows_hint", &FlatLayoutOptions::rows_hint)
+        .def_rw("arena_bytes", &FlatLayoutOptions::arena_bytes)
         .def_rw("gu_read_pieces", &FlatLayoutOptions::gu_read_pieces)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })

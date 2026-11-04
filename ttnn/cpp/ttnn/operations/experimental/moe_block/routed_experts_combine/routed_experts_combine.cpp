@@ -74,6 +74,37 @@ uint32_t static_cb_bytes(MoEBlockResources& res, const fre::FlatRoutedExpertPlan
         align64(ml.total_entries * 16ull) + dispatch_static_cb_bytes(N, S, W, sparse_dispatch_2d::default_group(W)));
 }
 
+// The flat expert's config for the combine's arena and that arena's bytes a core: the caller's layout when its plan
+// fits the arena the combine gets (the largest free L1 block less what stays below it, or combine.arena_bytes), else
+// the layout with that arena as its budget (the flat plan fits it: FlatLayoutOptions.arena_bytes) - a smaller plan
+// leaves the arena at least as large, so the fitted plan still fits.
+struct FlatFit {
+    fre::FlatRoutedExpertConfig cfg;
+    uint32_t arena_bytes = 0;
+};
+FlatFit fit_flat(
+    MoEBlockResources& res,
+    uint32_t m,
+    uint32_t activation,
+    const fre::FlatLayoutOptions& layout,
+    const CombineConfig& combine) {
+    auto& mesh = res.mesh_device();
+    FlatFit f{base_flat_config(res, m, activation, layout), combine.arena_bytes};
+    for (uint32_t i = 0; i < 4; ++i) {
+        const auto fp = fre::flat_routed_expert_plan(mesh, f.cfg);
+        if (combine.arena_bytes == 0) {
+            const uint32_t reserve = exchange_arena_reserve(static_cb_bytes(res, *fp));
+            const auto stats = mesh.allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+            f.arena_bytes = exchange_arena_bytes(static_cast<uint32_t>(stats.largest_free_block_bytes), reserve);
+        }
+        if (fp->arena_tiles * 2048 <= f.arena_bytes || layout.arena_bytes > 0) {
+            return f;  // (a caller's own budget is kept: make_state checks it against the arena)
+        }
+        f.cfg.layout.arena_bytes = static_cast<int32_t>(f.arena_bytes);
+    }
+    return f;
+}
+
 CombineState make_state(
     MoEBlockResources& res,
     uint32_t m,
@@ -89,7 +120,8 @@ CombineState make_state(
     CombineState s;
     s.combine = combine;
     s.layout = layout;
-    s.flat_config = base_flat_config(res, m, activation, layout);
+    const FlatFit fit = fit_flat(res, m, activation, layout, combine);
+    s.flat_config = fit.cfg;
     s.flat = fre::ensure_flat_routed_expert_resources(res, s.flat_config);
     s.flat_config = fre::with_combine_overlap(s.flat_config, *s.flat.plan, true);
     const auto& fp = *s.flat.plan;
@@ -112,12 +144,7 @@ CombineState make_state(
     in.n_acc = combine.n_acc;
     in.mode = combine.mode;
     in.depth = combine.depth;
-    in.arena_bytes = combine.arena_bytes;
-    if (in.arena_bytes == 0) {  // (the largest free L1 block less what stays below it)
-        const uint32_t reserve = exchange_arena_reserve(static_cb_bytes(res, fp));
-        const auto stats = mesh.allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-        in.arena_bytes = exchange_arena_bytes(static_cast<uint32_t>(stats.largest_free_block_bytes), reserve);
-    }
+    in.arena_bytes = fit.arena_bytes;  // (the largest free L1 block less what stays below it, or the caller's)
     TT_FATAL(
         in.arena_bytes >= fp.arena_tiles * 2048,
         "routed_experts_combine: the arena {} KB < the flat expert's {} KB",
@@ -185,8 +212,8 @@ uint32_t routed_experts_combine_static_cb_bytes(
     uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout) {
     using namespace routed_experts_combine_detail;
-    const auto cfg = base_flat_config(resources, max_tokens_per_expert, activation, layout);
-    return static_cb_bytes(resources, *fre::flat_routed_expert_plan(resources.mesh_device(), cfg));
+    const auto fit = fit_flat(resources, max_tokens_per_expert, activation, layout, CombineConfig{});
+    return static_cb_bytes(resources, *fre::flat_routed_expert_plan(resources.mesh_device(), fit.cfg));
 }
 
 tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(

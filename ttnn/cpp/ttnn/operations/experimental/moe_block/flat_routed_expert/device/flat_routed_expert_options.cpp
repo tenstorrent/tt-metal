@@ -10,11 +10,11 @@ namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
 std::vector<uint32_t> FlatLayoutOptions::key() const {
     const auto u = [](int32_t v) { return static_cast<uint32_t>(v); };
-    return {pin_ratio, u(rows_hint), u(gu_read_pieces)};
+    return {pin_ratio, u(arena_bytes), u(gu_read_pieces)};
 }
 
 std::string FlatLayoutOptions::str() const {
-    return fmt::format("pin_ratio {} rows_hint {} gu_read_pieces {}", pin_ratio, rows_hint, gu_read_pieces);
+    return fmt::format("pin_ratio {} arena_bytes {} gu_read_pieces {}", pin_ratio, arena_bytes, gu_read_pieces);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

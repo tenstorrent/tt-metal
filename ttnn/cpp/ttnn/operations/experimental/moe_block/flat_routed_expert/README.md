@@ -49,7 +49,8 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 * The gate/up cores read their own weights; even splits (gate/up: the 2 It weight tiles of a K row over <= 64 cores, pairs where possible, else
   16-column units; down: the H tile columns over <= 32 cores). An intermediate size without an even split fails.
 * x read once by the helper relays, fed along one unicast snake per gate/up rectangle (both rectangles full).
-* Sub-blocks up to 128 rows; 64 with `rows_hint <= 320` on plans with gate/up row passes.
+* Sub-blocks up to 128 rows, the arena under its L1 budget (`arena_bytes`, default the L1 bank): 3 down-core h buffers,
+  then 2, then fewer sub-block rows.
 
 | | GLM-5.3 | GLM-5.3-Flash | K2.7 | K3 | DSv4.1-Flash | M3 |
 |---|---|---|---|---|---|---|
@@ -61,7 +62,7 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | Field | Default | Meaning |
 |---|---|---|
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
-| `rows_hint` | -1 | expected rows per expert (the MoE block: `round(chunk * top_k / experts)`) |
+| `arena_bytes` | -1 (the L1 bank) | the arena's L1 budget a core (the MoE block: the combine's arena, when the plan does not fit it as it is) |
 | `gu_read_pieces` | -1 (1) | each weight block read as 1 / 2 / 4 reads (more, smaller reads are slower in the op on GLM shapes; K3 in the MoE block takes 2) |
 
 ## Tests

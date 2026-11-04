@@ -41,9 +41,8 @@ class MoEBlock:
     ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (gate_up_compute
     SE_ACT);
     ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
-    Capacity and layout default to max(chunk, 256) and FlatLayoutOptions(rows_hint=chunk x top_k / experts) - the flat
-    arena then fits next to the combine's in the largest free L1 block (a capacity of 8192, or GLM-5.3's 128-row
-    sub-blocks at 8x4 chunk 5120, did not)."""
+    Capacity and layout default to max(chunk, 256) and FlatLayoutOptions() - the combine fits the flat plan into its
+    arena (the largest free L1 block less the static CBs below it; FlatLayoutOptions.arena_bytes)."""
 
     def __init__(
         self,
@@ -65,11 +64,11 @@ class MoEBlock:
         assert resources.config.persist_l1_small, "MoEBlock: create its resources with persist_l1_small=True"
         self.mb, self.mesh_device, self.resources, self.dtypes = mb, mesh_device, resources, dtypes
         self.accumulators, self.l1_free = accumulators, l1_free
-        chunk, dims = resources.config.chunk_tokens, resources.dims
+        chunk = resources.config.chunk_tokens
         if max_tokens_per_expert is None:  # (an expert sees each token at most once; the flat op is built for >= 256)
             max_tokens_per_expert = max(chunk, 256)
         if layout is None:
-            layout = mb.FlatLayoutOptions(rows_hint=round(chunk * dims.top_k / dims.num_experts))
+            layout = mb.FlatLayoutOptions()
         self.combine = combine if combine is not None else mb.CombineConfig()
         self.combine.n_acc = accumulators
         self.expert_kw = dict(

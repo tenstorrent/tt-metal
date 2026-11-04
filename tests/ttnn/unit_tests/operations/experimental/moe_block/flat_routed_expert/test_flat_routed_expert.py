@@ -68,7 +68,6 @@ def _op(device, model, chunk, weights):
         n_global=md["E"],
         act=md["act"],
         pin=1,
-        layout=dict(rows_hint=round(pc["M"])),
     )
 
 

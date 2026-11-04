@@ -86,9 +86,9 @@ def test_flat_weight_regions_places_every_tile(units):
 def test_flat_layout_options():
     ttnn = pytest.importorskip("ttnn")
     mb = ttnn._ttnn.operations.experimental.moe_block
-    a = mb.FlatLayoutOptions(rows_hint=40)
-    assert (a.pin_ratio, a.rows_hint, a.gu_read_pieces) == (8, 40, -1)
-    assert a == weights_py.flat_layout(dict(rows_hint=40))
+    a = mb.FlatLayoutOptions(arena_bytes=40960)
+    assert (a.pin_ratio, a.arena_bytes, a.gu_read_pieces) == (8, 40960, -1)
+    assert a == weights_py.flat_layout(dict(arena_bytes=40960))
     assert a != weights_py.flat_layout(a, gu_read_pieces=2)
-    # (pin_ratio, rows_hint, gu_read_pieces)
-    assert list(a.key()) == [8, 40, 2**32 - 1]
+    # (pin_ratio, arena_bytes, gu_read_pieces)
+    assert list(a.key()) == [8, 40960, 2**32 - 1]

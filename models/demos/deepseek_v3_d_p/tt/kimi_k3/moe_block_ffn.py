@@ -276,11 +276,8 @@ class TtK3MoEBlockFfn:
                 max_tokens_per_expert=max(chunk, 256),
                 activation=flat_weights_module().ACTS[self.act],
                 # (every gate/up core reads its own weight blocks on NOC0, each block as gu_read_pieces reads; the
-                # expected rows per expert size the sub-blocks)
-                layout=mb.FlatLayoutOptions(
-                    rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts),
-                    gu_read_pieces=opts.gu_read_pieces or self._default_gu_read_pieces(),
-                ),
+                # combine fits the sub-blocks into its arena)
+                layout=mb.FlatLayoutOptions(gu_read_pieces=opts.gu_read_pieces or self._default_gu_read_pieces()),
             )
             logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
             logger.info(
