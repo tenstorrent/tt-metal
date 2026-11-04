@@ -4,18 +4,18 @@
 The MiniMax-M3 vision encoder on one Tenstorrent chip, in the form the encoder service's media module calls it:
 
     encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, hf_config)  # load(), once
-    tokens = encoder.forward(image.pixels)  # encode(), per image: pixels as tt/vision/preprocess.py resizes them
+    tokens = encoder.forward(image.pixels)  # encode(), per image: image as the media module's prepare gives it
     try:
         read_embeddings(tokens, out)  # out: [n_tokens, 6144] bf16 values, for example in shared memory
     finally:
         ttnn.deallocate(tokens)
 
 This module imports ttnn, so import it only where the chip is used, for example inside the media module's load(), and
-never in a process that must run without ttnn; the resize, tt/vision/preprocess.py, does not import ttnn.
+never in a process that must run without ttnn; the media module's prepare, which resizes images, does not import ttnn.
 
-forward takes one resized image, uint8 (height, width, 3) with sides that are multiples of 28 pixels, as
-resize_image returns it (the service's M3Image.pixels). It turns the pixels into patch rows on the host (patch_rows,
-which checks them first), then runs the patch embedding, the vision blocks, the 2 x 2 merge and the projector to the
+forward takes one resized image, uint8 (height, width, 3) with sides that are multiples of 28 pixels, as the media
+module's prepare returns it (M3Image.pixels). It turns the pixels into patch rows on the host (patch_rows, which
+checks them first), then runs the patch embedding, the vision blocks, the 2 x 2 merge and the projector to the
 text model's hidden size on the chip: M3VLVisionModel of tt/vision/model.py, so no model code is written here. It
 returns the image's vision tokens on the chip, bf16 [n_tokens, 6144] in row-major layout in DRAM, untilized on the
 chip, so they read back as contiguous rows with no tile padding to strip and no untilize on the host. n_tokens is
@@ -156,8 +156,8 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
         """The vision tokens of one resized image on the chip: bf16 [n_tokens, out_dim] (out_dim 6144 for MiniMax-M3),
         row-major, in DRAM. The caller frees it.
 
-        pixels: uint8 (height, width, 3), as resize_image returns it. patch_rows raises TypeError or ValueError for
-        pixels that no image resizes to (check_pixels) before any device work.
+        pixels: uint8 (height, width, 3), as the media module's prepare returns it (M3Image.pixels). patch_rows raises
+        TypeError or ValueError for pixels that no image resizes to (check_pixels) before any device work.
         """
         pixel_values, grid_thw = patch_rows(pixels)
         tokens = self.model(pixel_values, grid_thw)  # (1, 1, n_tokens, out_dim) in tiles

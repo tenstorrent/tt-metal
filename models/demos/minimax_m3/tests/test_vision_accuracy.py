@@ -4,10 +4,11 @@
 Accuracy of the MiniMax-M3 vision encoder with the checkpoint's weights, against Hugging Face goldens.
 
 Builds TtMiniMaxM3VisionEncoder from the checkpoint as the encoder service's load() does (from_weights_path: all 32
-layers and the projector on one chip) and runs it on the images of golden_hf_vision.py as encode() does: resize_image,
-forward(pixels), then read_embeddings into a host buffer. The tower output comes from the same encoder's model
-(M3VLVisionModel.forward_tower). Both are compared with Hugging Face's MiniMaxM3VLModel vision tower and projector in
-fp32 on the CPU, stored with the goldens, through the vision unit tests' check_close:
+layers and the projector on one chip) and runs it on the images of golden_hf_vision.py as the encoder service does:
+prepare resizes each image, then, as in encode(), forward(pixels) and read_embeddings into a host buffer. The tower
+output comes from the same encoder's model (M3VLVisionModel.forward_tower). Both are compared with Hugging Face's
+MiniMaxM3VLModel vision tower and projector in fp32 on the CPU, stored with the goldens, through the vision unit
+tests' check_close:
   - vision tokens (final, L / 4 x 6144): PCC >= 0.998 and relative L2 error <= 0.10 on every image;
   - tower output (L x 1280): PCC >= Hugging Face's own bf16 PCC on that image minus 0.002, and relative L2 error
     <= 0.12. A bf16 run of the Hugging Face model already loses more on some images than on others (tower PCC
@@ -32,9 +33,9 @@ Needs the checkpoint and the goldens, and skips without either:
                         default $HF_MODEL/golden/vision.
 Before any device work, on the CPU:
   - each golden file must have the sha256 that manifest.json gives, so a half-updated copy fails;
-  - resize_image and patch_rows (tt/vision/preprocess.py) must give each image's pixel values and grid as the
-    goldens hold them, the image processor's, bit for bit; resize_image must also give the same pixels for the image
-    as a uint8 RGBA array, whose alpha channel it drops, as for the PIL RGB image;
+  - the media module's prepare, given each image as the uint8 RGB array an encoder service passes, and patch_rows
+    (tt/vision/preprocess.py) must give its pixel values and grid as the goldens hold them, the image processor's,
+    bit for bit;
   - HF_MODEL must be the goldens' checkpoint: its patch embedding and pre_layrnorm must reproduce the goldens' first
     pre_layrnorm rows, and its projector the first vision tokens from the goldens' tower output. Goldens of another
     checkpoint fail there, not as a low PCC. These are 11 of the checkpoint's 523 vision tensors; weights that differ
@@ -61,8 +62,9 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
-from models.demos.minimax_m3.tt.vision.preprocess import patch_rows, resize_image
+from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
 from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
+from models.demos.minimax_m3.vision.media import MiniMaxM3Media
 
 from .golden_hf_vision import GOLDEN_FORMAT, IMAGES, gain, load_image, sha256, token_cosine_p01
 from .test_factory import parametrize_mesh_with_fabric
@@ -123,13 +125,12 @@ def _load_goldens():
     return manifest, goldens
 
 
-def _resized_images(goldens) -> dict:
-    """Each image as resize_image gives it, after checking that patch_rows of it gives the goldens' pixel values and
-    grid bit for bit, and that resize_image gives the same pixels for the image as a uint8 RGBA array."""
+def _resized_images(goldens, media: MiniMaxM3Media) -> dict:
+    """Each image as media's prepare gives it from the image as a uint8 RGB array, as an encoder service passes it,
+    after checking that patch_rows of it gives the goldens' pixel values and grid bit for bit."""
     images, failed = {}, []
     for case, golden in goldens.items():
-        image, _ = load_image(case)
-        pixels = resize_image(image).pixels
+        pixels = media.prepare("image", np.array(load_image(case, "RGB")[0])).pixels
         pixel_values, grid_thw = patch_rows(pixels)
         want_values, want_grid = golden["pixel_values"], golden["image_grid_thw"]
         if not torch.equal(grid_thw, want_grid):
@@ -137,21 +138,19 @@ def _resized_images(goldens) -> dict:
         elif not torch.equal(pixel_values, want_values):
             differ = int((pixel_values != want_values).sum())
             failed.append(f"{case}: {differ} of {want_values.numel()} pixel values differ from the goldens'")
-        if not np.array_equal(resize_image(np.asarray(load_image(case, "RGBA")[0])).pixels, pixels):
-            failed.append(f"{case}: resize_image gives other pixels for the image as an RGBA array")
         images[case] = pixels
     assert not failed, (
-        f"resize_image and patch_rows do not give the goldens' input (here torch {torch.__version__}, torchvision"
+        f"prepare and patch_rows do not give the goldens' input (here torch {torch.__version__}, torchvision"
         f" {torchvision.__version__} and Pillow {PIL.__version__}):\n" + "\n".join(failed)
     )
     return images
 
 
-def _checkpoint_reference() -> MiniMaxM3VisionEncoder:
-    """The Torch reference's patch embedding, pre_layrnorm and projector with HF_MODEL's weights, without the blocks."""
-    with open(os.path.join(HF_MODEL, "config.json")) as f:
-        config = dataclasses.replace(vision_config(json.load(f)), num_hidden_layers=0)
-    return MiniMaxM3VisionEncoder(config).load_hf_state_dict(load_vision_state_dict(HF_MODEL)).eval()
+def _checkpoint_reference(config: dict) -> MiniMaxM3VisionEncoder:
+    """The Torch reference's patch embedding, pre_layrnorm and projector with HF_MODEL's weights, without the blocks.
+    config: HF_MODEL's config.json."""
+    vision = dataclasses.replace(vision_config(config), num_hidden_layers=0)
+    return MiniMaxM3VisionEncoder(vision).load_hf_state_dict(load_vision_state_dict(HF_MODEL)).eval()
 
 
 def _check_checkpoint(reference, goldens, manifest):
@@ -213,12 +212,14 @@ def test_vision_accuracy(mesh_device, device_params):
     """On every image, vision tokens at PCC >= 0.998 and relL2 <= 0.10, and the tower output within 0.002 of Hugging
     Face's bf16 PCC and at relL2 <= 0.12, with no NaN or Inf."""
     manifest, goldens = _load_goldens()
-    images = _resized_images(goldens)
-    _check_checkpoint(_checkpoint_reference(), goldens, manifest)
+    with open(os.path.join(HF_MODEL, "config.json")) as f:
+        config = json.load(f)  # the service's config, which load() passes to from_weights_path
+    images = _resized_images(goldens, MiniMaxM3Media(config))
+    _check_checkpoint(_checkpoint_reference(config), goldens, manifest)
     cores = mesh_device.compute_with_storage_grid_size()
     logger.info(f"goldens {GOLDEN_DIR} ({manifest['checkpoint']}), HF_MODEL {HF_MODEL}, cores {cores.x}x{cores.y}")
 
-    encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, HF_MODEL)
+    encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, HF_MODEL, config)
     failed = []
     for case, golden in goldens.items():
         pixels = images[case]

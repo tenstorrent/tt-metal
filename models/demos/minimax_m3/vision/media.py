@@ -15,14 +15,12 @@ import numpy as np
 import torch
 from torchvision.transforms.v2 import functional as tvF
 
+from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE
+from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, MAX_PIXELS, MAX_RATIO, MIN_PIXELS, PATCH_SIZE
 from models.demos.minimax_m3.vision import format as media_format
 
-PATCH_SIZE = 14
-MERGE_SIZE = 2
-FACTOR = PATCH_SIZE * MERGE_SIZE
-MIN_PIXELS = 4 * FACTOR * FACTOR
-MAX_PIXELS = 576 * FACTOR * FACTOR
-MAX_RATIO = 200
+# The resize's geometry is the vision encoder's (tt/vision/preprocess.py and image_input.py, which need no ttnn
+# either), so prepare gives only images that the encoder's check_pixels takes.
 IMAGE_START = 200029  # "]<]start of image[>[" in the MiniMax-M3 tokenizer
 IMAGE_END = 200030  # "]<]end of image[>["
 

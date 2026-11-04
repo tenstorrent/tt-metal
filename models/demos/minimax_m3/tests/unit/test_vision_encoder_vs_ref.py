@@ -33,7 +33,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.minimax_m3.tt.vision.preprocess import BLOCK, PATCH_SIZE, patch_rows
+from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, PATCH_SIZE, patch_rows
 from models.demos.minimax_m3.vision import format as media_format
 from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
@@ -87,7 +87,7 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
     reference = vision_reference(NUM_LAYERS)
     pixels = _noise_pixels(height, width)
     ref = _reference_tokens(reference, pixels)
-    n_tokens = (height // BLOCK) * (width // BLOCK)
+    n_tokens = (height // FACTOR) * (width // FACTOR)
     assert ref.shape == (n_tokens, HIDDEN)
 
     encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.hf_state_dict(), reference.config)
@@ -121,7 +121,7 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     assert cache_entries > 0, "the program cache holds no programs after the warm-up"
 
     images = [_noise_pixels(112, 448), _noise_pixels(448, 112)]
-    sizes = [media_format.stored_nbytes((p.shape[0] // BLOCK) * (p.shape[1] // BLOCK), HIDDEN) for p in images]
+    sizes = [media_format.stored_nbytes((p.shape[0] // FACTOR) * (p.shape[1] // FACTOR), HIDDEN) for p in images]
     buffer = np.full(GUARD_BYTES + sum(size + GUARD_BYTES for size in sizes), GUARD, dtype=np.uint8)
     guard = buffer.copy()
     starts = np.cumsum([GUARD_BYTES] + [size + GUARD_BYTES for size in sizes])[:-1]

@@ -1,27 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU checks of the vision encoder's image code (tt/vision/preprocess.py) against the Hugging Face MiniMax-M3 image
-processor, and of its input rules.
+"""CPU checks of the vision encoder's input against the Hugging Face MiniMax-M3 image processor: the media module's
+prepare (vision/media.py), which resizes an image, and patch_rows (tt/vision/preprocess.py), which turns the resized
+image into the encoder's patch rows; and of check_pixels' rules.
 
 Each step must give what the processor gives, bit for bit:
-  - resize_image: the processor's resized image, which is uint8 (captured where the processor rescales and
-    normalizes it), and its grid;
-  - patch_rows of that resized image: the processor's pixel_values and image_grid_thw;
-  - preprocess, both steps: the same, from the image;
-  - resized_size: the processor's resize rule (smart_resize) for 1024 sizes, rejecting the same ones.
+  - prepare: the processor's resized image, which is uint8 (captured where the processor rescales and normalizes it),
+    and its grid;
+  - patch_rows, of that resized image and of prepare's: the processor's pixel_values and image_grid_thw;
+  - smart_resize, prepare's resize rule: the processor's for 1024 sizes and for the most stretched images, rejecting
+    the same ones.
 The images are seeded noise, the hardest input for the resize, at sizes that take each branch of the resize rule
 (under the 56 x 56 minimum area, exactly 672 x 672, over the 672 x 672 maximum, tall, wide, a 25 x 4000 strip, the
-most stretched result) and in RGB, RGBA, grayscale and palette modes, plus the cat photo of models/sample_data and
-numpy arrays of RGB and RGBA values.
+most stretched result) and in RGB, RGBA, grayscale and palette modes, plus the cat photo of models/sample_data. The
+processor takes the PIL image, which it converts to RGB, and prepare the uint8 RGB array of it that an encoder service
+passes, converted the same way (PIL's convert).
 
 Two processors: the one in transformers (MiniMaxM3VLImageProcessor; tt-metal pins transformers 5.12.1), and, only
 when HF_MODEL is a checkpoint with a preprocessor_config.json, the checkpoint's own, loaded with trust_remote_code.
 Without HF_MODEL the "checkpoint" cases are not generated, so CI shows no skipped test.
 
 The other tests check check_pixels' rules (every size the resize gives passes, the bounds are reached, and the sizes
-outside them fail), the errors of resize_image and patch_rows, a read-only input, that resize_image never returns a
-view of its input, and that the module imports with ttnn blocked, as an encoder service's main process needs.
+outside them fail), that prepare never returns a view of its input, patch_rows on a read-only input, and that
+tt/vision/preprocess.py and image_input.py, which the media module imports, import with ttnn blocked.
 
 No device and no weights. These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes
 "test_vision_").
@@ -46,16 +48,14 @@ from PIL import Image
 
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, num_tokens
 from models.demos.minimax_m3.tt.vision.preprocess import (
-    BLOCK,
+    FACTOR,
     MAX_RESIZED_ASPECT_RATIO,
     MAX_TOKENS,
     PATCH_SIZE,
     check_pixels,
     patch_rows,
-    preprocess,
-    resize_image,
-    resized_size,
 )
+from models.demos.minimax_m3.vision.media import MiniMaxM3Media, smart_resize
 
 REPO = Path(__file__).resolve().parents[5]
 # (height, width, PIL mode) of each noise image.
@@ -75,6 +75,10 @@ PHOTOS = {"cat": "models/sample_data/huggingface_cat_image.jpg"}  # 640x480 RGB 
 # Image sides for the resize rule: around the patch and resize-factor multiples, the limits and large photos.
 SIDES = [1, 2, 13, 14, 27, 28, 29, 41, 42, 43, 55, 56, 57, 84, 100, 224, 333, 448, 480, 500, 640, 671, 672, 673, 700]
 SIDES += [896, 1000, 1080, 1344, 1920, 2016, 4000]
+# prepare reads none of the config's values.
+MEDIA = MiniMaxM3Media(
+    {"image_token_index": 0, "text_config": {"hidden_size": 1}, "vision_config": {"patch_size": PATCH_SIZE}}
+)
 
 
 def _processor_kinds():
@@ -135,28 +139,27 @@ def _check_equal(name: str, ours: torch.Tensor, hf: torch.Tensor):
     assert torch.equal(ours, hf), f"{name}: not bit-identical to HF, max abs diff {(ours - hf).abs().max().item():.3e}"
 
 
-def _check_steps(image, processor, monkeypatch):
-    """resize_image, patch_rows on the processor's resized image, and preprocess, each equal to the processor."""
+def _check_steps(image: Image.Image, processor, monkeypatch):
+    """prepare's resized image and grid, patch_rows of the processor's resized image, and patch_rows of prepare's,
+    each equal to the processor."""
     pixel_values, grid_thw, hf_resized = _run_processor(processor, image, monkeypatch)
-    resized = resize_image(image)
-    assert resized.pixels.dtype == np.uint8 and resized.pixels.flags.c_contiguous
-    assert [[1, 2 * resized.grid_h, 2 * resized.grid_w]] == grid_thw.tolist()
+    item = MEDIA.prepare("image", np.array(image.convert("RGB")))
+    assert item.pixels.dtype == np.uint8 and item.pixels.flags.c_contiguous
+    assert [[1, 2 * item.grid_h, 2 * item.grid_w]] == grid_thw.tolist()
     if hf_resized is not None:
-        _check_equal("resized image", torch.from_numpy(resized.pixels), hf_resized)
+        _check_equal("resized image", torch.from_numpy(item.pixels), hf_resized)
         rows, rows_grid = patch_rows(hf_resized.numpy())
         _check_equal("pixel_values from HF's resized image", rows, pixel_values)
         _check_equal("grid_thw from HF's resized image", rows_grid, grid_thw)
-    rows, rows_grid = preprocess(image)
+    rows, rows_grid = patch_rows(item.pixels)
     _check_equal("pixel_values", rows, pixel_values)
     _check_equal("grid_thw", rows_grid, grid_thw)
-    return pixel_values
 
 
 @pytest.mark.parametrize("image_id", list(IMAGES) + list(PHOTOS))
 def test_vision_preprocess_vs_hf(hf_processor, image_id, monkeypatch):
-    """Each step equals the processor bit for bit: resize_image its resized uint8 image, patch_rows of that image and
-    preprocess its pixel_values and image_grid_thw; resized_size and num_tokens give its grid and token count from the
-    image size alone."""
+    """Each step equals the processor bit for bit: prepare its resized uint8 image, patch_rows its pixel_values and
+    image_grid_thw; smart_resize and num_tokens give its grid and token count from the image size alone."""
     if image_id in IMAGES:
         height, width, mode = IMAGES[image_id]
         image = _noise_image(height, width, mode)
@@ -164,61 +167,49 @@ def test_vision_preprocess_vs_hf(hf_processor, image_id, monkeypatch):
         image = _photo(image_id)
         width, height = image.size
     _check_steps(image, hf_processor, monkeypatch)
-    grid = [[1, *(side // PATCH_SIZE for side in resized_size(height, width))]]
+    grid = [[1, *(side // PATCH_SIZE for side in smart_resize(height, width))]]
     assert num_tokens(grid) == hf_processor.get_number_of_image_patches(height, width) // MERGE_SIZE**2
 
 
-def test_vision_preprocess_array_vs_hf(hf_processor, monkeypatch):
-    """A uint8 RGB array (height, width, 3) gives what the processor gives for it and for the same PIL image; an RGBA
-    array (height, width, 4) gives what the processor gives for the PIL RGBA image, whose alpha channel it drops."""
-    photo = np.array(_photo("cat"))
-    assert photo.shape == (480, 640, 3)
-    from_array = _check_steps(photo, hf_processor, monkeypatch)
-    _check_equal("pixel_values of the array against the PIL image", from_array, preprocess(Image.fromarray(photo))[0])
-    rgba = np.concatenate([photo, np.full((480, 640, 1), 7, dtype=np.uint8)], axis=2)  # nearly transparent
-    rows, _ = preprocess(rgba)
-    hf_rows = _run_processor(hf_processor, Image.fromarray(rgba), monkeypatch)[0]
-    _check_equal("pixel_values of an RGBA array", rows, hf_rows)
-    _check_equal("pixel_values of an RGBA array against its RGB values", rows, from_array)
-
-
-def test_vision_resized_size_vs_hf(hf_processor):
-    """resized_size follows the processor's resize rule for 1024 sizes and rejects the same ones (aspect ratio over
-    200); every size it gives passes check_pixels, at most 576 tokens. The rejections are checked without
+def test_vision_smart_resize_vs_hf(hf_processor):
+    """smart_resize, prepare's resize rule, gives the processor's size for 1024 sizes and rejects the same ones (aspect
+    ratio over 200); every size it gives passes check_pixels, at most 576 tokens. The rejections are checked without
     expect_error, which would log two lines for each of about a hundred sizes."""
-    smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
+    hf_smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
     factor, max_pixels = hf_processor.patch_size * hf_processor.merge_size, hf_processor.max_pixels
     for height in SIDES:
         for width in SIDES:
             try:
-                expected = smart_resize(height, width, factor=factor, max_pixels=max_pixels)
+                expected = hf_smart_resize(height, width, factor=factor, max_pixels=max_pixels)
             except ValueError:
                 expected = None
             try:
-                ours = resized_size(height, width)
+                got = smart_resize(height, width)
             except ValueError as error:
-                ours = str(error)
+                got = str(error)
             if expected is None:
-                assert "aspect ratio must be at most 200" in str(ours), (height, width, ours)
+                assert "aspect ratio" in str(got), (height, width, got)
                 continue
-            assert ours == expected, (height, width)
+            assert got == expected, (height, width)
             grid_h, grid_w = check_pixels(np.zeros((*expected, 3), dtype=np.uint8))
-            assert (grid_h * BLOCK, grid_w * BLOCK) == expected and grid_h * grid_w <= MAX_TOKENS, (height, width)
+            assert (grid_h * FACTOR, grid_w * FACTOR) == expected and grid_h * grid_w <= MAX_TOKENS, (height, width)
 
 
 def test_vision_resized_aspect_ratio_bound(hf_processor):
-    """MAX_RESIZED_ASPECT_RATIO is the most the processor's resize stretches an image: over every image with an aspect
-    ratio of 190 to 200 and a short side of up to 60 pixels, where the rounding stretches most (its module docstring
-    has the bound), the most stretched resized image is 339 tokens long and 1 token wide, as for 9600x48 pixels."""
-    smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
+    """MAX_RESIZED_ASPECT_RATIO is the most the resize stretches an image: over every image with an aspect ratio of
+    190 to 200 and a short side of up to 60 pixels, where the rounding stretches most (preprocess.py has the bound),
+    smart_resize gives the processor's size, and the most stretched resized image is 339 tokens long and 1 token wide,
+    as for 9600x48 pixels."""
+    hf_smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
     ratios = []
     for short in range(1, 61):
         for long in range(190 * short, 200 * short + 1):
-            height, width = smart_resize(short, long)
+            height, width = hf_smart_resize(short, long)
+            assert smart_resize(short, long) == (height, width), (short, long)
+            assert hf_smart_resize(long, short) == (width, height)
             ratios.append(width / height)
-            assert smart_resize(long, short) == (width, height)
     assert max(ratios) == MAX_RESIZED_ASPECT_RATIO
-    assert smart_resize(48, 9600) == (BLOCK, MAX_RESIZED_ASPECT_RATIO * BLOCK)
+    assert smart_resize(48, 9600) == (FACTOR, MAX_RESIZED_ASPECT_RATIO * FACTOR)
 
 
 # id: (height, width) of resized images at the bounds of check_pixels, which must pass.
@@ -234,7 +225,7 @@ GOOD_PIXELS = {
 def test_vision_check_pixels_bounds(case):
     """check_pixels takes the resized images at its bounds and gives their token grid."""
     height, width = GOOD_PIXELS[case]
-    assert check_pixels(np.zeros((height, width, 3), dtype=np.uint8)) == (height // BLOCK, width // BLOCK)
+    assert check_pixels(np.zeros((height, width, 3), dtype=np.uint8)) == (height // FACTOR, width // FACTOR)
 
 
 # id: (pixels, error, message). Every case is the resize of nothing: no image resizes to it.
@@ -268,35 +259,19 @@ def test_vision_check_pixels_rejects(case, expect_error):
             check(pixels)
 
 
-# id: (image, error, message)
-BAD_IMAGES = {
-    "torch": (torch.zeros(3, 56, 56, dtype=torch.uint8), TypeError, "PIL image or a uint8 numpy array"),
-    "float_array": (np.zeros((56, 56, 3), dtype=np.float32), TypeError, "must be uint8"),
-    "gray_array": (np.zeros((56, 56), dtype=np.uint8), ValueError, "RGB or RGBA"),
-    "two_channels": (np.zeros((56, 56, 2), dtype=np.uint8), ValueError, "RGB or RGBA"),
-    "empty_array": (np.zeros((0, 56, 3), dtype=np.uint8), ValueError, "must be positive"),
-    "aspect_ratio": (np.zeros((10, 2010, 3), dtype=np.uint8), ValueError, "aspect ratio must be at most 200"),
-}
+def test_vision_prepare_returns_new_memory():
+    """prepare never returns a view of the caller's array, even for an image already at its resized size, so a
+    service may reuse the array's buffer once prepare returns."""
+    rgb = np.random.default_rng(0).integers(0, 256, (672, 672, 3), dtype=np.uint8)
+    item = MEDIA.prepare("image", rgb)
+    assert np.array_equal(item.pixels, rgb) and not np.shares_memory(item.pixels, rgb)
+    assert (item.grid_h, item.grid_w) == (24, 24)
 
 
-@pytest.mark.parametrize("case", BAD_IMAGES)
-def test_vision_resize_image_rejects(case, expect_error):
-    """resize_image and preprocess raise TypeError for an input that is not a PIL image or a uint8 array and ValueError
-    for an array that is not RGB or RGBA, an empty image and an aspect ratio over 200."""
-    image, error, message = BAD_IMAGES[case]
-    for run in (resize_image, preprocess):
-        with expect_error(error, message):
-            run(image)
-
-
-def test_vision_resize_image_returns_new_memory():
-    """resize_image never returns a view of the caller's array, even for an image already at its resized size, and
-    patch_rows takes a read-only array, as one unpickled from shared memory may be, without a warning or a change."""
+def test_vision_patch_rows_read_only():
+    """patch_rows takes a read-only array, as one unpickled from shared memory may be, without a warning or a
+    change."""
     image = np.random.default_rng(0).integers(0, 256, (672, 672, 3), dtype=np.uint8)
-    resized = resize_image(image)
-    assert np.array_equal(resized.pixels, image) and not np.shares_memory(resized.pixels, image)
-    assert (resized.grid_h, resized.grid_w) == (24, 24)
-
     read_only = image.copy()
     read_only.setflags(write=False)
     with warnings.catch_warnings():
