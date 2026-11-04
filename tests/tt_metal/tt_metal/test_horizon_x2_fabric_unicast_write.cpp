@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <cstdlib>
 #include <vector>
 
@@ -46,6 +47,7 @@ std::shared_ptr<distributed::MeshBuffer> fabric_unicast_2dev_l1_buffer(distribut
         .page_size = FABRIC_UNICAST_2DEV_BYTES,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
     };
     return distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = FABRIC_UNICAST_2DEV_BYTES}, local_cfg, &device);
@@ -61,6 +63,13 @@ protected:
     void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0, 1}); }
 
     void SetUp() override {
+        auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+                         "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
+                            .string();
+        MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
@@ -68,6 +77,7 @@ protected:
     void TearDown() override {
         QuasarMeshDeviceSingleCardFixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        MetalContext::instance().set_default_fabric_topology();
     }
 };
 
@@ -177,4 +187,24 @@ TEST_F(FabricUnicastWrite2DevBothChipsFixture, FabricUnicastWriteReverse) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_fabric_unicast_write_with_checker(*devices_[1], *devices_[0], 1, 0);
+}
+// -----------------------------------------------------------------------
+// ttsim fixture — single device, chip 0 → chip 0 (sequential dispatch).
+// Validates kernel compilation, dispatch, and the NOC self-write path.
+// The kernel uses the #ifdef TT_METAL_TTSIM routing-table bypass, so no
+// SetFabricConfig or cross-chip AXI crossbar is needed.
+// -----------------------------------------------------------------------
+
+class FabricUnicastWriteTtsimFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0}); }
+};
+
+TEST_F(FabricUnicastWriteTtsimFixture, TtsimFabricUnicastWrite) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "set TT_METAL_SIMULATOR=/home/jhai/.cache/ttsim/v1.12.0/libttsim_qsr.so to enable";
+    }
+    // Sender on chip 0 core {0,0} → write to recv_buf on same chip/core via NOC self-write.
+    // Checker runs after sender completes (both dispatched blocking/sequentially).
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0);
 }

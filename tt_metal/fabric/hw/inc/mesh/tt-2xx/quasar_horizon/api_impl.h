@@ -19,6 +19,11 @@
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
 #include "tt_metal/fabric/hw/inc/mesh/addrgen_api.h"
+// DPRINT is not available on ROCC (dm2, -mcpu=tt-qsr64-rocc); guard by RISC type.
+#if (defined(COMPILE_FOR_TRISC) || (defined(COMPILE_FOR_DM) && COMPILE_FOR_DM < 2)) && defined(DEBUG_PRINT_ENABLED)
+#include "debug/dprint.h"
+#define HORIZON_API_HAS_DPRINT 1
+#endif
 
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::mesh::experimental {
@@ -65,16 +70,25 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     // noc_addr is a flat ATT address: REMOTE_WINDOW.compare | (selector << HORIZON_ATT_ENDPOINT_SHIFT) | offset
     const uint64_t local_offset = noc_addr & HORIZON_ATT_OFFSET_MASK;
     const uint32_t selector = static_cast<uint32_t>((noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
-    const uint32_t phys_x = selector % HORIZON_ATT_WORKER_GRID_X;  // = UMD dev_id
-    const uint32_t phys_y = selector / HORIZON_ATT_WORKER_GRID_X;  // = device-local row
+    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
+    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
 
 #ifdef TT_METAL_TTSIM
     const uint64_t remote_addr = noc_addr;  // ttsim: routing table not populated
 #else
     const auto* routing_table =
         reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_over_noc_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    // flat_addr[mesh][dev_id][device_local_x][device_local_y]; device_local_x always 0 on Horizon.
-    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][phys_x][0][phys_y] + local_offset;
+    // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
+    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
+#ifdef HORIZON_API_HAS_DPRINT
+    {
+        const uint64_t _rt_e = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y];
+        DPRINT("A: sel={} tx={} ty={}\n", selector, tile_x, tile_y);
+        DPRINT("A: RT hi={:#x} lo={:#x}\n", (uint32_t)(_rt_e >> 32), (uint32_t)_rt_e);
+        DPRINT("A: off={:#x}:{:#x}\n", (uint32_t)(local_offset >> 32), (uint32_t)local_offset);
+        DPRINT("A: remote hi={:#x} lo={:#x}\n", (uint32_t)(remote_addr >> 32), (uint32_t)remote_addr);
+    }
+#endif
 #endif
 
     // Horizon NoC communication can currently only reach the lower 1 MB of each
@@ -82,6 +96,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     ASSERT(local_offset + size <= (1u << 20));
     // Zero base means self-entry or unfilled routing table slot.
     ASSERT(remote_addr - local_offset != 0);
+#ifdef HORIZON_API_HAS_DPRINT
+    DPRINT("A: write src={:#x} sz={}\n", src_addr, size);
+#endif
     noc_async_write(src_addr, remote_addr, size);
 }
 

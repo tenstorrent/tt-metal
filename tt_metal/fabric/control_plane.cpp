@@ -685,15 +685,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Horizon x2: AXI crossbar is invisible to UMD ethernet APIs.
     // Override the ethernet-based solver's 1x1 mapping with a direct enumeration of all chips.
     // cluster.user_exposed_chip_ids() is populated from the cluster descriptor YAML, not ethernet.
-    if (this->is_fabric_over_noc()) {
-        std::map<FabricNodeId, ChipId> horizon_mapping;
-        LogicalChipId logical_idx = 0;
-        for (const auto physical_chip_id : cluster.user_exposed_chip_ids()) {
-            horizon_mapping[FabricNodeId(MeshId{0}, logical_idx)] = physical_chip_id;
-            ++logical_idx;
-        }
-        this->load_physical_chip_mapping(horizon_mapping);
-    }
+    TT_FATAL(
+        !(this->is_fabric_over_noc()),
+        "Auto-discovery does not work for Fabric over NoC-based topologies, supply an MGD file and chip mapping "
+        "instead.");
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
@@ -956,7 +951,9 @@ void ControlPlane::initialize_fabric_context() {
 void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    this->validate_mesh_connections();
+    if (!this->is_fabric_over_noc()) {
+        this->validate_mesh_connections();
+    }
 }
 
 const tt::tt_metal::PhysicalSystemDescriptor& ControlPlane::descriptor_to_map_on() const {
@@ -1673,7 +1670,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
                             is_self ? tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE
                                     : tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE |
                                           (uint64_t(selector) << tt::tt_fabric::HORIZON_REMOTE_ENDPOINT_SHIFT);
-                        info.flat_addr[0][dev_id][0][local_y] = addr;
+                        info.flat_addr[0][dev_id][phys_x][phys_y] = addr;
                     }
                 }
                 continue;
@@ -1942,15 +1939,6 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
         if (mapped_physical_chip_id == physical_chip_id) {
             return fabric_node_id;
         }
-    }
-
-    // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
-    // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    // LOCAL horizon_x2 spike (not for upstream): a partitioned simulator build's chips have no
-    // Ethernet, so auto-discovery maps none of them; give them synthetic ids too.
-    if (this->cluster_.get().is_mock_or_emulated() ||
-        this->cluster_.get().get_target_device_type() == tt::TargetDevice::Simulator) {
-        return FabricNodeId(MeshId{0}, physical_chip_id);
     }
 
     TT_FATAL(

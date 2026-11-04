@@ -188,3 +188,26 @@ TEST_F(FlatWrite2DevBothChipsFixture, FlatWrite2DevReversePosted) {
     }
     expect_flat_write_2dev_with_checker(*devices_[1], *devices_[0], 1, 0, 1, true);
 }
+// -----------------------------------------------------------------------
+// ttsim fixture — single device, chip 0 → chip 0.
+// If the ttsim device exposes access points (local NOC2AXI window), the
+// flat-address write kernel is exercised against local L1.  If not, the
+// test skips gracefully.
+// -----------------------------------------------------------------------
+
+class FlatWriteTtsimFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0}); }
+};
+
+TEST_F(FlatWriteTtsimFixture, TtsimFlatWritePosted) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "set TT_METAL_SIMULATOR=/home/jhai/.cache/ttsim/v1.12.0/libttsim_qsr.so to enable";
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    auto* dev0 = cluster.get_driver()->get_tt_device(0);
+    if (dev0->get_access_points().empty()) {
+        GTEST_SKIP() << "ttsim device has no access points; skipping flat-write test";
+    }
+    expect_flat_write_2dev_with_checker(*devices_[0], *devices_[0], 0, 0, 0, true);
+}
