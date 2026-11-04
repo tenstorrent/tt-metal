@@ -34,6 +34,7 @@ Data Movement APIs
   noc_async_write_barrier_with_trid
   noc_async_writes_flushed
   noc_async_posted_writes_flushed
+  noc_async_writes_departed
 
   get_semaphore
   noc_semaphore_set
