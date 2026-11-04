@@ -291,7 +291,7 @@ DeviceStorage DeviceStorage::combine_device_storages(
         tt::tt_metal::distributed::MeshShape(vec_coords.size()), shard_dim);
 
     DeviceStorage res(model_storage, std::move(vec_coords));
-    tt::tt_metal::update_tensor_topology(res.get_mesh_tensor(), topology);
+    res.update_tensor_topology(std::move(topology));
     return res;
 }
 
