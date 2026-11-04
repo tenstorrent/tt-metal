@@ -223,8 +223,7 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 //   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = NAMED_CT_ARG("CHANNEL_BUFFER_SIZE");
 constexpr bool fabric_tensix_extension_mux_mode = NAMED_CT_ARG("FABRIC_TENSIX_EXTENSION_MUX_MODE");
-// The far router does not stamp a packet's source channel (Tensix mux mode: everything comes from its worker channel).
-constexpr bool skip_src_ch_id_update = NAMED_CT_ARG("SKIP_SRC_CH_ID_UPDATE") != 0;
+constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC0");
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC1");
