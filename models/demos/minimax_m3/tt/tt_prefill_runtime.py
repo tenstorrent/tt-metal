@@ -105,8 +105,8 @@ class TtPrefillRuntime:
     passed into every call."""
 
     def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig, media_reader=None):
-        """media_reader: the first rank's EmbeddingReader (models/common/multimedia_store/reader.py), which image
-        embedding injection reads; None without image input."""
+        """media_reader: the first rank's EmbeddingReader (models/common/multimedia_store/reader.py), which media
+        embedding injection reads; None without multimodal input."""
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config

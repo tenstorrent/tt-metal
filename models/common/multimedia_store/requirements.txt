@@ -1,0 +1,3 @@
+# Mooncake's store client, for the prefill runner's media embedding store (mooncake_store.py). Install it into the
+# python_env the prefill runner launches from. Linux only: Mooncake publishes no other wheels.
+mooncake-transfer-engine-non-cuda==0.3.13.post1 ; sys_platform == 'linux'

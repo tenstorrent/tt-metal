@@ -38,10 +38,6 @@ huggingface-hub >= 0.30.0
 qwen-vl-utils
 av
 
-# For the MiniMax-M3 prefill runner's image embedding store (models/common/multimedia_store): Mooncake's store client.
-# Linux only: Mooncake publishes no other wheels.
-mooncake-transfer-engine-non-cuda==0.3.13.post1 ; sys_platform == 'linux'
-
 # For Tracy WASM profiler web GUI server
 websockets==16.0
 
