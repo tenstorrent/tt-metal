@@ -347,3 +347,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   user, i.e. nearly every expert active per chip). No launch gain at this shape: the program adds ~70 us somewhere
   (the x_g write + "written" count + release multicast + the down -> reduce signal, or the 120-core launch itself);
   the layer profile (`tracy_l4_b4_persist_g11d`) and step 2 (resident x: no x_g write / read) decide.
+- 2026-11-04 06:28 step 2's unit test (`unit_moe_persistent2_r2`): the eager persistent program matched the three-op
+  sequence bit-exactly, the first traced replay (fresh inputs) HUNG. tt-triage: on most chips 3-7 gate|up cores had
+  their compute waiting for weight tiles with the reader finished (reader vs writer expert-count mismatch), the down
+  cores waiting on those experts, the exchange cores in phase B. Cause: `writer_gate_up.cpp`'s resident-x branch
+  skipped the `noc_async_read_barrier` that the x-read branch placed after the routing reads, so the writer scanned
+  stale routing; eager matched only because the previous program had left the same routing in that L1 region. Fix
+  675eefb3f4c (wt_persist2). Reset #3; `chain_persist2_r3` re-tests step 2 after step 1's gate and profile.
