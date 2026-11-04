@@ -1016,6 +1016,33 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_custom_mm": "perf_custom_mm"},
     },
+    "perf_custom_mm_reuse_dest_srcb": {
+        "version": 2,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "in0_tile_r_dim",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "producer_kt",
+            "reuse_kt",
+            "reuse_nt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_custom_mm_reuse_dest_srcb": "perf_custom_mm_reuse_dest_srcb"
+        },
+    },
 }
 
 

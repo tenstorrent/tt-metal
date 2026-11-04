@@ -167,6 +167,10 @@ DB_SCHEMA = [
     Column("preserve", "bool", True, "configuration"),
     Column("rearm", "bool", True, "configuration"),
     Column("transpose", "bool", True, "configuration"),
+    Column("in0_tile_r_dim", "int64", True, "configuration"),
+    Column("producer_kt", "int64", True, "configuration"),
+    Column("reuse_kt", "int64", True, "configuration"),
+    Column("reuse_nt", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
