@@ -288,6 +288,58 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out, bo
     return program;
 }
 
+// The PrefetcherPipe tests' pipes go from core (0, 0) to core (1, 0), with a ring of kPipeRingSize bytes.
+constexpr uint32_t kPipeRingSize = 1024;
+
+CoreCoord pipe_sender() { return CoreCoord{0, 0}; }
+
+CoreRangeSet pipe_receivers() { return CoreRangeSet(CoreRange(CoreCoord{1, 0})); }
+
+m2::PrefetcherPipeSpaceConfig make_pipe_space_config() {
+    return {
+        .sender_cores = CoreRangeSet(CoreRange(pipe_sender())),
+        .receiver_domain = pipe_receivers(),
+        .ring_size = kPipeRingSize,
+        .max_receivers_per_pipe = 1,
+    };
+}
+
+// A program whose one kernel, on the sender core, binds PrefetcherPipe parameter "pipe" and sends nothing, with run
+// args that give the parameter this pipe.
+Program make_pipe_sender_program(m2::PrefetcherPipe& pipe) {
+    const m2::PrefetcherPipeParamName pipe_name{"pipe"};
+    m2::KernelSpec sender_kernel{
+        .unique_id = m2::KernelSpecName{"sender"},
+        .source = m2::KernelSpec::SourceCode{.code = "void kernel_main() {}"},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+    sender_kernel.advanced_options.prefetcher_pipe_bindings = {
+        {.pipe_parameter_names = {pipe_name}, .accessor_name = "out"}};
+    Program program{
+        .spec =
+            {.name = "pipe_sender",
+             .kernels = {sender_kernel},
+             .work_units = {{.name = "sender", .kernels = {sender_kernel.unique_id}, .target_nodes = pipe_sender()}},
+             .advanced_options =
+                 {.prefetcher_pipe_parameters =
+                      {{.unique_id = pipe_name,
+                        .receivers = pipe_receivers(),
+                        .ring_size = kPipeRingSize,
+                        .entry_size = 256}}}},
+    };
+    program.run_args.advanced_options.prefetcher_pipe_args.emplace(pipe_name, m2::PrefetcherPipeArgument{pipe});
+    return program;
+}
+
+// A one-tile output for a program that writes nothing.
+Tensor make_unused_output(tt::tt_metal::distributed::MeshDevice* device) {
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{})),
+        device);
+}
+
 // Per-core allocation needs the HYBRID allocator, which Metal reads from the environment once per process, before the
 // fixture runs. So these tests run only when the binary runs with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
 class GenericOpProgramSpecHybridAllocatorTest : public TTNNFixtureWithDevice {
@@ -895,62 +947,55 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMatmul) {
     EXPECT_TRUE(ttnn::allclose<bfloat16>(golden.cpu(), output.cpu(), 1e-1f, 1e-5f));
 }
 
-// A program binds a PrefetcherPipe parameter to one pipe for its lifetime, and the cache key does not hold the pipe, so
-// a later call that passes another pipe of the same shape is rejected, with validate_program_args on or off. A caller
-// that needs another pipe gives the parameter another name, or the program its own custom_program_hash.
+// A program binds a PrefetcherPipe parameter to the first pipe it gets, and the cache key does not hold the pipe, so a
+// later call that passes a pipe of another space is rejected, with validate_program_args on or off. A caller that needs
+// another pipe gives the parameter another name, or the program its own custom_program_hash.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferentPrefetcherPipe) {
-    const CoreCoord sender{0, 0};
-    const CoreRangeSet receivers(CoreRange(CoreCoord{1, 0}));
-    constexpr uint32_t ring_size = 1024;
-    const m2::PrefetcherPipeSpaceConfig space_config{
-        .sender_cores = CoreRangeSet(CoreRange(sender)),
-        .receiver_domain = receivers,
-        .ring_size = ring_size,
-        .max_receivers_per_pipe = 1,
-    };
     // A space must outlive its pipes, and a pipe every program bound to it: the cleanup empties the program cache
     // before the pipes go.
-    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, space_config);
-    auto pipe = space.create_pipe(sender, receivers);
-    auto other_space = m2::CreatePrefetcherPipeSpace(*this->device_, space_config);
-    auto other_pipe = other_space.create_pipe(sender, receivers);
+    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
+    auto other_space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto other_pipe = other_space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
-
-    const m2::PrefetcherPipeParamName pipe_name{"pipe"};
-    // The sender kernel binds the pipe and sends nothing.
-    m2::KernelSpec sender_kernel{
-        .unique_id = m2::KernelSpecName{"sender"},
-        .source = m2::KernelSpec::SourceCode{.code = "void kernel_main() {}"},
-        .hw_config = ttnn::create_writer_datamovement_config(),
-    };
-    sender_kernel.advanced_options.prefetcher_pipe_bindings = {
-        {.pipe_parameter_names = {pipe_name}, .accessor_name = "out"}};
-    const m2::ProgramSpec spec{
-        .name = "pipe_sender",
-        .kernels = {sender_kernel},
-        .work_units = {{.name = "sender", .kernels = {sender_kernel.unique_id}, .target_nodes = sender}},
-        .advanced_options =
-            {.prefetcher_pipe_parameters =
-                 {{.unique_id = pipe_name, .receivers = receivers, .ring_size = ring_size, .entry_size = 256}}},
-    };
-    const auto run_args_with = [&](m2::PrefetcherPipe& prefetcher_pipe) {
-        m2::ProgramRunArgs run_args;
-        run_args.advanced_options.prefetcher_pipe_args.emplace(pipe_name, m2::PrefetcherPipeArgument{prefetcher_pipe});
-        return run_args;
-    };
-    const Tensor output = ttnn::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{})),
-        this->device_);
+    const Tensor output = make_unused_output(this->device_);
 
     // Preparing the program binds it to the first pipe without running it.
-    ttnn::experimental::prepare_generic_op({output}, spec, run_args_with(pipe));
+    const auto first = make_pipe_sender_program(pipe);
+    ttnn::experimental::prepare_generic_op({output}, first.spec, first.run_args);
+    const auto other = make_pipe_sender_program(other_pipe);
     for (const bool validate : {true, false}) {
         const auto restore = set_validate_program_args(validate);
         EXPECT_THAT(
-            [&] { ttnn::experimental::generic_op({output}, spec, run_args_with(other_pipe)); },
+            [&] { ttnn::experimental::generic_op({output}, other.spec, other.run_args); },
             ThrowsMessage<std::exception>(HasSubstr("different PrefetcherPipe object")));
+    }
+}
+
+// A pipe re-carved in its space after the bound pipe is destroyed has the same addresses and geometry, so it can take
+// the bound pipe's place: a later call with it reuses the cached program, which ttnn's framework rebinds to it.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarvedInPlace) {
+    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    std::optional<m2::PrefetcherPipe> pipe = space.create_pipe(pipe_sender(), pipe_receivers());
+    const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
+    const Tensor output = make_unused_output(this->device_);
+
+    const auto first = make_pipe_sender_program(*pipe);
+    ttnn::experimental::prepare_generic_op({output}, first.spec, first.run_args);
+    const auto entries = this->device_->num_program_cache_entries();
+    const uint32_t ring_address = pipe->buffer_address();
+    const uint32_t config_address = pipe->config_address();
+    // Nothing ran, so the pipe can go before its replacement is carved.
+    pipe.reset();
+    pipe = space.create_pipe(pipe_sender(), pipe_receivers());
+    ASSERT_EQ(pipe->buffer_address(), ring_address);
+    ASSERT_EQ(pipe->config_address(), config_address);
+
+    const auto replacement = make_pipe_sender_program(*pipe);
+    for (const bool validate : {true, false}) {
+        const auto restore = set_validate_program_args(validate);
+        ttnn::experimental::prepare_generic_op({output}, replacement.spec, replacement.run_args);
+        EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
     }
 }
 

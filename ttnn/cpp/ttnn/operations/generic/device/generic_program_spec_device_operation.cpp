@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <variant>
@@ -613,6 +614,26 @@ GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
     return attributes;
 }
 
+// On a cache hit ttnn's framework rebinds each PrefetcherPipe of the cached programs to the pipe at the position in
+// prefetcher_pipes where it found that parameter's pipe on the cache miss. The list follows the cache key's order,
+// programs and then each spec's pipe parameters, so every call with the same key puts each pipe at the same position.
+GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
+    GenericProgramSpecOperation::operation_attributes_t attributes) {
+    attributes.prefetcher_pipes.clear();
+    for (const auto& program : attributes.programs) {
+        const auto& pipes = program.run_args->advanced_options.prefetcher_pipe_args;
+        for (const auto& parameter : program.spec->advanced_options.prefetcher_pipe_parameters) {
+            // A missing pipe fails the call's checks, which name it.
+            if (const auto pipe = pipes.find(parameter.unique_id); pipe != pipes.end()) {
+                // An empty owner: the entry points at the caller's pipe without owning it.
+                attributes.prefetcher_pipes.emplace_back(
+                    std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>(), &pipe->second.get());
+            }
+        }
+    }
+    return attributes;
+}
+
 }  // namespace
 
 Tensor generic_op(
@@ -622,7 +643,7 @@ Tensor generic_op(
     std::optional<uint64_t> custom_program_hash) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     return ttnn::device_operation::launch<GenericProgramSpecOperation>(
-        program_spec_attributes(spec, run_args, custom_program_hash, tensor_args), tensor_args);
+        with_prefetcher_pipes(program_spec_attributes(spec, run_args, custom_program_hash, tensor_args)), tensor_args);
 }
 
 void prepare_generic_op(
@@ -632,21 +653,21 @@ void prepare_generic_op(
     std::optional<uint64_t> custom_program_hash) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     ttnn::device_operation::prepare<GenericProgramSpecOperation>(
-        program_spec_attributes(spec, run_args, custom_program_hash, tensor_args), tensor_args);
+        with_prefetcher_pipes(program_spec_attributes(spec, run_args, custom_program_hash, tensor_args)), tensor_args);
 }
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const GenericProgramSpecOperation::operation_attributes_t& operation_attributes) {
     return ttnn::device_operation::launch<GenericProgramSpecOperation>(
-        operation_attributes, make_program_spec_tensor_args(io_tensors));
+        with_prefetcher_pipes(operation_attributes), make_program_spec_tensor_args(io_tensors));
 }
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const GenericProgramSpecOperation::operation_attributes_t& operation_attributes) {
     ttnn::device_operation::prepare<GenericProgramSpecOperation>(
-        operation_attributes, make_program_spec_tensor_args(io_tensors));
+        with_prefetcher_pipes(operation_attributes), make_program_spec_tensor_args(io_tensors));
 }
 
 }  // namespace ttnn::prim
