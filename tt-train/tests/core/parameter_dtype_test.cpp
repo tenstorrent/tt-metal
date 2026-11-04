@@ -156,7 +156,7 @@ TEST_F(ParameterDtypeTest, ReadsReduceDtypeFromTheTrainingConfig) {
     EXPECT_EQ(read("precision: {reduce_dtype: ~}"), std::nullopt);
 }
 
-// apply_precision_config sets the context's gradient sync default when the config names one and leaves it otherwise,
+// apply_precision_config stores the context's gradient sync default from every config it applies, an unset one too,
 // and closing the device clears it.
 TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     const auto apply = [](const char* training_config) {
@@ -165,14 +165,16 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     (void)apply("precision: {reduce_dtype: float32}");
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
 
-    // A config without the key, or with it null, keeps the default, also one set by hand.
+    // A config without the key, or with it null, stores none: nothing carries over from the config before, nor from a
+    // default set by hand.
     (void)apply("precision: {master_dtype: bfloat16}");
-    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
-    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::FLOAT32);
     (void)apply("precision: {reduce_dtype: ~}");
-    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
 
     // A wrong name changes nothing.
+    (void)apply("precision: {reduce_dtype: bfloat16}");
     EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float32, master_dtype: float16}"));
     EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float16}"));
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);

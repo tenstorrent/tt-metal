@@ -93,9 +93,8 @@ std::optional<ttnn::DataType> apply_precision_config(
     if (master_dtype) {
         store_trainable_parameters_as(parameters, *master_dtype);
     }
-    if (reduce_dtype) {
-        autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
-    }
+    // Stored every time, an unset one too: the default describes this config, not one applied earlier in the process.
+    autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
     return master_dtype;
 }
 
