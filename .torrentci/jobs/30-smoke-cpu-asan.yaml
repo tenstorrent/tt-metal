@@ -20,6 +20,7 @@
 # No triggers: run it by hand. asan-build is an implicit dependency.
 jobs:
   - id: smoke-cpu-asan
+    checkout: false
     description: "Run the PR Gate runtime validation smoke cpu-only test (CPU_* cases, mock cluster) on the ASan packages"
     timeout: 1h
     runs-on:

@@ -7,6 +7,7 @@
 # torrentci#2153 S3e-2 and torrentci#2180. Run it by hand.
 jobs:
   - id: card-smi-n150
+    checkout: false
     description: "S6 canary: tt-smi -s on one n150 (VM path, vfio-vm)"
     timeout: 20m
     runs-on:
