@@ -3,13 +3,14 @@
 
 """Demo: DFlash speculative-decoding generation via ``DFlashFusedDecoder``
 (tt/dflash_drafter.py) -- the same B=1 fused-trace loop that backs
-``Gemma4DFlashForCausalLM`` in vLLM serving (tt/generator_vllm.py).
+``Gemma4DFlashContractForCausalLM`` in vLLM serving (tt/generator_vllm.py).
 
-Replicates ``Gemma4DFlashForCausalLM``'s exact prefill_forward /
-_spec_get_drafter / _spec_bootstrap / decode_forward sequencing directly
-against a real ``Gemma4Generator`` target model, so it can be run and watched
-without standing up vLLM. Prints the generated text plus a few headline
-numbers (tok/s, mean accepted-drafts/iteration).
+Replicates the serving sequence (``Gemma4DFlashContractForCausalLM.prefill_forward``
+tap capture, ``Gemma4DFlashBase._spec_get_drafter`` / ``_spec_bootstrap``, then
+fused steps back to back) directly against a real ``Gemma4Generator`` target
+model, so it can be run and watched without standing up vLLM. Prints the
+generated text plus a few headline numbers (tok/s, mean
+accepted-drafts/iteration).
 
 Requires HF_MODEL (target, e.g. google/gemma-4-31B-it) and the z-lab dFlash
 drafter snapshot in the HF cache (auto-discovered) or GEMMA4_DFLASH_DRAFTER.
@@ -67,7 +68,7 @@ def _dflash_default_snapshot():
 
 
 def _unwrap_kv_layers(kv_cache):
-    """Same defensive unwrap as Gemma4DFlashForCausalLM._spec_bootstrap."""
+    """Same defensive unwrap as Gemma4DFlashBase._spec_bootstrap."""
     kv_layers = kv_cache
     if (
         isinstance(kv_layers, (list, tuple))
@@ -181,7 +182,7 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     logger.info(f"prompt tokens: {n}  |  max_new: {max_new}  |  model: {model_path}")
     logger.info("=" * 70)
 
-    # Real prefill with dFlash tap capture (Gemma4DFlashForCausalLM.prefill_forward):
+    # Real prefill with dFlash tap capture (Gemma4DFlashContractForCausalLM.prefill_forward):
     # enable_trace=False is required -- the residual taps are captured by a
     # python hook in the eager forward, which a traced replay skips.
     model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
@@ -198,7 +199,7 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
         taps = model0.pop_dflash_taps()
         model0.dflash_capture_taps(None)
 
-    # Fused decoder bootstrap (Gemma4DFlashForCausalLM._spec_bootstrap): one-time
+    # Fused decoder bootstrap (Gemma4DFlashBase._spec_bootstrap): one-time
     # drafter ctx ingest + fused-trace compile/capture.
     kv_layers = _unwrap_kv_layers(tt_kv_cache)
     dec = DFlashFusedDecoder(model0, drafter, kv_layers, page_table[:1])
@@ -207,9 +208,9 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     dec.capture(anchor_token, n, max_new=max_new)
     logger.info(f"trace capture (one-time compile): {time.perf_counter() - t_cap0:.1f}s")
 
-    # Steady-state decode loop (Gemma4DFlashForCausalLM.decode_forward's
-    # internal block loop): call .step() back to back until max_new tokens
-    # have been committed.
+    # Steady-state decode loop (the fused replay the contract class runs once
+    # per proposal): call .step() back to back until max_new tokens have been
+    # committed.
     eos = getattr(model0.hf_config, "eos_token_id", 1)
     eos_set = set(eos) if isinstance(eos, (list, tuple)) else {int(eos)}
     vocab = drafter.vocab
