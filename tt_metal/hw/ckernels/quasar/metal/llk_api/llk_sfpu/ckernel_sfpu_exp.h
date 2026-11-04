@@ -321,14 +321,10 @@ template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
 /** @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE. */
-template <
-    bool APPROXIMATION_MODE,
-    bool EN_32BIT_DEST,
-    sfpi::DataLayout LAYOUT = dest_float_layout<EN_32BIT_DEST>,
-    int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
 using ExpDest = DestUnary<ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>, LAYOUT, ITERATIONS>;
 
-/** @brief EXP over a Dest span; macro-path entry, same code as @ref ExpDest. */
+/** @brief EXP over a Dest span; macro-path entry, HW-implied layout. */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
@@ -341,7 +337,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, dest_float_layout<EN_32BIT_DEST>, ITERATIONS>::calculate();
+    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, sfpi::DataLayout::Default, ITERATIONS>::calculate();
 }
 
 template <

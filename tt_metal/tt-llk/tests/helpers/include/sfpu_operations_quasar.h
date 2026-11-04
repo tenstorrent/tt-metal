@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -158,6 +159,35 @@ using namespace ckernel::sfpu;
 template <auto>
 inline constexpr bool unhandled_op = false;
 
+template <sfpi::DataLayout L>
+using layout_c = std::integral_constant<sfpi::DataLayout, L>;
+
+// Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest. A 32-bit Dest is F32 whatever
+// the family; a 16-bit Dest follows the family (F16a / F16b). Other families (MX) have no explicit layout: HW-implied.
+template <bool EN_32BIT_DEST, typename Fn>
+inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
+{
+    if constexpr (EN_32BIT_DEST)
+    {
+        fn(layout_c<sfpi::DataLayout::F32> {});
+    }
+    else
+    {
+        switch (family)
+        {
+            case DataFormat::Float16:
+                fn(layout_c<sfpi::DataLayout::F16a> {});
+                break;
+            case DataFormat::Float16_b:
+                fn(layout_c<sfpi::DataLayout::F16b> {});
+                break;
+            default:
+                fn(layout_c<sfpi::DataLayout::Default> {});
+                break;
+        }
+    }
+}
+
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
 inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
@@ -269,7 +299,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        ckernel::sfpu::SquareDest<>::init_op();
+        init_square();
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -765,7 +795,7 @@ void call_unary_sfpu_operation_quasar(
     {
         ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
         // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
-        ckernel::sfpu::dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
             sfpu_format,
             [&](auto l)
             { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
@@ -836,7 +866,7 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::square)
     {
         ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
-        ckernel::sfpu::dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
             sfpu_format, [&](auto l) { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
     }
     else if constexpr (is_trig_op(OPERATION))
@@ -1720,7 +1750,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         else
         {
             ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
-            ckernel::sfpu::dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
                 math_format,
                 [&](auto l)
                 {
