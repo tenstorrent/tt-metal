@@ -27,13 +27,15 @@ def _height_sharded(device, num_cores, shard_shape):
         (1, 4, 24, 128),  # 24-wide: not a face width
         (1, 4, 32, 64),  # tile-aligned output rows
         (1, 4, 40, 64),  # one full tile plus 8
+        (1, 4, 16, 160),  # 5 tiles wide
+        (1, 4, 32, 224),  # 7 tiles wide (the ResNet fold width)
     ],
-    ids=["h8", "h16", "h24", "h32", "h40"],
+    ids=["h8", "h16", "h24", "h32", "h40", "w160", "w224"],
 )
 @pytest.mark.parametrize("transpose", [ttnn.transpose, ttnn.experimental.quasar.transpose], ids=["main", "quasar"])
 def test_quasar_transpose_wh_sharded_rm(device, transpose, n, c, h, w):
     # Shards hold a whole number of tiles' worth of elements, so the op takes the sharded factory rather than the
-    # interleaved fallback. W stays at 4 tiles or fewer: wider blocks hang on Quasar in the shared compute kernel.
+    # interleaved fallback.
     is_quasar = device.arch() == ttnn.device.Arch.QUASAR
     if not is_quasar and h > 16 and h % 32 != 0:
         # WH/BH narrow-row pack: rows wider than 16 datums are written wrong (#59752), and with Ht > 1 rows are
