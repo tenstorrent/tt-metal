@@ -327,6 +327,40 @@ _SHORT_SLAB_REDUCE_SCATTER_TRANSPORT = dict(num_workers_per_link=4, chunks_per_s
 _MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
 
 
+# The fused matmul + reduce-scatter beats ttnn.linear + ccl_reduce_scatter_rows only for a weight of K <= 2048 (the
+# sliding o_proj) at >= 1024 rows per device: chunk 8192 at CP8, or four 2048-token requests in one step. Elsewhere its
+# planner loses (it splits short M over few cores and streams K >= 4096), so the other projections keep the unfused path.
+FUSED_MATMUL_REDUCE_SCATTER_MAX_K = 2048
+FUSED_MATMUL_REDUCE_SCATTER_MIN_ROWS = 1024
+# L1 the fused op's plan leaves free for Gemma4's resident L1 tensors; its default (64 KiB) clashes at chunk 2048.
+_FUSED_MATMUL_REDUCE_SCATTER_L1_HEADROOM = 128 * 1024
+
+
+def fused_matmul_reduce_scatter_enabled() -> bool:
+    """On by default; GEMMA4_FUSED_MM_RS=0 keeps every projection on ttnn.linear + ccl_reduce_scatter_rows."""
+    return os.environ.get("GEMMA4_FUSED_MM_RS", "1").lower() not in ("0", "false", "no")
+
+
+def matmul_reduce_scatter_rows(hidden_states, weight, mesh_config, ccl_manager, math_fidelity):
+    """hidden_states @ weight summed across TP, keeping this device's 1/TP of the rows, in one fused op.
+
+    The result matches ttnn.linear + ccl_reduce_scatter_rows: bf16, in L1 up to _MAX_L1_REDUCE_SCATTER_OUT_ROWS rows
+    per device and DRAM above. weight is 2D (K, N). The op always accumulates in fp32.
+    """
+    out_rows = hidden_states.padded_shape[-2] // mesh_config.tp_degree
+    return ttnn.experimental.matmul_reduce_scatter_prefill(
+        hidden_states,
+        weight,
+        cluster_axis=mesh_config.tp_axis,
+        scatter_dim=-2,
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
+        compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity),
+        memory_config=ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_OUT_ROWS else ttnn.DRAM_MEMORY_CONFIG,
+        l1_headroom=_FUSED_MATMUL_REDUCE_SCATTER_L1_HEADROOM,
+    )
+
+
 def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
     """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
 

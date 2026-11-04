@@ -5,7 +5,13 @@
 
 import ttnn
 
-from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
+from models.demos.gemma4_d_p.tt.ccl import (
+    FUSED_MATMUL_REDUCE_SCATTER_MAX_K,
+    FUSED_MATMUL_REDUCE_SCATTER_MIN_ROWS,
+    ccl_reduce_scatter_rows,
+    fused_matmul_reduce_scatter_enabled,
+    matmul_reduce_scatter_rows,
+)
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes
 
 from .weights import load_attention_weights
@@ -17,6 +23,7 @@ from .operations import (
     apply_output_projection,
     apply_qkv_projection,
     prefill_short_lived_memcfg,
+    projection_math_fidelity,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
@@ -93,6 +100,15 @@ class Gemma4Attention:
             state_dict=state_dict,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
+        )
+        # A (K, N) view of o_proj for the fused matmul + reduce-scatter, on the layers whose K it is faster for (sliding).
+        o_k, o_n = self.weights.o_proj.shape[-2], self.weights.o_proj.shape[-1]
+        self.fused_o_proj = (
+            ttnn.reshape(self.weights.o_proj, (o_k, o_n))
+            if mesh_config.tp_degree > 1
+            and o_k <= FUSED_MATMUL_REDUCE_SCATTER_MAX_K
+            and fused_matmul_reduce_scatter_enabled()
+            else None
         )
 
         self.ring_kv_cache = ring_kv_cache
@@ -230,8 +246,16 @@ class Gemma4Attention:
             metadata = lanes[0] if lanes is not None else prefill_metadata
             tt_sdpa = self._cache_and_attention(tt_q, tt_k, tt_v, metadata, chunk_offset, packed_global_rope)
 
-        # Concat heads + apply out proj + all_reduce
+        # Concat heads, then out proj + TP reduce-scatter (fused in one op where that is faster)
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rows = tt_out.shape[-2]
+        if self.fused_o_proj is not None and rows >= FUSED_MATMUL_REDUCE_SCATTER_MIN_ROWS:
+            fidelity = projection_math_fidelity(fidelity_rows or rows)
+            projected = matmul_reduce_scatter_rows(
+                tt_out, self.fused_o_proj, self.mesh_config, self.ccl_manager, fidelity
+            )
+            tt_out.deallocate(True)
+            return projected
         projected = apply_output_projection(tt_out, self.weights, fidelity_rows=fidelity_rows)
         tt_out.deallocate(True)
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
