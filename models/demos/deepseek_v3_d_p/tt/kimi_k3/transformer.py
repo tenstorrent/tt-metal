@@ -116,11 +116,16 @@ class TtKimiK3Transformer(LightweightModule):
         mtp_predictor=None,
         # KV dedup for the MLA layers only; must match the KVPE cache allocation.
         tp_shard_kv: Optional[bool] = None,
+        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget). Named so it never reaches
+        # TtKimiK3Block through **block_kwargs; Kimi-K3 runs one chunk per forward.
+        forward_chunks: int = 1,
         **block_kwargs,
     ):
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
+        if forward_chunks != 1:
+            raise NotImplementedError(f"Kimi-K3 has no packed forward yet; got forward_chunks={forward_chunks}")
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
         # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
         # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
@@ -451,6 +456,7 @@ class TtKimiK3Transformer(LightweightModule):
         input_is_embedded: bool = False,
         provided_levels: int = 0,
         mtp_geometry=None,
+        chunks: Optional[list] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 
@@ -471,6 +477,8 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
+        if chunks is not None:
+            raise NotImplementedError("Kimi-K3 has no packed forward yet; chunks must be None")
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:

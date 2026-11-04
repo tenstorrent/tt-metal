@@ -60,8 +60,8 @@ class MyModelAdapter(PrefillModelAdapter):
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
     supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Without
                                # it, a forward of several chunks runs prefill_chunk once per chunk.
-    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Packed
-                               # forwards do not carry them, so the runner refuses F > 1 across ranks.
+    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Unless
+                               # supports_packed_forward_indexer_indices, the runner refuses F > 1 across ranks.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -248,6 +248,14 @@ whose `prefill_forward` handles them lifts the last two: `supports_packed_forwar
 chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
 `(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
 chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
+
+A pipeline split that passes indexer indices between ranks (`passes_indexer_indices`, GLM-5.3's cross-layer reuse) is
+refused at F > 1 too, unless `supports_packed_forward_indexer_indices = True`: the runtime's
+`indexer_indices_shape()` then covers all F chunks (GLM-5.3 stacks them chunk-major along rows), `prefill_forward`
+takes the upstream rank's as `indexer_indices=`, and `outbound_indexer_indices` holds its own for every chunk, so the
+runner sends one index tensor per forward exactly as it does per chunk at F = 1. On any rank but the first,
+`prefill_forward` takes the upstream rank's packed activation (every chunk's rows back to back on each chip) and a
+non-last rank returns its own.
 
 ---
 
