@@ -1601,6 +1601,8 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     if (e.NCH > 1 && e.shards > 1) {
         nd.emplace_back("SE_GROW_OWN_CR", iv(e.CR / e.shards));
         nd.emplace_back("SE_GROW_OWN_RT", iv(e.rows / 32 / e.shards));
+    } else {
+        nd.emplace_back("SE_CR", iv(e.CR));  // (GROW's chunk-major form: row tiles a chunk)
     }
     if (e.WRING) {
         nd.emplace_back("SE_WRING", iv(e.WRING));

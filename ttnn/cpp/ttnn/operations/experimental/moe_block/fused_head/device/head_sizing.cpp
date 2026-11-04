@@ -1142,7 +1142,8 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
             seq_ends.assign(e.begin(), e.end());
         }
         if (!ovl.empty()) {
-            const int64_t room = region(off, "out") - region(off, "xin");
+            // (the room from xin up to the words, the region after acc)
+            const int64_t room = region(off, "words") - region(off, "xin");
             const int64_t hold = region(ovl, "hold"), finb = region(ovl, "finb");
             if (al64(hold) + finb <= room) {
                 set_region(off, "hold", region(off, "xin"));

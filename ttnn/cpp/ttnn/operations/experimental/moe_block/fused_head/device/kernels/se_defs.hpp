@@ -7,12 +7,12 @@
 
 // GROW(m, lr): the global row tile of chunk m's chunk-local row tile lr. With row chunks over TP shards (NCH > 1 and
 // shards > 1) chunk m is block m of every owner, so the owners' rows stay contiguous: the host defines
-// SE_GROW_OWN_CR = CR / shards and SE_GROW_OWN_RT = rows / 32 / shards; else chunk-major (CR is the kernel's own
-// constant at the expansion site).
+// SE_GROW_OWN_CR = CR / shards and SE_GROW_OWN_RT = rows / 32 / shards; else chunk-major (SE_CR = CR, row tiles a
+// chunk).
 #ifdef SE_GROW_OWN_CR
 #define GROW(m, lr) (((lr) / SE_GROW_OWN_CR) * SE_GROW_OWN_RT + (m) * SE_GROW_OWN_CR + (lr) % SE_GROW_OWN_CR)
 #else
-#define GROW(m, lr) ((m) * CR + (lr))
+#define GROW(m, lr) ((m) * SE_CR + (lr))
 #endif
 
 // SE_EW: the router-phase words (a persistent L1 tensor a core). The BRISC / NCRISC read its address from the common
