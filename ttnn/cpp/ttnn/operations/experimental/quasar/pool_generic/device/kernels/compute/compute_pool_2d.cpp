@@ -72,6 +72,12 @@ void kernel_main() {
     // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
     constexpr auto fast_tilize_cb_id = dfb::fast_tilize_cb;
 #endif
+    // TILE output: pre_tilize holds two tile rows (sized by the factory). Each stick is packed as a full
+    // 32x32 untilized tile (rows s..s+31; only row 0 is the result), so the last stick of a tile row
+    // spills up to 31 rows past it. Every round pushes and pops the whole ring so it always restarts at row 0.
+    constexpr uint32_t pre_tilize_rows = 2 * TILE_HEIGHT;
+    // fast_tilize_cb views the same bytes as whole tiles: the ring is pre_tilize_rows / TILE_HEIGHT tile rows.
+    constexpr uint32_t fast_tilize_ring_tiles = (pre_tilize_rows / TILE_HEIGHT) * in_ntiles_c;
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     // QSR: match num_faces_in_input_tile_for_cb in the pool factory. The reduce-col strided tilize
@@ -141,7 +147,8 @@ void kernel_main() {
     compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, pack_target_cb_id);
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
-    pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
+    // full_ct_dim = in_ntiles_c: the pre_tilize / scratch row is the full stick width, each c-block packs its slice.
+    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(pack_target_cb_id);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -223,14 +230,16 @@ void kernel_main() {
                 // though this branch is discarded by `if constexpr` on the non-tiled build, the
                 // compiler still name-looks-up those DFB tokens, so the body must be #ifdef-gated.
 #ifdef OUTPUT_TILED
+                // Full 32x32 untilize pack of the reduced DEST at this stick's row (row 0 = the result,
+                // rows 1..31 are overwritten by the next sticks). The Quasar 1x32 tiny-tile untilize can't be
+                // used here: it reads DEST as tiny tiles (faces 8 rows apart), while the reduce leaves
+                // 32x32-layout tiles (faces 16 rows apart), so it packs the wrong DEST rows (#64327). The
+                // pre_tilize write cursor stays at the stick start until the last c-block pushes the whole stick.
+                pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(pre_tilize_cb_id, 1, c_i);
                 if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
-                    pre_tilize_cb.push_back(partial_iter_output_tiles);
+                    pre_tilize_cb.push_back(in_ntiles_c);
                     tilize_stick_counter++;
                     tilize_stick_total++;
-                } else {
-                    pack_untilize_dest<max_tiles_per_iter>(pre_tilize_cb_id, 1, 0);
-                    pre_tilize_cb.push_back(max_tiles_per_iter);
                 }
                 tile_regs_release();
 
@@ -238,14 +247,14 @@ void kernel_main() {
                 if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
                     if (last_tile && last_tile_height != TILE_HEIGHT) {
                         pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
-                        // if the last tile is not whole we won't have pushed enough sticks, so we need to
-                        // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
-                        // before calling tilize
-                        uint32_t filler_stick_tiles =
-                            (TILE_HEIGHT - last_tile_height) *
-                            ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
-                        pre_tilize_cb.push_back(filler_stick_tiles);
+                        // Nothing unpacks pre_tilize (fast_tilize unpacks its fast_tilize_cb view), so order
+                        // the pop_front below after this wait on Quasar (TEN-4746), as in release_out_pages.
+                        dummy_unpack(pre_tilize_cb_id);
                     }
+                    // Push filler sticks up to the full ring (the rest of a partial last tile row, plus the
+                    // spill tile row) so the CB pointers are correct before calling tilize and the next
+                    // round restarts at row 0.
+                    pre_tilize_cb.push_back((pre_tilize_rows - tilize_stick_counter) * in_ntiles_c);
                     pack_untilize_uninit(pre_tilize_cb_id);
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
@@ -262,8 +271,8 @@ void kernel_main() {
                     // fast_tilize_cb since its reserve_back; on Quasar the push needs a packer op on this
                     // DFB after that wait (TEN-4746).
                     dummy_pack(fast_tilize_cb_id);
-                    fast_tilize_cb.push_back(in_ntiles_c);
-                    fast_tilize_cb.wait_front(in_ntiles_c);
+                    fast_tilize_cb.push_back(fast_tilize_ring_tiles);
+                    fast_tilize_cb.wait_front(fast_tilize_ring_tiles);
 
 #ifdef ARCH_QUASAR
                     // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to out_cb.
@@ -275,10 +284,10 @@ void kernel_main() {
 
                     out_cb.push_back(in_ntiles_c);
                     release_out_pages(out_cb, in_ntiles_c);
-                    fast_tilize_cb.pop_front(in_ntiles_c);
-                    fast_tilize_cb.reserve_back(in_ntiles_c);
-                    pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
-                    pre_tilize_cb.reserve_back(TILE_HEIGHT * in_ntiles_c);
+                    fast_tilize_cb.pop_front(fast_tilize_ring_tiles);
+                    fast_tilize_cb.reserve_back(fast_tilize_ring_tiles);
+                    pre_tilize_cb.pop_front(pre_tilize_rows * in_ntiles_c);
+                    pre_tilize_cb.reserve_back(pre_tilize_rows * in_ntiles_c);
 
                     tilize_stick_counter = 0;
 
@@ -288,8 +297,7 @@ void kernel_main() {
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
-                        pre_tilize_cb_id);
+                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(pre_tilize_cb_id);
                 }
 #endif  // OUTPUT_TILED
             } else {
