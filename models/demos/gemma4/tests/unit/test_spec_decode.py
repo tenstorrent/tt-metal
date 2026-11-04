@@ -3975,3 +3975,64 @@ def test_serving_record_draws_match_the_device_sampler(mesh_device, device_param
     greedy_mean = sum(accepts[1]) / len(accepts[1])
     assert greedy_mean >= float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5)), "the greedy row's acceptance floor"
     spec.serving_release()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 1), {}, id="1x1")],
+    indirect=True,
+)
+def test_sampled_verify_top1_tiebreak_matches_the_plain_sampler(mesh_device, device_params, reset_seeds):
+    """GEMMA4_SPEC_SAMPLED_VERIFY: the record's top-1 tie-break is the plain sampler's (``TTSampling``'s
+    ``_adjust_values_for_tiebreak``), op for op, on the same candidates: on the packed rows whose k == 1 the
+    single lowest-global-index candidate among the tied maxima is boosted past the tie (so ``ttnn.sampling``'s
+    argmax picks it whatever order the top-k network gave the ties), every other row's values are untouched,
+    and the two share their constants."""
+    import models.common.sampling.tt_sampling as plain_sampling
+    from models.common.sampling.tt_sampling import TTSampling
+    from models.demos.gemma4.tt import spec_sampling
+    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, _top1_mask
+
+    for name in ("TIEBREAK_DELTA_SCALE", "TIEBREAK_DELTA_FLOOR", "TIEBREAK_INDEX_SENTINEL"):
+        assert getattr(spec_sampling, name) == getattr(plain_sampling, name)
+    torch.manual_seed(0)
+    R, W = 32, 64
+    values = torch.randn(1, 1, R, W).to(torch.bfloat16)
+    values[0, 0, :16, 5] = 3.0  # rows 0-15: the maximum at three candidate columns
+    values[0, 0, :16, 20] = 3.0
+    values[0, 0, :16, 41] = 3.0
+    # distinct global ids per row; among the tied columns of rows 0-15 the lowest id sits at column 41
+    gidx = torch.stack([torch.randperm(4 * W)[:W] for _ in range(R)]).reshape(1, 1, R, W)
+    gidx[0, 0, :16, 41] = 0
+    k = [1] * 24 + [32] * 8  # rows 24-31 sample with k > 1: untouched
+    gcol = _top1_mask(k)
+
+    def dev(t, dtype, layout):
+        return ttnn.from_torch(
+            t, device=mesh_device, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+    def host(t):
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+    v, g, m = (
+        dev(values, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        dev(gidx.to(torch.int32), ttnn.uint32, ttnn.TILE_LAYOUT),
+        dev(gcol, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    )
+    record = SpecVerifySampler.__new__(SpecVerifySampler)
+    record.sub_core_grids, record.ops = None, 0
+    ours = host(record._tiebreak_top1(v, g, m))
+    plain = TTSampling.__new__(TTSampling)
+    plain.sub_core_grids, plain._greedy_col = None, m
+    theirs = host(plain._adjust_values_for_tiebreak(v, g))
+    assert torch.equal(ours, theirs), "the record's tie-break differs from the plain sampler's"
+    boosted = ours != values.float()
+    for r in range(R):
+        cols = boosted[0, 0, r].nonzero().reshape(-1).tolist()
+        if r < 16:
+            assert cols == [41], f"row {r}: boosted columns {cols}, expected the lowest-id tied maximum (41)"
+        elif r < 24:
+            assert cols == [int(values[0, 0, r].float().argmax())], f"row {r}: a lone maximum is the winner"
+        else:
+            assert cols == [], f"row {r}: a k > 1 row is untouched, got {cols}"

@@ -2223,6 +2223,28 @@ def test_a_sampled_solo_row_is_never_proposed_for(model, mtp, adapter, monkeypat
     drafts = mtp._mtp_decoder.results[-1].drafts[0].tolist()
     with expect_error(RuntimeError, "no device sampling parameters"):
         mh._verify(mtp, [mh._block(30, drafts)], [mh._positions(3, 6)], [5], [10], sampling=False)
+    # ... the draftless host-sampled verify the runner does send (it keeps the request off the drafts on such a
+    # step, contract s.4h) drops the proposal, never verified (s.4d), and answers the row from the plain decode
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+    mh._prefill(mtp, rows=1)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([30]), sampling_params=sampled1)
+    proposal = mh._propose(mtp, [[30] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and mtp._mtp_sessions[0].retained is not None
+    dropped = mtp._mtp_dropped_proposals
+    out = mh._verify(
+        mtp, [[30] + [-1] * 5], [mh._positions(3, 6)], [0], [10], result=mh.logits_result(1, 77), sampling=False
+    )
+    assert out.spec_mode == "argmax_ids" and out.argmax_ids[0][0].item() == 77
+    assert mtp._mtp_dropped_proposals == dropped + 1 and mtp._mtp_sessions[0].retained is None
+    # ... and a logits verify of the drafted sampled row answers from the target's logits (the host walk applies
+    # the request's own parameters; the draws play no part): no refusal
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})
+    mh._prefill(mtp, rows=1)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([30]), sampling_params=sampled1)
+    proposal = mh._propose(mtp, [[30] + [-1] * 5], [[3] + [-1] * 5])
+    drafts = mtp._mtp_decoder.results[-1].drafts[0].tolist()
+    out = mh._verify(mtp, [mh._block(30, drafts)], [mh._positions(3, 6)], [5], [10], mode="logits")
+    assert out.spec_mode == "logits" and tuple(out.logits.shape) == (1, 6, mh.VOCAB)
     # penalties, logprobs and a grammar bitmask still keep a row plain under the knob
     for values in ({"presence_penalty": 0.5}, {"repetition_penalty": 1.2}, {"enable_log_probs": True}):
         mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_SAMPLED_VERIFY": "1"})

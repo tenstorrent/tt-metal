@@ -7844,12 +7844,30 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             n = int(valid[r]) if r < len(valid) else 0
             if n > 0:
                 retained = self._mtp_take_retained(session, slot, r, block, position, n, width)
-                self._mtp_check_retained_sampling(retained, sampling, r, position)
+                if mode == "argmax_ids":
+                    # a logits answer is the target's logits, walked on the host under the row's own
+                    # parameters: the draws play no part in it
+                    self._mtp_check_retained_sampling(retained, sampling, r, position)
                 answered[r] = retained
                 continue
             retained = self._mtp_retained_for(session, block[0], position)
-            if retained is not None:
-                self._mtp_check_retained_sampling(retained, sampling, r, position)
+            if (
+                retained is not None
+                and mode == "argmax_ids"
+                and sampling is None
+                and retained.sampling is not None
+                and float(retained.sampling[0]) > 0.0
+            ):
+                # A host-sampled argmax_ids verify would answer a drafted sampled row's column 0 with the
+                # argmax, not a draw under its parameters. The runner keeps such a request off the drafts on a
+                # host-sampled step (contract s.4h), so the proposal is dropped, never verified (s.4d), and the
+                # plain decode below answers the row.
+                self._mtp_dropped_proposals += 1
+                session.dropped += 1
+                session.retained = None
+            elif retained is not None:
+                if mode == "argmax_ids":
+                    self._mtp_check_retained_sampling(retained, sampling, r, position)
                 retained.consumed = True
                 answered[r] = retained
             elif session is not None:

@@ -3030,11 +3030,13 @@ class SpeculativeDecoder:
         t2 = time.perf_counter()
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
-        gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        argmax = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        gids = argmax
         if plan is not None and plan.any_sampled:
-            # the sampler's draws for the sampled packed rows; greedy rows keep the argmax (bit-identical to knob off)
+            # the sampler's draws for the sampled packed rows; greedy rows keep the argmax (bit-identical to knob off).
+            # The verify check below keeps comparing the record's argmax (a draw is not the plain forward's choice).
             draws = self._srv_sampler.read(self._srv_shape_bufs[shape]["sampler"], B * P)
-            gids = select_verify_ids(plan, gids, draws)
+            gids = select_verify_ids(plan, argmax, draws)
         t3 = time.perf_counter()
         self._srv_phase_ms = {
             "replay_upload": (t1 - t0) * 1e3,
@@ -3047,7 +3049,7 @@ class SpeculativeDecoder:
             and self._srv_checked.get((shape, int(width)), 0) < self._srv_check_steps
         ):
             zero_tables = not bool(torch.as_tensor(page_tables).any())
-            self._srv_verify_check(shape, rec, rows, live, anchors, positions, gids, zero_tables=zero_tables)
+            self._srv_verify_check(shape, rec, rows, live, anchors, positions, argmax, zero_tables=zero_tables)
         self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
         return ServingStepResult(
             shape=shape,

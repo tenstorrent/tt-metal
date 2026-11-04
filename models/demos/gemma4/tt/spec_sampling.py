@@ -37,6 +37,7 @@ without the device top-k sampler (fractured meshes): ``serving_prepare``
 refuses the knob there and the adapter reports the capability False.
 """
 
+import itertools
 import os
 import secrets
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import DEVICE_SEED_MAX, _hash_request_seed_to_device_seed, format_sampling_params
 from models.common.sampling.sampling_params import SamplingParams
+from models.common.sampling.tt_sampling import TIEBREAK_DELTA_FLOOR, TIEBREAK_DELTA_SCALE, TIEBREAK_INDEX_SENTINEL
 from models.demos.gemma4.tt.ccl import ccl_allgather
 
 SPEC_SAMPLED_VERIFY_ENV = "GEMMA4_SPEC_SAMPLED_VERIFY"
@@ -264,7 +266,8 @@ class SpecVerifySampler:
         self.invalid_mask = getattr(tt_sampling, "tt_invalid_vocab_mask", None)
         self.max_top_k = min(SPEC_SAMPLED_MAX_TOP_K, int(getattr(tt_sampling, "max_top_k", SPEC_SAMPLED_MAX_TOP_K)))
         self._offsets = {}  # (width, slice) -> [1, 1, 32, width] int32 TILE: block d of 32 columns holds d * slice
-        self._uploaded = {}  # (id(S), chunk) -> params_key last uploaded
+        self._uploaded = {}  # (S's serial, chunk) -> params_key last uploaded
+        self._serial = itertools.count(1)  # one per alloc: a recycled id() never reads as the same buffers
         self.ops = 0  # device programs the last body issued (diagnostics)
 
     # -- persistent buffers ----------------------------------------------------------------------------------
@@ -276,10 +279,21 @@ class SpecVerifySampler:
         R = SPEC_SAMPLED_ROW_TILE
         chunks = serving_chunks(B, P)
         greedy = greedy_sampling_rows((B, P - 1))
-        S = {"chunks": chunks, "k": [], "p": [], "temp": [], "seeds": [], "sidx": []}
+        S = {
+            "chunks": chunks,
+            "serial": next(self._serial),
+            "k": [],
+            "p": [],
+            "temp": [],
+            "seeds": [],
+            "sidx": [],
+            "gcol": [],
+        }
         for c in range(chunks):
             k, p, temp, seeds = greedy.chunk(c)
             S["k"].append(self._from_torch(torch.tensor(k, dtype=torch.int32), ttnn.uint32))
+            # the top-1 tie-break's mask (1.0 on the rows whose k == 1), TILE so it broadcasts over the width
+            S["gcol"].append(self._from_torch(_top1_mask(k), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
             S["p"].append(self._from_torch(torch.tensor(p, dtype=torch.float32), ttnn.bfloat16))
             S["temp"].append(self._from_torch(torch.tensor(temp, dtype=torch.float32), ttnn.bfloat16))
             S["seeds"].append(self._from_torch(torch.tensor(seeds, dtype=torch.int64), ttnn.uint32))
@@ -308,7 +322,7 @@ class SpecVerifySampler:
         for S in shape_bufs:
             if S is None:
                 continue
-            for key in ("k", "p", "temp", "seeds", "sidx"):
+            for key in ("k", "p", "temp", "seeds", "sidx", "gcol"):
                 self.decoder._free_tensor_tree(S.get(key))
         for t in self._offsets.values():
             self.decoder._free_tensor_tree(t)
@@ -351,6 +365,9 @@ class SpecVerifySampler:
                 indices.deallocate(True)
             gidx = ttnn.add(self.offsets_for(width, vocab_slice), idx_i32, dtype=ttnn.uint32)  # [1, 1, 32, width]
             idx_i32.deallocate(True)
+            adjusted = self._tiebreak_top1(values, gidx, S["gcol"][c])
+            values.deallocate(True)
+            values = adjusted
             gidx_rm = ttnn.untilize(gidx, use_multicore=True)
             gidx.deallocate(True)
             ttnn.manual_seed(seeds=S["seeds"][c], user_ids=self.user_ids, sub_core_grids=self.sub_core_grids)
@@ -366,6 +383,52 @@ class SpecVerifySampler:
             values.deallocate(True)
             gidx_rm.deallocate(True)
             self.ops += 6
+
+    def _tiebreak_top1(self, values, gidx, gcol):
+        """The plain sampler's top-1 tie-break (``TTSampling._adjust_values_for_tiebreak``) on the record's
+        candidates ``values`` [1, 1, 32, W] bf16 TILE and their global indices ``gidx`` [1, 1, 32, W] uint32 TILE:
+        on the packed rows whose ``k == 1`` (``gcol`` [1, 1, 32, 1] bf16, 1.0 there) the single lowest-global-index
+        candidate among the tied maxima is boosted just past the tie, so ``ttnn.sampling``'s argmax picks it
+        whatever order the top-k network gave the ties, run to run and slot to slot; every other row's values
+        are unchanged (a boost of 0). The reduce and the index arithmetic stay in int32 (the FPU truncates
+        float32 indices above 2**11; see the plain sampler). Returns the adjusted values; ``values`` is the
+        caller's to free."""
+        scg = self.sub_core_grids
+        maxv = ttnn.max(values, dim=3, keepdim=True, sub_core_grids=scg)  # [1, 1, 32, 1] bf16
+        is_max = ttnn.eq(values, maxv, sub_core_grids=scg)
+        not_max = ttnn.lt(values, maxv, sub_core_grids=scg)
+        abs_max = ttnn.abs(maxv, sub_core_grids=scg)
+        maxv.deallocate(True)
+        delta_scaled = ttnn.multiply(abs_max, TIEBREAK_DELTA_SCALE, sub_core_grids=scg)
+        abs_max.deallocate(True)
+        delta = ttnn.add(delta_scaled, TIEBREAK_DELTA_FLOOR, sub_core_grids=scg)  # >= 2 bf16 ULP of the row max
+        delta_scaled.deallocate(True)
+        idx = ttnn.typecast(gidx, ttnn.int32, sub_core_grids=scg)
+        offset = ttnn.multiply(not_max, TIEBREAK_INDEX_SENTINEL, sub_core_grids=scg)  # exact in bf16 (2**24)
+        not_max.deallocate(True)
+        offset_i32 = ttnn.typecast(offset, ttnn.int32, sub_core_grids=scg)
+        offset.deallocate(True)
+        masked_idx = ttnn.add(idx, offset_i32, sub_core_grids=scg)  # the non-maxima above every real index
+        offset_i32.deallocate(True)
+        lowest = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1, 1, 32, 1] int32
+        masked_idx.deallocate(True)
+        is_low_i32 = ttnn.eq(idx, lowest, sub_core_grids=scg)
+        idx.deallocate(True)
+        lowest.deallocate(True)
+        is_low = ttnn.typecast(is_low_i32, ttnn.bfloat16, sub_core_grids=scg)
+        is_low_i32.deallocate(True)
+        winner = ttnn.multiply(is_max, is_low, sub_core_grids=scg)  # 1.0 at exactly one candidate of a row
+        is_max.deallocate(True)
+        is_low.deallocate(True)
+        gated = ttnn.multiply(winner, gcol, sub_core_grids=scg)  # the k == 1 rows only
+        winner.deallocate(True)
+        boost = ttnn.multiply(gated, delta, sub_core_grids=scg)
+        gated.deallocate(True)
+        delta.deallocate(True)
+        adjusted = ttnn.add(values, boost, sub_core_grids=scg)
+        boost.deallocate(True)
+        self.ops += 16
+        return adjusted
 
     def _candidates(self, x, V_x, sharded):
         """``(values [1,1,32,W] bf16 TILE, indices [1,1,32,W], W, slice)``: the top-k candidates of every row."""
@@ -409,7 +472,7 @@ class SpecVerifySampler:
         if plan.chunks != S["chunks"]:
             raise ValueError(f"the plan has {plan.chunks} chunks, the record's sampler {S['chunks']}")
         for c in range(S["chunks"]):
-            key = (id(S), c)
+            key = (S["serial"], c)
             params = plan.params_key(c)
             k, p, temp, seeds = plan.chunk(c)
             if self._uploaded.get(key) != params:
@@ -421,6 +484,9 @@ class SpecVerifySampler:
                     h = self._from_torch(torch.tensor(host, dtype=hdtype), dtype, device=False)
                     ttnn.copy_host_to_device_tensor(h, dev)
                     h.deallocate(True)
+                h = self._from_torch(_top1_mask(k), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False)
+                ttnn.copy_host_to_device_tensor(h, S["gcol"][c])
+                h.deallocate(True)
                 self._uploaded[key] = params
             if any(plan.sampled[c * SPEC_SAMPLED_ROW_TILE : (c + 1) * SPEC_SAMPLED_ROW_TILE]):
                 h = self._from_torch(torch.tensor(seeds, dtype=torch.int64), ttnn.uint32, device=False)
@@ -437,9 +503,16 @@ class SpecVerifySampler:
         return out[: int(rows)]
 
 
+def _top1_mask(k):
+    """``[1, 1, 32, 1]`` bf16: 1.0 on the packed rows whose top-k is 1 (the plain sampler's argmax users)."""
+    return (torch.as_tensor(list(k), dtype=torch.int64).reshape(1, 1, -1, 1) == 1).to(torch.bfloat16)
+
+
 def _same_buffer(a, b):
-    """Whether two device tensors share one buffer (a ttnn op that returns its input under a new wrapper)."""
+    """Whether two device tensors share one buffer (a ttnn op that returns its input under a new wrapper).
+    A device tensor answers ``buffer_address``; only a stand-in without it falls back to identity (a failing
+    address lookup on a real tensor raises, because a wrong answer here frees the caller's logits)."""
     try:
         return a.buffer_address() == b.buffer_address()
-    except Exception:
+    except AttributeError:
         return a is b

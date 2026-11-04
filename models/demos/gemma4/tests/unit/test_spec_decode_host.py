@@ -1751,6 +1751,10 @@ def _rail_allocates_nothing_after_capture(
     def gone(ref):
         return ref() is None or ref().freed
 
+    def _value(b):
+        # a binary op's second operand: a device tensor or a python scalar
+        return b.host if isinstance(b, _Buf) else b
+
     def pad(t, pads, value=0.0):
         # content-preserving (the published logits' columns are checked on the host side)
         flat = [int(x) for lo_hi in reversed(pads) for x in lo_hi]
@@ -1831,8 +1835,15 @@ def _rail_allocates_nothing_after_capture(
         slice=lambda t, starts, ends: op(t.host[tuple(slice(a, b) for a, b in zip(starts, ends))].clone(), t.dtype),
         # the sampler stage's ops (recording fakes; the draw itself is device-tested)
         topk=topk,
-        typecast=lambda t, dtype: op(t.host.clone(), dtype),
-        add=lambda a, b, dtype=None, **kw: op(a.host + b.host, dtype if dtype is not None else a.dtype),
+        typecast=lambda t, dtype, **kw: op(t.host.clone(), dtype),
+        add=lambda a, b, dtype=None, **kw: op(a.host + _value(b), dtype if dtype is not None else a.dtype),
+        # the top-1 tie-break's elementwise ops and reduces (content-preserving on these tie-free logits)
+        max=lambda t, dim=3, keepdim=True, **kw: op(t.host.amax(dim=dim, keepdim=keepdim), t.dtype),
+        min=lambda t, dim=3, keepdim=True, **kw: op(t.host.amin(dim=dim, keepdim=keepdim), t.dtype),
+        eq=lambda a, b, **kw: op((a.host == _value(b)).to(a.host.dtype), a.dtype),
+        lt=lambda a, b, **kw: op((a.host < _value(b)).to(a.host.dtype), a.dtype),
+        abs=lambda t, **kw: op(t.host.abs(), t.dtype),
+        multiply=lambda a, b, **kw: op(a.host * _value(b), a.dtype),
         untilize=lambda t, use_multicore=False: op(t.host.clone(), t.dtype),
         split=lambda t, size, dim: [op(c.clone(), t.dtype) for c in torch.split(t.host, size, dim=dim)],
         manual_seed=manual_seed,
@@ -1999,7 +2010,7 @@ def _rail_allocates_nothing_after_capture(
         for S in spec._srv_shape_bufs.values():
             samp = S["sampler"]
             assert samp["chunks"] == (S["B"] * S["P"] + 31) // 32
-            assert all(t.address in prepared for key in ("k", "p", "temp", "seeds", "sidx") for t in samp[key])
+            assert all(t.address in prepared for key in ("k", "p", "temp", "seeds", "sidx", "gcol") for t in samp[key])
         width = (32 * tp) if sharded_verify else 32
         assert list(spec._srv_sampler._offsets) == [(width, vocab_padded // tp if sharded_verify else vocab_padded)]
         assert all(t.address in prepared for t in spec._srv_sampler._offsets.values())
@@ -2201,7 +2212,9 @@ def _rail_allocates_nothing_after_capture(
     if one_upload:
         assert all(S["staged"][key].freed for S in bufs for key in ("u32", "i32"))
     if sampled_verify:
-        assert all(t.freed for S in bufs for key in ("k", "p", "temp", "seeds", "sidx") for t in S["sampler"][key])
+        assert all(
+            t.freed for S in bufs for key in ("k", "p", "temp", "seeds", "sidx", "gcol") for t in S["sampler"][key]
+        )
         assert spec._srv_sampler is None
     assert not spec._srv_frozen
     assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
