@@ -610,7 +610,16 @@ class WanTransformer3DModel(Module):
         return spatial_out
 
     def inner_step(
-        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=True
+        self,
+        spatial_1BNI,
+        prompt_1BLP,
+        rope_cos_1HND,
+        rope_sin_1HND,
+        trans_mat,
+        N,
+        timestep,
+        gather_output=True,
+        timestep_conditioning=None,
     ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
@@ -622,8 +631,12 @@ class WanTransformer3DModel(Module):
 
         Spatial input is a tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
         Spatial output is an fp32 ttnn.Tensor on device with same layout.
+
+        `timestep_conditioning` optionally passes a precomputed `prepare_timestep_conditioning(timestep)`.
         """
-        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+        if timestep_conditioning is None:
+            timestep_conditioning = self.prepare_timestep_conditioning(timestep)
+        temb_11BD, timestep_proj_1BTD = timestep_conditioning
 
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
@@ -676,6 +689,8 @@ class WanTransformer3DModel(Module):
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:
+        # Both CFG branches share the timestep, so compute its conditioning once.
+        timestep_conditioning = self.prepare_timestep_conditioning(timestep)
         cond = self.inner_step(
             spatial_1BNI,
             prompt_1BLP,
@@ -685,6 +700,7 @@ class WanTransformer3DModel(Module):
             N,
             timestep,
             gather_output=gather_output,
+            timestep_conditioning=timestep_conditioning,
         )
         if not do_classifier_free_guidance:
             return cond
@@ -698,6 +714,7 @@ class WanTransformer3DModel(Module):
             N,
             timestep,
             gather_output=gather_output,
+            timestep_conditioning=timestep_conditioning,
         )
 
         combined = ttnn.lerp(uncond, cond, guidance_scale)
