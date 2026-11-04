@@ -4403,8 +4403,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
 
     // Typecast pairs not yet wired through the metal2 compute-API datapath (they hang or throw today):
     //  * any UInt8 endpoint;
-    //  * any Int16 endpoint (the data_format.cpp Int16 enablement is reverted until the full narrow-int
-    //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
+    //  * any Int16 endpoint (the full narrow-int datapath has not landed, and the data_format.cpp pack_src
+    //    derivation has no Int16 entry for a 32-bit Dest);
     //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
     //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
     // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
