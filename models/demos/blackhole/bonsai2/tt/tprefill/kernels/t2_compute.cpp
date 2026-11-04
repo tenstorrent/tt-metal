@@ -3,9 +3,10 @@
 // 2D exact ternary prefill linear (linear2.py), compute. This core: token row tiles r < m (m <= 7) of its row group x
 // its output tile columns, in blocks of up to NBLK. Per block, kb and column c: P[r] = x'[r, kb] @ T[kb, c] for all r
 // (4 matmul_blocks, rt = m, ternary in1 with a forced exponent: exact), then the SFPU multiplies every P[r] by the
-// column's fp16 scales of the kb (the broadcast-scale tile of scales.py in DEST tile 7: one DEST read per lane vector),
-// and the packer adds P[r] into the fp32 accumulator tile (r, c) in L1 (L1 accumulation; the first kb overwrites).
-// After the block every accumulator goes out as bf16 (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
+// column's fp16 scales of the kb (the broadcast-scale tile of scales.py in DEST tile 7: its 4 lane vectors go to
+// LREG4..7, then one SFPLOADMACRO per SFPU row loads, multiplies and stores the row; T2_SFPI: the older sfpi loop), and
+// the packer adds P[r] into the fp32 accumulator tile (r, c) in L1 (L1 accumulation; the first kb overwrites). After
+// the block every accumulator goes out as bf16 (GLU_PAIRS: up * silu(gate) per (gate, up) column pair).
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
@@ -69,6 +70,80 @@ inline void scale_p(uint32_t m) {
         }
     }
 }
+// SFPLOADMACRO version of scale_p: one instruction per SFPU row. Templates k = 0..3: LReg[16] = LREG(4 + k) * VD + 0
+// (the 4 scale vectors in LREG4..7); macro k: load the row into VD = LREG0, MAD with template k (VB = VD, result in
+// LReg[16]), store LReg[16] back to the row 2 instructions later (the pattern of tt-llk's _mul_int_).
+inline void t2_macro_init() {
+    TTI_SFPMUL(p_sfpu::LREG4, 0, p_sfpu::LCONST_0, 12, 0);
+    TTI_SFPMUL(p_sfpu::LREG5, 0, p_sfpu::LCONST_0, 13, 0);
+    TTI_SFPMUL(p_sfpu::LREG6, 0, p_sfpu::LCONST_0, 14, 0);
+    TTI_SFPMUL(p_sfpu::LREG7, 0, p_sfpu::LCONST_0, 15, 0);
+    constexpr uint32_t store_bits = 0x40 | (2 << 3) | 3;
+#define T2_MACRO(k)                                                    \
+    do {                                                               \
+        constexpr uint32_t mad_bits = 0x80 | 0x40 | (4 + k);           \
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8));   \
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8)); \
+        TTI_SFPCONFIG(0, 4 + k, 0);                                    \
+    } while (0)
+    T2_MACRO(0);
+    T2_MACRO(1);
+    T2_MACRO(2);
+    T2_MACRO(3);
+#undef T2_MACRO
+    TTI_SFPCONFIG(0x3F0, 8, 1);  // UsesLoadMod0ForStore for macros 0..3, delay kinds as _init_mul_int_
+    TTI_SFPNOP;
+}
+#define T2_ROW(q) \
+    TTI_SFPLOADMACRO(((2 * (((q) >> 3) & 1) + ((q) & 1)) << 2), sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_6, 0)
+inline void scale_macro(uint32_t z, uint32_t m) {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    const uint32_t sa = 7 * 64 + 8 * z;  // scale vectors v = 0..3 of combo z in DEST tile 7
+    TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 0);
+    TT_SFPLOAD(p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 2);
+    TT_SFPLOAD(p_sfpu::LREG6, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 4);
+    TT_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, sa + 6);
+    TTI_SFPNOP;
+    for (uint32_t r = 0; r < m; ++r) {  // ADDR_MOD_6 steps 2 per row: 32 rows reach the next tile
+        T2_ROW(0);
+        T2_ROW(1);
+        T2_ROW(2);
+        T2_ROW(3);
+        T2_ROW(4);
+        T2_ROW(5);
+        T2_ROW(6);
+        T2_ROW(7);
+        T2_ROW(8);
+        T2_ROW(9);
+        T2_ROW(10);
+        T2_ROW(11);
+        T2_ROW(12);
+        T2_ROW(13);
+        T2_ROW(14);
+        T2_ROW(15);
+        T2_ROW(16);
+        T2_ROW(17);
+        T2_ROW(18);
+        T2_ROW(19);
+        T2_ROW(20);
+        T2_ROW(21);
+        T2_ROW(22);
+        T2_ROW(23);
+        T2_ROW(24);
+        T2_ROW(25);
+        T2_ROW(26);
+        T2_ROW(27);
+        T2_ROW(28);
+        T2_ROW(29);
+        T2_ROW(30);
+        T2_ROW(31);
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+#undef T2_ROW
 // GLU pair (gate in DEST tile 0, up in 1): tile 1 = up * silu(gate). Needs silu_tile_init.
 inline void glu_full() {
     constexpr uint32_t T = 32;
@@ -88,6 +163,11 @@ ALWI void scale_col(uint32_t z, uint32_t m) {
 #ifdef TRISC_MATH
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+#ifndef T2_SFPI
+    ckernel::sfpu::scale_macro(z, m);
+    math::clear_dst_reg_addr();
+    return;
+#endif
     switch (z) {
         SP_CASE(0) SP_CASE(1) SP_CASE(2) SP_CASE(3) SP_CASE(4) SP_CASE(5) SP_CASE(6) SP_CASE(7) default : break;
     }
@@ -116,6 +196,7 @@ ALWI void scale_tile_srca() {
 
 void kernel_main() {
     constexpr uint32_t NBLK = get_compile_time_arg_val(0);
+    constexpr uint32_t WSLOT = NBLK * 4, SSLOT = (NBLK + 7) / 8 + 1;  // t2_writer.cpp's CB slots per kb
     constexpr uint32_t KPC = get_compile_time_arg_val(1);  // kbs per x' chunk (rows of 4 KPC tiles)
     const uint32_t KB = get_common_arg_val<uint32_t>(0);
     const uint32_t n_count = get_arg_val<uint32_t>(0);
@@ -123,6 +204,8 @@ void kernel_main() {
     const uint32_t nblk = get_arg_val<uint32_t>(2);  // the row's block count: every core takes every multicast chunk
     const uint32_t ACC = get_arg_val<uint32_t>(3);   // accumulator tiles per block: the whole ring (m_max x NBLK), so
                                                      // every block starts at the ring's start (tile r * NBLK + c)
+    const uint32_t n_first = get_arg_val<uint32_t>(4);  // first output tile column: column n's scales are combo n % 8
+                                                        // of broadcast-scale tile n / 8
     if (m == 0) {
         return;
     }
@@ -137,21 +220,25 @@ void kernel_main() {
             }
             continue;
         }
-        const uint32_t units = (nb + 7) / 8;
+        const uint32_t u0 = (n_first + c0) / 8;
+#ifndef T2_SFPI
+        MATH((ckernel::sfpu::t2_macro_init()));
+#endif
         cb_reserve_back(cb_acc, ACC);
+        pack_reconfig_data_format(cb_acc);
         for (uint32_t kb = 0; kb < KB; ++kb) {
             if (kb % KPC == 0) {
                 cb_wait_front(cb_x, m * 4 * KPC);
             }
             const uint32_t x0 = (kb % KPC) * 4;
-            cb_wait_front(cb_w, nb * 4);
-            cb_wait_front(cb_s, units);
+            cb_wait_front(cb_w, WSLOT);
+            cb_wait_front(cb_s, SSLOT);
             for (uint32_t c = 0; c < nb; ++c) {
                 tile_regs_acquire();
 #ifndef T2_NOSCOPY
                 copy_init(cb_s);
                 scale_tile_srca();
-                copy_tile(cb_s, c / 8, 7);
+                copy_tile(cb_s, (n_first + c0 + c) / 8 - u0, 7);
                 reconfig_data_format_srca(cb_w);
                 matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
                 ternary_srca();
@@ -168,13 +255,16 @@ void kernel_main() {
                 }
 #endif
 #ifndef T2_NOSCALE
+#ifdef T2_SFPI
                 addcmul_tile_init();
-                scale_col(c % 8, m);
+#endif
+                scale_col((n_first + c0 + c) % 8, m);
 #endif
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_acc);
-                pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
+                if (c == 0 && kb < 2) {  // the block's first kb overwrites the accumulators, later kbs add
+                    pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
+                }
 #ifndef T2_NOPACK
                 for (uint32_t r = 0; r < m; ++r) {
                     pack_tile<true>(r, cb_acc, r * NBLK + c);
@@ -185,8 +275,8 @@ void kernel_main() {
             if (kb % KPC == KPC - 1) {
                 cb_pop_front(cb_x, m * 4 * KPC);
             }
-            cb_pop_front(cb_w, nb * 4);
-            cb_pop_front(cb_s, units);
+            cb_pop_front(cb_w, WSLOT);
+            cb_pop_front(cb_s, SSLOT);
         }
         pack_reconfig_l1_acc(0);
         cb_push_back(cb_acc, ACC);

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """2D exact ternary prefill linear: Y = X' W'^T in Bonsai's own ternary weights, as linear.py, laid out for large K.
 
-Each core row is a row group (a slice of the token row tiles); its 13 cores split the output tile columns in units of 8
-(scales.py's broadcast tiles). The row's first core multicasts the group's x' tiles per kb to the row only
+Each core row is a row group (a slice of the token row tiles); its 13 cores split the output tile columns evenly (GLU: in
+(gate, up) pairs; a core's columns may start inside a unit of 8 of scales.py's broadcast tiles). The row's first core multicasts the group's x' tiles per kb to the row only
 (kernels/t2_reader.cpp), so each core receives 1/10 of x' (linear.py multicasts all of it to every core); each core
 streams its columns' ternary tiles per kb from the decode records (kernels/t2_writer.cpp) and keeps fp32 accumulators in
 L1 (packer L1 accumulation), so it can hold any number of columns (kernels/t2_compute.cpp)."""
@@ -76,13 +76,14 @@ class TernaryPrefillLinear2:
         mb, me = divmod(Mt, GY)
         m_of = [mb + (1 if y < me else 0) for y in range(GY)]
         m_first = np.cumsum([0] + m_of[:-1]).tolist()
-        ub, ue = divmod(Nt // UNIT, GX)
-        u_of = [ub + (1 if xx < ue else 0) for xx in range(GX)]
-        n_first = (UNIT * np.cumsum([0] + u_of[:-1])).tolist()
-        n_of = [UNIT * u for u in u_of]
+        # columns split as evenly as possible (GLU: in (gate, up) pairs); a core's columns may start mid-unit
+        step = 2 if glu else 1
+        ub, ue = divmod(Nt // step, GX)
+        n_of = [step * (ub + (1 if xx < ue else 0)) for xx in range(GX)]
+        n_first = np.cumsum([0] + n_of[:-1]).tolist()
         m_max = max(m_of)
         assert m_max <= 7, f"T={T}: {m_max} row tiles per row group (DEST holds 7 products and the scale tile)"
-        NBLK = max(UNIT, min(max(n_of), ACC_BUDGET // (m_max * 4096)) // UNIT * UNIT)
+        NBLK = max(2, min(max(n_of), ACC_BUDGET // (m_max * 4096)) // step * step)
         nblk = -(-max(n_of) // NBLK)  # every core of a row takes every chunk (rows share the column split)
         vx = [device.worker_core_from_logical_core(ttnn.CoreCoord(xx, 0)).x for xx in range(GX)]
         runs, start = [], 0
@@ -100,7 +101,7 @@ class TernaryPrefillLinear2:
             for xx in range(GX):
                 rd[xx][y] = [1 if xx == 0 else 0, s0.x, s0.y, m_first[y], m_of[y], nblk, GX, len(runs)] + rects
                 wr[xx][y] = [n_first[xx], n_of[xx], m_first[y], m_of[y]]
-                cp[xx][y] = [n_of[xx], m_of[y], nblk, m_max * NBLK]
+                cp[xx][y] = [n_of[xx], m_of[y], nblk, m_max * NBLK, n_first[xx]]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
 
         def cb(index, fmt, page, pages, cores=crs):
@@ -127,6 +128,7 @@ class TernaryPrefillLinear2:
                     core_ranges=crs,
                     compile_time_args=[kpc] + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
                     runtime_args=rd,
+                    defines=dbg,
                     common_runtime_args=[x.buffer_address(), Kt],
                     config=ttnn.WriterConfigDescriptor(),  # BRISC, NOC 0
                 ),
@@ -137,7 +139,7 @@ class TernaryPrefillLinear2:
                     + ttnn.TensorAccessorArgs(self.rec).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(self.sbc).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                    defines=dm,
+                    defines=dm + dbg,
                     runtime_args=wr,
                     common_runtime_args=[
                         self.rec.buffer_address(),
@@ -165,7 +167,7 @@ class TernaryPrefillLinear2:
             cbs=x_cbs
             + [
                 cb(1, ttnn.bfloat8_b, 256, 2 * NBLK * 4),
-                cb(3, ttnn.float32, 2048, 2 * (NBLK // UNIT)),
+                cb(3, ttnn.float32, 2048, 2 * (-(-NBLK // UNIT) + 1)),
                 cb(24, ttnn.float32, 4096, m_max * NBLK),
                 cb(16, ttnn.bfloat16, 2048, 4),
             ],

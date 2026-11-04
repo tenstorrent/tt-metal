@@ -36,6 +36,7 @@ void kernel_main() {
             cb_reserve_back(cb_x, CHT);
             const uint32_t dst = get_write_ptr(cb_x);
             if (is_sender) {
+#ifndef T2_NOXREAD
                 for (uint32_t r = 0; r < m_count; ++r) {
                     for (uint32_t i = 0; i < 4 * KPC; ++i) {
                         noc_async_read(
@@ -43,6 +44,8 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+#endif
+#ifndef T2_NOXMC
                 if (ncores > 1) {
                     noc_semaphore_wait(ready_p, ncores - 1);
                     noc_semaphore_set(ready_p, 0);
@@ -63,10 +66,13 @@ void kernel_main() {
                     }
                     noc_async_write_barrier();
                 }
+#endif
             } else {
+#ifndef T2_NOXMC
                 noc_semaphore_set(valid_p, 0);
                 noc_semaphore_inc(ready_noc, 1);
                 noc_semaphore_wait(valid_p, 1);
+#endif
             }
             cb_push_back(cb_x, CHT);
         }
