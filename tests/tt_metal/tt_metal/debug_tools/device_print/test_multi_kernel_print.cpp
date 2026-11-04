@@ -43,9 +43,9 @@ distributed::MeshCoordinateRange single_device_range() {
     return distributed::MeshCoordinateRange(zero, zero);
 }
 
-Program& add_empty_program(distributed::MeshWorkload& workload) {
+Program& add_empty_program(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     auto range = single_device_range();
-    workload.add_program(range, Program());
+    workload.add_program(range, CreateProgram(mesh_device));
     return workload.get_programs().at(range);
 }
 
@@ -114,7 +114,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
         }
 
         distributed::MeshWorkload workload;
-        Program& program = add_empty_program(workload);
+        Program& program = add_empty_program(*mesh_device, workload);
 
         const CoreRangeSet crs(std::set<CoreRange>(eth_cores.begin(), eth_cores.end()));
         CreateKernel(program, kEriscKernel, crs, make_active_eth_config());
@@ -156,7 +156,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         const EthernetConfig config = make_active_eth_config();
         for (int i = 0; i < 2; i++) {
             distributed::MeshWorkload workload;
-            Program& program = add_empty_program(workload);
+            Program& program = add_empty_program(*mesh_device, workload);
             CreateKernel(program, kEriscKernel, core, config);
             this->RunProgram(mesh_device, workload);
         }

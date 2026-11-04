@@ -519,7 +519,7 @@ def _commit_layer_forward(
     if layer.hidden_size_per_layer_input and per_layer_input is not None and hasattr(layer, "per_layer_input_gate"):
         residual_pli = hidden_states
         gated = ttnn.linear(hidden_states, layer.per_layer_input_gate)
-        gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
+        gated = ttnn.gelu(gated, variant=ttnn.GeluVariant.Tanh)
         gated = ttnn.mul(gated, per_layer_input)
         projected = ttnn.linear(gated, layer.per_layer_projection)
         normed_pli = _decode_rms_norm_forward(layer.post_per_layer_input_norm, projected)

@@ -128,14 +128,14 @@ void kernel_main() {
     // (d0 * 2^16 + d1 * 2^8 + d2) / 2^24. Every such multiple of 2^-24 is an exact FP32 value,
     // and 2^-24 is the FP32 ulp on [0.5, 1). The largest threshold is 1 - 2^-24, so the draw is
     // not capped at 255/256 the way a single packed BF16 uniform is.
-    // Digits come from even columns of face 0. On Wormhole an FP32 store into 16-bit dest leaves
-    // the odd columns empty (element 1 reads as 0), which would drop this back to a 1/256 grid if
-    // a digit were read from element 1. Elements 0, 2 and 4 are draws from three different SFPU
-    // lanes on both Wormhole and Blackhole; Blackhole also fills the odd columns, which this read
-    // does not use.
+    // Elements 0, 1 and 2 are three different draws of the tile's first row: element 0 is lane 0
+    // of rand_tile's first SFPU store, element 1 is lane 0 of its second store (it lands because
+    // rand() programs its dest address mode on every call), and element 2 is lane 1 of the first
+    // store. A dead digit would put the threshold back on a coarser grid
+    // (test_sampling_low_digit_reaches_the_tail).
     constexpr uint32_t RAND_DIGIT_0 = 0;
-    constexpr uint32_t RAND_DIGIT_1 = 2;
-    constexpr uint32_t RAND_DIGIT_2 = 4;
+    constexpr uint32_t RAND_DIGIT_1 = 1;
+    constexpr uint32_t RAND_DIGIT_2 = 2;
     const uint32_t digit_0 = rand_digit(rand_values[RAND_DIGIT_0]);
     const uint32_t digit_1 = rand_digit(rand_values[RAND_DIGIT_1]);
     const uint32_t digit_2 = rand_digit(rand_values[RAND_DIGIT_2]);

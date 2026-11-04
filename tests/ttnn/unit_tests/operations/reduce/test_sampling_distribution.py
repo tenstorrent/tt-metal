@@ -215,6 +215,13 @@ def test_sampling_low_digit_reaches_the_tail(device):
     The reference is the softmax of the BF16 logits. Over draws = USERS * N the count is
     Binomial(draws, p); the test requires it within 4 standard deviations of draws * p
     (and therefore not zero, and not the 2x rate of a low digit that copies the high one).
+
+    The writer's second digit is element 1 of the random tile, written by the compute kernel's
+    second SFPU store, so this test also catches a random tile stored under a stale dest address
+    mode (only the first store lands): on Wormhole nothing in this kernel after top_k restores that
+    mode, so a seedless draw after ttnn.manual_seed depends on rand_tile programming it; on
+    Blackhole recip_tile_init re-programs it before the next draw, so the same defect would not
+    show there.
     """
     gap = 6.25  # bf16-exact; P(second) = 1 / (1 + e^6.25) = 0.00193
     values = torch.full((1, 1, USERS, W), -30.0)

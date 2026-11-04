@@ -44,6 +44,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -161,7 +162,7 @@ int run() {
         [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
             for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                if (zone.site().name == "HOST_RX") {
+                if (zone.descriptor().name == "HOST_RX") {
                     starts[zone.core().chip_id].push_back(zone.start_time());
                 }
             }
@@ -655,7 +656,7 @@ struct Run {
 Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
     Chips chips;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
-        IDevice* device = mesh_device.get_device(coord);
+        IDevice* device = tt::tt_metal::internal::get_device(mesh_device, coord);
         chips.emplace(device->id(), Chip{coord, device, mesh_device.get_fabric_node_id(coord)});
     }
     Run result{.pairs = find_pairs(mesh_device, chips)};
@@ -789,7 +790,7 @@ public:
             [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
                 dropped_bytes_ += batch.dropped_bytes();
                 for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                    const std::string_view name = zone.site().name;
+                    const std::string_view name = zone.descriptor().name;
                     const streaming_profiler::Core core = zone.core();
                     if (name == "MC_RX") {
                         arrivals_[zone.runtime_id()].push_back(multicast::Arrival{
