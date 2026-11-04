@@ -75,7 +75,7 @@ void kernel_main() {
     const uint32_t first_row = get_arg_val<uint32_t>(arg++);
     const uint32_t end_row = get_arg_val<uint32_t>(arg++);
     const uint32_t num_m_blocks = get_arg_val<uint32_t>(arg++);
-    const uint32_t lane_n0 = get_arg_val<uint32_t>(arg++);  // first global N tile of this core's lane
+    const uint32_t lane_n0 = get_arg_val<uint32_t>(arg++);   // first global N tile of this core's lane
     const uint32_t w_round0 = get_arg_val<uint32_t>(arg++);  // w_mcast round of K block 0 (rotating-sender stagger)
 
     Noc noc;

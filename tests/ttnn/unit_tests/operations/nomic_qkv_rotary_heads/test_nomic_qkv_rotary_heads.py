@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for nomic_qkv_rotary_heads (immutable spec; see ttnn/ttnn/operations/nomic_qkv_rotary_heads/op_design.md).
+"""Acceptance test for nomic_qkv_rotary_heads (immutable spec; see ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/nomic_qkv_rotary_heads/op_design.md).
 
 qkv = x @ W^T + b (fp32), split into 12 heads of 64 for q, k and v, q scaled by 1/8, NeoX rotate-half rotary (base 10000)
 on q and k, written as three interleaved (B, 12, S, 64) bfloat16 TILE tensors. x is in the layout

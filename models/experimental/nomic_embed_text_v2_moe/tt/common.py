@@ -473,8 +473,9 @@ def sharded_norm_layout(
     return sharded_norm_configs(*split, width_tiles)[0], *split, SHARDED_NORM_COLUMNS
 
 
-# The generated layer norm (ttnn/ttnn/operations/nomic_residual_layer_norm) covers 32 to 128 tile rows of M on the
-# 11x10 grid, in its own ND-sharded layout: 2 or 3 cores a row group, 1 to 4 tile rows a core, picked per shape.
+# The generated layer norm (ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/nomic_residual_layer_norm)
+# covers 32 to 128 tile rows of M on the 11x10 grid, in its own ND-sharded layout: 2 or 3 cores a row group, 1 to 4
+# tile rows a core, picked per shape.
 # Every op on the residual stream then reads and writes that layout (tt.attention, tt.mlp, tt.moe), and a
 # forward either runs entirely on it or not at all.
 ND_NORM_MIN_TILES, ND_NORM_MAX_TILES = 32, 128

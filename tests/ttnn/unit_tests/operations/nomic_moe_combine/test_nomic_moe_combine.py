@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for nomic_moe_combine (immutable spec; see ttnn/ttnn/operations/nomic_moe_combine/op_design.md).
+"""Acceptance test for nomic_moe_combine (immutable spec; see ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/nomic_moe_combine/op_design.md).
 
 out[t, :] = round_bf16(bias + w[0, t] * rows[index[0, t], :] + w[1, t] * rows[index[1, t], :]), fp32 accumulation, one
 rounding, the bias added once. Phase 0 cell: expert_rows in L1, the output in the layer norm's ND-sharded layout

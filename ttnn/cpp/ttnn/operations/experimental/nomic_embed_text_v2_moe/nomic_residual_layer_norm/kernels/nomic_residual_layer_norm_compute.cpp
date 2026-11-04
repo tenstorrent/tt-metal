@@ -212,8 +212,8 @@ constexpr uint32_t cb_stats_gather = get_compile_time_arg_val(16);
 constexpr uint32_t cb_center_col = get_compile_time_arg_val(17);  // per-row mean (seeded: -mean * rstd), col 0
 constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(18);
 constexpr uint32_t cb_output = get_compile_time_arg_val(19);
-constexpr uint32_t kInvSumBits = get_compile_time_arg_val(20);  // fl(1/N) / packed-S scale (see stats_finalize)
-constexpr bool kLookahead = get_compile_time_arg_val(21) != 0;  // row-block software pipelining knob
+constexpr uint32_t kInvSumBits = get_compile_time_arg_val(20);        // fl(1/N) / packed-S scale (see stats_finalize)
+constexpr bool kLookahead = get_compile_time_arg_val(21) != 0;        // row-block software pipelining knob
 constexpr bool kSeededNormalize = get_compile_time_arg_val(22) != 0;  // normalize as 2 seeded multiplies (knob)
 constexpr bool kFusedRecompute = get_compile_time_arg_val(23) != 0;   // lookahead: y - mean as (x - mean) + r (knob)
 constexpr uint32_t D0 = 0, D1 = 1, D2 = 2, D3 = 3;

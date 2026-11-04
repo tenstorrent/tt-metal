@@ -83,7 +83,7 @@ Reviewed and found sound (no change):
 
 ## Verifier CLI Summary
 
-Results: `ttnn/ttnn/operations/nomic_moe_dispatch/verifier_results/verifier_report.json` (final run, after all fixes).
+Results: `ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/nomic_moe_dispatch/verifier_results/verifier_report.json` (final run, after all fixes).
 
 - supported_pass: 29 (11 `test_op` cells, 3 loose perf cases, 15 regression tests)
 - xfail_expected: 33 (= 11 shapes × {table dram/output l1, table l1/output dram, table dram/output dram}, all properly refused by `validate()`)

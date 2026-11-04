@@ -220,7 +220,7 @@ change against the production build.
 ## Verifier CLI Summary
 
 Results dir `/tmp/qkv_verifier_golden2`; the report is copied to
-`ttnn/ttnn/operations/nomic_qkv_rotary_heads/verifier_report.json`.
+`ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/nomic_qkv_rotary_heads/verifier_report.json`.
 
 - supported_pass: 68 (59 `test_golden.py` incl. the 3 LOOSE_CASES, 9 `test_regression.py`; all `ln_layout`)
 - xfail_expected: 56 (all `placement=model_layout` → Refinement 1)
