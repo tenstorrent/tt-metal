@@ -266,19 +266,13 @@ class TransformerBlock(LightweightModule):
             unconsumed.discard(key)
             return layer_hf_state_dict[key]
 
-        def maybe_consume(key: str) -> ttnn.Tensor | None:
-            if key not in layer_hf_state_dict:
-                return None
-            unconsumed.discard(key)
-            return layer_hf_state_dict[key]
-
         self.attention.update(
             q_proj=consume("self_attn.q_proj.weight"),
             k_proj=consume("self_attn.k_proj.weight"),
             v_proj=consume("self_attn.v_proj.weight"),
             o_proj=consume("self_attn.o_proj.weight"),
-            q_norm=maybe_consume("self_attn.q_norm.weight"),
-            k_norm=maybe_consume("self_attn.k_norm.weight"),
+            q_norm=consume("self_attn.q_norm.weight") if self.attention._q_norm_module is not None else None,
+            k_norm=consume("self_attn.k_norm.weight") if self.attention._k_norm_module is not None else None,
             hf_rope=hf_rope,
         )
         self.feed_forward.update(
