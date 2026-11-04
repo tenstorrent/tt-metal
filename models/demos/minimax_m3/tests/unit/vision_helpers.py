@@ -37,12 +37,12 @@ VISION_GRIDS = {
     # with one 128-key chunk, 112 of its keys masked
     "h4w4": (1, 4, 4),
 }
-# The 1-card CI leg, which has a 5 minute timeout, runs h16w16 and h40w54. h40w54 runs what h16w16 does not: the RoPE
-# op's reload kernels, partial row tiles and, on 12x10, the transposed matmul split with a partial last block and
-# program configs for the merge linears. The P150 runners in main's CI logs have 11x10 grids, where h40w54 takes
-# neither: there the transposed split comes at h36w36 and h48w48, and the merge linears keep ttnn's own config at every
-# grid here. M3_VISION_ALL_GRIDS=1 adds the other grids. They are left out rather than skipped, so the leg shows no
-# skipped vision tests.
+# The CI entry "MiniMax-M3 vision unit tests (1-card)", which has a 5 minute timeout, runs h16w16 and h40w54. h40w54
+# runs what h16w16 does not: the RoPE op's reload kernels, partial row tiles and, on 12x10, the transposed matmul split
+# with a partial last block and program configs for the merge linears. The P150 runners in main's CI logs have 11x10
+# grids, where h40w54 takes neither: there the transposed split comes at h36w36 and h48w48, and the merge linears keep
+# ttnn's own config at every grid here. M3_VISION_ALL_GRIDS=1 adds the other grids. They are left out rather than
+# skipped, so the leg shows no skipped vision tests.
 CI_GRIDS = ("h16w16", "h40w54")
 # The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 128-key chunk and masks the padded
 # ones: 16 of 2176 at 2160 patches, too few for a broken mask to move the output past its bound, and 60 of 384 at 324.
