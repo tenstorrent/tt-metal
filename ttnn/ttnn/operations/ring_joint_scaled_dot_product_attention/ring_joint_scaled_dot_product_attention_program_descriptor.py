@@ -52,7 +52,8 @@ L1_CB_BUDGET = 1300 * 1024  # per-core CB budget for choose_block_extents (desig
 # Q.K^T operand truncation of HiFi2 gives rel-RMS 0.0206 (gate 0.02); HiFi3 0.0045, HiFi4 0.0045. Not applied
 # when fp32_dest_acc_en is off (the DiT production / perf-focus config keeps the requested HiFi2).
 FP32_DEST_MIN_FIDELITY = ttnn.MathFidelity.HiFi3
-MASK_TILES = 1  # main key-tail mask tile (joint tail mask comes with non-aligned joint)
+MASK_TILES = 1  # main key-tail mask tile; +1 joint key-tail tile when the joint keys end inside a tile
+JOINT_MASK_TILES = 2  # non-causal with a partial joint tail tile: [main tail (logical_n % 32), joint tail]
 CAUSAL_MASK_TILES = 2  # causal (R4): [diagonal triangle, all -inf]; the key-tail mask is not needed (see writer)
 
 # ---- CB indices (compute cores) ----
@@ -556,10 +557,12 @@ def _semaphores(mesh_device):
     return _SEM_CACHE[key][1]
 
 
-def _landing_buffers(mesh_device, G, k, v):
+def _landing_buffers(mesh_device, G, k, v, tag="main"):
+    """Persistent (G - 1)-slot DRAM landing buffers for K / V slices shaped like k / v (tag: "main" for the
+    sequence K/V, "joint" for the sharded-joint K/V slices — distinct buffers even when the shapes coincide)."""
     b, hk, n_kv, dh = tuple(k.padded_shape)
     _, hv, _, dv = tuple(v.padded_shape)
-    key = (id(mesh_device), G, b, hk, hv, n_kv, dh, dv, str(k.dtype), str(v.dtype))
+    key = (id(mesh_device), tag, G, b, hk, hv, n_kv, dh, dv, str(k.dtype), str(v.dtype))
     if key not in _LANDING_CACHE:
         lk = ttnn.allocate_tensor_on_device(
             ttnn.Shape([(G - 1) * b, hk, n_kv, dh]), k.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
@@ -639,8 +642,11 @@ def run_ring_joint_sdpa(
             raise ValueError("ring_joint_sdpa: joint tensor shapes do not match Q/K/V")
         if jq.dtype != q.dtype or jk.dtype != k.dtype or jv.dtype != v.dtype:
             raise ValueError("ring_joint_sdpa: joint tensor dtypes must match Q/K/V")
-    if logical_l != 0:
-        raise ValueError("ring_joint_sdpa: sharded joint (logical_l > 0) is not supported")
+    sharded = has_joint and logical_l > 0
+    if logical_l != 0 and not has_joint:
+        raise ValueError("ring_joint_sdpa: logical_l > 0 needs joint tensors")
+    if sharded and L % 32:
+        raise ValueError(f"ring_joint_sdpa: sharded joint slices must be tile-aligned; L_dev={L}")
     if is_balanced and not is_causal:
         raise ValueError("ring_joint_sdpa: is_balanced is defined for causal attention only")
     if is_causal and (has_joint or n_q != n_kv):
@@ -651,6 +657,8 @@ def run_ring_joint_sdpa(
     chips, ring, G, num_links = plan(mesh_device, cluster_axis=cluster_axis, topology=topology, num_links=num_links)
     if not (1 <= logical_n <= G * n_kv):
         raise ValueError(f"ring_joint_sdpa: logical_n={logical_n} outside [1, {G * n_kv}]")
+    if sharded and logical_l > G * L:
+        raise ValueError(f"ring_joint_sdpa: logical_l={logical_l} outside [1, {G * L}]")
     if scale is None:
         scale = dh**-0.5
 
@@ -665,7 +673,10 @@ def run_ring_joint_sdpa(
     C = len(next(iter(chips.values()))["compute"])
     qh = q_heads_per_unit(hq, hk, hv)
     NQ, LQ, BG = qh * n_q_t, qh * Lq_t, b * hq // qh  # unit row space: g heads stacked (contiguous tile rows)
-    mask_tiles = CAUSAL_MASK_TILES if is_causal else MASK_TILES
+    # joint key tail: replicated keys end at L, sharded ones at logical_l (every slice is L_dev = L rows, tile-aligned,
+    # so the one partial slice's partial tile has logical_l % 32 valid columns)
+    joint_cols = (logical_l if sharded else L) % 32 if has_joint else 0
+    mask_tiles = CAUSAL_MASK_TILES if is_causal else (JOINT_MASK_TILES if joint_cols else MASK_TILES)
     Sq, Sk = choose_block_extents(
         tensor_q_tiles=NQ,
         joint_q_tiles=LQ,
@@ -699,6 +710,14 @@ def run_ring_joint_sdpa(
         else None
     )
     landk, landv = _landing_buffers(mesh_device, G, k, v)
+    # Sharded joint (R5): the joint K/V slices ride the same relay as a second entry kind into their own landing
+    # slots. Without it the joint-kind tensors alias the main ones (valid accessors, never addressed).
+    NK = 2 if sharded else 1  # transport entry kinds per (batch, kv head index): main [, joint]
+    if sharded:
+        landjk, landjv = _landing_buffers(mesh_device, G, jk, jv, tag="joint")
+        tjk, tjv = jk, jv
+    else:
+        landjk, landjv, tjk, tjv = landk, landv, k, v
     sem_arrival, sem_ready, sem_cdone, sem_poll = _semaphores(mesh_device)
     arrival_addr, ready_addr, cdone_addr, poll_addr = (
         int(ttnn.get_global_semaphore_address(s)) for s in (sem_arrival, sem_ready, sem_cdone, sem_poll)
@@ -713,6 +732,7 @@ def run_ring_joint_sdpa(
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
     group = PORT_BATCH_CHUNKS
     kpe, vpe = n_kv_t * DHt, n_kv_t * DVt  # pages of one K / V head slice
+    jkpe, jvpe = (Lq_t * DHt, Lq_t * DVt) if sharded else (0, 0)  # pages of one joint K / V head slice
     Hmax = max(hk, hv)
     E = b * Hmax  # transport entries (b, j): K head j if j < hk, V head j if j < hv
 
@@ -725,6 +745,12 @@ def run_ring_joint_sdpa(
         return first + (max(0, min(h, logical_n - (2 * G - 1 - s) * h)) if first == h else 0)
 
     mask_cols = logical_n % 32
+
+    def joint_valid_rows(s):
+        """Joint rows of source s's slice at a global joint index < logical_l (sharded) / all L (replicated)."""
+        if not sharded:
+            return L
+        return max(0, min(L, logical_l - s * L))
 
     addr = lambda t: int(t.buffer_address()) if t is not None else 0
     ta = (
@@ -754,10 +780,26 @@ def run_ring_joint_sdpa(
             )
             for l in range(num_links)
         }
+        joint_chunks = {
+            l: (
+                _chunks_per_part(jkpe, l, num_links, num_banks, run_pages),
+                _chunks_per_part(jvpe, l, num_links, num_banks, run_pages),
+            )
+            for l in range(num_links)
+        }
         item_chunks = {l: ck + cv for l, (ck, cv) in part_chunks.items()}
+
+        def item_ok(ck, cv):  # every (batch, kv head index) item carries >= 1 chunk (its arrival increment)
+            return all(((j < hk) and ck > 0) or ((j < hv) and cv > 0) for j in range(Hmax))
+
         for l, (ck, cv) in part_chunks.items():  # every item of a used port must carry >= 1 chunk (its increment)
-            if ck + cv and ((hk < hv and cv == 0) or (hv < hk and ck == 0)):
+            if ck + cv and not item_ok(ck, cv):
                 raise ValueError(f"ring_joint_sdpa: a K/V head slice is too small to split over {num_links} links")
+            # a port's counter is an entry index over BOTH kinds, so a port carries a joint item iff a main one
+            if sharded and bool(ck + cv) != item_ok(*joint_chunks[l]):
+                raise ValueError(
+                    f"ring_joint_sdpa: a joint K/V slice ({L} rows) is too small to split over {num_links} links"
+                )
 
         # ---------------- port cores (TRANSPORT) ----------------
         preader_rt, psender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -767,23 +809,33 @@ def run_ring_joint_sdpa(
             up = ch["prev"] if d == "fwd" else ch["next"]
             up_sends = chips[up][d] if up is not None else []
             ck, cv = part_chunks[l]
+            jck, jcv = joint_chunks[l]
             ic = ck + cv
-            total = b * (hk * ck + hv * cv) * len(sends)
-            expect_in = E * len(up_sends) if ic > 0 else 0
+            total = b * (hk * (ck + jck) + hv * (cv + jcv)) * len(sends)
+            expect_in = E * NK * len(up_sends) if ic > 0 else 0
             preader_rt[core.x][core.y] = [
                 addr(k),
                 addr(v),
                 addr(landk),
                 addr(landv),
+                addr(tjk),
+                addr(tjv),
+                addr(landjk),
+                addr(landjv),
                 kpe,
                 vpe,
+                jkpe,
+                jvpe,
                 l,
                 num_links,
                 arrival_addr,
                 ck,
                 cv,
+                jck,
+                jcv,
                 total,
                 E,
+                NK,
                 hk,
                 hv,
                 len(sends),
@@ -795,8 +847,12 @@ def run_ring_joint_sdpa(
             args = [
                 addr(landk),
                 addr(landv),
+                addr(landjk),
+                addr(landjv),
                 kpe,
                 vpe,
+                jkpe,
+                jvpe,
                 l,
                 num_links,
                 arrival_addr,
@@ -804,6 +860,9 @@ def run_ring_joint_sdpa(
                 total,
                 ck,
                 cv,
+                jck,
+                jcv,
+                NK,
                 ready_addr,
                 int(send_ready),
                 rc.x if rc else 0,
@@ -822,6 +881,8 @@ def run_ring_joint_sdpa(
 
         # ---------------- compute-core key segments (local -> joint -> remote by hop distance) ----------------
         port_index = {pk: i for i, pk in enumerate(port_keys)}
+        # kind: 0 local main, 1 local joint, 2 remote main, 3 remote joint (sharded). masked: 0 none, else the
+        # key-tail mask tile index + 1 applied on the segment's last valid tile (1 main tail, 2 joint tail).
         segments = []  # (kind, valid_tiles, masked, slot, S_in, rank, port_mask, src)
 
         def add_main(kind, s, slot=0, S_in=0, rank=0, port_mask=0):
@@ -832,9 +893,15 @@ def run_ring_joint_sdpa(
             masked = int(vr % 32 != 0 and not is_causal)
             segments.append((kind, (vr + 31) // 32, masked, slot, S_in, rank, port_mask, s))
 
+        def add_joint(kind, s, slot=0, S_in=0, rank=0, port_mask=0):
+            jr = joint_valid_rows(s)
+            if jr == 0:
+                return  # a wholly padded slice: never read (its landing is not awaited either)
+            segments.append((kind, (jr + 31) // 32, 2 if jr % 32 else 0, slot, S_in, rank, port_mask, s))
+
         add_main(0, p)
         if has_joint:
-            segments.append((1, Lq_t, 0, 0, 0, 0, 0, 0))
+            add_joint(1, p)
         arr = {}
         for d in ("fwd", "bwd"):
             up = ch["prev"] if d == "fwd" else ch["next"]
@@ -849,6 +916,8 @@ def run_ring_joint_sdpa(
                         if item_chunks[l] > 0:
                             mask |= 1 << port_index[(d, l)]
                     add_main(2, s, _slot(p, s, G), len(arr[d]), dist - 1, mask)
+                    if sharded:  # the joint slice of s lands right after its main slice (entry kind 1)
+                        add_joint(3, s, _slot(p, s, G), len(arr[d]), dist - 1, mask)
         seg_flat = [x for sgm in segments for x in sgm]
         seg_compute = [x for sgm in segments for x in (sgm[1], sgm[2], sgm[7])]
         pxy = [virt(pc) for pc in port_cores]
@@ -882,10 +951,10 @@ def run_ring_joint_sdpa(
         # ---------------- compute-core kernels ----------------
         unit_ct = [Sq, Sk, DHt, DVt, NQ, LQ, n_kv_t, BG, C, hq, hk, hv, qh, n_q_t, Lq_t]
         unit_ct += [int(is_causal), int(is_balanced), G]
-        reader_ct = [CB_Q_BLOCK, CB_K_BLOCK, CB_V_BLOCK] + unit_ct + [len(port_cores)]
-        for t in (q, k, v, jq, jk, jv, landk, landv):
+        reader_ct = [CB_Q_BLOCK, CB_K_BLOCK, CB_V_BLOCK] + unit_ct + [len(port_cores), NK]
+        for t in (q, k, v, jq, jk, jv, landk, landv, landjk, landjv):
             reader_ct += ta(t)
-        writer_ct = [CB_OUT_TILES, CB_KEY_MASK, CB_MAX_SCALER, CB_SUM_SCALER] + unit_ct + [mask_cols]
+        writer_ct = [CB_OUT_TILES, CB_KEY_MASK, CB_MAX_SCALER, CB_SUM_SCALER] + unit_ct + [mask_cols, joint_cols]
         writer_ct += ta(out) + ta(jout)
         compute_ct = (
             [
@@ -906,7 +975,7 @@ def run_ring_joint_sdpa(
                 CB_OUT_TILES,
             ]
             + unit_ct
-            + [scale_bits, CB_P_TOKEN]
+            + [scale_bits, CB_P_TOKEN, mask_tiles]
         )
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -925,6 +994,8 @@ def run_ring_joint_sdpa(
                     addr(jv),
                     addr(landk),
                     addr(landv),
+                    addr(landjk),
+                    addr(landjv),
                     ci,
                     arrival_addr,
                     cdone_addr,
@@ -948,14 +1019,22 @@ def run_ring_joint_sdpa(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"{prefix}_port_reader.cpp"),
                 core_ranges=port_crs,
-                compile_time_args=port_ct + ta(k) + ta(v) + ta(landk) + ta(landv),
+                compile_time_args=port_ct
+                + ta(k)
+                + ta(v)
+                + ta(landk)
+                + ta(landv)
+                + ta(tjk)
+                + ta(tjv)
+                + ta(landjk)
+                + ta(landjv),
                 runtime_args=preader_rt,
                 config=dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"{prefix}_port_sender.cpp"),
                 core_ranges=port_crs,
-                compile_time_args=port_ct + ta(landk) + ta(landv),
+                compile_time_args=port_ct + ta(landk) + ta(landv) + ta(landjk) + ta(landjv),
                 runtime_args=psender_rt,
                 config=dm("RISCV_0", NOC1),
             ),
@@ -1007,6 +1086,8 @@ def run_ring_joint_sdpa(
                 dh,
                 dv,
                 L,
+                logical_l,
+                sharded,
                 logical_n,
                 Sq,
                 Sk,
@@ -1030,6 +1111,7 @@ def run_ring_joint_sdpa(
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
 
-    io = [q, k, v] + ([jq, jk, jv, jout] if has_joint else []) + [landk, landv, out]
+    io = [q, k, v] + ([jq, jk, jv, jout] if has_joint else []) + [landk, landv] + ([landjk, landjv] if sharded else [])
+    io += [out]
     ttnn.generic_op(io, mesh_desc)
     return out, jout

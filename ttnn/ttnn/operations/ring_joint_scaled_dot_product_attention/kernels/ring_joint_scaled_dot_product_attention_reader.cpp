@@ -45,12 +45,13 @@ void kernel_main() {
     constexpr bool balanced = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t G = get_compile_time_arg_val(20);
     constexpr uint32_t num_ports = get_compile_time_arg_val(21);
+    constexpr uint32_t num_kinds = get_compile_time_arg_val(22);  // transport entry kinds: 1, 2 with sharded joint
     constexpr bool has_joint = Lq_t > 0;
     constexpr uint32_t groups = hq / g;
     constexpr uint32_t Hmax = hk > hv ? hk : hv;  // transport entries per batch (one per kv head index)
     static_assert(num_ports <= MAX_PORTS, "too many port cores");
 
-    constexpr auto q_args = TensorAccessorArgs<22>();
+    constexpr auto q_args = TensorAccessorArgs<23>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto jq_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -58,6 +59,9 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto jv_args = TensorAccessorArgs<jk_args.next_compile_time_args_offset()>();
     constexpr auto lk_args = TensorAccessorArgs<jv_args.next_compile_time_args_offset()>();
     constexpr auto lv_args = TensorAccessorArgs<lk_args.next_compile_time_args_offset()>();
+    // sharded-joint landing (aliases of lk / lv otherwise: valid, never addressed)
+    constexpr auto ljk_args = TensorAccessorArgs<lv_args.next_compile_time_args_offset()>();
+    constexpr auto ljv_args = TensorAccessorArgs<ljk_args.next_compile_time_args_offset()>();
 
     uint32_t a = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(a++);
@@ -68,6 +72,8 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t jv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t lk_addr = get_arg_val<uint32_t>(a++);
     const uint32_t lv_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t ljk_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t ljv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t core_idx = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
     const uint32_t cdone_addr = get_arg_val<uint32_t>(a++);
@@ -91,11 +97,15 @@ void kernel_main() {
     const auto v_acc = TensorAccessor(v_args, v_addr, kv_tile);
     const auto lk_acc = TensorAccessor(lk_args, lk_addr, kv_tile);
     const auto lv_acc = TensorAccessor(lv_args, lv_addr, kv_tile);
+    const auto ljk_acc = TensorAccessor(ljk_args, ljk_addr, kv_tile);
+    const auto ljv_acc = TensorAccessor(ljv_args, ljv_addr, kv_tile);
 
     // landing slot pages: slot * (b*hk*n_kv_t*DHt) + K head pages (V: hv, DVt)
     constexpr uint32_t B = BG / groups;
     constexpr uint32_t k_slot_pages = B * hk * n_kv_t * DHt;
     constexpr uint32_t v_slot_pages = B * hv * n_kv_t * DVt;
+    constexpr uint32_t jk_slot_pages = B * hk * Lq_t * DHt;  // sharded joint: Lq_t = the slice's tiles
+    constexpr uint32_t jv_slot_pages = B * hv * Lq_t * DVt;
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
 
     const uint32_t tail_idx = seg_idx + num_segments * 8;  // W, then has_tail, bh, row0, rows, joint, then p
@@ -162,17 +172,21 @@ void kernel_main() {
             if (kind == 1) {
                 k_base = k_head * Lq_t * DHt;
                 v_base = v_head * Lq_t * DVt;
+            } else if (kind == 3) {
+                k_base = slot * jk_slot_pages + k_head * Lq_t * DHt;
+                v_base = slot * jv_slot_pages + v_head * Lq_t * DVt;
             } else {
                 k_base = (kind == 2 ? slot * k_slot_pages : 0) + k_head * n_kv_t * DHt;
                 v_base = (kind == 2 ? slot * v_slot_pages : 0) + v_head * n_kv_t * DVt;
             }
-            if (kind == 2) {
+            if (kind >= 2) {
                 MaybeDeviceZoneScope("reader_landing_wait");
-                // ---- await_landing: count needed = entry * S_in + rank + 1 on every port carrying the source ----
+                // ---- await_landing: count needed = ee * S_in + rank + 1 on every port carrying the source, ee the
+                // entry index over (entry, kind): main slice ee = entry * num_kinds, joint slice + 1 ----
                 const uint32_t S_in = get_arg_val<uint32_t>(base + 4);
                 const uint32_t rank = get_arg_val<uint32_t>(base + 5);
                 const uint32_t mask = get_arg_val<uint32_t>(base + 6);
-                const uint32_t need = entry * S_in + rank + 1;
+                const uint32_t need = (entry * num_kinds + (kind == 3 ? 1 : 0)) * S_in + rank + 1;
                 for (uint32_t pi = 0; pi < num_ports; ++pi) {
                     if (!((mask >> pi) & 1)) {
                         continue;
@@ -206,6 +220,8 @@ void kernel_main() {
                                 noc_async_read_tile(kpage + d, k_acc, dst);
                             } else if (kind == 2) {
                                 noc_async_read_tile(kpage + d, lk_acc, dst);
+                            } else if (kind == 3) {
+                                noc_async_read_tile(kpage + d, ljk_acc, dst);
                             } else {
                                 if constexpr (has_joint) {
                                     const auto jk_acc = TensorAccessor(jk_args, jk_addr, kv_tile);
@@ -219,6 +235,8 @@ void kernel_main() {
                                 noc_async_read_tile(vpage + d, v_acc, dst);
                             } else if (kind == 2) {
                                 noc_async_read_tile(vpage + d, lv_acc, dst);
+                            } else if (kind == 3) {
+                                noc_async_read_tile(vpage + d, ljv_acc, dst);
                             } else {
                                 if constexpr (has_joint) {
                                     const auto jv_acc = TensorAccessor(jv_args, jv_addr, kv_tile);

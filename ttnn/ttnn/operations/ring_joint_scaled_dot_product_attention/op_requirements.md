@@ -141,7 +141,7 @@ No SUPPORTED change.
 
 **Outcome**: focus 52.81 → 42.64 ms fastest chip / 42.80 ms slowest (1.24x; key block 66.6 → 53.2 us), soft gate holds, guard set flat. Landed at bf16 DEST: single l / O accumulators (a on the pack thread in a spare exp-chunk slot; ELWMUL a·l_acc / a·O_acc accumulated onto the fresh row sum / P·V in S2, packed back in place; no rescale pass, cb_sum_blk / cb_out_blk dropped from the plan), plus ping-pong running max (no m copy). Bottleneck now: the streamed block is balanced across MATH / PACK / UNPACK. Single-payload ablations move it ≤ 6 us, the matmuls alone 39.8 us (≈ 21 us HiFi2 FPU), every payload stubbed 16.3 us, and inits are ≈ 16 ns each. Still 2.36x roofline. Next: subblock height 2 (row-pair streaming: unpacks per block 1216 → 768, fewer sections) and a key-split tail (the r = 2 tail is 4 %). Not done here: the row-pair rewrite restructures the whole pipeline, and its target resource is not shown to bind. The co-tune is closed at the focus (Sq 16 × Sk 16 needs 1.58 MB > 1.33 MB even after the fold-in).
 
-### [ ] Refinement 4 — DiT joint / cross variants: sharded joint, non-aligned replicated joint, cross-attention
+### [x] Refinement 4 — DiT joint / cross variants: sharded joint, non-aligned replicated joint, cross-attention
 
 **Goal**: add `"sharded"` to `SUPPORTED["joint_mode"]`, `"non_aligned"` to `SUPPORTED["joint_len"]` and `"cross"` to `SUPPORTED["attention_kind"]`, natively:
 - **Sharded joint (design regime R5)**: each device holds an L_dev = roundup32(ceil(L/G)) slice and `logical_l = L`. The joint K/V slices travel the ring as extra transport entries into joint landing slots, `key_block_plan` gains remote joint segments (rows ≥ `logical_l` masked), and joint Q stays local, so `joint_out` is the device's own slice. **TRANSPORT** (new entry kind on the existing relay) + **OVERLAP** (joint remote segments gated like the main ones).
@@ -153,6 +153,8 @@ No SUPPORTED change.
 - Sharded joint is the only item here that changes the transport. Reuse the existing entry / slot / arrival-count protocol: one more entry kind, the count stays an entry index (`blackhole-fabric.md` rule 5).
 
 **Done when**: those three axis values are in SUPPORTED, the golden suite (incl. `test_ring_mock.py` sharded-joint cells and `test_fabric_configs.py`) shows 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode, and no regression on prior cells.
+
+**Outcome**: all three values in SUPPORTED, no EXCLUSIONS. Golden slice `-k "sharded or non_aligned or cross"` 320 passed / 0 failed; `test_ring_mock.py` + `test_fabric_configs.py` + `test_regression.py` 118 passed; unit acceptance + causal_heads 27 passed; new `test_..._joint_cross.py` 14 passed (both DEST widths).
 
 ### [ ] Refinement 5 — Perf-flagged case: K/V reuse multicast across a grid row (design regime R2) — scheme-change
 

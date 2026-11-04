@@ -397,3 +397,30 @@ The focus is **1.45x faster on every chip (76.48 → 52.69 ms)**, with no guard 
     default mode.
 - Tests added: none (existing precision-baseline / causal-heads / acceptance files cover the bf16-DEST path).
   `probes/perf_breakdown.py` gained `FOCUS_FID` (fidelity ablation).
+
+## Refinement 4 — DiT joint / cross variants: sharded joint, non-aligned replicated joint, cross-attention
+- Date: 2026-11-04
+- What was done:
+  - SUPPORTED: `joint_mode += sharded`, `joint_len += non_aligned`, `attention_kind += cross`. No EXCLUSIONS.
+  - Sharded joint (R5) — TRANSPORT: the joint K/V slices are a second transport entry *kind* on the existing relay
+    (port reader / sender loop over `ee = entry * NK + kind`; kind 1 reads the joint inputs / relays from and lands in
+    separate persistent joint landing buffers `_landing_buffers(..., tag="joint")`). The arrival count stays an entry
+    index (`ee * S_in + rank + 1`); the host checks a port carries a joint item iff it carries a main one.
+    OVERLAP: remote joint segments (kind 3) follow each remote main segment of the same source in the key plan and
+    are gated like it (joint slice lands right after the main slice of the same (batch, kv head)). Joint Q stays local;
+    `joint_out` is the device's own slice. Wholly padded slices are skipped (no read, no wait).
+  - Non-aligned joint (replicated L % 32 or sharded logical_l % 32): second key-tail mask tile (`JOINT_MASK_TILES = 2`
+    → `compute_cb_plan` mask_tiles ≤ 2); each segment carries its mask-tile index (+1), the writer builds tile 1 with
+    the joint valid columns; both DEST bodies apply it (bf16 stream: dest-reuse add; fp32: the mask chain now indexes
+    the tile with `TileAddressing::Offset`). Masked in-kernel; inputs arrive tile-padded, no host pad.
+  - Cross-attention: the unit decode / key plan were already split on `n_q_t` vs `n_kv_t`; widened the gate only.
+  - Reused: unit decode, key_block_plan segments, entry/slot/arrival protocol, key-tail mask path, CB plan.
+    Added: entry kind loop in both port kernels, kind-3 segments in the reader, joint mask tile.
+- Accuracy achieved: golden tolerances (bf16/bf16 fp32 DEST: PCC ≥ 0.999, rel-RMS ≤ 0.02; bf16 DEST 0.995 / 0.05;
+  bf8b combos per TOLERANCES) on Flux / SD3.5 (L 333) / Motif (L 334) / Mochi (L 118) joint shapes and the LTX-2 cross
+  shapes, G = 2 and 4.
+- Golden test progress: test_golden slice (`sharded or non_aligned or cross`) 320 passed / 0 failed;
+  test_ring_mock + test_fabric_configs + test_regression 118 passed.
+- Issues encountered: None.
+- Tests added: `tests/ttnn/unit_tests/operations/ring_joint_scaled_dot_product_attention/test_ring_joint_scaled_dot_product_attention_joint_cross.py`
+  (sharded L 333 / 512 / 118, replicated L 333 / 118, cross q32 / q64; fp32 and bf16 DEST; 1×4 ring).

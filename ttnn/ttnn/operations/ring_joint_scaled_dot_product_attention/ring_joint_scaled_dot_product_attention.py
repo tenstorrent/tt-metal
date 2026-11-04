@@ -57,7 +57,8 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + Refinement 1: bf16 DEST, bfloat8_b Q and K/V + Refinement 2: causal / balanced, GQA/MQA/MLA)
+# 2. SUPPORTED (Phase 0 + Refinement 1: bf16 DEST, bfloat8_b Q and K/V + Refinement 2: causal / balanced, GQA/MQA/MLA
+#    + Refinement 4: sharded joint, non-aligned joint, cross-attention)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -66,10 +67,10 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
-    "attention_kind": ["self"],
+    "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa", "mla"],
-    "joint_len": ["none", "aligned"],
-    "joint_mode": ["none", "replicated"],
+    "joint_len": ["none", "aligned", "non_aligned"],
+    "joint_mode": ["none", "replicated", "sharded"],
     "mask_mode": ["none", "causal"],
     "is_balanced": [False, True],
     "seq_padding": ["exact", "padded"],

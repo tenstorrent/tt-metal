@@ -149,11 +149,12 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(32);
     constexpr uint32_t scale_bits = get_compile_time_arg_val(33);
     constexpr uint32_t cb_p_tok = get_compile_time_arg_val(34);
-    constexpr uint32_t mask_tiles = causal ? 2 : 1;  // causal: [diagonal, all -inf]; else the key-tail mask
+    // causal: [diagonal, all -inf]; else the key-tail masks [main tail, joint tail (non-aligned / sharded joint)]
+    constexpr uint32_t mask_tiles = get_compile_time_arg_val(35);
 
     const uint32_t core_idx = get_arg_val<uint32_t>(0);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
-    constexpr uint32_t SEG = 3;  // per segment: valid_tiles, masked, src
+    constexpr uint32_t SEG = 3;  // per segment: valid_tiles, masked (0 none, else key-tail mask tile + 1), src
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_scores);
 
@@ -172,14 +173,14 @@ void kernel_main() {
     uint32_t row_gq[Sq];
     struct BlockMask {
         bool any;          // the block needs any mask tile
-        bool pad;          // non-causal: key-tail mask on column skv - 1
+        uint32_t pad;      // non-causal: key-tail mask tile + 1 on column skv - 1 (0: none)
         uint32_t src, t0;  // causal: source device, first key tile of the block
     };
     auto mask_of = [&](const BlockMask& bm, uint32_t r, uint32_t c, uint32_t skv) -> uint32_t {
         if constexpr (causal) {
             return causal_mask_class(row_gq[r], global_tile<balanced>(bm.src, bm.t0 + c, n_kv_t, G));
         } else {
-            return (bm.pad && c + 1 == skv) ? 1 : 0;
+            return (c + 1 == skv) ? bm.pad : 0;
         }
     };
     const uint32_t pv_sbw = subblock_w(DVt);
@@ -489,19 +490,19 @@ void kernel_main() {
         }
         for (uint32_t s = 0; s < num_segments; ++s) {
             uint32_t valid = get_arg_val<uint32_t>(2 + SEG * s);
-            const bool seg_masked = get_arg_val<uint32_t>(3 + SEG * s) != 0;
+            const uint32_t seg_masked = get_arg_val<uint32_t>(3 + SEG * s);
             [[maybe_unused]] const uint32_t seg_src = get_arg_val<uint32_t>(4 + SEG * s);
             if constexpr (causal) {  // same truncation as the reader (keys past the unit's latest query)
                 valid = causal_visible_tiles<balanced>(valid, seg_src, max_gq, n_kv_t, G);
             }
             for (uint32_t t0 = 0; t0 < valid; t0 += Sk, ++kb) {
                 const uint32_t skv = (valid - t0) < Sk ? (valid - t0) : Sk;
-                BlockMask bm{false, false, seg_src, t0};
+                BlockMask bm{false, 0, seg_src, t0};
                 if constexpr (causal) {
                     bm.any = global_tile<balanced>(seg_src, t0 + skv - 1, n_kv_t, G) >= min_gq;
                 } else {
-                    bm.pad = seg_masked && (t0 + skv == valid);
-                    bm.any = bm.pad;
+                    bm.pad = (t0 + skv == valid) ? seg_masked : 0;
+                    bm.any = bm.pad != 0;
                 }
                 const bool zs = (i == 0) && (kb >= ZONE_SAMPLE_KB0) && (kb < ZONE_SAMPLE_KB0 + ZONE_SAMPLE_NKB);
                 if constexpr (!DST_ACCUM_MODE) {
@@ -575,8 +576,14 @@ void kernel_main() {
                                         InputTileMapping::Block,
                                         DataFormatReconfig::Enabled,
                                         TileAddressing::Strided),
-                                    input(cb_mask, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::None)>{
-                                    StridedTileRange{skv - 1, Sk}},
+                                    input(
+                                        cb_mask,
+                                        BroadcastDim::None,
+                                        WaitPolicy::Upfront,
+                                        PopPolicy::None,
+                                        InputTileMapping::Scalar,
+                                        DataFormatReconfig::Enabled,
+                                        TileAddressing::Offset)>{StridedTileRange{skv - 1, Sk}, bm.pad - 1},
                                 PackTile<output(
                                     cb_scores,
                                     ReservePolicy::None,

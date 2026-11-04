@@ -3,7 +3,9 @@
 
 // Compute-core writer (BRISC, NoC1): startup_block (reduce scalers + key-tail mask tile) and store_out_block.
 //
-// Mask tile (only when logical_n % 32 != 0): column c of every row = 0 if c < valid_cols else -inf (bf16 0xFF80).
+// Key-tail mask tiles (non-causal): tile 0 = the main key tail (logical_n % 32 valid columns), tile 1 (only when the
+// joint keys end inside a tile: L % 32 replicated, logical_l % 32 sharded) = the joint key tail. Column c of every row
+// = 0 if c < valid_cols else -inf (bf16 0xFF80); a tile with valid_cols == 0 is never applied and stays zero.
 // Built without a whole-tile CPU loop: zero the tile over the NoC, write the -inf lanes of row 0 of faces 0/1,
 // then replicate that row to the other 15 rows of each face and faces 0/1 to faces 2/3 with local NoC copies.
 
@@ -27,8 +29,10 @@ void kernel_main() {
     constexpr uint32_t C = get_compile_time_arg_val(12);
     constexpr bool causal = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t mask_cols = get_compile_time_arg_val(22);
+    constexpr uint32_t joint_cols = get_compile_time_arg_val(23);
+    constexpr uint32_t key_mask_tiles = joint_cols != 0 ? 2 : 1;  // host: compute_cb_plan mask_tiles (non-causal)
     constexpr bool has_joint = LQ > 0;
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
     [[maybe_unused]] constexpr auto jout_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -74,34 +78,42 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         mask_cb.push_back(2);
-    } else if constexpr (mask_cols != 0) {
+    } else if constexpr (mask_cols != 0 || joint_cols != 0) {
         Noc noc;
         CircularBuffer mask_cb(cb_mask);
         const uint32_t tile_bytes = get_tile_size(cb_mask);
-        mask_cb.reserve_back(1);
-        const uint32_t base = get_write_ptr(cb_mask);
-        noc.async_write_zeros(mask_cb, tile_bytes, {.offset_bytes = 0});
+        mask_cb.reserve_back(key_mask_tiles);
+        const uint32_t base0 = get_write_ptr(cb_mask);
+        noc.async_write_zeros(mask_cb, key_mask_tiles * tile_bytes, {.offset_bytes = 0});
         noc.write_zeros_l1_barrier();
-        // row 0 of face 0 (cols 0..15) and face 1 (cols 16..31): 16 bf16 each, 2 per word
+        // row 0 of face 0 (cols 0..15) and face 1 (cols 16..31) CPU-written, then replicated with local NoC copies
         constexpr uint32_t FACE_BYTES = 16 * 16 * 2;
         constexpr uint32_t ROW_BYTES = 16 * 2;
-        volatile tt_l1_ptr uint16_t* f0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base);
-        volatile tt_l1_ptr uint16_t* f1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base + FACE_BYTES);
-        for (uint32_t c = mask_cols; c < 32; ++c) {
-            if (c < 16) {
-                f0[c] = 0xFF80;
-            } else {
-                f1[c - 16] = 0xFF80;
+        auto build_tail = [&](uint32_t base, uint32_t valid_cols) {
+            volatile tt_l1_ptr uint16_t* f0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base);
+            volatile tt_l1_ptr uint16_t* f1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base + FACE_BYTES);
+            for (uint32_t c = valid_cols; c < 32; ++c) {
+                if (c < 16) {
+                    f0[c] = 0xFF80;
+                } else {
+                    f1[c - 16] = 0xFF80;
+                }
             }
+            for (uint32_t r = 1; r < 16; ++r) {
+                noc_async_read(get_noc_addr(base), base + r * ROW_BYTES, ROW_BYTES);
+                noc_async_read(get_noc_addr(base + FACE_BYTES), base + FACE_BYTES + r * ROW_BYTES, ROW_BYTES);
+            }
+            noc_async_read_barrier();
+            noc_async_read(get_noc_addr(base), base + 2 * FACE_BYTES, 2 * FACE_BYTES);  // faces 2, 3 = faces 0, 1
+            noc_async_read_barrier();
+        };
+        if constexpr (mask_cols != 0) {
+            build_tail(base0, mask_cols);
         }
-        for (uint32_t r = 1; r < 16; ++r) {
-            noc_async_read(get_noc_addr(base), base + r * ROW_BYTES, ROW_BYTES);
-            noc_async_read(get_noc_addr(base + FACE_BYTES), base + FACE_BYTES + r * ROW_BYTES, ROW_BYTES);
+        if constexpr (joint_cols != 0) {
+            build_tail(base0 + tile_bytes, joint_cols);
         }
-        noc_async_read_barrier();
-        noc_async_read(get_noc_addr(base), base + 2 * FACE_BYTES, 2 * FACE_BYTES);  // faces 2, 3 = faces 0, 1
-        noc_async_read_barrier();
-        mask_cb.push_back(1);
+        mask_cb.push_back(key_mask_tiles);
     }
 
     // ---- store_out_block ----

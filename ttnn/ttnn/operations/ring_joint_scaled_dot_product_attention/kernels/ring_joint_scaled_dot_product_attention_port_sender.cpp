@@ -41,14 +41,20 @@ void kernel_main() {
     constexpr uint32_t group = get_compile_time_arg_val(4);
     constexpr auto lk_args = TensorAccessorArgs<5>();
     constexpr auto lv_args = TensorAccessorArgs<lk_args.next_compile_time_args_offset()>();
+    constexpr auto ljk_args = TensorAccessorArgs<lv_args.next_compile_time_args_offset()>();  // joint kind landing
+    constexpr auto ljv_args = TensorAccessorArgs<ljk_args.next_compile_time_args_offset()>();
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     constexpr uint32_t num_headers = group;
 
     size_t a = 0;
     const uint32_t lk_addr = get_arg_val<uint32_t>(a++);
     const uint32_t lv_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t ljk_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t ljv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t kpe = get_arg_val<uint32_t>(a++);
     const uint32_t vpe = get_arg_val<uint32_t>(a++);
+    const uint32_t jkpe = get_arg_val<uint32_t>(a++);
+    const uint32_t jvpe = get_arg_val<uint32_t>(a++);
     const uint32_t first_bank = get_arg_val<uint32_t>(a++);
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr =
@@ -57,6 +63,9 @@ void kernel_main() {
     const uint32_t total = get_arg_val<uint32_t>(a++);      // chunks I send
     const uint32_t k_chunks = get_arg_val<uint32_t>(a++);   // chunks of one K / V part on this port
     const uint32_t v_chunks = get_arg_val<uint32_t>(a++);
+    const uint32_t jk_chunks = get_arg_val<uint32_t>(a++);
+    const uint32_t jv_chunks = get_arg_val<uint32_t>(a++);
+    const uint32_t num_kinds = get_arg_val<uint32_t>(a++);  // 1, or 2 with a sharded joint (entry index ee)
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
     const uint32_t send_ready = get_arg_val<uint32_t>(a++);
     const uint32_t ready_x = get_arg_val<uint32_t>(a++);
@@ -79,8 +88,9 @@ void kernel_main() {
         const auto lk = TensorAccessor(lk_args, lk_addr, page_bytes);
         const auto lv = TensorAccessor(lv_args, lv_addr, page_bytes);
         const uint32_t hmax = hk > hv ? hk : hv;
-        const uint32_t k_slot_pages = (num_entries / hmax) * hk * kpe;
-        const uint32_t v_slot_pages = (num_entries / hmax) * hv * vpe;
+        const auto ljk = TensorAccessor(ljk_args, ljk_addr, page_bytes);
+        const auto ljv = TensorAccessor(ljv_args, ljv_addr, page_bytes);
+        const uint32_t nb = num_entries / hmax;
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
         for (uint32_t h = 0; h < num_headers; ++h) {
@@ -109,12 +119,17 @@ void kernel_main() {
             const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
             uint32_t chunks_left = total;
             uint32_t h = 0, unflushed = 0;
-            for (uint32_t e = 0; e < num_entries; ++e) {
+            for (uint32_t ee = 0; ee < num_entries * num_kinds; ++ee) {
+                const uint32_t e = ee / num_kinds;
+                const bool jkind = ee != e * num_kinds;
                 const uint32_t bi = e / hmax, j = e - (e / hmax) * hmax;
-                const uint32_t kp = (bi * hk + j) * kpe, vp = (bi * hv + j) * vpe;
-                const uint32_t kn = j < hk ? kpe : 0, vn = j < hv ? vpe : 0;
+                const uint32_t kpp = jkind ? jkpe : kpe, vpp = jkind ? jvpe : vpe;
+                const uint32_t kp = (bi * hk + j) * kpp, vp = (bi * hv + j) * vpp;
+                const uint32_t kn = j < hk ? kpp : 0, vn = j < hv ? vpp : 0;
+                const uint32_t k_slot_pages = nb * hk * kpp, v_slot_pages = nb * hv * vpp;
                 // the item's last chunk carries the arrival increment (host guarantees >= 1 chunk per item)
-                const uint32_t item_chunks = (j < hk ? k_chunks : 0) + (j < hv ? v_chunks : 0);
+                const uint32_t item_chunks =
+                    (j < hk ? (jkind ? jk_chunks : k_chunks) : 0) + (j < hv ? (jkind ? jv_chunks : v_chunks) : 0);
                 for (uint32_t k = 0; k < num_sources; ++k) {
                     const uint32_t slot = get_arg_val<uint32_t>(slots_idx + k);
                     uint32_t item_sent = 0;
@@ -140,10 +155,12 @@ void kernel_main() {
                         }
                     };
                     for_each_chunk(kn, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
-                        send(lk.get_noc_addr(slot * k_slot_pages + kp + page, 0, 0), n);
+                        const uint32_t pg = slot * k_slot_pages + kp + page;
+                        send(jkind ? ljk.get_noc_addr(pg, 0, 0) : lk.get_noc_addr(pg, 0, 0), n);
                     });
                     for_each_chunk(vn, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
-                        send(lv.get_noc_addr(slot * v_slot_pages + vp + page, 0, 0), n);
+                        const uint32_t pg = slot * v_slot_pages + vp + page;
+                        send(jkind ? ljv.get_noc_addr(pg, 0, 0) : lv.get_noc_addr(pg, 0, 0), n);
                     });
                 }
             }
