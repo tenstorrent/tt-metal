@@ -15,15 +15,13 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     random_tensor,
-    assert_pcc,
-    device_config,
+    assert_quality,
     row_grid,
     ROW_GRIDS,
+    MeshRows,
     P150_AND_RING,
     REFERENCE,
     REFERENCE_LAYERS,
-    sp_gather,
-    sp_shard,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import compute_kernel_config
 from models.experimental.kimi_k3_moonvit_v2.tt.rms_norm import RMSNorm
@@ -32,17 +30,17 @@ from models.experimental.kimi_k3_moonvit_v2.tt.rms_norm import RMSNorm
 ENCODER_NORMS = ["norm0", "norm1"]
 
 
-def check_rms_norm(mesh_device, sp_axis, torch_norm, eps: float, n: int, rows: int) -> None:
+def check_rms_norm(mesh_device, torch_norm, eps: float, rows: MeshRows) -> None:
     (dim,) = torch_norm.normalized_shape
     tt = RMSNorm(dim, eps=eps, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(torch_norm.state_dict())
 
-    x = random_tensor(n, dim)
+    x = random_tensor(rows.n, dim)
     with torch.no_grad():
-        golden = torch_norm(x)
+        golden = torch_norm(rows.take(x))
 
-    out = tt(sp_shard(x, mesh_device, sp_axis, rows))
-    assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, n))
+    out = tt(rows.shard(x, mesh_device))
+    assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.01)
 
 
 @P150_AND_RING
@@ -50,34 +48,28 @@ def check_rms_norm(mesh_device, sp_axis, torch_norm, eps: float, n: int, rows: i
 @ROW_GRIDS
 @pytest.mark.parametrize("name", ENCODER_NORMS)
 def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, size, layer, name):
-    config = device_config(config, sp_axis)
-    grid = row_grid(size, sp_axis)
     torch_norm = reference.vision_tower.encoder.blocks[layer].get_submodule(name)
     assert torch_norm.eps is None
-    _, h, w = grid[0]
-    check_rms_norm(mesh_device, sp_axis, torch_norm, config.norm_eps, h * w, config.max_patches)
+    ((_, h, w),) = row_grid(size)
+    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
 
 
 @P150_AND_RING
 @REFERENCE
 @ROW_GRIDS
 def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    config = device_config(config, sp_axis)
-    grid = row_grid(size, sp_axis)
     torch_norm = reference.vision_tower.encoder.final_layernorm
     assert torch_norm.eps is None
-    _, h, w = grid[0]
-    check_rms_norm(mesh_device, sp_axis, torch_norm, config.norm_eps, h * w, config.max_patches)
+    ((_, h, w),) = row_grid(size)
+    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
 
 
 @P150_AND_RING
 @REFERENCE
 @ROW_GRIDS
 def test_projector_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    config = device_config(config, sp_axis)
-    grid = row_grid(size, sp_axis)
     torch_norm = reference.mm_projector.post_norm
     assert torch_norm.eps == config.projector_norm_eps
-    _, h, w = grid[0]
-    n, rows = h * w // config.merge_area, config.max_patches // config.merge_area
-    check_rms_norm(mesh_device, sp_axis, torch_norm, config.projector_norm_eps, n, rows)
+    ((_, h, w),) = row_grid(size)
+    rows = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
+    check_rms_norm(mesh_device, torch_norm, config.projector_norm_eps, rows)

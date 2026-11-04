@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import time
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import RING_SIZE, MoonViTConfig
 from models.common.utility_functions import comp_pcc
 from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
 
@@ -65,24 +68,18 @@ GRIDS = {
 ATTENTION_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
 
 # Device grids for the parts that work on each row alone (everything but attention). Their CPU golden
-# grows only with the row count, so it runs at the full padded length in seconds. Each size names one
-# (h, w) per mesh, since one P150 runs a quarter of the ring's rows (`device_config`):
+# grows only with the row count, so it runs at the full padded length in seconds. Both meshes run the
+# same image; one P150 runs one ring chip's quarter of it (`MeshRows`):
 #   full:     fills the padded length exactly; real rows on every ring chip, no padding
 #   max_side: also fills it, with the longest side the processor allows (512)
-#   partial:  nearly full; the real rows end inside a tile (not a multiple of 32)
-#   small:    a small image, almost all padding
-ROW_GRID_SIZES = {
-    "full": {"ring": (256, 256), "p150": (128, 128)},
-    "max_side": {"ring": (512, 128), "p150": (512, 32)},
-    "partial": {"ring": (250, 250), "p150": (122, 130)},
-    "small": {"ring": (40, 100), "p150": (40, 100)},
-}
+#   partial:  nearly full; the real rows end inside a tile (not a multiple of 32) on the last chip
+#   small:    a small image, almost all padding; every real row is on the first chip
+ROW_GRID_SIZES = {"full": (256, 256), "max_side": (512, 128), "partial": (250, 250), "small": (40, 100)}
 ROW_GRIDS = pytest.mark.parametrize("size", list(ROW_GRID_SIZES))
 
 
-def row_grid(size: str, sp_axis: int | None) -> list[tuple[int, int, int]]:
-    """The `size` grid for the mesh under test: `ring` when the sequence is split, else `p150`."""
-    h, w = ROW_GRID_SIZES[size]["p150" if sp_axis is None else "ring"]
+def row_grid(size: str) -> list[tuple[int, int, int]]:
+    h, w = ROW_GRID_SIZES[size]
     return [(1, h, w)]
 
 
@@ -90,11 +87,11 @@ def row_grid(size: str, sp_axis: int | None) -> list[tuple[int, int, int]]:
 # 2x4 mesh, torus links along the 4-long axis) it is the first row: `mesh_device` in conftest.py
 # opens all 8 chips and hands the test that row. `FABRIC_2D_TORUS_X` because `FABRIC_1D_RING` cannot
 # route the ring's wraparound link there.
-RING_SIZE = 4
 LOUDBOX_SHAPE = (2, RING_SIZE)
-RING4 = pytest.param((1, RING_SIZE), 1, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}, id="ring1x4")
-# One P150 standing in for one chip of that ring: it gets the first quarter of the padded sequence
-# (`device_config`).
+RING_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}
+RING4 = pytest.param((1, RING_SIZE), 1, 2, RING_FABRIC, id="ring1x4")
+# One P150 standing in for one chip of that ring: it runs that chip's quarter of the padded sequence
+# (`device_config`, `MeshRows`), never the whole of it.
 P150 = pytest.param((1, 1), None, 1, {}, id="p150")
 
 
@@ -110,22 +107,33 @@ def mesh_params(*params):
 RING = mesh_params(RING4)
 P150_AND_RING = mesh_params(P150, RING4)
 
+# Traced tests (`Trace`): the ring with DRAM set aside for the captured commands.
+TRACE_REGION_SIZE = 100_000_000
+RING_TRACE = mesh_params(
+    pytest.param((1, RING_SIZE), 1, 2, {**RING_FABRIC, "trace_region_size": TRACE_REGION_SIZE}, id="ring1x4")
+)
+# Untimed replays, then timed ones (`Trace.time_replays`).
+TRACE_WARMUP = 2
+TRACE_ITERATIONS = 10
+
 NOT_WRITTEN = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="ttnn forward not written yet")
 
 # ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed. The ROW_GRIDS cases pad
 # to 16,384 rows per chip, so they skip there; each row-wise part also has a SIMULATOR_GRID case on one
-# chip, padded to SIMULATOR_ROWS, with random weights.
+# chip, with random weights: the chip's quarter of a ring padded to SIMULATOR_ROWS, 128 rows.
 ON_SIMULATOR = bool(os.environ.get("TT_METAL_SIMULATOR"))
 NOT_ON_SIMULATOR = pytest.mark.skipif(ON_SIMULATOR, reason="full padded length is too slow on ttsim")
 SINGLE_CHIP = mesh_params(P150)
-SIMULATOR_ROWS = 128
-# 120 rows: the real rows end inside the last tile, and the padding fills one more.
+SIMULATOR_ROWS = 512
+# 120 rows, all in the first chip's quarter: the real rows end inside a tile, padding after them.
 SIMULATOR_GRID = [(1, 6, 20)]
 
 
 def device_config(config: MoonViTConfig, sp_axis: int | None) -> MoonViTConfig:
-    """The config a test builds with. On one P150 (`sp_axis` None) the padded length is one ring
-    chip's share, `max_patches / RING_SIZE` rows, so the chip sees the shapes a ring chip sees."""
+    """The config the TT modules build with. On one P150 (`sp_axis` None) the padded length is one ring
+    chip's share, `max_patches / RING_SIZE` rows, so the chip sees the shapes a ring chip sees. Host
+    prep and `check_grid` keep the full config: the input is the ring's, and `MeshRows` cuts the
+    chip's quarter from it."""
     if sp_axis is not None:
         return config
     return dataclasses.replace(config, max_patches=config.max_patches // RING_SIZE)
@@ -139,9 +147,60 @@ def ring_parallel(mesh_device, sp_axis: int | None, num_links: int) -> tuple[Par
     return ParallelFactor(sp_factor, sp_axis), TT_CCL(mesh_device, num_links=num_links, topology=ttnn.Topology.Ring)
 
 
-def assert_pcc(golden: torch.Tensor, actual: torch.Tensor, pcc: float = 0.99) -> None:
-    passing, found = comp_pcc(golden.float(), actual.float(), pcc)
-    assert passing, found
+def quality(golden: torch.Tensor, actual: torch.Tensor) -> dict[str, float]:
+    """How close `actual` is to `golden`:
+
+    - `pcc`: Pearson correlation (`comp_pcc`). Blind to a scale or offset error.
+    - `relative_rmse`: RMS error over the golden's standard deviation. Catches what PCC misses.
+    - `ccc`: concordance correlation, PCC lowered by any scale or offset difference.
+    - `max_abs`, `max_rel`: the largest element differences (as `comp_allclose` reports them; `max_rel`
+      over nonzero golden values), for diagnosis.
+    """
+    golden, actual = golden.float(), actual.float()
+    _, pcc = comp_pcc(golden, actual, 0.0)
+    g, a = golden.flatten().double(), actual.flatten().double()
+    std_g, std_a = g.std().item(), a.std().item()
+    cov = ((g - g.mean()) * (a - a.mean())).mean().item()
+    ccc = 2 * cov / (std_g**2 + std_a**2 + (g.mean() - a.mean()).item() ** 2)
+    relative_rmse = (g - a).pow(2).mean().sqrt().item() / std_g
+    diff = (golden - actual).abs()
+    nonzero = golden != 0
+    max_rel = (diff[nonzero] / golden[nonzero].abs()).max().item() if nonzero.any() else 0.0
+    max_abs = diff.max().item()
+    return {"pcc": pcc, "relative_rmse": relative_rmse, "ccc": ccc, "max_abs": max_abs, "max_rel": max_rel}
+
+
+def format_quality(q: dict[str, float]) -> str:
+    return (
+        f"PCC {q['pcc']:.6f}, relative RMSE {q['relative_rmse']:.2%}, CCC {q['ccc']:.6f}, "
+        f"max abs {q['max_abs']:.3g}, max rel {q['max_rel']:.3g}"
+    )
+
+
+def quality_failures(q: dict[str, float], pcc: float, relative_rmse: float | None) -> list[str]:
+    failures = []
+    if not q["pcc"] >= pcc:
+        failures.append(f"PCC {q['pcc']:.6f} < {pcc}")
+    if relative_rmse is not None and not q["relative_rmse"] <= relative_rmse:
+        failures.append(f"relative RMSE {q['relative_rmse']:.2%} > {relative_rmse:.2%}")
+    return failures
+
+
+def assert_quality(
+    golden: torch.Tensor, actual: torch.Tensor, pcc: float = 0.99, relative_rmse: float | None = None, label: str = ""
+) -> dict[str, float]:
+    """Assert PCC >= `pcc` and relative RMSE <= `relative_rmse`; log every `quality` measure.
+
+    Thresholds follow tt_dit's `assert_quality` (PCC plus relative RMSE); CCC and the largest element
+    differences are logged, not asserted. Each test's relative RMSE limit is about twice the largest
+    value measured on Blackhole over its cases (random and checkpoint weights, both meshes), rounded
+    up. Tests whose forward is not written yet have none (`relative_rmse=None` logs it only)."""
+    label = label or os.environ.get("PYTEST_CURRENT_TEST", "quality").split(" ")[0]
+    q = quality(golden, actual)
+    logger.info(f"{label}: {format_quality(q)}")
+    failures = quality_failures(q, pcc, relative_rmse)
+    assert not failures, f"{label}: {failures}"
+    return q
 
 
 def random_tensor(*shape: int, dtype: torch.dtype = torch.bfloat16, seed: int = 0) -> torch.Tensor:
@@ -204,3 +263,115 @@ def sp_gather(x: ttnn.Tensor, mesh_device, sp_axis: int | None, logical_n: int) 
         composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
     out = ttnn.to_torch(x, mesh_composer=composer)[0, :, :logical_n]
     return out[0] if out.shape[0] == 1 else out
+
+
+@dataclasses.dataclass(frozen=True)
+class MeshRows:
+    """The rows of one padded sequence that the mesh under test holds: `n` real rows padded to `rows`,
+    the ring's length, in the order the ring splits them (window order for patches in the model).
+
+    On the ring (`sp_axis` set) that is every row. On one chip (`sp_axis` None) it is one ring chip's
+    quarter, `rows // RING_SIZE` rows: the last chip that holds real rows, so the quarter has real rows
+    and, unless the image fills the padded length, the padding after them, as that ring chip has.
+
+    Host tensors have their rows on dim 0, real (`n`) or already padded (`rows`).
+    """
+
+    n: int
+    rows: int
+    sp_axis: int | None
+
+    @property
+    def share(self) -> int:
+        """Padded rows on the mesh."""
+        return self.rows if self.sp_axis is not None else self.rows // RING_SIZE
+
+    @property
+    def start(self) -> int:
+        """The first padded row on the mesh."""
+        if self.sp_axis is not None:
+            return 0
+        return min((self.n - 1) // self.share, RING_SIZE - 1) * self.share
+
+    @property
+    def real(self) -> slice:
+        """The real rows on the mesh."""
+        return slice(self.start, min(self.start + self.share, self.n))
+
+    def take(self, x: torch.Tensor) -> torch.Tensor:
+        """The real rows on the mesh: the rows of a golden to compare with `gather`."""
+        return x[self.real]
+
+    def held(self, x: torch.Tensor) -> torch.Tensor:
+        """`x` zero-padded to `rows`, then the `share` rows on the mesh."""
+        return host_prep.pad_rows(x, self.rows)[self.start : self.start + self.share]
+
+    def shard(self, x: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+        """(L, C) or (L, H, C) on the host -> the mesh's rows on device, [1, 1 or H, share/sp, C]."""
+        x = self.held(x)
+        return sp_shard(x if x.ndim == 2 else x.transpose(0, 1), mesh_device, self.sp_axis, self.share, dtype)
+
+    def gather(self, x: ttnn.Tensor, mesh_device) -> torch.Tensor:
+        """The inverse of `shard` with the padding dropped: -> (real rows, C) or (real rows, H, C)."""
+        out = sp_gather(x, mesh_device, self.sp_axis, self.real.stop - self.real.start)
+        return out if out.ndim == 2 else out.transpose(0, 1)
+
+
+class Trace:
+    """One captured trace of `forward()`, replayed on command queue 0.
+
+    `forward` must read only inputs that keep their address (tensors kept alive, or `DeviceInput`s),
+    and must have run once untraced first: that compiles its programs and allocates the ring attention
+    semaphores and buffers, which cannot happen inside a capture. Every replay writes `output`. Use it
+    as a context manager, so the trace is released when a check fails.
+    """
+
+    def __init__(self, mesh_device, forward) -> None:
+        self.mesh_device = mesh_device
+        self.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        try:
+            self.output = forward()
+        except BaseException:
+            ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
+            ttnn.release_trace(mesh_device, self.trace_id)
+            raise
+        ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    def __enter__(self) -> "Trace":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        ttnn.release_trace(self.mesh_device, self.trace_id)
+
+    def _execute(self) -> None:
+        ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
+
+    def replay(self) -> ttnn.Tensor:
+        """Run once on the current inputs and wait for it; returns `output`."""
+        self._execute()
+        ttnn.synchronize_device(self.mesh_device)
+        return self.output
+
+    def time_replays(self, label: str, iterations: int = TRACE_ITERATIONS, warmup: int = TRACE_WARMUP) -> float:
+        """Seconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
+        back with one wait for the device at the end, so that wait is spread over all of them (as the
+        CCL perf tests time their traces). Nothing is written or read in between. Logged, not asserted."""
+        for _ in range(warmup):
+            self._execute()
+        ttnn.synchronize_device(self.mesh_device)
+        start = time.perf_counter()
+        for _ in range(iterations):
+            self._execute()
+        ttnn.synchronize_device(self.mesh_device)
+        seconds = (time.perf_counter() - start) / iterations
+        logger.info(f"{label}: {seconds * 1e3:.3f} ms per traced replay ({iterations} replays)")
+        return seconds
+
+
+def assert_same_as_untraced(untraced: torch.Tensor, traced: torch.Tensor, label: str = "") -> None:
+    """A replay runs the same programs on the same inputs as the untraced run, so it must match it
+    exactly."""
+    assert torch.equal(
+        untraced, traced
+    ), f"{label}: traced output differs from the untraced run ({format_quality(quality(untraced, traced))})"

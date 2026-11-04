@@ -30,13 +30,16 @@ def test_encoder_steps_match_encoder(shallow_config, shallow_reference):
     with torch.no_grad():
         x = tower.patch_embed(pixels.to(torch.bfloat16), grid_thws)
         expected = tower.encoder(x, grid_thws)
+        (expected_model,) = shallow_reference(pixels.to(torch.bfloat16), grid_thws)
         steps = dict(encoder_steps(shallow_reference, x, grid_thws))
         # Resuming at block 1 from block 0's output gives the same result.
         resumed = dict(encoder_steps(shallow_reference, steps["block_00"], grid_thws, start=1))
 
-    assert list(steps) == [f"block_{i:02d}" for i in range(shallow_config.num_hidden_layers)] + ["final_layernorm"]
+    blocks = [f"block_{i:02d}" for i in range(shallow_config.num_hidden_layers)]
+    assert list(steps) == blocks + ["final_layernorm", "mm_projector"]
     assert torch.equal(steps["final_layernorm"], expected)
     assert torch.equal(resumed["final_layernorm"], expected)
+    assert torch.equal(steps["mm_projector"], expected_model)
 
 
 @pytest.mark.parametrize("length", [64, 300])

@@ -13,7 +13,7 @@ import torch
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     random_tensor,
-    assert_pcc,
+    assert_quality,
     ATTENTION_GRIDS,
     REFERENCE_LAYERS,
     RING,
@@ -56,4 +56,4 @@ def test_vision_attention(mesh_device, sp_axis, num_links, config, reference, gr
     logical_n = logical_length_tensor(mesh_device, h * w)
     out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches), rope, logical_n)
     out = sp_gather(out, mesh_device, sp_axis, h * w)
-    assert_pcc(golden, host_prep.from_window_order(out, h, w, config.merge_kernel_size))
+    assert_quality(golden, host_prep.from_window_order(out, h, w, config.merge_kernel_size), relative_rmse=0.025)

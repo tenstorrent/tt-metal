@@ -44,6 +44,10 @@ class TT_CCL:
     def ring_attention_semaphores(self) -> list[ttnn.GlobalSemaphore]:
         """Global semaphores for `ring_joint_scaled_dot_product_attention`, created once: two sets of
         `RING_ATTENTION_SEMAPHORES`, alternating per call."""
+        # TODO: Settle whether the alternation is needed. A trace records the set each call used, and
+        # with 27 layers (odd) the last call of one replay and the first of the next share set 0.
+        # Either the semaphores must be reset before each replay, or alternating is not needed at all:
+        # gemma4_d_p, gpt_oss_d_p and deepseek_v3_d_p pass one fixed set to every ring attention call.
         if self._semaphores is None:
             grid = self.mesh_device.compute_with_storage_grid_size()
             cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})

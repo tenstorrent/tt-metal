@@ -18,11 +18,12 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     GRIDS,
     ROW_GRIDS,
     SHALLOW_REFERENCE,
+    MeshRows,
     device_config,
     random_patches,
     row_grid,
 )
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig, check_grid
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig, check_grid, resolve_parallel
 
 REFERENCE_CONFIG = Path(__file__).parents[1] / "reference" / "config.json"
 
@@ -96,16 +97,42 @@ def test_rejects_unsupported_grids(config, expect_error, grid, message):
         check_grid(torch.tensor(grid), config)
 
 
-@pytest.mark.parametrize("sp_axis", [None, 1], ids=["p150", "ring1x4"])
 @ROW_GRIDS
-def test_row_grids_fit_their_mesh(config, sp_axis, size):
-    """Each row-wise device grid is a valid image for its mesh and has the shape its name promises."""
-    config = device_config(config, sp_axis)
-    (grid,) = row_grid(size, sp_axis)
+def test_row_grids(config, size):
+    """Each row-wise device grid is a valid image, and its shape and the quarter one P150 runs of it
+    are what its name promises."""
+    (grid,) = row_grid(size)
     h, w = check_grid(torch.tensor([grid]), config)
+    chip = MeshRows(h * w, config.max_patches, None)
+    real = chip.real.stop - chip.real.start
+    last_chip = config.max_patches - chip.share
     if size in ("full", "max_side"):
         assert h * w == config.max_patches
+        assert (chip.start, real) == (last_chip, chip.share)
     if size == "max_side":
         assert max(h, w) == config.max_side_patches
     if size == "partial":
-        assert (h * w) % 32 and h * w > config.max_patches * 3 // 4
+        assert chip.start == last_chip and real % 32 and real < chip.share
+    if size == "small":
+        assert chip.start == 0 and real == h * w < chip.share
+
+
+def test_mesh_rows():
+    """On the ring every row; on one chip the quarter of the last ring chip with real rows."""
+    x = torch.arange(10.0)[:, None]
+    ring = MeshRows(10, 16, sp_axis=1)
+    assert torch.equal(ring.take(x), x)
+    assert torch.equal(ring.held(x)[:10], x) and not ring.held(x)[10:].any()
+    chip = MeshRows(10, 16, sp_axis=None)
+    assert (chip.share, chip.start, chip.real) == (4, 8, slice(8, 10))
+    assert torch.equal(chip.take(x), x[8:10])
+    assert torch.equal(chip.held(x), torch.tensor([[8.0], [9.0], [0.0], [0.0]]))
+    # An already padded tensor gives the same rows.
+    assert torch.equal(chip.held(torch.nn.functional.pad(x, (0, 0, 0, 6))), chip.held(x))
+    assert MeshRows(16, 16, None).start == 12 and MeshRows(3, 16, None).start == 0
+
+
+def test_one_device_runs_at_most_a_ring_chips_share(config, expect_error):
+    resolve_parallel(None, None, None, device_config(config, None))
+    with expect_error(ValueError, "one ring chip's share"):
+        resolve_parallel(None, None, None, config)
