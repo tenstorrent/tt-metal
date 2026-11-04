@@ -20,6 +20,7 @@
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/prefetcher_pipe.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
+#include "ttnn-nanobind/host_runtime.hpp"
 #include "ttnn-nanobind/d2d_stream_service.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
 #include "ttnn-nanobind/d2h_stream_service.hpp"
@@ -338,6 +339,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_semaphore::py_module(m_global_semaphore);
     ttnn::prefetcher_pipe::py_module(m_prefetcher_pipe);
     ttnn::hd_socket::py_module(m_hd_socket);
+    ttnn::host_runtime::py_module(m_hd_socket);
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module(m_d2d_stream_service);

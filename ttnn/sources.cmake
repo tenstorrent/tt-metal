@@ -126,6 +126,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/prefetcher_pipe.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
+    cpp/ttnn-nanobind/host_runtime.cpp
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp

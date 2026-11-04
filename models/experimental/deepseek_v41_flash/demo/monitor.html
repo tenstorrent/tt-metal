@@ -1,0 +1,465 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+     SPDX-License-Identifier: Apache-2.0
+     The page demo/monitor.py serves: it polls /api/state once a second and draws everything client-side. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek-V4.1 server monitor</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #262c35; --text: #d7dce3; --dim: #8691a0;
+    --green: #4cc38a; --yellow: #e5b84c; --red: #ef6461; --blue: #5aa9e6; --magenta: #c58af9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; background: var(--bg); z-index: 2; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .pill { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .live { background: #1d3b2c; color: var(--green); }
+  .stale { background: #3d3317; color: var(--yellow); }
+  .down { background: #3f1d1d; color: var(--red); }
+  .dim { color: var(--dim); }
+  .spacer { flex: 1; }
+  .windows button { background: var(--panel); color: var(--dim); border: 1px solid var(--line); padding: 3px 9px;
+                    cursor: pointer; font: inherit; }
+  .windows button.on { color: var(--text); border-color: var(--blue); }
+  main { padding: 14px 16px 40px; display: grid; gap: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; }
+  .card .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .card .s { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0; }
+  .panel h2 { font-size: 12px; margin: 0 0 6px; color: var(--dim); font-weight: 600; text-transform: uppercase;
+              letter-spacing: .04em; display: flex; gap: 10px; align-items: baseline; }
+  .chart { position: relative; height: 210px; }
+  .chart canvas { width: 100%; height: 100%; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 11px; color: var(--dim); }
+  .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; }
+  .tip { position: absolute; pointer-events: none; background: #0b0d10ee; border: 1px solid var(--line);
+         padding: 5px 7px; font-size: 11px; white-space: nowrap; display: none; z-index: 1; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--line); }
+  td.r, th.r { text-align: right; }
+  tr.running td { color: var(--green); } tr.queued td { color: var(--magenta); }
+  tr.parked td, tr.busy td { color: var(--text); } tr.host td { color: var(--blue); }
+  .scroll { max-height: 340px; overflow: auto; }
+  .scroll.users { max-height: 480px; }
+  #slots td, #slots th { padding-right: 14px; }
+  #slots .last { color: var(--dim); }
+  .bar { height: 8px; background: #232933; border-radius: 4px; overflow: hidden; min-width: 120px; }
+  .bar > div { height: 100%; }
+  .row2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 14px; }
+  #log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 360px; overflow: auto;
+         white-space: pre-wrap; word-break: break-word; }
+  #log .t { color: var(--dim); margin-right: 8px; }
+  .lv-DEBUG { color: #6fb7c7; } .lv-WARNING { color: var(--yellow); } .lv-ERROR, .lv-CRITICAL { color: var(--red); }
+  .lv-SUCCESS { color: var(--green); }
+  label { color: var(--dim); font-size: 12px; cursor: pointer; }
+  .banner { background: #3f1d1d; color: var(--red); padding: 8px 12px; border-radius: 6px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="model">DeepSeek-V4.1</h1>
+  <span id="status" class="pill down">no data</span>
+  <span id="uptime" class="dim"></span>
+  <span id="updated" class="dim"></span>
+  <span class="spacer"></span>
+  <span class="windows" id="windows">
+    <button data-s="300">5 m</button><button data-s="900" class="on">15 m</button><button data-s="3600">1 h</button><button data-s="0">all</button>
+  </span>
+</header>
+<main>
+  <div class="banner" id="broken"></div>
+  <div class="panel"><h2>Users <span class="dim" id="slot-summary"></span></h2><div class="scroll users"><table id="slots"></table></div></div>
+  <div class="panel" id="images-panel" style="display:none"><h2>Images <span class="dim" id="images-summary"></span></h2>
+    <div class="row2">
+      <div><table id="images-live"></table></div>
+      <div class="scroll"><table id="images-done"></table></div>
+    </div></div>
+  <div class="cards" id="cards"></div>
+  <div class="charts">
+    <div class="panel"><h2>Decode tok/s, all users <span class="dim" id="decode-now"></span></h2>
+      <div class="chart" id="c-decode"></div></div>
+    <div class="panel"><h2>Decode tok/s per user</h2><div class="chart" id="c-users"></div></div>
+    <div class="panel"><h2>Prefill tok/s</h2><div class="chart" id="c-prefill"></div></div>
+    <div class="panel"><h2>KV page pool used</h2><div class="chart" id="c-kv"></div></div>
+    <div class="panel"><h2>Free KV cache (tokens)</h2><div class="chart" id="c-free"></div></div>
+    <div class="panel"><h2>Users</h2><div class="chart" id="c-slots"></div></div>
+    <div class="panel"><h2>Host runtime, mean µs per call</h2><div class="chart" id="c-timers"></div></div>
+  </div>
+  <div class="row2">
+    <div class="panel"><h2>KV page pool</h2><table id="pool"></table>
+      <h2 style="margin-top:14px">Host runtime</h2><table id="runtime"></table></div>
+  </div>
+  <div class="panel"><h2>History <span class="dim" id="history-summary"></span></h2><div class="scroll"><table id="history"></table></div></div>
+  <div class="panel"><h2>Log <label><input type="checkbox" id="debug"> debug</label>
+      <label><input type="checkbox" id="follow" checked> follow</label></h2><div id="log"></div></div>
+</main>
+<script>
+"use strict";
+const PALETTE = ["#5aa9e6", "#4cc38a", "#e5b84c", "#ef6461", "#c58af9", "#58d4c9", "#f29e4c", "#9aa5ff",
+                 "#e07bb5", "#a8d672", "#7fb4ff", "#ffcf70"];
+const series = [];          // one point per server snapshot, as monitor.py builds them
+let history = [], logLines = [], imagesDone = [], state = null, started = null;
+let since = 0, logSince = 0, historySince = 0, imagesSince = 0, windowSeconds = 900, lastNow = 0;
+const userColors = new Map();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = (v, d = 1) => (v == null || !isFinite(v)) ? "–" : Number(v).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+const int = (v) => (v == null) ? "–" : Math.round(v).toLocaleString();
+const dur = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return h ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m${String(s % 60).padStart(2, "0")}s`; };
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+function colorOf(name) {
+  if (!userColors.has(name)) userColors.set(name, PALETTE[userColors.size % PALETTE.length]);
+  return userColors.get(name);
+}
+
+// ---- charts ------------------------------------------------------------------------------------------ //
+class Chart {
+  constructor(el, opts = {}) {
+    this.el = el; this.opts = opts;
+    this.canvas = document.createElement("canvas"); el.appendChild(this.canvas);
+    this.tip = document.createElement("div"); this.tip.className = "tip"; el.appendChild(this.tip);
+    this.legend = document.createElement("div"); this.legend.className = "legend"; el.after(this.legend);
+    this.lines = []; this.hoverX = null;
+    this.canvas.addEventListener("mousemove", (e) => { this.hoverX = e.offsetX; this.draw(); });
+    this.canvas.addEventListener("mouseleave", () => { this.hoverX = null; this.tip.style.display = "none"; this.draw(); });
+  }
+  set(lines, t0, t1) { this.lines = lines; this.t0 = t0; this.t1 = t1; this.draw(); this.drawLegend(); }
+  drawLegend() {
+    const unit = this.opts.unit || "";
+    this.legend.innerHTML = this.lines.map((l) => {
+      const last = l.points.length ? l.points[l.points.length - 1][1] : null;
+      return `<span><i style="background:${l.color}"></i>${esc(l.name)} <b>${this.opts.format ? this.opts.format(last) : fmt(last)}${unit}</b></span>`;
+    }).join("");
+  }
+  draw() {
+    const dpr = window.devicePixelRatio || 1, w = this.el.clientWidth, h = this.el.clientHeight;
+    if (this.canvas.width !== w * dpr || this.canvas.height !== h * dpr) { this.canvas.width = w * dpr; this.canvas.height = h * dpr; }
+    const ctx = this.canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const L = 54, R = 10, T = 8, B = 20, pw = w - L - R, ph = h - T - B;
+    const { t0, t1 } = this; if (!(t1 > t0)) return;
+    let ymax = this.opts.ymax ?? 0;
+    if (this.opts.ymax == null) for (const l of this.lines) for (const [t, v] of l.points) if (t >= t0 && v != null && v > ymax) ymax = v;
+    ymax = ymax > 0 ? niceCeil(ymax * 1.08) : 1;
+    const x = (t) => L + (t - t0) / (t1 - t0) * pw, y = (v) => T + ph - v / ymax * ph;
+    ctx.font = "11px ui-sans-serif, system-ui"; ctx.strokeStyle = "#262c35"; ctx.fillStyle = "#8691a0"; ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const v = ymax * i / 4, yy = Math.round(y(v)) + .5;
+      ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(L + pw, yy); ctx.stroke();
+      ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(this.opts.format ? this.opts.format(v) : axisLabel(v), L - 6, yy);
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4; ctx.fillText(clock(t), Math.min(Math.max(x(t), L + 24), L + pw - 24), T + ph + 5); }
+    ctx.save(); ctx.beginPath(); ctx.rect(L, T, pw, ph); ctx.clip();
+    for (const l of this.lines) {
+      ctx.strokeStyle = l.color; ctx.lineWidth = l.width || 1.6; ctx.setLineDash(l.dash || []); ctx.beginPath();
+      let pen = false, prevT = null;
+      for (const [t, v] of l.points) {
+        if (t < t0 - 5) continue;
+        // A gap of several snapshots (the server busy or away) breaks the line rather than bridging it.
+        if (v == null || (prevT != null && t - prevT > 10)) { pen = false; }
+        if (v == null) { prevT = t; continue; }
+        if (pen) ctx.lineTo(x(t), y(v)); else { ctx.moveTo(x(t), y(v)); pen = true; }
+        prevT = t;
+      }
+      ctx.stroke();
+    }
+    ctx.restore(); ctx.setLineDash([]);
+    if (this.hoverX != null && this.hoverX >= L && this.hoverX <= L + pw) {
+      const t = t0 + (this.hoverX - L) / pw * (t1 - t0);
+      ctx.strokeStyle = "#8691a0"; ctx.beginPath(); ctx.moveTo(this.hoverX + .5, T); ctx.lineTo(this.hoverX + .5, T + ph); ctx.stroke();
+      const rows = this.lines.map((l) => { const p = nearest(l.points, t); return p ? [l, p] : null; }).filter(Boolean);
+      if (rows.length) {
+        const unit = this.opts.unit || "";
+        this.tip.innerHTML = `<div class="dim">${clock(rows[0][1][0])}</div>` + rows.map(([l, p]) =>
+          `<div><i style="display:inline-block;width:8px;height:8px;background:${l.color};margin-right:5px"></i>${esc(l.name)}: <b>${this.opts.format ? this.opts.format(p[1]) : fmt(p[1])}${unit}</b></div>`).join("");
+        this.tip.style.display = "block";
+        const tw = this.tip.offsetWidth;
+        this.tip.style.left = (this.hoverX + 12 + tw > w ? this.hoverX - tw - 12 : this.hoverX + 12) + "px";
+        this.tip.style.top = "8px";
+      }
+    }
+  }
+}
+function niceCeil(v) { const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; }
+function axisLabel(v) { return v >= 1e6 ? fmt(v / 1e6, 1) + "M" : v >= 1e4 ? fmt(v / 1e3, 0) + "k" : v >= 100 ? fmt(v, 0) : fmt(v, v >= 10 ? 0 : 1); }
+function nearest(points, t) {
+  let lo = 0, hi = points.length - 1; if (hi < 0) return null;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (points[mid][0] < t) lo = mid + 1; else hi = mid; }
+  const p = (lo > 0 && Math.abs(points[lo - 1][0] - t) < Math.abs(points[lo][0] - t)) ? points[lo - 1] : points[lo];
+  return p && p[1] != null && Math.abs(p[0] - t) < 10 ? p : null;
+}
+// A trailing average over `seconds`, so a per-second rate reads steadily without hiding a change for long.
+function smooth(points, seconds) {
+  const out = []; let sum = 0, n = 0, j = 0;
+  for (let i = 0; i < points.length; i++) {
+    const v = points[i][1]; if (v != null) { sum += v; n++; }
+    while (points[j][0] < points[i][0] - seconds) { if (points[j][1] != null) { sum -= points[j][1]; n--; } j++; }
+    out.push([points[i][0], n ? sum / n : null]);
+  }
+  return out;
+}
+
+const charts = {
+  decode: new Chart($("c-decode"), { unit: " tok/s" }),
+  users: new Chart($("c-users"), { unit: " tok/s" }),
+  prefill: new Chart($("c-prefill"), { unit: " tok/s" }),
+  kv: new Chart($("c-kv"), { ymax: 100, unit: "%", format: (v) => fmt(v, 0) }),
+  free: new Chart($("c-free"), { format: axisLabel }),
+  slots: new Chart($("c-slots"), { format: (v) => fmt(v, 0) }),
+  timers: new Chart($("c-timers"), { unit: " µs" }),
+};
+
+function drawCharts() {
+  const t1 = series.length ? series[series.length - 1].t : Date.now() / 1000;
+  const t0 = windowSeconds ? t1 - windowSeconds : (series.length ? series[0].t : t1 - 60);
+  const pts = series.filter((p) => p.t >= t0 - 15);
+  const line = (key) => pts.map((p) => [p.t, p[key] ?? null]);
+  charts.decode.set([
+    { name: "generated (5 s avg)", color: "#4cc38a", points: smooth(line("decode"), 5), width: 2 },
+    { name: "generated (per second)", color: "#4cc38a55", points: line("decode"), width: 1 },
+    { name: "device steps/s", color: "#5aa9e6", points: smooth(line("steps"), 5), dash: [4, 3] },
+  ], t0, t1);
+  const users = new Set(); for (const p of pts) for (const u in p.users) users.add(u);
+  charts.users.set([...users].sort().map((u) => ({
+    name: u, color: colorOf(u), points: smooth(pts.map((p) => [p.t, p.users[u] ?? null]), 5) })), t0, t1);
+  charts.prefill.set([
+    { name: "prefill (5 s avg)", color: "#e5b84c", points: smooth(line("prefill"), 5), width: 2 },
+    { name: "prefill (per second)", color: "#e5b84c55", points: line("prefill"), width: 1 },
+  ], t0, t1);
+  const groups = new Set(); for (const p of pts) for (const g in p.kv) groups.add(g);
+  charts.kv.set([...groups].sort().map((g, i) => ({
+    name: g, color: PALETTE[i % PALETTE.length], points: pts.map((p) => [p.t, p.kv[g] != null ? 100 * p.kv[g] : null]) })), t0, t1);
+  charts.free.set([{ name: "tokens free", color: "#58d4c9", points: line("tokens_left"), width: 2 }], t0, t1);
+  charts.slots.set([
+    { name: "running", color: "#4cc38a", points: line("running"), width: 2 },
+    { name: "queued", color: "#c58af9", points: line("queued") },
+    { name: "parked", color: "#e5b84c", points: line("parked") },
+    { name: "in host RAM", color: "#5aa9e6", points: line("host") },
+    { name: "images in flight", color: "#58d4c9", points: line("images_live"), dash: [4, 3] },
+  ], t0, t1);
+  const timerNames = ["dispatch", "packet", "hash", "engram", "output_read"];
+  charts.timers.set(timerNames.map((name, i) => ({
+    name, color: PALETTE[i], points: smooth(pts.map((p) => [p.t, p.timers ? p.timers[name] : null]), 5) })), t0, t1);
+}
+
+// ---- panels ------------------------------------------------------------------------------------------ //
+function avg(key, seconds) {
+  const t1 = series.length ? series[series.length - 1].t : 0; let sum = 0, n = 0;
+  for (let i = series.length - 1; i >= 0 && series[i].t > t1 - seconds; i--) if (series[i][key] != null) { sum += series[i][key]; n++; }
+  return n ? sum / n : null;
+}
+function card(k, v, s = "") { return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`; }
+
+function drawCards() {
+  if (!state) { $("cards").innerHTML = ""; return; }
+  const st = state.slot_states || {}, totals = state.totals || {}, host = state.host || {};
+  const decoding = (state.turns || []).filter((t) => t.phase === "decode");
+  const perUser = decoding.length ? decoding.reduce((a, t) => a + t.decode_tps, 0) / decoding.length : null;
+  const pool = Object.entries(state.pool || {});
+  const used = pool.reduce((a, [, [u]]) => a + u, 0), total = pool.reduce((a, [, [, t]]) => a + t, 0);
+  const prefills = history.filter((r) => r.prompt_tokens > 0 && r.prefill_s > 0).slice(-20);
+  const lastPrefill = prefills.length ? prefills[prefills.length - 1] : null;
+  $("cards").innerHTML = [
+    card("Decode, all users", fmt(avg("decode", 5)) + " <small>tok/s</small>", `${fmt(avg("decode", 60))} over 1 min`),
+    card("Decode per user", fmt(perUser) + " <small>tok/s</small>", `${decoding.length} decoding`),
+    card("Prefill", fmt(avg("prefill", 30), 0) + " <small>tok/s</small>",
+      lastPrefill ? `last: ${int(lastPrefill.prompt_tokens)} tok at ${fmt(lastPrefill.prefill_tps, 0)} tok/s` : "30 s average"),
+    card("Device steps", fmt(avg("steps", 5)) + " <small>/s</small>", `${int(state.inflight)} in flight`),
+    card("Active users", int(st.running), `of ${int(st.max_running || state.slots)} seats`),
+    card("Queued", int(st.queued), "waiting for a seat"),
+    card("Parked", int(st.parked), `${int(host.users)} in host RAM, ${int(st.empty)} empty`),
+    card("Generated", int(totals.generated), "tokens, since start"),
+    card("Prefilled", int(totals.prefilled), `tokens, ${int(totals.turns)} turns done`),
+    card("Free KV cache", int(state.tokens_left), "tokens"),
+    card("KV pages used", total ? fmt(100 * used / total, 1) + "%" : "–", `${int(used)} / ${int(total)} blocks`),
+  ].join("");
+  $("decode-now").textContent = `${fmt(avg("decode", 5))} tok/s now`;
+}
+
+function drawSlots() {
+  if (!state) return;
+  const turns = new Map((state.turns || []).map((t) => [t.slot, t]));
+  const order = { running: 0, queued: 1, busy: 2, parked: 3, host: 4 };
+  const rows = (state.users || []).filter((r) => r.tier !== "empty")
+    .sort((a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9) || (a.index ?? 1e9) - (b.index ?? 1e9));
+  const lastTurn = new Map();   // "user/slot" -> its newest ended turn, for the users not running one
+  for (const h of history) lastTurn.set(`${h.user}/${h.slot}`, h);
+  const st = state.slot_states || {};
+  $("slot-summary").textContent = `${int(st.running)} active · ${int(st.queued)} queued · ${int(st.parked)} parked · ` +
+    `${int((state.host || {}).users)} in host RAM · ${int(st.empty)} empty slots`;
+  $("slots").innerHTML = `<tr><th class="r">slot</th><th>user</th><th>state</th><th class="r">context</th><th></th>
+    <th class="r">msgs</th><th>progress</th><th class="r">prefill tok/s</th><th class="r">decode tok/s</th><th class="r">turn age</th></tr>` +
+    (rows.length ? rows.map((r) => {
+    const turn = r.index != null ? turns.get(r.index) : null;
+    let phase = r.tier, progress = "", prefill = "", decode = "", age = "";
+    if (r.tier === "host") progress = `${fmt((r.bytes || 0) / 2 ** 20, 0)} MiB in host RAM`;
+    else if (r.tier === "queued" && r.queue != null) progress = `#${r.queue + 1} in queue`;
+    if (turn) {
+      phase = turn.phase + (turn.cancelled ? " (stopping)" : "");
+      age = dur(turn.age_s);
+      prefill = fmt(turn.prefill_tps, 0);
+      if (turn.phase === "prefill") progress = `${int(turn.prefilled)} / ${int(turn.prompt_tokens)} prompt tokens`;
+      else { progress = `${int(turn.generated)} / ${int(turn.max_tokens)} generated`; decode = fmt(turn.decode_tps); }
+    } else {
+      const last = lastTurn.get(`${r.id}/${r.index}`);
+      if (last) {
+        const tip = `last turn, ended ${clock(last.ended)}`;
+        prefill = last.prompt_tokens ? `<span class="last" title="${tip}">${fmt(last.prefill_tps, 0)}</span>` : "";
+        decode = last.generated ? `<span class="last" title="${tip}">${fmt(last.decode_tps)}</span>` : "";
+      }
+    }
+    const share = state.max_seq ? r.tokens / state.max_seq : 0;
+    return `<tr class="${esc(r.tier)}"><td class="r">${r.index ?? "h" + (r.host ?? "")}</td><td>${esc(r.id || "–")}</td><td>${esc(phase)}</td>
+      <td class="r">${int(r.tokens)} / ${int(state.max_seq)}</td>
+      <td><div class="bar" title="${fmt(100 * share, 1)}% of the context"><div style="width:${100 * share}%;background:var(--blue)"></div></div></td>
+      <td class="r">${int(r.messages)}</td><td>${progress}</td><td class="r">${prefill}</td><td class="r">${decode}</td><td class="r">${age}</td></tr>`;
+  }).join("") : `<tr><td colspan="10" class="dim">no users yet</td></tr>`);
+}
+
+// What each stage of an image in flight is doing, in the words of the server's _ImageStatus.
+function imageDetail(e) {
+  if (e.stage === "uploading") return `${fmt((e.received || 0) / 2 ** 20, 1)} / ${fmt((e.bytes || 0) / 2 ** 20, 1)} MiB received`;
+  if (e.stage === "vit") return `${esc(e.patches ?? "?")} patches → ${int(e.rows)} rows`;
+  if (e.rows != null) return `${int(e.rows)} rows`;
+  return e.bytes ? `${fmt(e.bytes / 2 ** 10, 0)} KiB` : "";
+}
+
+function drawImages() {
+  const img = state && state.images, panel = $("images-panel");
+  panel.style.display = img ? "" : "none";
+  if (!img) return;
+  const files = img.files || {}, free = img.rows_free || 0, total = img.rows_total || 0;
+  const share = total ? free / total : 0, color = share < .1 ? "var(--red)" : share < .3 ? "var(--yellow)" : "var(--green)";
+  $("images-summary").innerHTML = `<span style="color:${color}">${int(free)} / ${int(total)} rows free</span> · ` +
+    `${int(img.held)} held, ${int(img.encoded)} in the embedding table · ${int(files.count)} files (${fmt((files.bytes || 0) / 2 ** 20, 0)} MiB)`;
+  const live = img.live || [];
+  $("images-live").innerHTML = `<tr><th>in flight</th><th>stage</th><th>detail</th><th class="r">in stage</th></tr>` +
+    (live.length ? live.map((e) => `<tr style="color:var(--yellow)"><td>${esc(e.label)}</td><td>${esc(e.stage)}</td>
+      <td>${imageDetail(e)}</td><td class="r">${fmt(e.seconds, 1)}s</td></tr>`).join("")
+      : `<tr><td colspan="4" class="dim">no image in flight</td></tr>`);
+  const done = imagesDone.slice(-100).reverse();
+  $("images-done").innerHTML = `<tr><th>done</th><th>image</th><th class="r">rows</th><th class="r">decode</th>
+    <th class="r">ViT</th><th class="r">embedding</th><th class="r">total</th></tr>` +
+    (done.length ? done.map((e) => `<tr><td>${clock(e.at)}</td><td>${esc(e.label)}</td><td class="r">${int(e.rows)}</td>
+      <td class="r">${fmt(e.decode, 2)}s</td><td class="r">${e.vit == null ? '<span class="dim">from disk</span>' : fmt(e.vit, 2) + "s"}</td>
+      <td class="r">${fmt(e.embedding, 2)}s</td><td class="r">${fmt((e.decode || 0) + (e.vit || 0) + (e.embedding || 0), 2)}s</td></tr>`).join("")
+      : `<tr><td colspan="7" class="dim">no images processed yet</td></tr>`);
+}
+
+function drawPool() {
+  if (!state) return;
+  const rows = Object.entries(state.pool || {}).map(([name, [used, total]]) => {
+    const share = total ? used / total : 0, color = share > .9 ? "var(--red)" : share > .7 ? "var(--yellow)" : "var(--green)";
+    return `<tr><td>${esc(name)}</td><td class="r">${int(used)} / ${int(total)}</td><td class="r">${int(total - used)} free</td>
+      <td><div class="bar"><div style="width:${100 * share}%;background:${color}"></div></div></td></tr>`;
+  });
+  const host = state.host || {};
+  if (host.max_users) rows.push(`<tr><td>host RAM</td><td class="r">${int(host.users)} / ${int(host.max_users)}</td>
+      <td class="r">${fmt(host.bytes / 2 ** 30, 2)} / ${fmt(host.max_bytes / 2 ** 30, 0)} GiB</td>
+      <td><div class="bar"><div style="width:${100 * (host.bytes / host.max_bytes || 0)}%;background:var(--blue)"></div></div></td></tr>`);
+  $("pool").innerHTML = `<tr><th>group</th><th class="r">blocks used</th><th class="r"></th><th></th></tr>` +
+    (rows.join("") || `<tr><td colspan="4" class="dim">no page pool yet</td></tr>`) +
+    `<tr><td>tokens free</td><td class="r" colspan="2">${int(state.tokens_left)}</td><td></td></tr>`;
+  const c = state.counters, rt = state.runtime;
+  if (!c) { $("runtime").innerHTML = `<tr><td class="dim">no runtime counters (not running on the Rust host?)</td></tr>`; return; }
+  const names = ["dispatch", "packet", "hash", "engram", "output_read"];
+  $("runtime").innerHTML = `<tr><th>thread work</th><th class="r">calls</th><th class="r">µs now</th><th class="r">µs mean</th></tr>` +
+    names.map((n) => `<tr><td>${n}</td><td class="r">${int(c[n + "_count"])}</td><td class="r">${fmt(rt && rt[n + "_us"], 1)}</td>
+      <td class="r">${fmt(c[n + "_count"] ? c[n + "_ns"] / c[n + "_count"] / 1e3 : null, 1)}</td></tr>`).join("") +
+    `<tr><td>steps posted / read</td><td class="r" colspan="3">${int(c.posted)} / ${int(c.outputs_read)}${c.closed ? " <span class='dim'>(closed)</span>" : ""}</td></tr>`;
+}
+
+function drawHistory() {
+  const rows = history.slice(-300).reverse();
+  const done = history.filter((r) => r.decode_s > 0);
+  const meanDecode = done.length ? done.reduce((a, r) => a + r.decode_tps, 0) / done.length : null;
+  $("history-summary").textContent = `${history.length} turns · mean ${fmt(meanDecode)} tok/s decode`;
+  $("history").innerHTML = `<tr><th>ended</th><th>user</th><th class="r">slot</th><th>outcome</th><th class="r">queued</th>
+    <th class="r">prompt</th><th class="r">cached</th><th class="r">prefill</th><th class="r">prefill tok/s</th><th class="r">TTFT</th>
+    <th class="r">generated</th><th class="r">decode</th><th class="r">decode tok/s</th></tr>` + (rows.length ? rows.map((r) => `<tr>
+    <td>${clock(r.ended)}</td><td>${esc(r.user || "–")}</td><td class="r">${r.slot}</td><td>${esc(r.outcome)}</td>
+    <td class="r">${fmt(r.queued_s, 2)}s</td><td class="r">${int(r.prompt_tokens)}</td><td class="r">${int(r.cached_tokens)}</td>
+    <td class="r">${fmt(r.prefill_s, 2)}s</td><td class="r">${fmt(r.prefill_tps, 0)}</td><td class="r">${fmt(r.ttft_s, 2)}s</td>
+    <td class="r">${int(r.generated)}</td><td class="r">${fmt(r.decode_s, 1)}s</td><td class="r">${fmt(r.decode_tps)}</td></tr>`).join("")
+    : `<tr><td colspan="13" class="dim">no turns have ended yet</td></tr>`);
+}
+
+function drawLog() {
+  const debug = $("debug").checked, box = $("log");
+  box.innerHTML = logLines.filter((l) => debug || l[2] !== "DEBUG").slice(-1500).map(([, t, level, msg]) =>
+    `<div class="lv-${esc(level)}"><span class="t">${clock(t)}</span>${esc(msg)}</div>`).join("");
+  if ($("follow").checked) box.scrollTop = box.scrollHeight;
+}
+
+function drawHeader(now) {
+  const el = $("status");
+  if (!state) { el.className = "pill down"; el.textContent = "waiting for the server's feed"; return; }
+  const age = now - state.t;
+  const closed = state.counters && state.counters.closed;
+  if (closed || age > 15) { el.className = "pill down"; el.textContent = closed ? "runtime closed" : "server gone"; }
+  else if (age > 4) { el.className = "pill stale"; el.textContent = "stale"; }
+  else { el.className = "pill live"; el.textContent = "live"; }
+  $("model").textContent = state.model_id || "DeepSeek-V4.1";
+  $("uptime").textContent = `up ${dur(state.t - state.started)}`;
+  $("updated").textContent = `updated ${fmt(age, 1)} s ago`;
+  const broken = $("broken"); broken.style.display = state.broken ? "block" : "none";
+  broken.textContent = state.broken ? `DECODE WEDGED: ${state.broken}` : "";
+}
+
+async function tick() {
+  try {
+    const r = await fetch(`/api/state?since=${since}&log_since=${logSince}&history_since=${historySince}&images_since=${imagesSince}`,
+                          { cache: "no-store" });
+    const v = await r.json();
+    if (v.started !== started) {
+      const first = started === null;
+      started = v.started;
+      if (!first) {   // a restarted server: start over, from a full fetch
+        series.length = 0; history = []; logLines = []; imagesDone = []; since = logSince = historySince = imagesSince = 0;
+        userColors.clear();
+        return;
+      }
+    }
+    for (const p of v.series) series.push(p);
+    if (series.length) since = series[series.length - 1].t;
+    for (const h of v.history) history.push(h);
+    if (history.length) historySince = history[history.length - 1].ended;
+    if (history.length > 5000) history = history.slice(-5000);
+    for (const e of v.images_done) imagesDone.push(e);
+    if (imagesDone.length) imagesSince = imagesDone[imagesDone.length - 1].at;
+    if (imagesDone.length > 1000) imagesDone = imagesDone.slice(-1000);
+    for (const l of v.log) logLines.push(l);
+    if (logLines.length) logSince = logLines[logLines.length - 1][0];
+    if (logLines.length > 5000) logLines = logLines.slice(-5000);
+    const keep = 6 * 3600; while (series.length && series[0].t < since - keep) series.shift();
+    state = v.state; lastNow = v.now;
+    drawHeader(v.now); drawSlots(); drawImages(); drawCards(); drawCharts(); drawPool();
+    if (v.history.length || !$("history").innerHTML) drawHistory();
+    if (v.log.length || !$("log").innerHTML) drawLog();
+  } catch (e) {
+    const el = $("status"); el.className = "pill down"; el.textContent = "monitor unreachable";
+  }
+}
+
+$("windows").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  windowSeconds = Number(b.dataset.s);
+  for (const x of document.querySelectorAll("#windows button")) x.classList.toggle("on", x === b);
+  drawCharts();
+});
+$("debug").addEventListener("change", drawLog);
+window.addEventListener("resize", () => Object.values(charts).forEach((c) => c.draw()));
+tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

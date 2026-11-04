@@ -48,7 +48,9 @@ class Speaker:
     def reply(self, client: Client, heard: str, args) -> str:
         """Send ``heard`` (the other side's line) and stream this side's answer to stdout; returns the answer."""
         self.messages.append({"role": "user", "content": heard})
-        params = {"user": self.user, "max_tokens": args.max_tokens, "temperature": args.temperature}
+        params = {"user": self.user, "max_tokens": args.max_tokens}
+        if args.temperature is not None:
+            params["temperature"] = args.temperature
         print(f"\n[{self.name}] ", end="", flush=True)
         text = ""
         t0 = time.perf_counter()
@@ -69,7 +71,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default="deepseek-v4.1-flash")
     p.add_argument("--turns", type=int, default=6, help="replies in total, alternating Bob, Alice, Bob, ...")
     p.add_argument("--max-tokens", type=int, default=256, help="cap on each reply")
-    p.add_argument("--temperature", type=float, default=0.7)
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="per-request temperature (default: the server's); rejected by a --device-sampling server, "
+        "which takes its temperature from its own --temperature",
+    )
     p.add_argument("--opening", default=_OPENING, help="Alice's first line, which Bob answers first")
     p.add_argument("--timeout", type=float, default=1800, help="per-request timeout in seconds")
     p.add_argument("--keep", action="store_true", help="leave both sessions on the server afterwards")

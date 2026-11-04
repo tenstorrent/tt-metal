@@ -89,6 +89,13 @@ Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/dem
     curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \\
         -d '{"messages": [{"role": "user", "content": [{"type": "file", "file_id": "file-api-..."},
                                                        {"type": "text", "text": "What is this?"}]}]}'
+
+With ``DEEPSEEK_V41_RUST_HOST=1`` the decode step's host work runs on the Rust host runtime (``tt/host_rs.py``), and
+the live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a
+raw snapshot a second (``DEEPSEEK_V41_MONITOR_PERIOD``) and the counters the runtime keeps anyway (see
+``demo/monitor.py``)::
+
+    python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090    # then open http://<host>:8090
 """
 
 from __future__ import annotations
@@ -127,6 +134,8 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
     _TP_SIZE,
 )
 from models.experimental.deepseek_v41_flash import encoding_dsv41
+from models.experimental.deepseek_v41_flash.demo import monitor
+from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.config import (
     DEFAULT_MODEL_DIR,
     VISION_STAGE,
@@ -212,6 +221,16 @@ _MAX_FILE_BYTES = 64 << 20  # per upload, DeepSeek's limit
 _MAX_STORED_FILE_BYTES = 4 << 30  # every live upload together
 _FILE_LIFETIME = (3600, 2592000)  # bounds of expires_after[seconds]
 _UPLOADS = itertools.count(1)  # names an upload in the live console until its bytes are in
+
+
+def _host_cpus() -> list[int]:
+    """``DEEPSEEK_V41_HOST_CPUS`` (e.g. ``"2-13"`` or ``"2,4,6"``): the CPUs the host runtime's threads are pinned
+    to, in their creation order (output, packet, Engram layers, stages); unset, they float."""
+    cpus = []
+    for part in filter(None, os.environ.get("DEEPSEEK_V41_HOST_CPUS", "").split(",")):
+        low, _, high = part.partition("-")
+        cpus.extend(range(int(low), int(high or low) + 1))
+    return cpus
 
 
 def _image_bytes(part: dict, index: int, files: "_FileStore") -> bytes:
@@ -824,11 +843,94 @@ class V41GenerationServer(GenerationServer):
         # serve() builds the server after the warmup and the prefill snapshot, and before the scheduler starts: the
         # point past every other device allocation of startup.
         self.engine.capture_vision()
+        self.monitor_feed = None
+        self._monitor_sink = None
+        if host_rs.enabled():
+            # After every capture: from here the decode step's replays, packets, Engram rows and outputs run on the
+            # Rust host runtime's threads, which keep their counters where the web monitor reads them.
+            prefix = monitor.default_prefix()
+            self.engine.model.start_host_runtime(_host_cpus(), counters_path=monitor.counters_path(prefix))
+            self.monitor_feed = monitor.MonitorFeed(
+                self.monitor_snapshot,
+                monitor.snapshot_path(prefix),
+                period=float(os.environ.get("DEEPSEEK_V41_MONITOR_PERIOD", "1.0")),
+            )
         cache = self.engine.weight_cache
         self.files = _FileStore(os.path.join(cache.path, "files") if cache else None)
 
+    def start(self) -> None:
+        super().start()
+        if self.monitor_feed is not None:
+            self._monitor_sink = logger.add(self.monitor_feed.log_sink, level="DEBUG", format="{message}")
+            self.monitor_feed.start()
+            logger.info(
+                f"web monitor feed: {self.monitor_feed.path}; watch it with "
+                f"python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090"
+            )
+
+    def stop(self) -> None:
+        if self.monitor_feed is not None:
+            self.monitor_feed.stop()
+            logger.remove(self._monitor_sink)
+        super().stop()
+
+    def monitor_snapshot(self) -> dict:
+        """The raw state :class:`~.monitor.MonitorFeed` publishes for the web monitor: counts, sizes and ages,
+        read without locking the scheduler, as the live console reads them. Every rate is the monitor's to work out,
+        in its own process."""
+        scheduler, pool = self.scheduler, self.pool
+        now = time.perf_counter()
+        host_users, host_bytes = pool.host_usage()
+        # Before the active turns: see _Scheduler._retire.
+        ended = list(scheduler.ended_turns)[-monitor.FEED_ENDED_TURNS :]
+        snapshot = {
+            "t": time.time(),
+            "model_id": self.model_id,
+            "started": self._created,
+            "max_seq": self.engine.max_seq,
+            "slots": len(self.engine.users),
+            "slot_states": pool.counts(),
+            "users": pool.rows(),
+            "turns": [
+                {
+                    "serial": turn.serial,
+                    "user": turn.user_key,
+                    "slot": turn.slot,
+                    "phase": turn.phase,
+                    "prompt_tokens": len(turn.ids),
+                    "cached_tokens": turn.cached,
+                    "prefilled": turn.fed,
+                    "generated": len(turn.generated),
+                    "max_tokens": turn.max_tokens,
+                    "prefill_s": turn.prefill_seconds,
+                    "age_s": now - turn.t_submit,
+                    "cancelled": turn.cancelled.is_set(),
+                }
+                for turn in list(scheduler._active)
+            ],
+            "inflight": len(scheduler._inflight),
+            "rounds": scheduler.rounds,
+            "steps": scheduler.steps,
+            "ended_turns": ended,
+            "pool": scheduler.pool_usage(),
+            "tokens_left": self.engine.tokens_left(),
+            "host": {
+                "users": host_users,
+                "bytes": host_bytes,
+                "max_users": pool.host_users,
+                "max_bytes": pool.host_bytes,
+            },
+            "broken": None if scheduler._broken is None else str(scheduler._broken),
+        }
+        if self.engine.images is not None:
+            snapshot["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
+        return snapshot
+
     def stats(self) -> dict:
         stats = super().stats()
+        host = self.engine.model.host_runtime_stats()
+        if host is not None:
+            stats["host_runtime"] = host
         if self.engine.images is not None:
             stats["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
         return stats
@@ -1133,7 +1235,15 @@ class V41ChatEngine(ChatEngine):
         queued = self._replay_q.popleft()
         if queued != int(pos):
             raise RuntimeError(f"traced packet pos {pos} does not match queued replay {queued}")
-        self._packets.put((int(token_id), int(pos)))
+        self._put_packet(int(token_id), int(pos))
+
+    def _put_packet(self, token_id: int, pos: int) -> None:
+        if not self.model.host_runtime_running:
+            self._packets.put((token_id, pos))
+            return
+        # The host runtime queues the write on its own packet thread, so no Python thread is needed.
+        with self.packet_lock:
+            self.model.write_step_packet(token_id, pos)
 
     def repeat_traced(self, token_id: int, pos: int) -> None:
         """Feed the oldest :meth:`post_traced` step the packet of ``pos``, the session's newest step, fed
@@ -1145,7 +1255,7 @@ class V41ChatEngine(ChatEngine):
         queued = self._replay_q.popleft()
         if queued <= int(pos):
             raise RuntimeError(f"rerunning pos {pos} in the step posted for pos {queued}, which is not after it")
-        self._packets.put((int(token_id), int(pos)))
+        self._put_packet(int(token_id), int(pos))
 
     def write_prefed(self, token_id: int, pos: int) -> None:
         """The output reader's packet write (:class:`_OutputReader`): straight to the socket, as it is on the
@@ -1317,6 +1427,8 @@ def parse_args(argv: list[str] | None = None):
                 f"{_L1_SMALL_SIZE})"
             )
     args = p.parse_args(argv)
+    if host_rs.enabled():
+        args.tui = False  # the web monitor (demo/monitor.py) watches it, from a process of its own
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
     if args.l1_small_size is None:
