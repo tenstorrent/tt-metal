@@ -54,6 +54,13 @@ void bind_topk_large_indices(nb::module_& mod) {
             * the resolved grid is structural and participates in the program-cache key;
             * kernels and circular buffers are created only on the resolved grid.
 
+        NoC selection:
+            * ``dram_read_noc`` picks the NoC the reader streams the input rows from DRAM on;
+              the writer (k indices per row, plus the row-split survivor hand-off) takes the other one;
+            * defaults to the arch's preferred DRAM-read NoC (NOC_0 on Blackhole);
+            * use it when another program runs alongside on a different subdevice and loads one NoC
+              heavily, so the two do not contend; it participates in the program-cache key.
+
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
@@ -68,6 +75,7 @@ void bind_topk_large_indices(nb::module_& mod) {
                 it a padded chunk ranks columns that were never written. Pass the SAME bound to
                 ring_indexer_score_dsa's valid_end_tensor -- a looser score with a tighter top-k drops real
                 keys, the reverse ranks a stale tail.
+            dram_read_noc: optional ``ttnn.NOC`` for the reader's DRAM reads (default: arch preferred).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
@@ -78,7 +86,8 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("valid_length_offset") = 0,
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("valid_end_tensor") = nb::none());
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("dram_read_noc") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

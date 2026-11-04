@@ -21,6 +21,8 @@ import ttnn
 
 from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
@@ -44,11 +46,11 @@ MOE_LAYER = 1
 # see it at all.
 BIAS_MISPLACEMENT_MAX_ABS = 1e-3
 
-# How far from 1 the measured count of shared biases a token holds may be. Measured 1.000 and 1.007
-# where a stacked pass adds the bias in w2's fp32 accumulator, and 0.946 and 0.950 where a transposed
-# pass adds it to the bfloat16 sum in bfloat16, which drops it from the half of the elements where
-# it is under half a step of the sum. A bias added inside the per-expert loop counts the mean
-# routed-weight sum instead, about 0.55.
+# How far from 1 the measured count of shared biases a token holds may be. Measured 1.003 and 0.996
+# where routed_combine adds it to the fp32 sum before rounding once. A bfloat16 add of the bias to a
+# bfloat16 sum measured 0.946 and 0.950: it drops the bias from the half of the elements where it is
+# under half a step of the sum. A bias added inside the per-expert loop counts the mean routed-weight
+# sum instead, about 0.55.
 BIAS_SCALE_TOLERANCE = 0.1
 
 
@@ -110,15 +112,35 @@ def keep_mask(batch: int, seqlen: int, keep) -> torch.Tensor:
     return mask
 
 
-def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
-    """A plausible (T, E) dense routing tensor, zero off the top-k and not renormalized.
+def routing_selection(tokens: int, experts: int, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """A plausible top-k selection: (T, K) float32 weights, descending and not renormalized, and (T, K) experts."""
+    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
+    return torch.topk(probabilities, top_k, dim=-1)
+
+
+def selection_as_dense(values: torch.Tensor, indices: torch.Tensor, experts: int) -> torch.Tensor:
+    """A (T, K) selection as the (T, E) dense routing tensor it stands for, zero off the top-k."""
+    return torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+
+
+def injected_routing(tokens: int, experts: int, top_k: int, device) -> tuple[Routing, torch.Tensor]:
+    """A plausible selection on the device, and the (T, E) dense weights it stands for, which
+    NomicExperts.dense_forward takes.
 
     Injected rather than routed so the expert tests measure the expert arithmetic alone; a
     routing flip would otherwise show up as an expert error.
     """
-    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
-    values, indices = torch.topk(probabilities, top_k, dim=-1)
-    return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+    values, indices = routing_selection(tokens, experts, top_k)
+    return device_selection(values, indices, device), selection_as_dense(values, indices, experts)
+
+
+def device_selection(values: torch.Tensor, indices: torch.Tensor, device) -> Routing:
+    """A (T, K) selection on the device, as TtNomicRouter.forward returns it."""
+    shape = (1, 1, *values.shape)
+    return Routing(
+        values=to_device(values.reshape(shape), device, dtype=ttnn.float32),
+        indices=to_device(indices.reshape(shape).to(torch.int32), device, dtype=ttnn.uint32),
+    )
 
 
 def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:

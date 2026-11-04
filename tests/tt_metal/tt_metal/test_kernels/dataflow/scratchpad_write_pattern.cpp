@@ -12,7 +12,7 @@
 // The kernel writes a known pattern into the scratchpad, then reports the scratchpad's base address
 // and data format to a host-known fixed L1 location passed as a named RTA. The host reads the report,
 // checks the format, then reads the scratchpad's L1 at that address and checks the pattern. If the
-// framework had shipped a 0 / stale base address, either get_base_address() would be wrong (so the
+// framework had shipped a 0 / stale base address, either the reported base would be wrong (so the
 // host reads the wrong L1) or the pattern wouldn't land where the host looks — both fail the test.
 //
 // `Scratchpad` and the `scratch::pad` token are provided by the auto-generated kernel_bindings
@@ -21,6 +21,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     // Host-known L1 address to report the scratchpad's base address into (named per-node RTA).
@@ -42,6 +43,7 @@ void kernel_main() {
     // ReadFromDeviceL1 after the (blocking) enqueue completes — the same pattern test_add_two_ints
     // and test_single_dm_l1_write rely on for Gen1.
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-    report[0] = s.get_base_address();
+    // Raw address: the base is reported to the host for comparison.
+    report[0] = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(s.local_mem()));
     report[1] = static_cast<uint32_t>(s.get_dataformat());
 }

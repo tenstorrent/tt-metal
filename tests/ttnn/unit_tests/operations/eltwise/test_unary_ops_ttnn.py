@@ -441,9 +441,9 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.float32, ttnn.float32),
         # bfloat16 is exhaustively covered (all bf16 bit patterns, all scalars in this
-        # list) by test_fill_op in test_unary_category4_bfloat16.py.
+        # list) by test_fill_op in test_unary_category4_bfloat16.py, and float32 by
+        # test_fill in test_unary_category4_float32.py.
         (torch.int32, ttnn.int32),
         (torch.uint32, ttnn.uint32),
     ],
@@ -451,9 +451,7 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
 def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    if torch_dtype.is_floating_point:
-        torch_input_tensor_a = torch.empty((h, w), dtype=torch_dtype).uniform_(-100, 100)
-    elif torch_dtype == torch.uint32:
+    if torch_dtype == torch.uint32:
         torch_input_tensor_a = torch.randint(low=0, high=100, size=(h, w), dtype=torch_dtype)
     else:
         torch_input_tensor_a = torch.randint(low=-100, high=100, size=(h, w), dtype=torch_dtype)
