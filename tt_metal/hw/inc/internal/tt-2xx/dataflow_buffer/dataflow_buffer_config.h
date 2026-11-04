@@ -557,6 +557,9 @@ static_assert(sizeof(dfb_global_header_t) == 120, "dfb_global_header_t size chan
 static_assert(offsetof(dfb_global_header_t, hart_desc) == 0, "hart_desc[] must be at offset 0");
 static_assert(offsetof(dfb_global_header_t, dm1_slots) == 104, "dm1_slots must be 4B aligned at 104");
 static_assert(offsetof(dfb_global_header_t, dm0_packed) == 112, "dm0_packed must be 8B aligned at 112");
+// Quasar DM L2 line size. The host lays out the DFB config on these lines; the device checks it
+// against L2_CACHE_LINE_SIZE.
+constexpr uint32_t DFB_CACHE_LINE_BYTES = 64;
 // The DM1 remapper blob, when present, always starts on the first cache line after the header.
 constexpr uint32_t DFB_DM1_REMAPPER_BLOB_OFFSET =
     (static_cast<uint32_t>(sizeof(dfb_global_header_t)) + DFB_CACHE_LINE_BYTES - 1u) & ~(DFB_CACHE_LINE_BYTES - 1u);

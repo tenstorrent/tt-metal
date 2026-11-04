@@ -14,6 +14,7 @@
 #include "internal/circular_buffer_interface.h"  // for cb_addr_shift
 #include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "internal/tt-2xx/risc_common.h"
+static_assert(DFB_CACHE_LINE_BYTES == L2_CACHE_LINE_SIZE, "host DFB config layout assumes the DM L2 line size");
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #else
