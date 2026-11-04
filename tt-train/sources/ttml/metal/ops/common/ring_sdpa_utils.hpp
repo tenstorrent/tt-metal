@@ -109,6 +109,8 @@ inline RingStepWork get_ring_step_work(
         static_cast<int>(mask_type));
     const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
     if (src_device == device_ring_id) {
+        // Special case handled elsewhere: src == d only at step 0, which the caller runs as one
+        // causal call (lane selection None) over the full local [d | 2N-1-d] sequence.
         return {.execute = false, .mask_type = AttentionMaskType::None, .lane = 0U};
     }
     return {
