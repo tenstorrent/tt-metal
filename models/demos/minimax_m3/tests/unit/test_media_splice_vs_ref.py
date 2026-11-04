@@ -71,16 +71,23 @@ class SharedBufferStore(Store):
         return views
 
 
-def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None):
+def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True):
     return SimpleNamespace(
-        config=SimpleNamespace(sp_factor=sp, chunk_size=chunk_size, mesh_shape=mesh_shape, sp_axis=0, tp_axis=1),
+        config=SimpleNamespace(
+            sp_factor=sp,
+            chunk_size=chunk_size,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            pipeline_activation_emb_tp_sharded=emb_tp_sharded,
+        ),
         hf_config=SimpleNamespace(hidden_size=HIDDEN),
         media_embedding_reader=store,
         mesh_device=mesh_device,
     )
 
 
-def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start):
+def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True):
     """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
     images: (start, num_tokens, key) per image."""
     mesh_shape = tuple(mesh_device.shape)
@@ -94,7 +101,9 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start):
         dtype=ttnn.bfloat16,
         shard_vocab_on_sp=False,
     )
-    runtime = runtime_with(store, sp=1, chunk_size=CHUNK, mesh_shape=mesh_shape, mesh_device=mesh_device)
+    runtime = runtime_with(
+        store, sp=1, chunk_size=CHUNK, mesh_shape=mesh_shape, mesh_device=mesh_device, emb_tp_sharded=emb_tp_sharded
+    )
     out = []
     for start in range(first_chunk_start, len(tokens), CHUNK):
         end = min(start + CHUNK, len(tokens))
@@ -159,7 +168,7 @@ def test_post_splice_embeddings(
     for s, n, key in images:
         want[s : s + n] = embs[key]
 
-    got = splice_chunks(mesh_device, table, tokens, images, Store(embs), first_chunk_start)
+    got = splice_chunks(mesh_device, table, tokens, images, Store(embs), first_chunk_start, sharded_residual == "1")
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
 
 

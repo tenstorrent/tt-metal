@@ -24,8 +24,8 @@ def inject_media_embeddings(
 
     rows [sp, rows_per_chip, hidden] and mask [sp, rows_per_chip] come from build_injection
     (models/demos/common/prefill/media.py) in the forward's per-chip order, so they shard like x_embd.
-    Computes x * keep + rows with keep = 1 off the mask: text rows stay bit-exact (x * 1 + 0) and image rows
-    become the image's embeddings (x * 0 + row).
+    Computes x * keep + rows with keep = 1 off the mask: text rows keep their values (x * 1 + 0) and image rows
+    take the image's embeddings (x * 0 + row).
     """
     sp, local, hidden = rows.shape
     assert sp == mesh_shape[sp_axis], f"rows for sp={sp} on mesh {mesh_shape}"

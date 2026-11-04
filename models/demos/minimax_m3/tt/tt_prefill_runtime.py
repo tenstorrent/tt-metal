@@ -44,7 +44,7 @@ from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_injection, store_key
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
-from models.demos.minimax_m3.tt.residual import activation_mapper, use_sharded_residual
+from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 from models.demos.minimax_m3.vision import format as media_format
 
@@ -370,7 +370,7 @@ class TtPrefillRuntime:
             mesh_shape=cfg.mesh_shape,
             sp_axis=cfg.sp_axis,
             tp_axis=cfg.tp_axis,
-            emb_tp_sharded=use_sharded_residual(),
+            emb_tp_sharded=cfg.pipeline_activation_emb_tp_sharded,
         )
 
     def compile(self, kv_cache) -> None:

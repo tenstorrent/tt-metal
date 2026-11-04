@@ -5,6 +5,7 @@
 seeded from the key. Implements models/common/multimedia_store/reader.py's EmbeddingReader."""
 
 import hashlib
+import struct
 
 import torch
 
@@ -31,7 +32,7 @@ class StubEmbeddingReader:
         try:
             key = bytes.fromhex(media_key)
             n = stub_key_tokens(key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError, struct.error) as e:
             raise Missing(media_key) from e
         buf = memoryview(bytearray(format.value_size(n, self.hidden)))
         h = format.Header(1, n, n, self.hidden)
