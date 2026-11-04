@@ -1406,6 +1406,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         "fp32_output_accumulation is not supported with an attention sink (its rescale path keeps FPU accumulators)");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+    // The flag is validated on causal chunked prefill without a sliding window (the long-prefix case it exists for);
+    // the other variants share this path but are untested with it.
+    TT_FATAL(
+        !fp32_output_accumulation || (operation_attributes.is_causal && is_chunked && !has_sliding_window),
+        "fp32_output_accumulation is supported only on causal chunked SDPA without a sliding window");
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
     // (apply_provided_mask_streaming) and must win over the structured lightweight palette: forcing
     // lightweight_mask false (via !use_provided_mask below) routes cb_mask_in sizing/dtype to the
