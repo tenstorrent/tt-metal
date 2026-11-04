@@ -586,9 +586,14 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int, send_indices
     logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
-def _lease_reclaim(inbound: D2DBoundary, outbound: D2DBoundary) -> None:
-    for service in inbound.channels() + outbound.channels():
-        service.wait_for_fabric_links()
+def _lease_wait(*boundaries: D2DBoundary) -> None:
+    for boundary in boundaries:
+        for service in boundary.channels():
+            service.wait_for_fabric_links()
+
+
+def _lease_grant_inbound(inbound: D2DBoundary) -> None:
+    _lease_wait(inbound)
     if inbound.activation is not None:
         inbound.activation.release_fabric_links()
 
@@ -917,10 +922,14 @@ def run_request_loop(
 
     def forward_shutdown():
         if outbound.activation is not None:
+            _lease_wait(outbound)
             _forward_shutdown(outbound, rank, d2d_rows, d2d_width, outbound_planes)
 
     while not _shutdown:
-        _lease_reclaim(inbound, outbound)
+        # The inbound and outbound groups never share a router, so the drain and its metadata read run
+        # while the previous chunk's outbound transfer is still on the fabric; only the compute's own
+        # fabric ops below must wait for both.
+        _lease_grant_inbound(inbound)
         inp = mtp_tokens = None
         mtp_id_segments = []
         try:
@@ -949,6 +958,7 @@ def run_request_loop(
                     ttnn.deallocate(mtp_tokens)
             forward_shutdown()
             raise
+        _lease_wait(inbound, outbound)
         # The top-k is the inbound's last segment; what is left are the MTP ids.
         indices = mtp_id_segments.pop() if recv_indices else None
         if _is_shutdown_sentinel(meta):

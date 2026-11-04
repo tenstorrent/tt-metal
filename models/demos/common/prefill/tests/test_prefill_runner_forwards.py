@@ -105,7 +105,8 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
 )
 def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect_error, is_last_rank, returns, message):
     shutdowns = []
-    monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
+    monkeypatch.setattr(runner, "_lease_grant_inbound", lambda *a: None)
+    monkeypatch.setattr(runner, "_lease_wait", lambda *a: None)
     monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
     monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
@@ -126,7 +127,8 @@ def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect
 
 def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
     shutdowns = []
-    monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
+    monkeypatch.setattr(runner, "_lease_grant_inbound", lambda *a: None)
+    monkeypatch.setattr(runner, "_lease_wait", lambda *a: None)
     monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     runtime = _PackedRuntime()
     runtime.config.is_last_rank = False
