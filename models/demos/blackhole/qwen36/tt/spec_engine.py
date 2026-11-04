@@ -1227,6 +1227,25 @@ class MTPSpecEngine:
         if c is not None and hasattr(c, "unpin"):
             c.unpin(row)
 
+    def _unaligned_chunk_force(self, start_pos, Tp):
+        """Save points of a non-final chunk [start_pos, Tp) whose end is not a multiple of 128 (Option A for this chunk, in
+        either resume mode): the whole chunk is prefilled (main KV + drafter KV of [start_pos, Tp), as vLLM expects), the
+        GDN state is snapshotted at p = the largest multiple of 128 <= Tp-3 when p > start_pos, and no Option B progress
+        is recorded. The next chunk (start_pos = Tp) then takes the normal resume path: spec_resume_cap(Tp) =
+        floor((Tp-1)/128)*128 >= p, so it restores p (or an older snapshot if p was evicted) and recomputes [p, ...),
+        rewriting the KV of [p, Tp) with the same values. The drafter slot p-1 was warmed here with token p (p < Tp).
+        Counted in ``chunk_unaligned_ends``; one WARNING per occurrence (it means the scheduler did not align)."""
+        self.chunk_unaligned_ends = getattr(self, "chunk_unaligned_ends", 0) + 1
+        self._chunk_bump("unaligned_ends")
+        p = ((int(Tp) - 3) // 128) * 128
+        force = (p,) if p > int(start_pos) else ()
+        logger.warning(
+            f"[spec_engine] non-final prefill chunk [{start_pos}, {Tp}) ends off the 128 grid "
+            f"(#{self.chunk_unaligned_ends}): Option A chunk, "
+            + (f"GDN snapshot at {p}" if force else "no snapshot inside the chunk (the next chunk resumes lower)")
+        )
+        return force
+
     def _chunk_bump(self, name):
         c = self._chunk_cache()
         if c is not None and hasattr(c, "bump"):
@@ -2847,10 +2866,13 @@ class MTPSpecEngine:
                 self._dv_guard.observe(slot, prompt_list[-self._dv_guard.window :])
         else:
             assert vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
-            assert Tp % 128 == 0, f"non-final prefill chunk end {Tp} is not a multiple of 128"
             assert (
                 start_pos is not None and 0 <= int(start_pos) < Tp
             ), f"non-final chunk start_pos {start_pos} vs end {Tp}"
+        # A non-final chunk end off the 128 grid (the scheduler normally aligns it; a resumed / preempted request whose
+        # chunk ends between its prompt and its replayed output tokens was not aligned, 2026-11-03): served as an Option A
+        # chunk (see _unaligned_chunk_force) instead of asserting, which killed the engine and every in-flight request.
+        unaligned_end = (not final) and Tp % 128 != 0
         # A multimodal row keeps its vision rows until it is released / joined: a re-prefill (_reprefill,
         # _reconcile_fresh_rows) needs them. A text prefill on the row clears a previous request's.
         if vision_tokens is None:
@@ -2875,11 +2897,14 @@ class MTPSpecEngine:
         # (spec_resume_cap(e, L) = e-128) and recomputes [e-128, e), which also warms the drafter slot e-1.
         force = ()
         exact_mode = chunk_exact_resume_enabled()
-        save_end = (not final) and exact_mode  # Option B: snapshot the chunk end + capture the hidden row of slot e-1
+        # Option B: snapshot the chunk end + capture the hidden row of slot e-1 (needs an aligned end)
+        save_end = (not final) and exact_mode and not unaligned_end
         if not final:
             if self.B <= 1 or getattr(model, "_prefix_cache", None) is None:
                 raise RuntimeError("non-final prefill chunk needs the batched spec engine and the GDN prefix cache")
-            if save_end:
+            if unaligned_end:
+                force = self._unaligned_chunk_force(start_pos, Tp)
+            elif save_end:
                 pass
             elif Tp - 128 > int(start_pos):
                 force = (Tp - 128,)
@@ -2893,8 +2918,8 @@ class MTPSpecEngine:
             plan_kw["force_points"] = force
         if exact is not None:
             plan_kw["exact_resume"] = exact
-        if save_end:
-            plan_kw["nonfinal"] = True
+        if save_end or unaligned_end:
+            plan_kw["nonfinal"] = True  # unaligned: the forced point replaces the end checkpoint; a plan is always made
         plan = (
             model.plan_spec_prefix(prompt[0], Tp, start_pos, **plan_kw)
             if start_pos is not None and self.B > 1 and vision_tokens is None
