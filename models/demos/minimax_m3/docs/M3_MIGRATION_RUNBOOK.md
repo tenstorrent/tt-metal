@@ -203,7 +203,7 @@ publishes a table at startup, so a second runner against a live endpoint kills b
 ```bash
 pkill -f migration_endpoint; pkill prun; pkill prted; pkill prte
 rm -f /dev/shm/mig_ep[01]_* /dev/shm/ep_[01]_[ab]_* /dev/shm/ttmig.* \
-      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* \
+      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
       /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map*.json /tmp/m3_migration_done.sentinel* \
       /data/philei/tmp/m3_kv_chunk_table_pp.pb \
       /data/philei/tmp/m3_pd/migration_done.sentinel* /data/philei/tmp/m3_pd/prefill_migration_handoff.json
@@ -230,7 +230,7 @@ Checked-in config: `$M3/m3_binding_loopback_migration_1rank.yaml` (runner) and
 #      691200-entry table is built one Python call at a time.
 $RUN $M3/m3_binding_loopback_migration_1rank.yaml $HOST:1
 #   wait for:  [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
-#              [migration] LayerAck channel ready at /tt_prefill_layer_acks_m3_prefill
+#              [migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 
 # ---- Terminal C — prefill + migrate + verify (0.3). Every verdict lands HERE.
 PREFILL_SEND_SHUTDOWN=1 python -m models.demos.common.prefill.runners.migration_driver \
@@ -701,7 +701,7 @@ export TT_METAL_HOME=$PREFILL M3_KVM_TABLE_DIR=$TABLES PP_TT_METAL_CACHE=/tmp/tt
   $DGEN/engine/tools/manifests/minimax_m3/runner_1rank_kvm.yaml $PHOST:1 $NIC 2>&1 | tee $RUN/runner.log
 ```
 
-Ready check: `ls /dev/shm/tt_h2d_stream_service_m3_prefill.bin /dev/shm/tt_prefill_layer_acks_m3_prefill`.
+Ready check: `ls /dev/shm/tt_h2d_stream_service_m3_prefill.bin /dev/shm/tt_prefill_layer_completions_m3_prefill`.
 Both tables must now exist and be non-empty: `ls -la $TABLES`.
 
 **3. KVM fleet, from the prefill node.** Write `$RUN/fleet.conf`:
