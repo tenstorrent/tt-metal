@@ -354,3 +354,9 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   skipped the `noc_async_read_barrier` that the x-read branch placed after the routing reads, so the writer scanned
   stale routing; eager matched only because the previous program had left the same routing in that L1 region. Fix
   675eefb3f4c (wt_persist2). Reset #3; `chain_persist2_r3` re-tests step 2 after step 1's gate and profile.
+- 2026-11-04 06:43 `gate84_B4_persist_g11d` PASSED: step 1 (gather + fused experts + combine in one program per chip)
+  reproduces `gate84_B4_fabar_r2` bit-exactly over the 20-step chain (ids, per-user pcc 0.794, chain 0.9547). Step
+  38.37 ms vs 37.69 / 37.34 ms: the block is ~20 us per layer SLOWER than the three programs it replaces, i.e. the
+  in-program handshakes (x_g write -> "written" count -> release multicast; down -> reduce signal) cost more than the
+  three dispatch boundaries they remove. Next: the per-core timeline of the profiled unit test (`tracy_unit_persist`)
+  to see the gaps, then step 2 (resident x removes the x_g write and the gate|up x reads).
