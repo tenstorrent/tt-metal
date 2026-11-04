@@ -390,3 +390,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   The floor (440 us/layer) needs ~270 us off: experts at few active experts (-70..90), the exchanges and all-reduces
   (-60), MHC (-60), shared expert + router overlapped in the block (-50). First experiment: the expert op's streaming
   knobs at 8 users (`test_stream_knobs_chip0` calibration), then the folds into the persistent block.
+- 2026-11-04 07:22 per-core zones of the persistent block at 8 users (`tracy_l4_b1_persist`, chip (0,0), 335 us):
+  gather ~50 us; the gate|up readers finish between 159 and 258 us (a 3x imbalance: expert rank -> reader by
+  modulo, ~15 active experts over 11 readers per bank); the down cores finish at 284-292 (the tail: ~14 us per
+  expert, serial per down core, 16 cores); the reduce 292 -> 335 = 42 us. At 8 users the expert phase is bound by
+  the down cores' per-expert serial work and the reader imbalance, not by DRAM bandwidth (45 MB would be 100 us).
+  Knob A/B queued (`chain_dr4`): `GLM53_STREAM_DOWN_READERS=4` (32 down cores) at 8 and 32 users, today's path
+  and the block (the persistent placement then takes 8 gate|up groups).
