@@ -444,7 +444,10 @@ def test_setup_ttml_model_rejects_a_checkpoint_missing_a_parameter(patch_llama_w
     model, tokenizer = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
     save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=patch_llama_weight_loading)
     checkpoint_dir = tmp_path / "checkpoints" / "grpo_step_1"
-    params = {name: p for name, p in model.parameters().items() if not name.endswith("/qkv_linear/weight")}
+    params = ttml.NamedParameters()
+    for name, param in model.parameters().items():
+        if not name.endswith("/qkv_linear/weight"):
+            params[name] = param
     ttml.checkpointing.save_checkpoint(str(checkpoint_dir / grpo_ttml_model.CHECKPOINT_FILE), model_params=params)
 
     with expect_error(RuntimeError, r"param\(s\) left at init"):
