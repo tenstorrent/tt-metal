@@ -108,7 +108,10 @@ def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, 
             partial, cluster_axis=1, num_links=num_links, topology=ttnn.Topology.Linear
         )
     )
-    assert torch.allclose(per_chip(partial).sum(0).expand(ring, -1), expected, rtol=2e-2, atol=2e-2)
+    partials = per_chip(partial)
+    # Each bf16 add rounds to the ulp of the partials' scale, so near-zero sums are only that close.
+    atol = 2 * ring * partials.abs().max().item() * 2**-8
+    torch.testing.assert_close(partials.sum(0).expand(ring, -1), expected, rtol=1e-2, atol=atol)
 
     # Several back-to-back calls exercise the semaphore reset and the persistent scratch.
     for i in range(iterations):
@@ -119,4 +122,4 @@ def test_fused_experts_all_reduce(mesh_device, hidden, intermediate, num_links, 
             assert torch.equal(got[0], got[chip]), f"iteration {i}: chip {chip} differs from chip 0"
         passing, msg = comp_pcc(expected, got, pcc=0.9999)
         assert passing, f"iteration {i}: fused all-reduce vs two-op path: {msg}"
-        torch.testing.assert_close(got, expected, rtol=1e-2, atol=1e-2)
+        torch.testing.assert_close(got, expected, rtol=1e-2, atol=atol)
