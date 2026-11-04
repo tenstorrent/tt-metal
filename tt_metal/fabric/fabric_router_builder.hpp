@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts

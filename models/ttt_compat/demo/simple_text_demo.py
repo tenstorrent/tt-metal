@@ -923,7 +923,9 @@ def test_demo_text(
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    cli_paged_attention = request.config.getoption("--paged_attention")
+    if cli_paged_attention is not None:
+        paged_attention = cli_paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
@@ -933,8 +935,12 @@ def test_demo_text(
         # temperature) keeps the remaining keys the demo indexes unconditionally.
         sampling_params = {**sampling_params, **cli_sampling_params}
     json_config_file = request.config.getoption("--decoder_config_file")
-    token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
-    stress_test = request.config.getoption("--stress_test") or stress_test
+    cli_token_accuracy = request.config.getoption("--token_accuracy")
+    if cli_token_accuracy is not None:
+        token_accuracy = cli_token_accuracy
+    cli_stress_test = request.config.getoption("--stress_test")
+    if cli_stress_test is not None:
+        stress_test = cli_stress_test
     arg_enable_trace = request.config.getoption("--enable_trace")
     if arg_enable_trace is not None:
         enable_trace = arg_enable_trace
