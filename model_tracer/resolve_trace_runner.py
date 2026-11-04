@@ -23,15 +23,20 @@ from pathlib import Path
 
 import yaml
 
-# Short names accepted for backwards compatibility with the old runner-label choices.
+# Old runner-label choices that still name the same pool as their SKU.
 LABEL_ALIASES = {
-    "N150": "wh_n150",
-    "N300": "wh_n300",
     "n300-llmbox": "wh_llmbox",
     "topology-6u": "wh_galaxy",
-    "P100a": "bh_p100",
-    "P150b": "bh_p150",
     "BH-LoudBox": "bh_loudbox",
+}
+
+# Old runner-label choices that used to pick the CIv2 pool, while the same-named SKU is CIv1.
+# Mapping them either way would silently change pools, so the caller picks the SKU.
+RETIRED_LABELS = {
+    "N150": ("wh_n150", "wh_n150_civ2"),
+    "N300": ("wh_n300", "wh_n300_civ2"),
+    "P100a": ("bh_p100", "bh_p100a_civ2_viommu"),
+    "P150b": ("bh_p150", "bh_p150b_civ2"),
 }
 
 ONLINE_MODES = ("local-disk", "lfc")
@@ -46,6 +51,12 @@ def is_hub_id(model, repo_root="."):
 
 
 def resolve_sku(label, skus):
+    if label in RETIRED_LABELS:
+        civ1, civ2 = RETIRED_LABELS[label]
+        raise ValueError(
+            f"runner-label {label!r} is no longer accepted; pick a SKU: {civ1} (CIv1, shared /mnt/MLPerf "
+            f"weights) or {civ2} (CIv2)"
+        )
     sku = LABEL_ALIASES.get(label, label)
     if sku not in skus:
         known = ", ".join(sorted(set(LABEL_ALIASES) | set(skus)))
