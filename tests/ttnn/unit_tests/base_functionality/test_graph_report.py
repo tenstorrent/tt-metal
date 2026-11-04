@@ -3801,8 +3801,29 @@ class TestGraphCaptureToFile:
             with expect_error(RuntimeError, "cannot create directories"):
                 ttnn.graph.end_graph_capture_to_file(report_path)
             assert not ttnn.graph.is_graph_capture_active()
+            assert not ttnn.graph.is_python_io_recording_enabled()
         finally:
             if ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+
+    def test_full_graph_capture_failed_write_keeps_outer_capture(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with expect_error(RuntimeError, "cannot create directories"):
+                with ttnn.graph.full_graph_capture(blocker / "report.json"):
+                    _ = ttnn.relu(tt_input)
+            assert ttnn.graph.is_graph_capture_active()
+            ttnn.graph.end_graph_capture()
+            assert not ttnn.graph.is_graph_capture_active()
+        finally:
+            while ttnn.graph.is_graph_capture_active():
                 ttnn.graph.end_graph_capture()
 
     @skip_for_slow_dispatch()

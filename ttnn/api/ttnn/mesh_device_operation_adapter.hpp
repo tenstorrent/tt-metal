@@ -435,6 +435,24 @@ public:
             return addresses;
         }
 
+        static bool declares_tensor_buffer_bindings(
+            const tt::tt_metal::ProgramDescriptor& desc, std::span<tt::tt_metal::Buffer* const> buffers) {
+            for (const auto& kernel : desc.kernels) {
+                if (!kernel.buffer_bindings.empty() || !kernel.common_buffer_bindings.empty()) {
+                    return true;
+                }
+            }
+            for (const auto& cb : desc.cbs) {
+                const tt::tt_metal::Buffer* cb_buffer =
+                    cb.buffer != nullptr ? cb.buffer
+                                         : (cb.tensor ? cb.tensor->mesh_buffer().get_reference_buffer() : nullptr);
+                if (cb_buffer != nullptr && std::find(buffers.begin(), buffers.end(), cb_buffer) != buffers.end()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         // Whether create_descriptor (the ProgramDescriptor variant) wants the per-coord MeshCoordinate.
         // DirectDescriptorFactory accepts the 4-arg form unconditionally but only forwards
         // when the underlying DeviceOperation defines it. Custom factories opt in explicitly.
@@ -584,8 +602,10 @@ public:
                         collected.buffers,
                         collected.num_input_buffers,
                         /*allow_inplace_output_tensor_alias=*/true);
+                    // A descriptor that declares tensor-buffer bindings only resolves to empty bindings when
+                    // resolve_bindings bailed on an aliased buffer.
                     std::vector<uint32_t> unpatchable_buffer_addresses;
-                    if (bindings.bailed_on_alias) {
+                    if (bindings.empty() && declares_tensor_buffer_bindings(desc, collected.buffers)) {
                         unpatchable_buffer_addresses = buffer_addresses(collected.buffers);
                     }
                     mesh_workload.add_program(device_range, std::move(program));
@@ -680,15 +700,17 @@ public:
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
-                    } else if (!has_override_runtime_arguments() && sv.resolved_bindings.bailed_on_alias) {
+                    } else if (!has_override_runtime_arguments() && !sv.unpatchable_buffer_addresses.empty()) {
+                        // Overrides are exempt: some rewrite every buffer address themselves (e.g.
+                        // minimal_matmul_strided_reduce_scatter_async), and the adapter cannot tell which.
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         TT_FATAL(
                             buffer_addresses(collected.buffers) == sv.unpatchable_buffer_addresses,
                             "{}: program cache hit on an entry built from a call that passed the same buffer in more "
                             "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
-                            "tensors. The cached entry stays unpatchable: call clear_program_cache() on the device "
-                            "before this call, or run with the program cache disabled.",
+                            "tensors. Pass distinct tensors to the first call (for example a clone of the repeated "
+                            "tensor), or run this op with the program cache disabled.",
                             ttsl::get_type_name<DeviceOperation>());
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
