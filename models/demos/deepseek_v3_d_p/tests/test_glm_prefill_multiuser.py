@@ -25,9 +25,10 @@ but the pipeline test also run on a LoudBox.
 * test_glm_packed_pipeline_matches_one_rank (8x4 only): the model split over two pipeline ranks on one mesh,
   packed forwards handed rank to rank, must match one rank, eager and traced.
 
-Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP row
-(2x4 -> 1,280-token chunks, 8x4 -> 5,120). On 2x4 every chip sees what a galaxy chip sees in attention
-(640 rows, 16 heads, 160 sparse_sdpa tokens) but holds 32 experts instead of 8.
+Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP chip
+(2x4 -> 1,280-token chunks, 8x4 -> 5,120, the 4x4 stage -> 2,560 with SP on its axis-1 ring). On 2x4 every chip
+sees what a galaxy chip sees in attention (640 rows, 16 heads, 160 sparse_sdpa tokens) but holds 32 experts
+instead of 8.
 
 Depth: 4 layers with every GLM-5.3 layer kind (_TestGLM53Config): 0-1 dense with full indexers, 2 MoE with a
 full indexer, 3 MoE reusing layer 2's top-k. The real model's first MoE layer with a full indexer is 6; the
@@ -50,10 +51,12 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe import tt_moe_gate_prefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
@@ -118,6 +121,7 @@ MESH_PARAMS = [
             fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
         ),
         1,
+        0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-2x4",
     ),
@@ -127,15 +131,27 @@ MESH_PARAMS = [
             fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
         ),
         2,
+        0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
+    ),
+    # One 4x4 stage (a galaxy tray half): SP on the axis-1 ring, TP=4 on the axis-0 line.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(
+            fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
+        ),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp1",
     ),
 ]
 
 
-def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks=1):
+def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks=1, sp_axis=0):
     """Random-weight chunked transformer plus KVPE and indexer-K caches with ``num_slots`` user slots."""
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     seq_cache = N_CHUNKS * chunk
     # _resolve_config_only is lru_cached and shared process-wide; don't leak max_seq_len into it.
@@ -200,10 +216,10 @@ def _token_ids(config, num_users, length):
     ]
 
 
-def _forward_input(mesh_device, chunks, ids_by_slot, chunk):
+def _forward_input(mesh_device, chunks, ids_by_slot, chunk, sp_axis):
     """A forward's tokens in the packed per-chip layout (pack_forward_tokens), SP-sharded on device. A
     partial chunk's tail and an empty chunk are padded with token 0."""
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk_tokens = []
     for c in chunks:
         real = [] if c.is_empty else ids_by_slot[c.slot_id][c.actual_start : c.actual_end].tolist()
@@ -215,14 +231,16 @@ def _forward_input(mesh_device, chunks, ids_by_slot, chunk):
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, sp_axis)
+        ),
     )
 
 
-def _run_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk):
+def _run_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk, sp_axis=0):
     """One forward of ``chunks``; returns the last layer's output on host, [1, len(chunks) * chunk, emb],
     in the packed per-chip row order. A one-chunk forward goes through the regular (non-packed) path."""
-    tt_tokens = _forward_input(mesh_device, chunks, ids_by_slot, chunk)
+    tt_tokens = _forward_input(mesh_device, chunks, ids_by_slot, chunk, sp_axis)
     if len(chunks) == 1 and transformer.forward_chunks == 1:
         c = chunks[0]
         out = transformer.forward(
@@ -262,10 +280,10 @@ def _chunk_real_rows(hidden, k, num_chunks, chunk_obj, sp, chunk_local):
     return torch.stack(rows)
 
 
-def _read_user_slots(cache, mesh_device, layers_per_user, num_slots):
+def _read_user_slots(cache, mesh_device, layers_per_user, num_slots, sp_axis=0):
     """Per-slot cache rows [layers_per_user, seq_cache, D], in device (shard-major) order. Both sides of
     every comparison are read the same way, so there is nothing to un-rotate."""
-    rows, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True)
+    rows, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True, sp_axis=sp_axis)
     assert rows.shape[0] == num_slots * layers_per_user, (rows.shape, num_slots, layers_per_user)
     return [rows[s * layers_per_user : (s + 1) * layers_per_user] for s in range(num_slots)]
 
@@ -290,19 +308,21 @@ def _compare_slots(label, kv_slots, idx_slots, pairs, threshold):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm_multiuser_interleaved_matches_sequential(variant, config_only, mesh_device, device_params, num_links):
+def test_glm_multiuser_interleaved_matches_sequential(
+    variant, config_only, mesh_device, device_params, num_links, sp_axis
+):
     """Round-robin over users (slots N..2N-1) must reproduce each user run alone (slots 0..N-1)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[sp_axis]
     num_slots = 2 * NUM_USERS
     mesh_device.enable_program_cache()
     config, transformer, kvpe_cache, index_kv_cache = _build(
-        mesh_device, config_only, device_params, num_links, chunk, num_slots
+        mesh_device, config_only, device_params, num_links, chunk, num_slots, sp_axis=sp_axis
     )
     try:
         ids = _token_ids(config, NUM_USERS, N_CHUNKS * chunk)
@@ -312,7 +332,9 @@ def test_glm_multiuser_interleaved_matches_sequential(variant, config_only, mesh
 
         def run(slot, c):
             chunks = [PrefillChunk(slot, c * chunk, (c + 1) * chunk)]
-            return _run_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk)
+            return _run_forward(
+                transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk, sp_axis
+            )
 
         sequential = {(u, c): run(u, c) for u in range(NUM_USERS) for c in range(N_CHUNKS)}
         interleaved = {}
@@ -326,8 +348,10 @@ def test_glm_multiuser_interleaved_matches_sequential(variant, config_only, mesh
             logger.info(f"[interleaved] user {key[0]} chunk {key[1]} last-layer PCC {pcc:.6f}")
             if pcc < INTERLEAVED_PCC:
                 failures.append(f"user {key[0]} chunk {key[1]} hidden PCC {pcc:.6f} < {INTERLEAVED_PCC}")
-        kv_slots = _read_user_slots(kvpe_cache, mesh_device, NUM_LAYERS, num_slots)
-        idx_slots = _read_user_slots(index_kv_cache, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_slots)
+        kv_slots = _read_user_slots(kvpe_cache, mesh_device, NUM_LAYERS, num_slots, sp_axis)
+        idx_slots = _read_user_slots(
+            index_kv_cache, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_slots, sp_axis
+        )
         failures += _compare_slots(
             "interleaved", kv_slots, idx_slots, [(u, NUM_USERS + u) for u in range(NUM_USERS)], INTERLEAVED_PCC
         )
@@ -357,13 +381,13 @@ def _packed_schedule(chunk):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_packed_forward_matches_one_chunk_forwards(
-    variant, config_only, mesh_device, device_params, num_links, monkeypatch
+    variant, config_only, mesh_device, device_params, num_links, sp_axis, monkeypatch
 ):
     """Packed forwards (slots 0..3) must reproduce every chunk run alone in its own forward (slots 4..7).
 
@@ -377,7 +401,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
     """
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     monkeypatch.setattr(tt_moe_gate_prefill, "ROWS_PADDING_CONFIG_CACHE_SIZE", 1)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     chunk_local = chunk // sp
     lengths, forwards = _packed_schedule(chunk)
@@ -385,7 +409,14 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
     num_slots = 2 * num_users
     mesh_device.enable_program_cache()
     config, transformer, kvpe_cache, index_kv_cache = _build(
-        mesh_device, config_only, device_params, num_links, chunk, num_slots, forward_chunks=FORWARD_CHUNKS
+        mesh_device,
+        config_only,
+        device_params,
+        num_links,
+        chunk,
+        num_slots,
+        forward_chunks=FORWARD_CHUNKS,
+        sp_axis=sp_axis,
     )
     try:
         for chunks in forwards:
@@ -403,7 +434,9 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
         packed = {}  # (slot, actual_start) -> real rows of the last layer's output
         for f, chunks in enumerate(forwards):
             logger.info(f"[packed] forward {f}: {chunks}")
-            hidden = _run_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk)
+            hidden = _run_forward(
+                transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk, sp_axis
+            )
             for k, c in enumerate(chunks):
                 if not c.is_empty:
                     packed[(c.slot_id, c.actual_start)] = _chunk_real_rows(
@@ -426,6 +459,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                     [ref_chunk] + [empty] * (FORWARD_CHUNKS - 1),
                     ids_by_slot,
                     chunk,
+                    sp_axis,
                 )
                 ref = _chunk_real_rows(hidden, 0, FORWARD_CHUNKS, ref_chunk, sp, chunk_local)
                 alone[(c.slot_id, c.actual_start)] = ref
@@ -435,8 +469,10 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                 if pcc < PACKED_OUTPUT_PCC:
                     failures.append(f"{c} hidden PCC {pcc:.6f} < {PACKED_OUTPUT_PCC}")
 
-        kv_slots = _read_user_slots(kvpe_cache, mesh_device, NUM_LAYERS, num_slots)
-        idx_slots = _read_user_slots(index_kv_cache, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_slots)
+        kv_slots = _read_user_slots(kvpe_cache, mesh_device, NUM_LAYERS, num_slots, sp_axis)
+        idx_slots = _read_user_slots(
+            index_kv_cache, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_slots, sp_axis
+        )
         # KV of layer L comes from layer L-1's output, so it is exact while every earlier layer is dense.
         exact_through = _TestGLM53Config.NUM_DENSE_LAYERS
         full_layers = [l for l, t in enumerate(config.indexer_types[:NUM_LAYERS]) if t == "full"]
@@ -467,22 +503,24 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
 
     # The packed model's one-chunk forwards vs a model built for one chunk per forward (same weights).
     _, single, single_kvpe, single_index = _build(
-        mesh_device, config_only, device_params, num_links, chunk, num_users, forward_chunks=1
+        mesh_device, config_only, device_params, num_links, chunk, num_users, forward_chunks=1, sp_axis=sp_axis
     )
     try:
         for chunks in forwards:
             for c in chunks:
                 if c.is_empty:
                     continue
-                hidden = _run_forward(single, single_kvpe, single_index, mesh_device, [c], ids_by_slot, chunk)
+                hidden = _run_forward(single, single_kvpe, single_index, mesh_device, [c], ids_by_slot, chunk, sp_axis)
                 ref = _chunk_real_rows(hidden, 0, 1, c, sp, chunk_local)
                 got = alone[(c.slot_id, c.actual_start)]
                 pcc = _pcc(ref, got)
                 logger.info(f"[single] {c} last-layer PCC {pcc:.6f} max|diff| {(ref - got).abs().max().item():.3e}")
                 if pcc < PACKED_OUTPUT_PCC:
                     failures.append(f"{c} hidden PCC {pcc:.6f} vs forward_chunks=1 < {PACKED_OUTPUT_PCC}")
-        single_kv = _read_user_slots(single_kvpe, mesh_device, NUM_LAYERS, num_users)
-        single_idx = _read_user_slots(single_index, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_users)
+        single_kv = _read_user_slots(single_kvpe, mesh_device, NUM_LAYERS, num_users, sp_axis)
+        single_idx = _read_user_slots(
+            single_index, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_users, sp_axis
+        )
         for u in range(num_users):
             for name, ours, theirs, layers in (
                 ("kvpe", kv_slots, single_kv, range(NUM_LAYERS)),
@@ -499,7 +537,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (2, 4),
@@ -509,6 +547,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
@@ -520,8 +559,22 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 stage (a galaxy tray half): SP on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM53Adapter.l1_small_size,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -529,11 +582,11 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links):
+def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links, sp_axis):
     """Traced packed forwards (slots 0..3) must fill the same KVPE and indexer-K as the eager packed
     forward of the same chunks on the same model (slots 4..7)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     lengths, forwards = _packed_schedule(chunk)
     num_users = len(lengths)
@@ -544,6 +597,8 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
         num_layers=NUM_LAYERS,
         max_seq_len=seq_cache,
         mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         chunk_size=chunk,
         forward_tokens_budget=FORWARD_CHUNKS * chunk,
         num_users=2 * num_users,
@@ -570,8 +625,8 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=NUM_LAYERS,
             num_users=cache_slots,
         ),
@@ -580,8 +635,8 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=full_indexer_rank(config, NUM_LAYERS),
             num_users=cache_slots,
             dtype=ttnn.bfloat8_b,
@@ -615,8 +670,10 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             ttnn.deallocate(inp)
         ttnn.synchronize_device(mesh_device)
 
-        kv_slots = _read_user_slots(caches.kvpe, mesh_device, NUM_LAYERS, cache_slots)
-        idx_slots = _read_user_slots(caches.index, mesh_device, full_indexer_rank(config, NUM_LAYERS), cache_slots)
+        kv_slots = _read_user_slots(caches.kvpe, mesh_device, NUM_LAYERS, cache_slots, sp_axis)
+        idx_slots = _read_user_slots(
+            caches.index, mesh_device, full_indexer_rank(config, NUM_LAYERS), cache_slots, sp_axis
+        )
         # Every user, including C, whose only chunk is partial from position 0 (#63408, fixed by #63538).
         failures = _compare_slots(
             "traced", kv_slots, idx_slots, [(u + num_users, u) for u in range(num_users)], TRACED_PCC
