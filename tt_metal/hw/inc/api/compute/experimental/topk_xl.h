@@ -5,10 +5,10 @@
 #pragma once
 
 // Define TOPK_XL_BLAZE_COMPAT consistently for all TRISCs before including this
-// header to use the Blaze-managed protocol. It disables SFPLOADMACRO, leaves
-// generic-sort SrcB validity to the caller, and uses PACK replay slots [0, 3)
-// for index extraction. The caller must serialize MATH
-// and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero advance across it.
+// header to use the Blaze-managed protocol. It leaves generic-sort SrcB validity
+// to the caller and uses PACK replay slots [0, 3) for index extraction. The caller
+// must serialize MATH and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero
+// advance across it.
 // Use topk_xl_copy_tile_init_short after configuring formats in that pipeline.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
