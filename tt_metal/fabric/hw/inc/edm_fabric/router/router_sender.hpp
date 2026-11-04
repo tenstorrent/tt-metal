@@ -354,11 +354,12 @@ __attribute__((noinline)) uint32_t open_or_close_worker_connection(
 // A worker channel: a worker on this chip connects at run time (its connection semaphore, checked every pass) and is
 // credited with the absolute count of slots returned. The count goes into the channel's read counter, which therefore
 // always holds it; while a worker is connected, a 4-byte posted NoC write copies that word into the worker's L1 on the
-// channel's own credit command buffer (CommandBuffers). Where command buffers keep presets, that buffer stays
-// programmed for the connection (at the connection, and again after the base firmware ran), so a credit only issues
-// the write; elsewhere every credit is a whole command. The credit and the connection event are out of line: a credit
-// goes back once per completion group from the far router (every few packets), or under first-level acks once per ack
-// frame, and its constants are built then instead of being held in the sender loop's registers for its whole run.
+// channel's own credit command buffer (CommandBuffers). Where command buffers keep presets, that buffer holds the whole
+// command for the connection (source, destination, length; programmed at the connection, and again after the base
+// firmware ran), so a credit is the read counter store and the command's send request; elsewhere every credit is a
+// whole command. The credit and the connection event are out of line: a credit goes back once per completion group
+// from the far router (every few packets), or under first-level acks once per ack frame, and its constants are built
+// then instead of being held in the sender loop's registers for its whole run.
 template <size_t CH>
 struct WorkerChannel {
     static_assert(SenderChannel<CH>::worker);
@@ -390,16 +391,20 @@ struct WorkerChannel {
     }
 
     // `returned` slots in all: into the read counter and, while a worker is connected, from there into the worker's L1.
+    // With presets the command is all preset (preset_credit): the credit waits for the buffer and sends it.
     __attribute__((noinline)) static void credit(uint32_t returned, bool worker_connected) {
         constexpr uint32_t source = read_counter_addr;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;
         if (worker_connected) {
             if constexpr (CommandBuffers::presets) {
-                ncrisc_noc_write_with_state<noc_mode, /*posted=*/true, /*update_counter=*/true, /*one_packet=*/true>(
-                    SenderChannel<CH>::producer_noc,
+                noc_wwrite_with_state<
+                    noc_mode,
                     credit_cmd_buf,
-                    source,
-                    static_cast<uint32_t>(interface().cached_worker_semaphore_address));
+                    CQ_NOC_sndl,
+                    CQ_NOC_SEND,
+                    CQ_NOC_WAIT,
+                    /*update_counter=*/true,
+                    /*posted=*/true>(SenderChannel<CH>::producer_noc, 0, 0, 0);
             } else {
                 while (!noc_cmd_buf_ready(SenderChannel<CH>::producer_noc, credit_cmd_buf)) {
                 }
@@ -419,15 +424,29 @@ struct WorkerChannel {
         }
     }
 
-    // The credit command buffer programmed for the connected worker, where command buffers keep presets.
+    // The credit command buffer programmed with the whole credit for the connected worker, where command buffers keep
+    // presets: a 4-byte posted write from the read counter to the worker's credit address (its node and its local
+    // address, which is on chip: the address's upper half stays as the state call set it).
     __attribute__((noinline)) static void preset_credit() {
         if constexpr (CommandBuffers::presets) {
+            const uint64_t worker_credit_addr = interface().cached_worker_semaphore_address;
             ncrisc_noc_write_set_state</*posted=*/true, /*one_packet=*/true>(
                 SenderChannel<CH>::producer_noc,
                 credit_cmd_buf,
-                interface().cached_worker_semaphore_address,
+                worker_credit_addr,
                 sizeof(uint32_t),
                 NOC_UNICAST_WRITE_VC);
+            // The buffer is ready (the state call waited for it) and nothing is issued on it until the next credit.
+            noc_wwrite_with_state<
+                noc_mode,
+                credit_cmd_buf,
+                CQ_NOC_SnDl,
+                CQ_NOC_send,
+                CQ_NOC_wait,
+                /*update_counter=*/false,
+                /*posted=*/true,
+                /*update_addr_mid=*/false>(
+                SenderChannel<CH>::producer_noc, read_counter_addr, 0, static_cast<uint32_t>(worker_credit_addr));
         }
     }
 
