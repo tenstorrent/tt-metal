@@ -402,20 +402,19 @@ def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer, Sfpu for Quasar, Unpacker, Math, Packer for Wormhole/Blackhole) before each test."""
 
     # Use 0xA3, because it's a non-zero value that we don't use anywhere else - it's good for triaging hangs.
-    MAILBOX_RESET = 0xA3
     MAILBOX_START_BLOCK = Mailboxes.Unpacker.value
-    # All 4 TRISC mailboxes on Quasar, all 3 on Wormhole/Blackhole
-    write_words_to_device(
-        location=location,
-        addr=MAILBOX_START_BLOCK,
-        data=[MAILBOX_RESET] * len(Mailboxes),
-    )
-    for slot in range(len(Mailboxes)):
-        addr = host_signal_address(slot)
-        if addr is not None:
-            write_words_to_device(
-                location=location, addr=addr, data=[MAILBOX_RESET], safe_mode=False
-            )
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        write_words_to_device(
+            location=location,
+            addr=MAILBOX_START_BLOCK,
+            data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
+        )
+    else:
+        write_words_to_device(
+            location=location,
+            addr=MAILBOX_START_BLOCK,
+            data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
+        )
 
 
 def pull_coverage_stream_from_tensix(
