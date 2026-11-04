@@ -87,17 +87,16 @@ FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, ui
     noc_semaphore_inc<true>(addr, value, LOCAL_NOC, LOCAL_NOC_VC);
 }
 
-// An inline write (one word) to this chip, on the local-write command buffer, then that buffer's preset restored: on
-// Blackhole a write to L1 is emulated there by a posted write, which leaves the buffer posted.
+// An inline write (one word) to this chip, then the local-write command buffer's preset restored. On Blackhole the
+// library emulates a write to L1 with a posted 4-byte write on the ERISC's write command buffer (NCRISC_WR_CMD_BUF),
+// which is the local-write buffer here: the write leaves it posted. A write to a register goes out on the atomics
+// buffer, which keeps no preset.
+static_assert(
+    CommandBuffers::local_writes == NCRISC_WR_CMD_BUF,
+    "the emulated L1 inline write reprograms the local-write command buffer, which local_write_init restores");
 FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
-    noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true, /*emulated_write_on_cmd_buf=*/true>(
-        dst_noc_addr,
-        value,
-        INLINE_WRITE_ALL_BYTES,
-        LOCAL_NOC,
-        LOCAL_NOC_VC,
-        /*customized_src_addr=*/0,
-        CommandBuffers::local_writes);
+    noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true>(
+        dst_noc_addr, value, INLINE_WRITE_ALL_BYTES, LOCAL_NOC, LOCAL_NOC_VC);
     local_write_init();
 }
 

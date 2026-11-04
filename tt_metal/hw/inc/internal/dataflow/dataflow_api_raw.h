@@ -357,19 +357,14 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state_impl(
     WAYPOINT("NAWD");
 }
 
-template <
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool posted = false,
-    bool flush = true,
-    bool emulated_write_on_cmd_buf = false>
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_dw_write_impl(
     uint64_t addr,
     uint32_t val,
     uint8_t be = 0xF,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC,
-    uint32_t customized_src_addr = 0,
-    uint8_t cmd_buf = write_at_cmd_buf) {
+    uint32_t customized_src_addr = 0) {
     WAYPOINT("NWIW");
     // Inline dword write: 4-byte immediate value.
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, vc, posted, noc);
@@ -387,15 +382,9 @@ FORCE_INLINE void noc_inline_dw_write_impl(
     }
 #endif
 
-    // Only Blackhole's emulated L1 write chooses its own buffer unless told otherwise (emulated_write_on_cmd_buf); the
-    // other architectures always issue an inline write on cmd_buf.
-#if defined(ARCH_BLACKHOLE)
-    noc_fast_write_dw_inline<noc_mode, dst_type, flush, emulated_write_on_cmd_buf>(
-#else
     noc_fast_write_dw_inline<noc_mode, dst_type, flush>(
-#endif
         noc,
-        cmd_buf,
+        write_at_cmd_buf,
         val,
         addr,
         be,  // byte-enable

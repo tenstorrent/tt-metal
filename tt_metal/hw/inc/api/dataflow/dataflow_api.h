@@ -2204,37 +2204,24 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                    | False    |
  * |                                          | write (`false` callers must prevent races on the caller    |          |                                  |          |
  * |                                          | side)                                                      |          |                                  |          |
- * | cmd_buf                                  | Command buffer to issue on                                 | uint8_t  | 0..3                             | False    |
- * | emulated_write_on_cmd_buf (template)     | Blackhole: issue an emulated L1 write on cmd_buf too       | bool     | true or false                    | False    |
  *
  * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
  * ensuring no outstanding inline write uses that address before issuing another write.
- *
- * On Blackhole an inline write to L1 is emulated by a 4-byte write from a scratch word, which goes out on the write
- * command buffer and reprograms it, whatever `cmd_buf` says, unless `emulated_write_on_cmd_buf` is set: then it goes
- * out on `cmd_buf`, for a caller that keeps that buffer programmed between its writes and restores it after this one.
- * Do not pass the inline-write command buffer with it: on Blackhole its return address is preset for atomics.
  */
 // clang-format on
 
 // Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
 // (api/dataflow/buf_rw_note.h).
-template <
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool posted = false,
-    bool flush = true,
-    bool emulated_write_on_cmd_buf = false>
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr,
     uint32_t val,
     uint8_t be = 0xF,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC,
-    uint32_t customized_src_addr = 0,
-    uint8_t cmd_buf = write_at_cmd_buf) {
+    uint32_t customized_src_addr = 0) {
     tt_buf_rw::note_opaque();
-    noc_inline_dw_write_impl<dst_type, posted, flush, emulated_write_on_cmd_buf>(
-        addr, val, be, noc, vc, customized_src_addr, cmd_buf);
+    noc_inline_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr);
 }
 
 // clang-format off

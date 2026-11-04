@@ -1067,10 +1067,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-// emulated_write_on_cmd_buf: issue the emulating write on `cmd_buf`, the buffer the caller passes, rather than on this
-// RISC's write command buffer (write_cmd_buf): for a caller that keeps a command buffer programmed between its writes
-// (the stateful NoC API) and restores it after this one. Off by default: the write goes on write_cmd_buf, as always.
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool flush = true, bool emulated_write_on_cmd_buf = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -1123,12 +1120,11 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
 #else
     constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 #endif
-    const uint32_t data_cmd_buf = emulated_write_on_cmd_buf ? cmd_buf : write_cmd_buf;
 
-    while (!noc_cmd_buf_ready(noc, data_cmd_buf));
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     ncrisc_noc_fast_write<noc_mode>(
         noc,
-        data_cmd_buf,
+        write_cmd_buf,
         src_addr,
         dest_addr,
         4,
@@ -1191,11 +1187,7 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
     }
 }
 
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool flush = true,
-    bool emulated_write_on_cmd_buf = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_impl(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -1212,11 +1204,11 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_impl(
             noc_fast_default_write_dw_inline<noc_mode>(
                 noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, num_dests);
         } else {
-            noc_fast_spoof_write_dw_inline<noc_mode, flush, emulated_write_on_cmd_buf>(
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
                 noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
         }
     } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode, flush, emulated_write_on_cmd_buf>(
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
             noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
     } else {
         ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
@@ -1225,12 +1217,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_impl(
     }
 }
 
-// emulated_write_on_cmd_buf: see noc_fast_spoof_write_dw_inline.
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool flush = true,
-    bool emulated_write_on_cmd_buf = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -1241,7 +1228,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool mcast,
     bool posted = false,
     uint32_t customized_src_addr = 0) {
-    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush, emulated_write_on_cmd_buf>(
+    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush>(
         noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr, 1);
 }
 
