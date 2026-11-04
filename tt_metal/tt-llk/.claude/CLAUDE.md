@@ -23,7 +23,6 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | `tests/python_tests/` | Python test suite (card jobs collect this tree) |
 | `tests/hardware_free/` | Host-only tests; run with `tests/run_hardware_free.sh` |
 | `tests/sources/` | C++ test source files |
-| `tests/hw_specific/` | Architecture-specific test files |
 | `docs/` | Documentation |
 
 ### Architecture File Naming

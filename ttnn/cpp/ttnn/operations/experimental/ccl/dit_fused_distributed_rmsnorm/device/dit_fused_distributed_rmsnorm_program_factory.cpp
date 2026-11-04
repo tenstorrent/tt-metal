@@ -1566,12 +1566,24 @@ ProgramDescriptor build_program_descriptor(
             fwd_rt_tail.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
             if (forward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, desc, core, fwd_rt_tail);
+                    *mesh_device,
+                    local_node_id,
+                    forward_fabric_node_id.value(),
+                    /*link_idx=*/f,
+                    desc,
+                    core,
+                    fwd_rt_tail);
             }
             fwd_rt_tail.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
             if (backward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, desc, core, fwd_rt_tail);
+                    *mesh_device,
+                    local_node_id,
+                    backward_fabric_node_id.value(),
+                    /*link_idx=*/f,
+                    desc,
+                    core,
+                    fwd_rt_tail);
             }
             KernelDescriptor::RTArgList fwd_rt;
             fwd_rt.reserve(2 + fwd_rt_tail.size());
