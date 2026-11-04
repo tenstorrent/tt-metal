@@ -141,6 +141,10 @@ class TtIndexer:
         self.w_rows = chunk // self.sp  # W: query tokens per SP row per chunk
         assert self.w_rows % (32 * self.tp) == 0, (chunk, self.sp, self.tp)
         self.sq = self.w_rows // self.tp  # query rows per chip
+        # the served index keys' block-cyclic stripe (query tokens per SP row of the chunk that WROTE them): this
+        # chunk's W, except in the decoder tail (DECODER_SKIP=replay128, P.31: tt/model.py sets the main chunk's W),
+        # whose queries then go to the score as natural blocks of their own W (fork option natural_query_rows)
+        self.key_rows = self.w_rows
         assert (self.w_rows // ratio) % 32 == 0, f"W / ratio = {self.w_rows // ratio} compressed rows not tile-aligned"
         assert chunk // ratio >= self.topk, f"a chunk's {chunk // ratio} keys < topk {self.topk} (valid_length >= k)"
         assert rope.half * 2 == self.rd, (rope.half, self.rd)
@@ -444,8 +448,10 @@ class TtIndexer:
             kv_len=kv_len,
             seq_subshard_axis=TP_AXIS if self.tp > 1 else None,
             block_cyclic_sp_axis=SP_AXIS,
-            block_cyclic_chunk_local=self.w_rows,
+            block_cyclic_chunk_local=self.key_rows,
             natural_query_blocks=True,
+            # (P.31: the queries' own W when the keys were laid out by another chunk; 0 = the same)
+            natural_query_rows=0 if self.key_rows == self.w_rows else self.w_rows,
             **epilogue,
         )  # [1, 1, Sq, T] bf16 ROW_MAJOR; future columns -inf, columns >= kv_len unwritten
         for u in (() if q_kept else (q,)) + (w,) + (() if shared or k_kept else (k_local,)):

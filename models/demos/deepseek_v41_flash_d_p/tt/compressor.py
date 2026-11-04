@@ -185,6 +185,7 @@ class AttnTable:
     def __init__(self, mesh, tables, hist: int, width: int):
         g = tables.geo
         self.mesh, self.width = mesh, width
+        self.tables = tables  # (the chunk geometry of its window region and lists)
         self.hist = hist
         self.bfp4 = ckv_bfp4()
         self.win = None

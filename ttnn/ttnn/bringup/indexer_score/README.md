@@ -9,7 +9,8 @@ Fork of `ttnn.experimental.indexer_score_dsa` / `ring_indexer_score_dsa` / `inde
   block pooling still refuse it.
 - `key_compression_ratio=2` (source: 1 or 4).
 - `ring_indexer_score_dsa(natural_query_blocks=True)`: queries are natural contiguous blocks at any tile-aligned
-  start while the keys stay in the block-cyclic cache layout (linear causal diagonal).
+  start while the keys stay in the block-cyclic cache layout (linear causal diagonal); `natural_query_rows` gives the
+  queries' own tokens per SP rank when their chunk is not the one that laid out the keys.
 - `IndexerScoreProgramConfig.__repr__` prints its values (stable fork-call capture signatures).
 - `ring_indexer_score_dsa` block epilogue (`block_keys`, `block_bias`, `block_max_out`, `block_max_pin`): the writer
   masks blocks of adjacent keys with a 0 / -inf bias and / or writes each block's max (+inf at each query's own block)
@@ -51,6 +52,10 @@ Realistic (use by default):
 - `key_compression_ratio` (fork adds 2): 1 (default), 2, 4.
 - `natural_query_blocks=False` (fork, opt-in, ring only): needs `block_cyclic_sp_axis` / `block_cyclic_chunk_local`,
   an axis ring (`cluster_axis` set) and the host-scalar `chunk_start_idx` (refused with `chunk_start_idx_tensor`).
+- `natural_query_rows=0` (fork, opt-in, with `natural_query_blocks`; 0 = `block_cyclic_chunk_local`): the query tokens
+  per SP rank, tile-aligned, >= Sq. Device (d, c) holds positions chunk_start_idx + d natural_query_rows + c Sq +
+  [0, Sq); the keys keep `block_cyclic_chunk_local`'s layout. For a small chunk scoring keys a larger chunk wrote
+  (DeepSeek-V4.1's decoder tail: 1024-token queries, keys of 5120-token chunks).
 
 - Block epilogue (fork, opt-in, ring only, batch 1): `block_keys=0` (> 0, a divisor of 32, exactly when a tensor
   below is given: blocks of `block_keys` adjacent logical keys); `block_bias=None` ([1, 1, Sq, NB] bf16 TILE DRAM,
@@ -82,6 +87,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
 - `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
+  `natural_query_rows`: the same; only the query geometry moves (the key stripes and the invP remap are the cache's).
 - Block epilogue: `ring_indexer_score_dsa` only, batch 1, one head-summed plane; the bias values are a mask (any
   nonzero bias masks the block; no general additive bias); block_max_out needs block_keys <= 8 (16-byte aligned fp32
   runs per score tile); the writer does the block max on its RISC-V core (scalar, about 1 compare per score).
@@ -103,7 +109,7 @@ logits = ttnn.bringup.ring_indexer_score_dsa(
 ```
 Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/unit/test_fp32_dest.py`,
 `tests/unit/test_key_stride.py`, `tests/unit/test_key_stride_ring.py`, `tests/unit/test_natural_query_blocks.py`,
-source tests via `tests/source.yaml`.
+`tests/unit/test_natural_query_rows.py` (BRINGUP_TEST_MESH), source tests via `tests/source.yaml`.
 
 ## Used by
 - hy4_preview_d_p: `tt/indexer.py`, ring op, HiFi4 + fp32 DEST, q 64 x k 32; C.dense_full.indexer, O.1.
@@ -112,6 +118,8 @@ source tests via `tests/source.yaml`.
 - deepseek_v41_flash_d_p: `tt/indexer.py`, ring op over axis 0 + TP query sub-shard, key_compression_ratio 2 / 1,
   `natural_query_blocks`; C.enc_source.indexer. P.16 (INDEXER_GLUE=on): layer 20 `block_keys=8, block_max_out,
   block_max_pin=True` (the candidate pool), layers 24-36 `block_keys=8, block_bias` (the candidate restriction).
+  P.31 (DECODER_SKIP=replay128): the decoder tail's layers 20-39 at a 1024-token chunk score the 5120-token chunks'
+  keys with `natural_query_rows`.
 
 ## History
 CHANGELOG.md
