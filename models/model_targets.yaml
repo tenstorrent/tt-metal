@@ -2337,7 +2337,8 @@ targets:
             status: active
             enforce_perf: false
             perf:
-              fps: 263.29
+              # Re-measured on wh_n150 after the row-major conversion change: median of 6 runs.
+              fps: 290.1
               fps_tolerance: 0.10
             owner_id: U07J5E9NA9G # Dalar Vartanians
             team: models

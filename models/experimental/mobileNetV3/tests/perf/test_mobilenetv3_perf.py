@@ -138,7 +138,7 @@ def run_perf_e2e_mobilenetV3(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((224, 224), 263.29)],
+    [((224, 224), 290.1)],
 )
 def test_mobilenetv3_perf_single_device(
     device,
