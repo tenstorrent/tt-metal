@@ -438,7 +438,7 @@ class Flux2Pipeline:
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
-        trace_warmup: bool = False,
+        trace_warmup: bool = True,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = True,
@@ -447,6 +447,9 @@ class Flux2Pipeline:
 
         The VAE axes come from the preset only when none of them is given. The presets do not set
         ``is_fsdp`` or ``dynamic_load``: FLUX.2-dev needs both on 2x2, Klein neither.
+
+        With ``dynamic_load``, loading a component releases the traces that depend on the weights it
+        evicts, and the next traced call captures them again, so serving should run without it.
         """
         mesh_shape = tuple(mesh_device.shape)
         preset = (_PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH).get(mesh_shape)
