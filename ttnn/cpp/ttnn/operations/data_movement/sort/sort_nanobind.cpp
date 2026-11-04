@@ -32,7 +32,7 @@ void bind_sort_operation(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-            out (Tuple[ttnn.Tensor, ttnn.Tensor], optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
+            out (Tuple[ttnn.Tensor, ttnn.Tensor], optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be UINT32 for FLOAT32 and UINT16 inputs, and UINT16 or UINT32 for BFLOAT16 inputs.
 
         Returns:
             List[ttnn.Tensor]: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
@@ -63,13 +63,14 @@ void bind_sort_operation(nb::module_& mod) {
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
 
-            NaN input is unsupported (undefined ordering) for BFLOAT16: the bfloat16 datapath
-            canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
-            from torch.sort's NaN-last ordering. Mask or replace NaNs before sorting.
+            NaN input is unsupported (undefined ordering). The bfloat16 datapath canonicalizes NaN
+            to same-sign infinity before comparing, and FLOAT32 orders NaN by sign, so NaN placement
+            deviates from torch.sort, which treats NaN as larger than any number. Mask or replace
+            NaNs before sorting.
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (DRAM and L1)
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (L1)
     )doc";
 
     ttnn::bind_function<"sort">(
