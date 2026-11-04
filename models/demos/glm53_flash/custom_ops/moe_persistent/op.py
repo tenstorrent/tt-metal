@@ -68,6 +68,10 @@ class MoePersistent:
         self.mesh = mesh
         self.device = mesh.device
         self.experts = experts
+        # the fused single-program op (gate|up + down kernel sets, semaphores, groups): the ExpertStream wrapper
+        # exposes gate_up / down and keeps it as ``fused_op``
+        self.fused = getattr(experts, "fused_op", None) or experts
+        assert hasattr(self.fused, "down_xy"), "the persistent block needs the fused expert op (GLM53_STREAM_FUSED=1)"
         self.T, self.H, self.E = int(T), int(H), int(E)
         grid = self.device.compute_with_storage_grid_size()
         self.grid = (grid.x, grid.y)
@@ -294,7 +298,7 @@ class MoePersistent:
 
     def _expert_kernels(self, xg, wg, w13, w2, act, out, base) -> tuple[list, list, list]:
         """(cbs, kernels, semaphores) of the fused expert program with the persistent hooks defined."""
-        ex = self.experts
+        ex = self.fused
         gu_cbs, gu_kernels = ex.gate_up.descriptors(
             xg,
             wg,
