@@ -449,6 +449,17 @@ execute_llk(is_perf=True, test_config_kwargs=dict(templates=_templates()))
     assert "tile_cnt" in _param_fields_in_tree(tiles, specs, helpers, post_init)
 
 
+def test_parameter_defaults_passed_directly_are_resolved():
+    specs = class_field_specs()
+    tree = ast.parse(
+        """
+def run(calls=CUSTOM_MM_CALLS()):
+    execute_llk(test_config_kwargs=dict(templates=[calls]))
+"""
+    )
+    assert {"num_calls", "rearm"} <= _param_fields_in_tree(tree, specs)
+
+
 def test_execute_llk_adds_loop_factor_to_the_derived_schema():
     specs = class_field_specs()
     tree = ast.parse(
