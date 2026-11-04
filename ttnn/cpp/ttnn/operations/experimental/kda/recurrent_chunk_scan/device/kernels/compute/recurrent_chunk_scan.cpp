@@ -55,8 +55,7 @@ FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
 
 // output = operand - a @ b, with the product kept in DST: each row group's matmul accumulates into DST and the
 // destination-reuse subtraction takes it from there, so the product never round-trips through a buffer. The operand
-// takes source A and the product source B, as in the two-operand op on a packed product. The carried state is
-// unchanged; the chunk output's last bits can differ.
+// takes source A and the product source B, as in the two-operand op on a packed product.
 // The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
 template <
     uint32_t Mt,
@@ -169,7 +168,7 @@ FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
 }
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
-// state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet, from the
+// state whose first Vt columns hold B. Publish (A + B) - B, or copy B, PacketRows tile rows per packet, from the
 // FP32 carry (UnpackToDest) with an SFPU subtraction, so A is exact in FP32 before it is packed.
 template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, typename DFBCarry, typename DFBOut>
 FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output) {
@@ -227,12 +226,21 @@ FORCE_INLINE void copy_exact(DFBIn& in, DFBOut& out, DFBMore&... more) {
     in.pop_front(Count);
 }
 
+// Replace the one state held by the ring and the carry with an exact copy of seed.
+template <uint32_t Tiles, typename DFBSeed, typename DFBRing, typename DFBCarry>
+FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
+    ring.wait_front(Tiles);
+    carry.wait_front(Tiles);
+    ring.pop_front(Tiles);
+    carry.pop_front(Tiles);
+    copy_exact<Tiles>(seed, ring, carry);
+}
+
 // S_{n+1} = S_n + (final_decay * S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Only the
-// small per-chunk change is formed in DST (the decay term by an eltwise broadcast multiply, the update accumulated onto
-// it by the matmul); the packer then adds it onto the FP32 state in L1 (L1 accumulation), in place in both the ring
-// (the matmul view of the state) and the carry (its UnpackToDest view). The state itself never passes through a source
-// register or DST, so a long-memory channel's change is not rounded away. Accumulating the matmul in DST is safe here,
-// unlike onto the decayed state itself before, because DST holds only the small change f * S + k_dec_t @ U, not S.
+// change final_decay * S_n + k_dec_t @ U_n is formed in DST, from source-register operands (S_n is read through source
+// A for the decay term, truncated toward zero), and the packer adds it onto the FP32 state in L1, in place in both the
+// ring (the matmul view of the state) and the carry (its UnpackToDest view), so S_n is carried to S_{n+1} without
+// rounding and only the change carries source-register error.
 // Both buffers hold exactly one state: popping it returns the write pointer to the same tiles, which every earlier
 // read of this chunk's state is done with, and each block reads only its own tiles before they are packed. The caller
 // waits for and releases k_dec_t, final_decay and U.
@@ -364,10 +372,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
-            state_ring.wait_front(key_pair_tiles);
-            state_ring.pop_front(key_pair_tiles);
-            state_carry.pop_front(key_pair_tiles);
-            copy_exact<key_pair_tiles>(state, state_ring, state_carry);
+            reseed_state<key_pair_tiles>(state, state_ring, state_carry);
         }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
@@ -378,11 +383,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     state_ring.wait_front(key_pair_tiles);
     state_carry.wait_front(key_pair_tiles);
     pack_reconfig_data_format(output.get_id());
-    constexpr uint32_t packet_rows = kda::largest_divisor_at_most(
-        Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
-    extract_paths<true, Kt, Vt, packet_rows>(state_carry, output);
-    pack_reconfig_data_format(transport_state.get_id());
-    extract_paths<false, Kt, Vt, packet_rows>(state_carry, transport_state);
+    extract_paths<true, Kt, Vt, Kt>(state_carry, output);
+    extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state);
     state_ring.pop_front(key_pair_tiles);
     state_carry.pop_front(key_pair_tiles);
 }
@@ -414,19 +416,13 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     copy_exact<key_value_tiles>(state, state_ring, state_carry);
-    pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         // A chronological split restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0's seed from `state` is copied before the loop.
         if (reset_chunk != 0 && chunk == reset_chunk) {
-            state_ring.wait_front(key_value_tiles);
-            state_carry.wait_front(key_value_tiles);
-            state_ring.pop_front(key_value_tiles);
-            state_carry.pop_front(key_value_tiles);
-            copy_exact<key_value_tiles>(tail_entry_states, state_ring, state_carry);
-            pack_reconfig_data_format(dfb::scratch);
+            reseed_state<key_value_tiles>(tail_entry_states, state_ring, state_carry);
         }
 
         // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
@@ -457,7 +453,6 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         final_decay.wait_front(Kt);
         update_state<Ct, Kt, Vt>(
             state_ring, state_carry, k_decay_transposed, final_decay, value_new);  // S += dl S + k_dec_t v_new
-        pack_reconfig_data_format(dfb::scratch);
         intra.wait_front(chunk_chunk_tiles);
         matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
         k_decay_transposed.pop_front(key_chunk_tiles);
