@@ -8,6 +8,7 @@ import pathlib
 import sys
 
 import pytest
+import yaml
 
 _PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
@@ -68,6 +69,10 @@ def _run(
     ]
     if kw.pop("incomplete", False):
         (tmp_path / "cur" / "ran.txt").write_text("perf_x.py::test_x[a]\n")
+    if "waivers" in kw:
+        path = tmp_path / "waivers.yaml"
+        path.write_text(yaml.safe_dump({"waivers": kw.pop("waivers")}))
+        argv += ["--waivers", str(path)]
     assert gate.main(argv) == 0
     return json.loads((tmp_path / f"verdict-{arch}.json").read_text())
 
@@ -192,6 +197,7 @@ def test_replay_of_a_real_merge_gate_run_passes(tmp_path):
         "improvements": 0,
         "new": 0,
         "missing": 0,
+        "waived": 0,
     }
     assert v["baseline"]["commit_sha"].startswith("9406a58a8a9")
     assert v["stage2"] == {"legs": 4, "notes": [], "outcomes": {}}
@@ -414,3 +420,56 @@ def test_verdict_prints_the_line_the_health_check_reads(tmp_path, capsys, monkey
     path.write_text(json.dumps({**v, "counts": {"points": 3, "regressions": 0}}))
     gate.main(["verdict", str(path)])
     assert "verdict=clean regressions=0" in capsys.readouterr().out
+
+
+_WAIVER = {
+    "test": "perf_x",
+    "max_delta": 0.15,
+    "reason": "One more pass, on purpose",
+    "issue": 1,
+}
+
+
+def test_the_repository_waivers_file_reads():
+    for arch in ARCHES:
+        assert isinstance(gate.waivers(arch), list)
+
+
+def test_a_waiver_accepts_a_regression_up_to_its_max_delta(tmp_path):
+    v = _run(tmp_path, current=(1100, 2000), waivers=[_WAIVER])
+    assert v["status"] == "pass" and v["counts"]["waived"] == 1
+    report = (tmp_path / "perf_gate_report.md").read_text()
+    assert (
+        "## Waived regressions (waivers.yaml)" in report
+        and "#1 | One more pass" in report
+    )
+
+
+def test_a_waiver_does_not_accept_more_than_its_max_delta(tmp_path):
+    v = _run(tmp_path / "a", current=(1200, 2000), waivers=[_WAIVER])
+    assert v["status"] == "regression" and v["counts"]["waived"] == 0
+
+
+def test_a_waiver_matches_on_arch_marker_and_config(tmp_path):
+    for i, extra in enumerate(
+        (
+            {"arch": "wormhole"},
+            {"marker": "KERNEL"},
+            {"config": {"math_fidelity": "HiFi1"}},
+        )
+    ):
+        v = _run(
+            tmp_path / str(i), current=(1100, 2000), waivers=[{**_WAIVER, **extra}]
+        )
+        assert v["status"] == "regression", extra
+    v = _run(
+        tmp_path / "x",
+        current=(1100, 2000),
+        waivers=[{**_WAIVER, "config": {"math_fidelity": "HiFi0"}}],
+    )
+    assert v["status"] == "pass"
+
+
+def test_a_waiver_without_a_reason_fails_the_gate(tmp_path):
+    v = _run(tmp_path, current=(1100, 2000), waivers=[{**_WAIVER, "reason": ""}])
+    assert v["status"] == "no-compare" and "entry 1 lacks reason" in v["reason"]
