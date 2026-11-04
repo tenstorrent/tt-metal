@@ -26,7 +26,12 @@ import torch
 from safetensors.torch import save_file
 
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
-from models.demos.minimax_m3.tt.vision.loader import build_reference, load_vision_state_dict
+from models.demos.minimax_m3.tt.vision.loader import (
+    CHECKPOINT_PREFIXES,
+    _remap,
+    build_reference,
+    load_vision_state_dict,
+)
 
 COMPRESSION = {"image_token_compression_method": "patch_merge", "spatial_merge_size": 3, "temporal_patch_size": 1}
 CONFIG_JSON = {
@@ -141,3 +146,18 @@ def test_vision_config_rejects_other_activation(expect_error):
     for hidden_act in ("quick_gelu", "gelu_pytorch_tanh"):
         with expect_error(ValueError, f"hidden_act must be 'gelu', the exact \\(erf\\) GELU, got '{hidden_act}'"):
             MiniMaxM3VisionConfig.from_hf_config(config_json(hidden_act))
+
+
+def test_vision_checkpoint_prefixes_are_the_renamed_ones():
+    """CHECKPOINT_PREFIXES, under which the encoder rejects a state_dict's weights, are the prefixes that _remap
+    renames: a key under them changes name, and a key in the v5.12 layout keeps its name."""
+    checkpoint_keys = [
+        "vision_tower.vision_model.embeddings.patch_embedding.weight",
+        "vision_tower.vision_model.encoder.layers.0.mlp.fc1.weight",
+        "patch_merge_mlp.linear_1.weight",
+    ]
+    model_keys = [_remap(key) for key in checkpoint_keys] + ["multi_modal_projector.linear_1.weight"]
+    for key in checkpoint_keys:
+        assert key.startswith(CHECKPOINT_PREFIXES) and _remap(key) != key, key
+    for key in model_keys:
+        assert not key.startswith(CHECKPOINT_PREFIXES) and _remap(key) == key, key
