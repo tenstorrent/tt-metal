@@ -66,6 +66,7 @@ void kernel_main() {
         cb_wait_front(cb_d, 1);
         cb_wait_front(cb_recv, 2 * groups);
         tile_regs_acquire();
+        reconfig_data_format_srca(cb_w, cb_recv);  // fp32 partials (the unpacker held the weight CB's format)
         copy_init(cb_recv);
         copy_tile(cb_recv, 0, 0);
         copy_tile(cb_recv, 1, 1);
@@ -87,7 +88,7 @@ void kernel_main() {
         tile_regs_release();
         cb_push_back(cb_h, 1);
         // routing weights: out = D_e @ h (BF16 x BF16 operands; srcA = in1, srcB = in0 as in the matmul kernels)
-        reconfig_data_format(cb_w, cb_h, cb_x, cb_d);
+        reconfig_data_format(cb_recv, cb_h, cb_x, cb_d);
         matmul_init(cb_d, cb_h);
         tile_regs_acquire();
         cb_wait_front(cb_h, 1);
