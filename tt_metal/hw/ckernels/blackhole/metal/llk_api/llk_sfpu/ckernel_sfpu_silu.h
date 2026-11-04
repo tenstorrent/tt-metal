@@ -10,8 +10,20 @@
 
 namespace ckernel::sfpu {
 
+bool bf16_dest_silu();
+template <int ITERATIONS>
+void calculate_silu_bf16();
+// Whether BF16 DEST runs the generated silu kernel as one call over the whole tile.
+inline constexpr bool silu_bf16_whole_tile = true;
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_silu()) {
+            calculate_silu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // The exp's constants, loaded once and kept in LRegs for the whole loop (see _sfpu_sigmoid_prgm_); 1/ln2 is
     // Prgm1 from silu_init. x stays live across the sigmoid, so the fp32 arm has room for two of its
     // three: p1 stays a per-row literal.
@@ -35,12 +47,19 @@ inline void calculate_silu() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_silu_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void silu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_prgm_, so we must use non-approx
     // sigmoid_init: it programs Prgm0 = 2.0f for the reciprocal and Prgm1 = 1/ln2 for the exp.
     sigmoid_init<false>();
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_silu_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_silu_bf16.h"
