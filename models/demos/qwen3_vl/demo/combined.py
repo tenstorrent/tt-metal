@@ -23,7 +23,7 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [{"N150": (1, 1), "N300": (1, 2), "P150": (1, 1)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize(
