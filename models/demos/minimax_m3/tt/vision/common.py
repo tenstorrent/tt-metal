@@ -20,7 +20,8 @@ from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 # Circular-buffer bytes per core for a weight matmul. It stays under a Blackhole core's free L1 (about 1.39 MiB)
 # and leaves room for the RoPE tables that the blocks read from L1. It also sets the K block: the largest that fits.
 # The buffers also share L1 with the blocks' activations where block_placement keeps them there. The host test that
-# walks the L1 budget pins the least room left below the lowest tensor on each grid, at least 124416 B.
+# walks the L1 budget pins the least room left below the lowest tensor on each grid, at least 108032 B in a bank of
+# PROOF_L1_BANK_BYTES.
 LINEAR_L1_BYTES = 1_000_000
 # The largest K block (in0_block_w), in tiles.
 LINEAR_MAX_IN0_BLOCK_W = 8
@@ -348,10 +349,14 @@ L1_GRIDS = ((11, 10), (12, 10), (13, 10))
 L1_MAX_ROWS = 2304
 # A P150's L1 bank with no L1_SMALL region, as measured on one.
 P150_L1_BANK_BYTES = 1_460_864
+# Room the proof leaves for the runtime to take more of each L1 bank than when P150_L1_BANK_BYTES was measured: on main
+# de69037d3a a P150 had 576 B less per bank, 1_459_136 B with the L1_SMALL region, so with no slack every forward kept
+# its activations in DRAM there.
+PROOF_L1_BANK_SLACK_BYTES = 16 * 1024
 # The L1 bank block_placement is proven for: a P150's as every M3 mesh open leaves it, less the L1_SMALL region that the
-# allocator takes out of the bank. Each margin of the proof is the bank less the block's tensors and one op's circular
-# buffers, so a larger bank only adds room.
-PROOF_L1_BANK_BYTES = P150_L1_BANK_BYTES - L1_SMALL_SIZE
+# allocator takes out of the bank and PROOF_L1_BANK_SLACK_BYTES. Each margin of the proof is the bank less the block's
+# tensors and one op's circular buffers, so a larger bank only adds room.
+PROOF_L1_BANK_BYTES = P150_L1_BANK_BYTES - L1_SMALL_SIZE - PROOF_L1_BANK_SLACK_BYTES
 # The most bytes at the top of each bank that other tensors may take when a forward starts: the proof keeps every
 # margin above it.
 PROOF_L1_FOREIGN_BYTES = 64 * 1024
