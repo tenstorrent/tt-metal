@@ -115,115 +115,6 @@ def _codegen_draw(earlier, shape, kwargs, dtype, layout, device, placement):
     return tensor, call_kwargs, golden
 
 
-_DEMOTED = [
-    ([2, 32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    ([2, 32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([2, 32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([2, 32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    ([2, 32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-    ([32, 32], {"memory_config": ttnn.L1_MEMORY_CONFIG}, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-]
-_DEMOTED_IDS = [
-    "[2, 32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
-    "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
-    "[2, 32, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
-    "[2, 32, 32]@L1|memory_config=BufferType.L1|int32|row_major",
-    "[2, 32, 32]@L1|memory_config=BufferType.L1|uint16|row_major",
-    "[2, 32, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
-    "[2, 32, 32]|memory_config=BufferType.DRAM|int32|row_major",
-    "[2, 32, 32]|memory_config=BufferType.DRAM|uint16|row_major",
-    "[2, 32, 32]|memory_config=BufferType.DRAM|uint32|row_major",
-    "[2, 32, 32]|memory_config=BufferType.L1|int32|row_major",
-    "[2, 32, 32]|memory_config=BufferType.L1|uint16|row_major",
-    "[2, 32, 32]|memory_config=BufferType.L1|uint32|row_major",
-    "[32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
-    "[32, 32]@L1|memory_config=BufferType.DRAM|uint16|row_major",
-    "[32, 32]@L1|memory_config=BufferType.DRAM|uint32|row_major",
-    "[32, 32]@L1|memory_config=BufferType.L1|int32|row_major",
-    "[32, 32]@L1|memory_config=BufferType.L1|uint16|row_major",
-    "[32, 32]@L1|memory_config=BufferType.L1|uint32|row_major",
-    "[32, 32]|memory_config=BufferType.DRAM|int32|row_major",
-    "[32, 32]|memory_config=BufferType.DRAM|uint16|row_major",
-    "[32, 32]|memory_config=BufferType.DRAM|uint32|row_major",
-    "[32, 32]|memory_config=BufferType.L1|int32|row_major",
-    "[32, 32]|memory_config=BufferType.L1|uint16|row_major",
-    "[32, 32]|memory_config=BufferType.L1|uint32|row_major",
-]
-
-
-@pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _DEMOTED, ids=_DEMOTED_IDS)
-def test_tilize_codegen_demotion(device, shape, kwargs, dtype, layout, placement):
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=placement)
-    device.clear_program_cache()
-    golden = ttnn.to_torch(_force_native(xt, **kwargs))
-    entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, **kwargs)
-    assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed a perf-demoted case to codegen (program cache grew); expected native fallback"
-    assert device.num_program_cache_entries() == entries_before, msg
-
-
 _CACHE_HIT = [
     (
         [1, 1, 32, 32],
@@ -470,27 +361,22 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
     ), "releasing the pin did not return to the cached plan"
 
 
-# --- Perf demotion boundary ---
-# is_demoted() sends a non-converting, one-tile-wide uint16/int32/uint32 input with at most 2 tile
-# rows to native. One more tile row, a second tile column, a dtype conversion, or a bf16 input
-# (native fast tilize) keeps the same call on codegen. Forced codegen still serves the demoted case:
-# only auto's choice changes.
-_DEMOTION_BOUNDARY = [
-    # shape, input dtype, tilize kwargs, routed to native, id
-    ([1, 1, 2 * 32, 32], ttnn.int32, {}, True, "wt1_2_tile_rows"),
-    ([2, 1, 32, 32], ttnn.uint16, {}, True, "wt1_2_tile_rows_from_batch"),
-    ([1, 1, 3 * 32, 32], ttnn.int32, {}, False, "wt1_3_tile_rows"),
-    ([1, 1, 6 * 32, 32], ttnn.int32, {}, False, "wt1_6_tile_rows"),
-    ([1, 1, 2 * 32, 64], ttnn.int32, {}, False, "wt2_2_tile_rows"),
-    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {"dtype": ttnn.int32}, False, "wt1_2_tile_rows_to_int32"),
-    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, True, "wt1_2_tile_rows_bf16"),
+# --- Small cases stay on codegen ---
+# Nothing is demoted: the smallest in-scope inputs (one tile column, one or two tile rows, integer or
+# bf16, with or without a dtype conversion) route to codegen under auto.
+_SMALL_CASES = [
+    # shape, input dtype, tilize kwargs, id
+    ([1, 1, 32, 32], ttnn.int32, {}, "wt1_1_tile_row"),
+    ([1, 1, 2 * 32, 32], ttnn.int32, {}, "wt1_2_tile_rows"),
+    ([2, 1, 32, 32], ttnn.uint16, {}, "wt1_2_tile_rows_from_batch"),
+    ([1, 1, 2 * 32, 32], ttnn.uint32, {}, "wt1_2_tile_rows_uint32"),
+    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {}, "wt1_2_tile_rows_bf16"),
+    ([1, 1, 2 * 32, 32], ttnn.bfloat16, {"dtype": ttnn.int32}, "wt1_2_tile_rows_to_int32"),
 ]
 
 
-@pytest.mark.parametrize(
-    "shape,in_dtype,kwargs,demoted,case_id", _DEMOTION_BOUNDARY, ids=[c[4] for c in _DEMOTION_BOUNDARY]
-)
-def test_tilize_codegen_demotion_boundary(device, shape, in_dtype, kwargs, demoted, case_id):
+@pytest.mark.parametrize("shape,in_dtype,kwargs,case_id", _SMALL_CASES, ids=[c[3] for c in _SMALL_CASES])
+def test_tilize_codegen_small_cases_stay_on_codegen(device, shape, in_dtype, kwargs, case_id):
     torch.manual_seed(0)
     host = _make_input(shape, in_dtype)
     xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -502,6 +388,5 @@ def test_tilize_codegen_demotion_boundary(device, shape, in_dtype, kwargs, demot
     # Primes the native program, so only a route to codegen grows the cache on the auto call.
     _force_native(xt, **kwargs)
     out, added = _codegen_added(device, lambda: ttnn.tilize(xt, **kwargs))
-    assert (added == 0) == demoted, f"{case_id}: auto {'kept the case on codegen' if demoted else 'demoted the case'}"
+    assert added > 0, f"{case_id}: auto sent the case to native"
     assert_equal(expected, ttnn.to_torch(out))
-    assert_equal(expected, ttnn.to_torch(_force_codegen(xt, **kwargs)))
