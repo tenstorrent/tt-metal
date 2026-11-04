@@ -131,7 +131,7 @@ def build_rollout_sampler(
 
     ``"ttml"`` builds a :class:`TTMLRolloutSampler` that generates with
     ``model`` and ``tokenizer`` (the trainer's own) on the already-open device.
-    ``"ttt"`` builds a :class:`TTTRolloutSampler` for the Llama ``model_source``
+    ``"ttt"`` builds a :class:`TTTRolloutSampler` for ``model_source``
     on the already-open ``mesh_device``, configured by ``remote_rollout``.
     """
     if source == "ttml":
