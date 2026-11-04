@@ -18,7 +18,8 @@ three right ones.
 
 The `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
 first replay (it must equal the untraced run exactly and pass the same checks), then time back-to-back
-replays on the saved input. The layer one runs TRACE_LAYER only.
+replays on the saved input. The layer one runs TRACE_LAYER only, twice per replay, so that back-to-back
+replays alternate CCL slots (`layer_forward(twice=True)`).
 """
 
 from __future__ import annotations
@@ -123,13 +124,31 @@ def to_host(t: ttnn.Tensor, mesh_device, sp_axis: int, config) -> torch.Tensor:
     return host_prep.from_window_order(sp_gather(t, mesh_device, sp_axis, H * W), H, W, config.merge_kernel_size)
 
 
-def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer):
+def share_parameters(source, target) -> None:
+    """Point every parameter of `target` at the device tensor of the same parameter in `source`, a module
+    tree of the same structure, so the two run on one copy of the weights."""
+    for (name, child), (target_name, target_child) in zip(
+        source.named_children(), target.named_children(), strict=True
+    ):
+        assert name == target_name, (name, target_name)
+        share_parameters(child, target_child)
+    for (name, parameter), (target_name, target_parameter) in zip(
+        source.named_parameters(), target.named_parameters(), strict=True
+    ):
+        assert name == target_name, (name, target_name)
+        target_parameter._data = parameter.data
+
+
+def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer, *, twice=False):
     """`(forward, parallel)`: `forward()` runs `blocks[layer]` on the saved input to that block (the
-    patch-embed output for layer 0, else the previous block's saved output), held on device."""
+    patch-embed output for layer 0, else the previous block's saved output), held on device.
+
+    `twice`: `forward()` runs the block on that input a second time, on CCL slot 1 (the first run is on
+    slot 0; same weights), and returns the second output. Back-to-back trace replays then never run two
+    ring attention calls in a row on the same slot (see `ccl.py`)."""
     parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
-    tt = TT_Vision_Block(
-        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
-    )
+    ckc = compute_kernel_config(mesh_device)
+    tt = TT_Vision_Block(config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=ckc, ccl_slot=0)
     tt.load_torch_state_dict(reference.vision_tower.encoder.blocks[layer].state_dict())
 
     x = saved("patch_embed" if layer == 0 else goldens.block_file(layer - 1)[:-3])
@@ -137,7 +156,19 @@ def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, lay
     x_window = host_prep.to_window_order(x, H, W, config.merge_kernel_size)
     x_dev = sp_shard(x_window, mesh_device, sp_axis, config.max_patches, ttnn.float32)
     logical_n = logical_length_tensor(mesh_device, H * W)
-    return (lambda: tt(x_dev, rope, logical_n)), parallel
+    if not twice:
+        return (lambda: tt(x_dev, rope, logical_n)), parallel
+
+    tt_slot1 = TT_Vision_Block(
+        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=ckc, ccl_slot=1
+    )
+    share_parameters(tt, tt_slot1)
+
+    def forward():
+        ttnn.deallocate(tt(x_dev, rope, logical_n))
+        return tt_slot1(x_dev, rope, logical_n)
+
+    return forward, parallel
 
 
 def check_layer(saved, out, config, parallel, layer, label=""):
@@ -165,9 +196,10 @@ def test_full_size_layer(mesh_device, sp_axis, num_links, config, reference, sav
 @RING_TRACE
 @CHECKPOINT
 def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, reference, saved):
-    """`test_full_size_layer` traced, for `blocks[TRACE_LAYER]`."""
+    """`test_full_size_layer` traced, for `blocks[TRACE_LAYER]`. The trace runs the layer twice on the
+    same input (CCL slots 0 and 1, `layer_forward(twice=True)`); the time per layer is half a replay."""
     layer = TRACE_LAYER
-    forward, parallel = layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer)
+    forward, parallel = layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer, twice=True)
     out = forward()
     untraced = to_host(out, mesh_device, sp_axis, config)
     ttnn.deallocate(out)
@@ -176,7 +208,8 @@ def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, referenc
         out = to_host(trace.replay(), mesh_device, sp_axis, config)
         assert_same_as_untraced(untraced, out, f"layer {layer}")
         check_layer(saved, out, config, parallel, layer, "traced ")
-        trace.time_replays(f"full-size layer {layer}")
+        seconds = trace.time_replays(f"full-size layer {layer}, run twice")
+        logger.info(f"full-size layer {layer}: {seconds / 2 * 1e3:.3f} ms per traced layer")
 
 
 def encoder_inputs(mesh_device, sp_axis, num_links, config, reference):

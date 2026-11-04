@@ -29,8 +29,15 @@ from .vision_mlp import TT_Vision_MLP
 
 class TT_Vision_Block(Module):
     def __init__(
-        self, config: MoonViTConfig, *, mesh_device: ttnn.MeshDevice, parallel: VisionParallel, compute_kernel_config
+        self,
+        config: MoonViTConfig,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel: VisionParallel,
+        compute_kernel_config,
+        ccl_slot: int = 0,
     ) -> None:
+        """`ccl_slot`: see `TT_Vision_Attention`."""
         super().__init__()
         norm_kwargs = dict(
             eps=config.norm_eps,
@@ -41,7 +48,11 @@ class TT_Vision_Block(Module):
         self.norm0 = RMSNorm(config.hidden_size, **norm_kwargs)
         self.norm1 = RMSNorm(config.hidden_size, **norm_kwargs)
         self.attention = TT_Vision_Attention(
-            config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config
+            config,
+            mesh_device=mesh_device,
+            parallel=parallel,
+            compute_kernel_config=compute_kernel_config,
+            ccl_slot=ccl_slot,
         )
         self.mlp = TT_Vision_MLP(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config)
 

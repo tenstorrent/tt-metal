@@ -48,12 +48,20 @@ def logical_length_tensor(mesh_device: ttnn.MeshDevice, n: int) -> ttnn.Tensor:
 
 class TT_Vision_Attention(Module):
     def __init__(
-        self, config: MoonViTConfig, *, mesh_device: ttnn.MeshDevice, parallel: VisionParallel, compute_kernel_config
+        self,
+        config: MoonViTConfig,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel: VisionParallel,
+        compute_kernel_config,
+        ccl_slot: int = 0,
     ) -> None:
+        """`ccl_slot` picks the ring attention semaphores and K/V gather buffers (`ccl.ccl_slot_for_layer`)."""
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.parallel = parallel
+        self.ccl_slot = ccl_slot
         self.scale = config.head_dim**-0.5
         kwargs = dict(bias=config.attn_bias, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config)
         self.wqkv = Linear(config.hidden_size, 3 * config.qkv_hidden_size, **kwargs)
@@ -115,7 +123,7 @@ class TT_Vision_Attention(Module):
         ccl = self.parallel.ccl
         sp_axis = self.parallel.sp_axis
         program_config, ccl_core_grid_offset = self._sdpa_grid()
-        k_buffer, v_buffer = ccl.ring_attention_buffers(k.shape, 2, sp_axis)
+        k_buffer, v_buffer = ccl.ring_attention_buffers(self.ccl_slot, k.shape, 2, sp_axis)
         out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
             k,
@@ -128,7 +136,7 @@ class TT_Vision_Attention(Module):
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config,
             dim=2,
-            multi_device_global_semaphore=ccl.ring_attention_semaphores(),
+            multi_device_global_semaphore=ccl.ring_attention_semaphores(self.ccl_slot),
             num_links=ccl.num_links,
             cluster_axis=sp_axis,
             mesh_device=self.mesh_device,
