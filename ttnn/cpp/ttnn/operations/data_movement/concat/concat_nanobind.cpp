@@ -20,17 +20,20 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_concat(nb::module_& mod) {
     const auto* doc = R"doc(
+        Concatenates the input tensors along dimension `dim`.
+
+        All input tensors must be on the same device and have the same rank, dtype and layout. Their shapes must
+        match in every dimension except `dim`, and the size of the output along `dim` is the sum of the inputs'
+        sizes along it. The inputs must be either all interleaved or all sharded.
 
         Args:
-            input_tensor (List of ttnn.Tensor): the input tensors.
-            dim (number): the concatenating dimension.
+            tensors (List[ttnn.Tensor]): the tensors to concatenate.
+            dim (int, optional): the dimension along which to concatenate. Defaults to `0`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
-
-        Keyword Args:
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
 
         Note:
