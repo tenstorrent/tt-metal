@@ -259,6 +259,30 @@ def test_payload_lists_media(env, monkeypatch, forward_chunks):
         assert decode_media_refs(metadata, forward_chunks, 2) == refs
 
 
+def test_payload_refuses_overlapping_media(env, monkeypatch, expect_error):
+    env()
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(100, 50), (120, 10)])
+    with expect_error(ValueError, "overlaps"):
+        producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+
+
+def test_media_config_needs_max_refs(monkeypatch, expect_error):
+    for name in (
+        "GLOBAL_MESH_SHAPE",
+        "CHUNK_SIZE",
+        "FORWARD_CHUNKS",
+        "CHUNK_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reload below
+    monkeypatch.setenv("PREFILL_PRODUCER_MEDIA", "100:50")
+    monkeypatch.delenv("PREFILL_MEDIA_MAX_REFS", raising=False)
+    with expect_error(AssertionError, "PREFILL_MEDIA_MAX_REFS"):
+        producer._load_env_config(check_budget=False)
+
+
 @pytest.mark.parametrize("interleave", ["round_robin", "random"])
 @pytest.mark.parametrize("forward_chunks", [2, 4])
 def test_packed_schedule(env, forward_chunks, interleave):

@@ -31,6 +31,7 @@ from models.demos.common.prefill.prefill_chunk import (
     packed_forward_capabilities,
     pad_chunks,
     sentinel_metadata,
+    validate_media_refs,
 )
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     connect_layer_completion_channel,
@@ -124,6 +125,8 @@ def _load_env_config(check_budget: bool = True) -> None:
     MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
     CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
     MEDIA = [tuple(int(x) for x in m.split(":")) for m in os.environ.get("PREFILL_PRODUCER_MEDIA", "").split(",") if m]
+    assert not MEDIA or MEDIA_MAX_REFS, "PREFILL_PRODUCER_MEDIA needs PREFILL_MEDIA_MAX_REFS > 0"
+    assert all(n > 0 for _, n in MEDIA), f"PREFILL_PRODUCER_MEDIA={MEDIA}: an image needs at least one token"
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
@@ -151,7 +154,9 @@ def _media_refs(chunks) -> list:
 
 
 def _pack_metadata(chunks) -> bytes:
-    return pack_forward_metadata(chunks, FORWARD_CHUNKS, _media_refs(chunks), MEDIA_MAX_REFS)
+    refs = _media_refs(chunks)
+    validate_media_refs(refs, chunks)
+    return pack_forward_metadata(chunks, FORWARD_CHUNKS, refs, MEDIA_MAX_REFS)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:

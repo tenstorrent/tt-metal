@@ -306,6 +306,10 @@ def test_media_refs_sentinel_fills_every_word():
 
 def test_media_refs_reject_bad_metadata(expect_error):
     chunks = [PrefillChunk(0, C, 2 * C), EMPTY]
+    with expect_error(ValueError, "a sentinel carries no media refs"):
+        pack_forward_metadata(
+            [PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, [MediaRef(0, C, 1, KEY)], 1
+        )
     with expect_error(ValueError, "2 media refs, the metadata holds 1"):
         pack_forward_metadata(chunks, 2, [MediaRef(0, C, 1, KEY)] * 2, max_refs=1)
     raw = bytearray(pack_forward_metadata(chunks, 2, max_refs=1))

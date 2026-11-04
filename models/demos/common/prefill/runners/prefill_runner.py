@@ -150,8 +150,8 @@ NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
-# Most media items the first rank's H2D metadata lists per forward; the engine must use the same value. Only the H2D
-# metadata grows: D2D records, D2H acks and the indices channel keep CHUNK_METADATA_SIZE_BYTES.
+# Most media items the first rank's H2D metadata lists per forward; the engine must use the same value. Only that
+# metadata grows: D2D records, D2H acks and the indices channel keep their sizes.
 MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
 H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
 
@@ -192,6 +192,9 @@ def _sparse_kv_cache_format():
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
+assert (
+    not MEDIA_MAX_REFS or ADAPTER.supports_media
+), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
 assert not (
     MEDIA_MAX_REFS and PER_CHUNK_FORWARDS
@@ -552,10 +555,17 @@ def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
     return _device_record(_metadata_record_words(meta), outbound.get_backing_tensor().device())
 
 
-def _ack_record(mesh_device, meta: dict) -> ttnn.Tensor:
-    """The first rank's D2H ack record when its H2D metadata also lists media refs, which do not fit the ack."""
-    words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32)
-    return _device_record(words.reshape(1, 1, 1, -1), mesh_device)
+def _ack_metadata(runtime, sockets, meta: dict, d2h_service) -> ttnn.Tensor:
+    """The D2H ack record: the received metadata, except on the first rank with media refs, whose H2D metadata is
+    longer than the ack; there a chunks-only record, refilled each forward."""
+    if not (MEDIA_MAX_REFS and d2h_service is not None and runtime.config.is_first_rank):
+        return sockets.metadata
+    words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32).reshape(1, 1, 1, -1)
+    if sockets.ack_record is not None and sockets.ack_record.is_allocated():
+        _fill_record(sockets.ack_record, words)
+    else:
+        sockets.ack_record = _device_record(words, runtime.mesh_device)
+    return sockets.ack_record
 
 
 def _fill_record(record: ttnn.Tensor, words: torch.Tensor) -> None:
@@ -670,6 +680,7 @@ class SocketBuffers:
         self.tokens = tokens
         self.overhang = overhang
         self.send_record = send_record
+        self.ack_record = None
         self.per_chunk = PerChunkBuffers()
         self.drain_trace = None
         self.send_trace = None
@@ -871,7 +882,7 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
-    ack_md = _ack_record(runtime.mesh_device, meta) if MEDIA_MAX_REFS and d2h_service is not None else sockets.metadata
+    ack_md = _ack_metadata(runtime, sockets, meta, d2h_service)
     media_kwargs = {"media_refs": meta["media_refs"]} if meta.get("media_refs") else {}
     with _with_hang_timeout(runtime.mesh_device):
         if PER_CHUNK_FORWARDS:
@@ -912,8 +923,6 @@ def _compute_and_send(
                 **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
-    if ack_md is not sockets.metadata:
-        ttnn.deallocate(ack_md)
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -1489,9 +1498,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
-    assert not (
-        MEDIA_MAX_REFS and is_first_rank and not getattr(runtime, "supports_media", False)
-    ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:

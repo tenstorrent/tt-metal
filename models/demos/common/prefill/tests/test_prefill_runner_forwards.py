@@ -97,7 +97,7 @@ def test_request_id_counts_forwards(loop):
 def test_first_rank_passes_media_refs_and_acks_only_the_chunks(monkeypatch):
     _configure(monkeypatch, supports_packed_forward=True)
     monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
-    monkeypatch.setattr(runner, "_ack_record", lambda mesh_device, meta: "chunks-only record")
+    monkeypatch.setattr(runner, "_device_record", lambda words, dev: "chunks-only record")
     refs = [MediaRef(0, 100, 50, bytes(32))]
     forward = runner._meta_from_words(forward_metadata_words(pad_chunks(FORWARDS[0], F), F))
     metas = iter([{**forward, "media_refs": refs}, runner._meta_from_words(sentinel_words(SHUTDOWN_WORD, F))])
@@ -120,6 +120,14 @@ def test_first_rank_passes_media_refs_and_acks_only_the_chunks(monkeypatch):
         sockets=runner.SocketBuffers(metadata=None),
     )
     assert runtime.calls == [(refs, "chunks-only record")]
+
+
+def test_only_the_first_rank_acks_with_a_chunks_only_record(monkeypatch):
+    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
+    sockets = runner.SocketBuffers(metadata=None)
+    sockets.metadata = "received record"
+    later_rank = SimpleNamespace(config=SimpleNamespace(is_first_rank=False))
+    assert runner._ack_metadata(later_rank, sockets, {}, d2h_service=object()) == "received record"
 
 
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):
