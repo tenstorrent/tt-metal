@@ -6,7 +6,7 @@ on:
       models:
         description: >-
           JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
-          Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
+          Example: [{"test_path":"models/ttt_compat/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
           Keys: test_path (required), HF_MODEL (optional), extra_args (optional),
           env (optional mapping of extra environment variables, e.g. {"MESH_DEVICE":"P150"}).
           All models share runner-label and are homogenized into one trace_run_id.
@@ -297,30 +297,6 @@ jobs:
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
-      - name: Check HF_MODEL weights
-        if: ${{ matrix.hf_model != '' }}
-        env:
-          INPUT_HF_MODEL: ${{ matrix.hf_model }}
-          SKU: ${{ needs.validate-inputs.outputs.sku }}
-        run: |
-          if [[ "$INPUT_HF_MODEL" == /* ]]; then
-            EXPECTED="$INPUT_HF_MODEL"
-          else
-            EXPECTED="$HF_HUB_CACHE/models--${INPUT_HF_MODEL//\//--}"
-          fi
-          if [[ "$HF_HUB_OFFLINE" == "0" && "$INPUT_HF_MODEL" != /* ]]; then
-            # Model code passes local_files_only=True whenever CI=true, so it never downloads
-            # by itself; fill the per-runner cache before the test runs.
-            echo "Syncing $INPUT_HF_MODEL into the per-runner cache ($HF_HUB_CACHE)"
-            python3 -c 'import os, huggingface_hub as h; print(h.snapshot_download(os.environ["INPUT_HF_MODEL"]))'
-          elif [[ -d "$EXPECTED" ]]; then
-            echo "Found weights for $INPUT_HF_MODEL at $EXPECTED"
-          else
-            echo "::error::$INPUT_HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
-            echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
-            exit 1
-          fi
-
       - name: Run model trace
         id: trace
         timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
@@ -329,6 +305,7 @@ jobs:
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
           MODEL_ENV_JSON: ${{ matrix.env_json }}
+          SKU: ${{ needs.validate-inputs.outputs.sku }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
@@ -340,6 +317,27 @@ jobs:
             done < <(
               python3 -c 'import json, os, sys; [sys.stdout.write(f"{k}={v}\0") for k, v in json.loads(os.environ["MODEL_ENV_JSON"]).items()]'
             )
+          fi
+
+          # After the per-model env, so a cache override covers both the download and the test.
+          if [[ -n "$HF_MODEL" ]]; then
+            if [[ "$HF_MODEL" == /* ]]; then
+              EXPECTED="$HF_MODEL"
+            else
+              EXPECTED="$HF_HUB_CACHE/models--${HF_MODEL//\//--}"
+            fi
+            if [[ "$HF_HUB_OFFLINE" == "0" && "$HF_MODEL" != /* ]]; then
+              # Model code passes local_files_only=True whenever CI=true, so it never downloads
+              # by itself; fill the per-runner cache before the test runs.
+              echo "Syncing $HF_MODEL into the per-runner cache ($HF_HUB_CACHE)"
+              python3 -c 'import os, huggingface_hub as h; print(h.snapshot_download(os.environ["HF_MODEL"]))'
+            elif [[ -d "$EXPECTED" ]]; then
+              echo "Found weights for $HF_MODEL at $EXPECTED"
+            else
+              echo "::error::$HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
+              echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
+              exit 1
+            fi
           fi
 
           # Reject extra_args that override output directory
