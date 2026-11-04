@@ -492,7 +492,8 @@ bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec);
 
 namespace detail {
 
-// False when no ROW_MAJOR tensor with this config has rows that span several pages.
+// False when no ROW_MAJOR tensor with this config has rows that span several pages. An ND shard spec can be
+// HEIGHT sharding for one shape and split the rows of the output an operation reindexes it to, so it counts.
 bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config);
 
 using ShardRowLaunch = std::function<Tensor(const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&)>;
