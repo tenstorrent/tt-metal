@@ -92,14 +92,21 @@ pytest models/demos/llvc/tests/perf/test_perf.py -v -s
 `LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, StreamMetrics)`
 and `LLVCModel(waveform)` does non-streaming conversion. Both accept `[T]`,
 `[B, T]`, or `[B, 1, T]`: `B > 1` is concurrent streams (independent ring
-buffers per row). PCC tests assert streaming vs offline equivalence and
-batched vs sequential streams.
+buffers per row). PCC tests compare streaming output against the PyTorch
+reference under identical chunking (`eval/evaluate.py::reference_stream`),
+assert traced vs eager replay equivalence, and check batched vs sequential
+streams (including the multi-window `chunk_factor=2` case); both the manual
+and fused SDPA attention paths are covered.
 
-`StreamMetrics.rtf` / `.latency_ms` are **end-to-end**: each timed chunk includes
-host→device input upload and device→host output download, which a real streaming
-deployment pays every chunk. `.device_rtf` / `.device_latency_ms` isolate device
-execution only (after upload, before download) for comparison. Perf tests assert
-the Stage-1 targets against the e2e figures.
+`StreamMetrics.rtf` / `.latency_ms` are **steady-state end-to-end** figures:
+each timed chunk includes host→device input upload and device→host output
+download, which a real streaming deployment pays every chunk. With trace
+enabled, the timing average covers the replayed chunks only — the one-time JIT
+warmup (chunk 0) and trace capture + first execution (chunk 1) are excluded, so
+these figures describe the sustained per-chunk rate of a long-running stream,
+not total wall time for short files. `.device_rtf` / `.device_latency_ms`
+isolate device execution only (after upload, before download) for comparison.
+Perf tests assert the Stage-1 targets against the steady-state e2e figures.
 
 `stream()` captures `forward_chunk` as a device **trace** and replays it per
 chunk (this is what removes the per-chunk host-dispatch overhead — see below).
@@ -178,18 +185,20 @@ the harness logs a skip line and still reports the pure-torch metrics.
 Measured on a Tenstorrent cloud N150 with the official KoeAI checkpoint
 (`G_500000.pth`, `chunk_factor=2`, trace enabled). WER / speaker similarity /
 DNSMOS from 50 LibriSpeech `test-clean` utterances (`--limit 50`), scored with
-Whisper `small.en` and Resemblyzer vs speaker 8312 (106 reference files).
+Whisper `small.en` and Resemblyzer vs speaker 8312 (106 reference files). RTF /
+latency are **steady-state replay** figures (per-chunk H2D + execute + D2H,
+excluding the one-time JIT warmup and trace-capture chunks — see `StreamMetrics`).
 
 | Metric | Target | Measured | Where checked |
 |---|---|---|---|
-| Streaming e2e RTF | < 0.3 | **0.220** | `eval/evaluate.py` (test_wavs: 0.220) |
-| Per-chunk e2e latency | < 100 ms | **33.7 ms** | `eval/evaluate.py` |
+| Streaming e2e RTF (steady-state) | < 0.3 | **0.220** | `eval/evaluate.py` (test_wavs: 0.220) |
+| Per-chunk e2e latency (steady-state) | < 100 ms | **33.7 ms** | `eval/evaluate.py` |
 | Accuracy vs PyTorch | PCC > 0.90 | **0.9993** global; 99.55% voiced frames > 0.9 | `eval/evaluate.py`, `tests/pcc/test_llvc.py` |
 | Content preservation | WER < 3.0% | **1.23%** (test-clean, 50 files) | `eval/evaluate.py --stage metrics` |
 | Speaker similarity to target | cosine > 0.70 | **0.904 mean / 0.812 min** | `eval/evaluate.py --stage metrics` |
 | Audio quality (DNSMOS OVRL) | — | 3.33 / 5 | `eval/evaluate.py --stage metrics` |
 
-Small-config perf gates (`tests/perf/test_perf.py`, e2e incl. H2D/D2H):
+Small-config perf gates (`tests/perf/test_perf.py`, steady-state e2e incl. H2D/D2H):
 `chunk_factor=1` RTF 0.156 / 17.0 ms, `chunk_factor=2` RTF 0.086 / 30.3 ms,
 `chunk_factor=4` RTF 0.049 / 56.6 ms — all under the RTF < 0.3 and < 100 ms
 targets. Eager (no trace) full-size RTF was 2.77 — trace gives ~13× by removing
@@ -200,11 +209,14 @@ per-chunk host dispatch, with identical numerics.
 - **Streaming path** assumes the per-chunk encoder-frame count is a multiple of
   `dec_chunk_size` (guaranteed by `LLVCModel.stream`). The decoder unfold is done
   with slices; for `chunk_factor=1` there is exactly one attention window.
-- **RTF transfer-cost caveat**: published Stage-1 numbers and the perf-test gate
+- **RTF measurement caveats**: published Stage-1 numbers and the perf-test gate
   use e2e RTF/latency (upload + execute + download per chunk). Device-only RTF
   will look better because it omits H2D/D2H; both are reported by `stream()` /
   the demo so the gap is visible. Overlapping the next chunk's upload with
-  compute (2-CQ) would shrink that gap further.
+  compute (2-CQ) would shrink that gap further. All reported RTF/latency are
+  **steady-state**: with trace enabled, the one-time JIT warmup (chunk 0) and
+  trace capture + first execution (chunk 1) are not part of the per-chunk
+  average, so total wall time for short files is higher than `RTF × duration`.
 - **Device trace (implemented)**: the per-chunk cost was host dispatch, not
   device math. `LLVCState` holds persistent ring buffers updated in place with
   `ttnn.copy`, so `forward_chunk` (a fixed shape across the streaming loop) is

@@ -7,9 +7,11 @@ Stage-1 targets from the bounty:
 * RTF < 0.3 for streaming mode
 * Latency < 100 ms per streaming chunk
 
-Primary assertions use *end-to-end* RTF/latency (per-chunk H2D upload + device
-execute + D2H download). Device-only figures are logged for comparison; see
-``StreamMetrics`` / README for the transfer-cost caveat.
+Primary assertions use *steady-state end-to-end* RTF/latency (per-chunk H2D
+upload + device execute + D2H download, averaged over the trace-replayed
+chunks; the one-time JIT warmup and trace-capture chunks are excluded). Device-
+only figures are logged for comparison; see ``StreamMetrics`` / README for the
+measurement caveats.
 """
 
 import pytest
@@ -39,7 +41,7 @@ class TestLLVCPerformance:
         out, metrics = model.stream(wav, chunk_factor=chunk_factor)
 
         logger.info(
-            "chunk_factor={}: e2e_RTF={:.3f} e2e_latency={:.2f}ms | device_RTF={:.3f} device_latency={:.2f}ms",
+            "chunk_factor={}: steady-state e2e_RTF={:.3f} e2e_latency={:.2f}ms | device_RTF={:.3f} device_latency={:.2f}ms",
             chunk_factor,
             metrics.rtf,
             metrics.latency_ms,
@@ -62,9 +64,9 @@ class TestLLVCPerformance:
         _ = model.stream(wav, chunk_factor=1)
         _, metrics = model.stream(wav, chunk_factor=1)
         logger.info("=" * 50)
-        logger.info("LLVC PERFORMANCE SUMMARY (streaming, chunk_factor=1)")
-        logger.info(f"e2e RTF: {metrics.rtf:.3f} (target < {TARGET_RTF})")
-        logger.info(f"e2e chunk latency: {metrics.latency_ms:.2f} ms (target < {TARGET_CHUNK_LATENCY_MS})")
+        logger.info("LLVC PERFORMANCE SUMMARY (streaming, chunk_factor=1, steady-state)")
+        logger.info(f"steady-state e2e RTF: {metrics.rtf:.3f} (target < {TARGET_RTF})")
+        logger.info(f"steady-state e2e chunk latency: {metrics.latency_ms:.2f} ms (target < {TARGET_CHUNK_LATENCY_MS})")
         logger.info(f"device RTF: {metrics.device_rtf:.3f}")
         logger.info(f"device chunk latency: {metrics.device_latency_ms:.2f} ms")
         logger.info("=" * 50)

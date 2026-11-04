@@ -11,12 +11,14 @@ weight mismatch.
 import pytest
 import torch
 
+from models.demos.llvc.eval.evaluate import reference_stream
 from models.demos.llvc.reference.llvc_reference import build_reference_model
 from models.demos.llvc.tt.config import LLVCConfig
 from models.demos.llvc.tt.model import LLVCModel
 
-# Streaming and offline share the chunked graph; allow a small numeric gap.
-STREAM_VS_OFFLINE_PCC = 0.99
+# bf16 device numerics vs fp32 torch; identical weights and chunking.
+E2E_VS_REFERENCE_PCC = 0.99
+TRACED_VS_EAGER_PCC = 0.99
 BATCHED_VS_SEQUENTIAL_PCC = 0.99
 
 
@@ -48,6 +50,19 @@ def _small_config() -> LLVCConfig:
         nhead=4,  # must match the PyTorch reference (no longer hardcoded to 8)
         convnet=ConvNetConfig(out_channels=tuple([1] * 3), kernel_sizes=tuple([3] * 3), dilations=tuple([1] * 3)),
     )
+
+
+def _fused_sdpa_config() -> LLVCConfig:
+    """Like ``_small_config`` but with head_dim 32 so the fused SDPA kernel runs.
+
+    ``_small_config`` has dec_dim=64 / nhead=4 -> head_dim 16, which always takes
+    the manual matmul+softmax fallback in ``ops.scaled_dot_product_attention``
+    (head_dim not a TILE_SIZE multiple). dec_dim=128 / nhead=4 -> head_dim 32
+    exercises the fused ``ttnn.transformer`` SDPA path against the reference.
+    """
+    cfg = _small_config()
+    cfg.dec_dim = 128
+    return cfg
 
 
 def _reference_params_from(config: LLVCConfig) -> dict:
@@ -89,58 +104,89 @@ class TestLLVCReference:
 
 
 class TestLLVCEndToEnd:
+    @pytest.mark.parametrize("config_builder", [_small_config, _fused_sdpa_config], ids=["manual-sdpa", "fused-sdpa"])
     @pytest.mark.parametrize("chunk_factor", [1, 2])
-    def test_e2e_pcc_vs_reference(self, device, torch_seed, chunk_factor):
-        cfg = _small_config()
+    def test_e2e_pcc_vs_reference(self, device, torch_seed, config_builder, chunk_factor):
+        """TTNN streaming vs the PyTorch reference under *identical* chunking.
+
+        Scores against ``reference_stream`` (same chunk split / lookahead
+        alignment as ``LLVCModel.stream``) rather than the offline
+        ``reference(wav)`` forward, whose ``pad=True`` alignment differs and
+        previously forced a loose 0.90 gate. Same-chunking comparison isolates
+        real numerical divergence, so the gate is tight. ``chunk_factor=2``
+        gives multiple decoder windows per chunk (nw >= 2).
+        """
+        cfg = config_builder()
         ref = build_reference_model(_reference_params_from(cfg))
         model = LLVCModel(cfg, ref, device=device)
 
-        n_samples = cfg.dec_chunk_size * cfg.L * chunk_factor
-        wav = torch.randn(1, 1, n_samples) * 0.2
+        # Several chunks, so the traced path (capture on chunk 1, replay after)
+        # is exercised, not just the eager warmup chunk.
+        n_samples = cfg.dec_chunk_size * cfg.L * chunk_factor * 4
+        wav = torch.randn(n_samples) * 0.2
 
-        with torch.no_grad():
-            ref_out = ref(wav)
-        tt_out = model(wav)
+        ref_out = reference_stream(ref, wav, L=cfg.L, dec_chunk_size=cfg.dec_chunk_size, chunk_factor=chunk_factor)
+        tt_out, _ = model.stream(wav, chunk_factor=chunk_factor)
 
         assert tt_out.shape == ref_out.shape, f"{tt_out.shape} vs {ref_out.shape}"
         pcc = compute_pcc(tt_out, ref_out)
-        print(f"E2E PCC (chunk_factor={chunk_factor}): {pcc:.4f}")
-        assert pcc > 0.90, f"E2E PCC {pcc:.4f} < 0.90"
+        print(f"E2E PCC vs reference_stream ({config_builder.__name__}, chunk_factor={chunk_factor}): {pcc:.4f}")
+        assert pcc > E2E_VS_REFERENCE_PCC, f"E2E PCC {pcc:.4f} <= {E2E_VS_REFERENCE_PCC}"
 
-    def test_streaming_matches_nonstreaming(self, device, torch_seed):
+    def test_traced_stream_matches_eager(self, device, torch_seed):
+        """Trace-replayed streaming matches the eager per-chunk path.
+
+        A previous version compared ``model.stream(wav, chunk_factor=1)`` with
+        ``model(wav)``, but ``__call__`` *is* ``stream(chunk_factor=1)`` — the
+        same function twice. Comparing a traced model against an eager
+        (``use_trace=False``) one with identical weights actually validates
+        trace capture/replay equivalence.
+        """
         cfg = _small_config()
+        assert cfg.use_trace, "default config must exercise the traced path"
         ref = build_reference_model(_reference_params_from(cfg))
-        model = LLVCModel(cfg, ref, device=device)
+        model_traced = LLVCModel(cfg, ref, device=device)
+
+        cfg_eager = _small_config()
+        cfg_eager.use_trace = False
+        model_eager = LLVCModel(cfg_eager, ref, device=device)
 
         wav = torch.randn(cfg.dec_chunk_size * cfg.L * 4) * 0.2
-        stream_out, metrics = model.stream(wav, chunk_factor=1)
-        offline_out = model(wav)
-        assert torch.isfinite(stream_out).all()
-        assert stream_out.shape == offline_out.shape, f"{stream_out.shape} vs {offline_out.shape}"
-        pcc = compute_pcc(stream_out, offline_out)
+        traced_out, metrics = model_traced.stream(wav, chunk_factor=1)
+        eager_out, _ = model_eager.stream(wav, chunk_factor=1)
+        assert torch.isfinite(traced_out).all()
+        assert traced_out.shape == eager_out.shape, f"{traced_out.shape} vs {eager_out.shape}"
+        pcc = compute_pcc(traced_out, eager_out)
         print(
-            f"streaming vs offline PCC={pcc:.4f} e2e_RTF={metrics.rtf:.3f} "
-            f"e2e_latency={metrics.latency_ms:.2f}ms (device_RTF={metrics.device_rtf:.3f})"
+            f"traced vs eager streaming PCC={pcc:.4f} steady-state_RTF={metrics.rtf:.3f} "
+            f"latency={metrics.latency_ms:.2f}ms (device_RTF={metrics.device_rtf:.3f})"
         )
-        assert pcc > STREAM_VS_OFFLINE_PCC, f"streaming vs non-streaming PCC {pcc:.4f} <= {STREAM_VS_OFFLINE_PCC}"
+        assert pcc > TRACED_VS_EAGER_PCC, f"traced vs eager PCC {pcc:.4f} <= {TRACED_VS_EAGER_PCC}"
 
-    def test_batched_streams_match_sequential(self, device, torch_seed):
-        """Public API concurrent streams: batched [B, T] matches per-stream B=1."""
+    @pytest.mark.parametrize("chunk_factor", [1, 2])
+    def test_batched_streams_match_sequential(self, device, torch_seed, chunk_factor):
+        """Public API concurrent streams: batched [B, T] matches per-stream B=1.
+
+        ``chunk_factor=2`` covers the B >= 2 with multiple windows per chunk
+        case: ``_build_windows`` stacks windows window-major, and the decoder
+        fold must convert to batch-major or frames interleave across streams
+        (the bug previously measured as PCC ~0.5 on real checkpoints).
+        """
         cfg = _small_config()
         cfg.use_trace = False
         ref = build_reference_model(_reference_params_from(cfg))
         model = LLVCModel(cfg, ref, device=device)
 
-        n = cfg.dec_chunk_size * cfg.L * 4
+        n = cfg.dec_chunk_size * cfg.L * chunk_factor * 4
         a = torch.randn(n) * 0.2
         b = torch.randn(n) * 0.2
-        out_a, _ = model.stream(a, chunk_factor=1)
-        out_b, _ = model.stream(b, chunk_factor=1)
-        batched, _ = model.stream(torch.stack([a, b], dim=0), chunk_factor=1)
+        out_a, _ = model.stream(a, chunk_factor=chunk_factor)
+        out_b, _ = model.stream(b, chunk_factor=chunk_factor)
+        batched, _ = model.stream(torch.stack([a, b], dim=0), chunk_factor=chunk_factor)
         assert batched.shape[0] == 2
         pcc_a = compute_pcc(batched[0], out_a)
         pcc_b = compute_pcc(batched[1], out_b)
-        print(f"batched vs sequential PCC: stream0={pcc_a:.4f} stream1={pcc_b:.4f}")
+        print(f"batched vs sequential (chunk_factor={chunk_factor}) PCC: stream0={pcc_a:.4f} stream1={pcc_b:.4f}")
         assert pcc_a > BATCHED_VS_SEQUENTIAL_PCC, f"batched[0] PCC {pcc_a:.4f} <= {BATCHED_VS_SEQUENTIAL_PCC}"
         assert pcc_b > BATCHED_VS_SEQUENTIAL_PCC, f"batched[1] PCC {pcc_b:.4f} <= {BATCHED_VS_SEQUENTIAL_PCC}"
 

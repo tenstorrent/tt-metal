@@ -446,6 +446,8 @@ def convert_stage(args: argparse.Namespace) -> dict:
         "streaming": {
             "mean_rtf": mean_rtf,
             "mean_chunk_latency_ms": sum(latencies) / len(latencies),
+            "rtf_definition": "steady-state replay: per-chunk H2D + execute + D2H, "
+            "excluding one-time JIT warmup (chunk 0) and trace capture (chunk 1)",
         },
         "decoder_throughput": decoder_throughput(mean_rtf, sr, hop),
         "token_level_accuracy_vs_reference": {
@@ -511,7 +513,7 @@ def _write_markdown(report: dict, path: str) -> None:
         "",
         "| Metric | Value |",
         "|---|---|",
-        f"| Streaming mean RTF | {st['mean_rtf']:.3f} |",
+        f"| Streaming mean RTF (steady-state) | {st['mean_rtf']:.3f} |",
         f"| Mean chunk latency | {st['mean_chunk_latency_ms']:.2f} ms |",
         f"| Decoder throughput | {thr['achieved_frames_per_s']:.0f} frames/s"
         f" ({thr['speed_vs_realtime']:.2f}× real-time) |",

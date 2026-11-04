@@ -43,9 +43,16 @@ class LLVCState:
 class StreamMetrics:
     """Per-chunk streaming timing.
 
-    ``rtf`` / ``latency_ms`` are end-to-end: they include per-chunk host→device
-    upload and device→host download. ``device_rtf`` / ``device_latency_ms`` cover
-    device execution only (after input upload, before output download).
+    ``rtf`` / ``latency_ms`` are end-to-end per chunk: they include per-chunk
+    host→device upload and device→host download. ``device_rtf`` /
+    ``device_latency_ms`` cover device execution only (after input upload,
+    before output download).
+
+    All four are **steady-state** figures. With trace enabled, only the
+    replayed chunks (2..N) are timed — the one-time JIT warmup (chunk 0) and
+    trace capture + first execution (chunk 1) are excluded, so they do not
+    describe total wall time for short files. In eager mode every chunk is
+    timed, including the first (which pays JIT compilation).
     """
 
     rtf: float
@@ -416,7 +423,15 @@ class LLVCModel:
             for i, piece in enumerate(chunks):
                 w0 = i * max_windows
                 w1 = min(w0 + max_windows, num_windows)
-                timed = ttnn.reshape(piece, (B, (w1 - w0) * cs, cfg.dec_dim))
+                nw = w1 - w0
+                if B > 1 and nw > 1:
+                    # _build_windows stacks windows window-major on dim 0
+                    # ([w0_b0, w0_b1, w1_b0, ...]). Fold to batch-major before
+                    # collapsing windows into the time axis — a direct reshape
+                    # would interleave decoder frames across streams.
+                    piece = ttnn.reshape(piece, (nw, B, cs, cfg.dec_dim))
+                    piece = ttnn.permute(piece, (1, 0, 2, 3))
+                timed = ttnn.reshape(piece, (B, nw * cs, cfg.dec_dim))
                 tgt = timed if tgt is None else ops.concat_time(tgt, timed)
         if T != orig_T:
             tgt = ops.slice_time(tgt, 0, orig_T)
@@ -532,8 +547,10 @@ class LLVCModel:
         ``B > 1`` is concurrent streams (independent per-row ring buffers).
 
         Returns ``(converted [B, 1, T], StreamMetrics)``. Primary ``rtf`` /
-        ``latency_ms`` are end-to-end (include per-chunk H2D upload and D2H
-        download); ``device_*`` fields isolate device execution only.
+        ``latency_ms`` are end-to-end per chunk (include per-chunk H2D upload
+        and D2H download) and are **steady-state replay** figures: with trace
+        enabled the one-time JIT warmup and trace-capture chunks are excluded
+        (see ``StreamMetrics``). ``device_*`` fields isolate device execution.
         """
         cfg = self.config
         L = cfg.L

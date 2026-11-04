@@ -110,7 +110,7 @@ def run_demo(args: argparse.Namespace, *, device: ttnn.Device) -> None:
             latencies.append(latency)
     if rtfs:
         logger.info(
-            "Mean e2e RTF: {:.3f}  Mean e2e chunk latency: {:.2f} ms",
+            "Mean steady-state e2e RTF: {:.3f}  Mean e2e chunk latency: {:.2f} ms",
             sum(rtfs) / len(rtfs),
             sum(latencies) / len(latencies),
         )
@@ -121,7 +121,7 @@ def _run_one(model, audio, sr, args, *, out_name):
         out, metrics = model.stream(audio, chunk_factor=args.chunk_factor)
         rtf, latency = metrics.rtf, metrics.latency_ms
         logger.info(
-            "[{}] streaming e2e_RTF={:.3f} e2e_latency={:.2f}ms (device_RTF={:.3f} device_latency={:.2f}ms)",
+            "[{}] streaming steady-state e2e_RTF={:.3f} e2e_latency={:.2f}ms (device_RTF={:.3f} device_latency={:.2f}ms)",
             out_name,
             rtf,
             latency,
