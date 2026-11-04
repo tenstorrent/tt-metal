@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -215,7 +216,9 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
+        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
+            mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -225,6 +228,8 @@ void enqueue_mesh_workload(
     }
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+
+    ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 
     TracyOpMeshWorkload(
         mesh_device,
@@ -624,7 +629,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
-    if (mesh_device->get_view().get_devices().empty()) {
+    if (mesh_device->is_remote_only()) {
         tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
@@ -657,7 +662,7 @@ void prepare(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
-    TT_FATAL(!mesh_device->get_view().get_devices().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+    TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
     detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import unicodedata
 
 import torch
@@ -28,6 +29,7 @@ from models.demos.blackhole.paddleocr_vl.tt.vision.model import VISION_BUCKETS, 
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
 from models.demos.qwen3_vl.tt.generator import Generator as VLGenerator
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -62,7 +64,21 @@ def _cer(ref: str, hyp: str) -> float:
     return prev[-1] / len(ref)
 
 
-def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device) -> str:
+def _read_page(
+    sample: dict,
+    processor,
+    tower,
+    generator,
+    embed_tokens,
+    image_token_id,
+    ref,
+    text_args,
+    device,
+    decode_stats: list[tuple[int, float]],
+) -> str:
+    # Report-only decode telemetry for the CI dashboard (#58596): appends one
+    # (decode_tokens, decode_seconds) pair per page to the caller-owned accumulator,
+    # keeping each test's stats isolated from the others.
     img = Image.open(os.path.join(DEMO, sample["image"])).convert("RGB")
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": OCR_PROMPT}]}]
     text = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -114,6 +130,8 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
     generated = [token]
 
     eos = set(tokenizer.all_special_ids or [])
+    decode_tokens = 0
+    decode_start = time.perf_counter()
     for step in range(MAX_NEW_TOKENS - 1):
         if token in eos:
             break
@@ -133,6 +151,9 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
         lg = out[0] if isinstance(out, tuple) else out
         token = int(_to_torch_logits(lg, device, text_args.vocab_size).argmax().item())
         generated.append(token)
+        decode_tokens += 1
+
+    decode_stats.append((decode_tokens, time.perf_counter() - decode_start))
 
     return tokenizer.decode([t for t in generated if t not in eos], skip_special_tokens=True)
 
@@ -176,9 +197,10 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
     assert samples, "hf_goldens.json has no samples"
     pipeline = _build_pipeline(device)
 
+    decode_stats: list[tuple[int, float]] = []
     cers = []
     for s in samples:
-        text = _read_page(s, *pipeline, device)
+        text = _read_page(s, *pipeline, device, decode_stats)
         c = _cer(s["hf_output"], text)
         cers.append(c)
         print(f"[{s['name']}] CERvsHF={c * 100:.2f}%  TT={text[:120]!r}")
@@ -204,9 +226,10 @@ def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
     assert not missing, f"no renderable sample in bucket(s) {sorted(missing)}"
 
     pipeline = _build_pipeline(device)
+    decode_stats: list[tuple[int, float]] = []
     cers = []
     for s, path in samples:
-        text = _read_page({"image": path}, *pipeline, device)
+        text = _read_page({"image": path}, *pipeline, device, decode_stats)
         c = _cer(s.ground_truth, text)
         cers.append(c)
         print(f"[{s.name}] bucket={s.bucket} CERvsTruth={c * 100:.2f}%")
@@ -215,4 +238,18 @@ def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
     print(
         f"mean CER vs ground truth over {len(cers)} pages: {mean_cer * 100:.2f}%  (gate: <= {GT_CER_GATE * 100:.2f}%)"
     )
+
+    # Report-only perf for the CI dashboard (#58596): aggregate single-user decode rate
+    # across all pages. No-op outside CI; device is still open for the SKU lookup.
+    total_tokens = sum(n for n, _ in decode_stats)
+    total_decode_s = sum(s for _, s in decode_stats)
+    if total_tokens > 0 and total_decode_s > 0:
+        decode_tps_u = total_tokens / total_decode_s
+        report_e2e_metrics(
+            "paddleocr-vl-1.6",
+            {"decode_t/s": decode_tps_u, "decode_t/s/u": decode_tps_u},
+            batch_size=1,
+            model_type="vlm",
+        )
+
     assert mean_cer <= GT_CER_GATE

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt::test_utils {

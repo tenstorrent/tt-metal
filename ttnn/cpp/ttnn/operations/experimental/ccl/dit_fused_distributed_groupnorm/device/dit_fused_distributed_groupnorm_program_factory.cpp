@@ -17,6 +17,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -877,12 +878,24 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
             if (forward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+                    *mesh_device,
+                    local_node_id,
+                    forward_fabric_node_id.value(),
+                    /*link_idx=*/f,
+                    program,
+                    {core},
+                    fwd_rt);
             }
             fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
             if (backward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+                    *mesh_device,
+                    local_node_id,
+                    backward_fabric_node_id.value(),
+                    /*link_idx=*/f,
+                    program,
+                    {core},
+                    fwd_rt);
             }
             SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
         }

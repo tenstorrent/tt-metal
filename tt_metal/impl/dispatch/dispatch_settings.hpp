@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <array>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
 #include <vector>
-#include "llrt/hal.hpp"
 #include <hostdevcommon/common_values.hpp>
 
 namespace tt {

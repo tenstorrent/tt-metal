@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import pytest
 import ttnn
 from loguru import logger
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device, k_dtype):

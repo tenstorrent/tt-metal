@@ -8,7 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 pytestmark = pytest.mark.use_module_device
 
@@ -188,6 +188,42 @@ def run_conv3d_test(
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+# Cover the Conv3D weight-sharing layouts that differ in how destination cores are packed:
+# one compact chain, multiple compact groups, and a partial row with non-participating cores.
+@pytest.mark.parametrize(
+    "batch,out_channels,c_in_block",
+    [(1, 160, 64), (2, 320, 32), (2, 64, 32)],
+    ids=["compact-chain", "compact-mixed", "rectangular-passive"],
+)
+def test_conv3d_weight_sharing_groups(device, batch, out_channels, c_in_block):
+    size = device.compute_with_storage_grid_size()
+    if size.x < 8 or size.y < 8:
+        pytest.skip("requires an 8x8 worker grid")
+    config = create_conv3d_config(
+        compute_with_storage_grid_size=(8, 8),
+        C_in_block=c_in_block,
+        C_out_block=32,
+        T_out_block=1,
+        H_out_block=1,
+        W_out_block=1,
+    )
+    # Repeat with fresh tensors to exercise cached programs, including idle row-tail
+    # destinations whose readiness semaphores are not consumed between executions.
+    for _ in range(2):
+        run_conv3d_test(
+            device,
+            (batch, 64, 5, 5, 5),
+            out_channels,
+            (3, 3, 3),
+            (1, 1, 1),
+            1,
+            (0, 1, 1),
+            "zeros",
+            grid_size=(8, 8),
+            config=config,
+        )
 
 
 @pytest.mark.parametrize(
@@ -952,3 +988,41 @@ def test_conv3d_fp32_operand_split_raw_weights(device):
     raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
     prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
     assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"
+
+
+@pytest.mark.parametrize("block", ["T_out_block", "H_out_block", "W_out_block"])
+def test_conv3d_rejects_zero_out_block(device, block, expect_error):
+    C, out_channels, kernel_size = 32, 32, (3, 3, 3)
+    torch.manual_seed(0)
+    input_tensor = torch.randn(1, C, 4, 8, 8, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, out_channels, kernel_size=kernel_size, padding=(0, 1, 1), bias=False)
+    tt_input = prepare_input_tensor(input_tensor, C, device)
+    config = create_conv3d_config(C_in_block=32, **{block: 0})
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, pad_value=0),
+        groups=1,
+        C_in_block=config.C_in_block,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    with expect_error(RuntimeError, f"{block} .* must be greater than 0"):
+        ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            dtype=ttnn.bfloat16,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            padding=(0, 1, 1),
+            padding_mode="zeros",
+            config=config,
+        )
+
+
+def test_prepare_conv3d_weights_rejects_zero_alignment(device, expect_error):
+    weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, 3), dtype=ttnn.bfloat16, pad_value=0)
+    with expect_error(RuntimeError, "alignment must be greater than 0"):
+        ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=weight, groups=1, C_in_block=32, alignment=0, device=device
+        )

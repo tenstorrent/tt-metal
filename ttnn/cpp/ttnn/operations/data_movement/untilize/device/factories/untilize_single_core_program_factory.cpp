@@ -12,6 +12,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "untilize_single_core_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -53,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -147,13 +148,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     // Compute kernel (untilize). ComputeConfig set directly: only fp32_dest_acc_en is set by the
     // legacy op -> enable_32_bit_dest; the fp32 unpack mode mirrors the legacy UnpackToDestFp32.
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{COMPUTE_SRC},

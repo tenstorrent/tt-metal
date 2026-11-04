@@ -95,13 +95,14 @@ tt/
   embeddings.py               word lookup, token-type embedding folded into the table
   attention.py                fused QKV, rotary, bidirectional SDPA, output projection
   mlp.py                      dense FFN, even-numbered layers
-  router.py                   fp32 softmax, top-k, dense routing weights
-  experts.py                  every token through every expert's w1 and w2, gate and reduce
+  router.py                   fp32 softmax and top-2 selection
+  experts.py                  each token through its two experts only, weighted and summed
   moe.py                      router plus experts, odd-numbered layers
   block.py                    one encoder block, post-norm with fused residual adds
   encoder.py                  the 12 blocks in sequence
   pooling.py                  mean pool, Matryoshka truncation, L2 normalize
   model.py                    the whole model, plus the text-to-embedding driver
+  chunking.py                 splits a large batch into chunks of whole sequences
 demo/
   demo.py                     embeds queries and passages, prints the similarity matrix
 ```
@@ -222,8 +223,8 @@ These failures do not raise exceptions, so the test suite includes measurements 
 2. **Do not renormalize the MoE top-2 routing weights.**
    `moe_normalize_expert_weights` is `false` in this checkpoint, so the two selected weights are used as they come out of the softmax and sum to less than 1. Dividing them by their top-2 sum, which Mixtral and Switch both do and which is the easy thing to copy by reflex, still scores around `0.99` PCC.
 
-3. **Use max-absolute error for shared-bias validation.**
-   PCC can hide the shared-bias bug because it mean-centers the resulting offset. The expert bias must be added once after the weighted expert sum, not inside the expert loop.
+3. **Validate the shared-bias placement against the module's own bias-free output.**
+   PCC can hide the shared-bias bug because it mean-centers the resulting offset, and at real weights the bfloat16 noise exceeds it. The expert bias must be added once after the weighted expert sum, not inside the expert loop. The tests project the output's difference from a bias-free run onto the bias, over every token: 1 for the right placement, the mean routed-weight sum for the wrong one.
 
 4. **Pass `is_causal=False` to SDPA explicitly.**
    `ttnn.transformer.scaled_dot_product_attention` defaults it to `True` where torch defaults to `False`. This is an encoder, so leaving the default applies a decoder mask: every token still gets finite output, computed from its prefix alone, at PCC 0.44.

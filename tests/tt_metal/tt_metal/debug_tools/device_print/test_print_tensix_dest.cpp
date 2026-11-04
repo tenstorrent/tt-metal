@@ -36,7 +36,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -680,7 +680,7 @@ static bool reader_datacopy_writer(
         workload.add_program(
             device_range, build_quasar_program(mesh_device, config, input_dram_buffer, output_dram_buffer));
     } else {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
 
         // Prepare reader kernel and get input DRAM buffer

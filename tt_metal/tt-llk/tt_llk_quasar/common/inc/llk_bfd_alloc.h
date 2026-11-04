@@ -173,12 +173,15 @@ inline std::uint8_t bfd_current()
  * @param tensor_shape: Tile/face dimensions and shape of the buffer
  * @param l1_base_addr: base address of the buffer in L1 (16B units)
  * @param l1_data_format: L1 data encoding format
+ * @return Allocated id to pass directly to the op's init function
  */
 template <BfdResource E, L1AccessMode MODE = L1AccessMode::Continuous>
-inline void bfd_alloc_and_program(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
+inline std::uint8_t bfd_alloc_and_program(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
 {
     const std::uint8_t id = bfd_alloc<E>();
-    _configure_buf_desc_table_(id, construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format));
+    const auto buf_desc   = construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format);
+    _configure_buf_desc_table_(id, buf_desc.words[0], buf_desc.words[1], buf_desc.words[2]);
+    return id;
 }
 
 } // namespace ckernel::trisc

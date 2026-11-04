@@ -26,14 +26,20 @@ inline constexpr uint32_t auto_dispatch_pacing_cycle_count = 43;
 // Group 0 is the idle value on the wire, so payload groups start at 1.
 inline constexpr uint32_t idle_group_id = 0;
 
+// The lane counts differ between Quasar IP variants, so they are read off the selected register map:
+// each lane has one input register, and the per-lane registers end where the next register starts.
+
 // How many dispatch instances drive each worker, and which lanes they occupy.
-inline constexpr uint32_t num_dispatch_lanes = 3;
+inline constexpr uint32_t num_dispatch_lanes =
+    (TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR - TT_FDS_TENSIXNEO_DISPATCH_TO_TENSIX_0__REG_ADDR) / sizeof(uint32_t);
 inline constexpr uint32_t dispatch_lane_mask = (uint32_t{1} << num_dispatch_lanes) - 1;
 
 // Dispatch listens for done on every worker lane; completion is counted in software,
 // so the hardware count threshold stays at 0 and no interrupt is armed. One lane per worker that
 // can report done, which bounds how many workers a single sub-device's completion tracking can cover.
-inline constexpr uint32_t num_worker_lanes = 32;
+inline constexpr uint32_t num_worker_lanes =
+    (TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR - TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR) /
+    sizeof(uint32_t);
 inline constexpr uint32_t all_worker_lanes_mask = ~uint32_t{0} >> (32 - num_worker_lanes);
 inline constexpr uint32_t dispatch_done_threshold = 0;
 
@@ -121,6 +127,8 @@ inline uint32_t dispatch_read_group_status(uint32_t group_id) { return FdsDispat
 
 inline void dispatch_clear_worker_status(uint32_t worker_lane) { FdsDispatch::fds_clear_neo_status(worker_lane); }
 
+inline void dispatch_clear_group_status(uint32_t group_id) { FdsDispatch::fds_write_group_status(group_id, 0); }
+
 inline uint32_t dispatch_read_group_count(uint32_t group_id) { return FdsDispatch::fds_read_group_count(group_id); }
 
 // Worker PLIC delivery: FDS group g arrives at the PLIC as source plic_source_base + g.
@@ -179,6 +187,11 @@ inline void worker_config_group(uint32_t group_id, uint32_t lane_mask, uint32_t 
 inline uint32_t worker_read_group_status(uint32_t group_id) { return FdsNeo::fds_read_group_status(group_id); }
 
 inline void worker_clear_dispatch_status(uint32_t dispatch_lane) { FdsNeo::fds_clear_de_status(dispatch_lane); }
+
+// Clears only the given lanes.
+inline void worker_clear_group_status(uint32_t group_id, uint32_t dispatch_lanes) {
+    FdsNeo::fds_write_group_status(group_id, ~dispatch_lanes);
+}
 
 inline void worker_wait_for_auto_dispatch_queue_space() {
     WAYPOINT("FADW");

@@ -76,7 +76,7 @@ void matmul_multicore_reuse_mcast(
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
@@ -275,7 +275,8 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
+        OVERRIDE_KERNEL_PREFIX
+        "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -284,7 +285,8 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
+        OVERRIDE_KERNEL_PREFIX
+        "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -293,7 +295,8 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+        OVERRIDE_KERNEL_PREFIX
+        "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -473,7 +476,7 @@ int main() {
         constexpr uint32_t N = 3072;  // tutorial values
         constexpr uint32_t K = 768;   // tutorial values
 #endif
-        constexpr uint32_t B = 1;     // tutorial values
+        constexpr uint32_t B = 1;  // tutorial values
 
         uint32_t Mt = M / TILE_HEIGHT;
         uint32_t Kt = K / TILE_WIDTH;

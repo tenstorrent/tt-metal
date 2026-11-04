@@ -33,9 +33,12 @@ struct MatmulParams {
     // and that deliver receiver i the in1 K-blocks of output column block i, in K order. Either every
     // pipe of one create_prefetcher_pipes_for_tensor_prefetcher call (DRAM senders), or worker-sender
     // pipes fed by the caller's own producer. Empty means none; at most one of the two transports may
-    // be set. Keep the pipes alive for as long as the program cache may hold a program built against
-    // them: the Program binds each pipe, and cb_in1 is laid over its ring.
+    // be set. The Program binds each pipe and lays cb_in1 over its ring; pipes re-carved in place of these,
+    // at the same addresses with the same geometry, reuse it, and the cache hit rebinds it to them.
     ttnn::PrefetcherPipeList prefetcher_pipes;
+    // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
+    // Set through ttnn::linear; only the 2D multicast program config (its Metal 2.0 spec factory) supports it.
+    std::optional<uint32_t> in0_column_offset = std::nullopt;
 };
 
 struct MatmulInputs {

@@ -38,7 +38,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         // Seed DST[0] with operand A from c_0 (legacy datacopy; identical in both kernels).
-        copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+        copy_init(tt::CBIndex::c_0);
         copy_tile(tt::CBIndex::c_0, 0, 0);
         // Op under test: DST[0] = DST[0] + c_1  (id-free reuse-dest API; c_1 -> BOp, DST reused).
         experimental::add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(BOp(in1_cb.read_address()));

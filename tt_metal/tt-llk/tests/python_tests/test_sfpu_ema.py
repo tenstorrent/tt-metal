@@ -3,10 +3,13 @@
 
 """Functional coverage for the EMA SFPU kernel.
 
-Two tests, both driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
+Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_sfpu_ema`:
 
 - `test_sfpu_ema` -- the default-suite check, one alpha over 1/2/4 time tiles.
+- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init before each `ema_tile`.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
+
+`perf_sfpu_ema.py` reuses `_run_sfpu_ema` with `is_perf=True`.
 
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
 least informative one available for this kernel: 0.25 is an exact power of two, so
@@ -21,42 +24,60 @@ import struct
 
 import pytest
 import torch
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    Transpose,
     format_dict,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfRunType, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
+from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     EMA_ALPHA_BETA,
+    EMA_INTERLEAVED_INIT,
+    LOOP_FACTOR,
+    NUM_FACES,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
+    fp32_bits,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # EMA smoothing factor chosen for the functional test (ttnn.ema has no default alpha;
 # it is a required argument). beta is derived as 1 - alpha.
 EMA_ALPHA = 0.25
 EMA_BETA = 1.0 - EMA_ALPHA
 
+_FUNCTIONAL_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+
+SFPU_EMA_PERF_SWEEP = dict(
+    formats=input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32],
+        same=True,
+    ),
+    dest_acc=get_valid_dest_accumulation_modes,
+)
+
 # Time tiles per sweep case. Kept small because the sweep is 1000 cases wide;
 # 2 tiles is 64 time steps per channel, enough for the recurrence to settle and for
 # rounding differences to accumulate through the carry.
 SWEEP_NUM_TIME_TILES = 2
 
+AFTER_INIT_NUM_TIME_TILES = 2
+
 # k/1000 for k in 0..999. alpha=0 is a degenerate pass-through (beta=1) and is kept
 # deliberately: it is the cheapest check that the carry term is actually multiplied
 # in rather than ignored.
 _ALPHA_STEPS = 1000
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
@@ -94,62 +115,112 @@ def _ema_golden_fp64(input_2d: torch.Tensor, alpha_f32: float, beta_f32: float):
     return out
 
 
-def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc):
-    """Run the EMA kernel over a [num_time_tiles*32, 32] input.
+def _run_sfpu_ema(
+    alpha: float,
+    beta: float,
+    dest_acc,
+    *,
+    formats=_FUNCTIONAL_FORMATS,
+    num_time_tiles: int | None = None,
+    input_dimensions: list[int] | None = None,
+    binary_init_before_ema: bool = False,
+    is_perf: bool = False,
+    perf_report=None,
+    run_types=None,
+    loop_factor: int = 1,
+):
+    """Run the shared functional/perf EMA kernel.
 
-    Returns (untilized device result, untilized 2D input view). Row = time step,
-    column = parallel channel, for both.
+    Exactly one of ``num_time_tiles`` and ``input_dimensions`` selects the input size.
+    Functional callers receive the untilized result plus its 2D input view.
+
+    With ``is_perf=True``, ``perf_report`` is required, ``run_types`` selects the
+    measured paths, ``loop_factor`` amortizes their tile loops, and the runner returns
+    ``None`` without generating host stimuli or a golden. ``binary_init_before_ema``
+    runs an eltwise binary init between datacopy and ``ema_tile``. Perf always
+    emits it as false, so the shared kernel has the constexpr on every build.
     """
-    torch.manual_seed(0)
+    if is_perf and binary_init_before_ema:
+        raise ValueError("binary_init_before_ema is not supported when is_perf=True")
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
 
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    torch_format = format_dict[formats.input_format]
+    if input_dimensions is None:
+        if num_time_tiles is None:
+            raise ValueError("num_time_tiles or input_dimensions must be provided")
+        input_dimensions = [num_time_tiles * TILE_DIM, TILE_DIM]
+    elif num_time_tiles is not None:
+        raise ValueError("provide num_time_tiles or input_dimensions, not both")
 
-    # [rows, cols] = [num_time_tiles*32 time steps, 32 parallel channels].
-    input_dimensions = [num_time_tiles * TILE_DIM, TILE_DIM]
-    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+    tile_cnt, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
+    )
 
-    stimuli_size = (tile_cnt * ELEMENTS_PER_TILE,)
-    src_A = torch.empty(stimuli_size, dtype=torch_format).uniform_(-4.0, 4.0)
-    src_B = torch.zeros_like(src_A)
+    src_A_tilized = src_B = golden_input = None
+    if not is_perf:
+        torch.manual_seed(0)
+        torch_format = format_dict[formats.input_format]
+        stimuli_size = (tile_cnt * ELEMENTS_PER_TILE,)
+        src_A = torch.empty(stimuli_size, dtype=torch_format).uniform_(-4.0, 4.0)
+        src_B = torch.zeros_like(src_A)
 
-    # Untilized 2D view for the golden (row = time step, col = channel).
-    golden_input = src_A.view(input_dimensions[0], input_dimensions[1])
+        # Untilized 2D view for the golden (row = time step, col = channel).
+        golden_input = src_A.view(input_dimensions[0], input_dimensions[1])
 
-    # Tilize the input the same way the device consumes it (row-major tile order,
-    # tile k = rows [32k, 32k+32)).
-    src_A_tilized = tilize_block(
-        src_A, input_dimensions, stimuli_format=formats.input_format
-    ).flatten()
+        # Tilize the input the same way the device consumes it (row-major tile
+        # order, tile k = rows [32k, 32k+32)).
+        src_A_tilized = tilize_block(
+            src_A, input_dimensions, stimuli_format=formats.input_format
+        ).flatten()
 
-    configuration = TestConfig(
-        "sources/sfpu_ema_test.cpp",
-        formats,
-        templates=[
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_ema_test.cpp",
+        "formats": formats,
+        "templates": [
             APPROX_MODE(ApproximationMode.No),
-            EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
-        ],
-        runtimes=[
+            EMA_ALPHA_BETA(alpha_bits=fp32_bits(alpha), beta_bits=fp32_bits(beta)),
             TILE_COUNT(tile_cnt),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
-        variant_stimuli=StimuliConfig(
+        "runtimes": [],
+        "variant_stimuli": StimuliConfig(
             src_A_tilized,
             formats.input_format,
             src_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt,
-            tile_count_B=1,
+            tile_count_B=tile_cnt if is_perf else 1,
             tile_count_res=tile_cnt,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": formats.input_format.is_32_bit(),
+        "compile_time_formats": True,
+    }
+    if not is_perf:
+        test_config_kwargs["disable_format_inference"] = True
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
     return res_tensor, golden_input
 
@@ -162,14 +233,35 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
     num_time_tiles=[1, 2, 4],
 )
 def test_sfpu_ema(dest_acc, num_time_tiles):
-    res_tensor, golden_input = _run_ema_on_device(
-        EMA_ALPHA, EMA_BETA, num_time_tiles, dest_acc
+    res_tensor, golden_input = _run_sfpu_ema(
+        EMA_ALPHA, EMA_BETA, dest_acc, num_time_tiles=num_time_tiles
     )
     golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
 
     assert passed_test(
         golden_tensor, res_tensor, DataFormat.Float16_b
     ), "EMA result does not match golden"
+
+
+# One axis, so pytest's own parametrize: the harness helper hands a single axis over as a tuple.
+@pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=["dest_acc:No", "dest_acc:Yes"],
+)
+def test_sfpu_ema_after_binary_init(dest_acc):
+    res_tensor, golden_input = _run_sfpu_ema(
+        EMA_ALPHA,
+        EMA_BETA,
+        dest_acc,
+        num_time_tiles=AFTER_INIT_NUM_TIME_TILES,
+        binary_init_before_ema=True,
+    )
+    golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
+
+    assert passed_test(
+        golden_tensor, res_tensor, DataFormat.Float16_b
+    ), "EMA result after an eltwise binary init does not match golden"
 
 
 @pytest.mark.nightly
@@ -193,7 +285,9 @@ def test_sfpu_ema_alpha_sweep(alpha_index, dest_acc):
     alpha = float(torch.tensor(alpha_index / _ALPHA_STEPS, dtype=torch.float32))
     beta = float(torch.tensor(1.0 - alpha, dtype=torch.float32))
 
-    res, golden_input = _run_ema_on_device(alpha, beta, SWEEP_NUM_TIME_TILES, dest_acc)
+    res, golden_input = _run_sfpu_ema(
+        alpha, beta, dest_acc, num_time_tiles=SWEEP_NUM_TIME_TILES
+    )
     golden = _ema_golden_fp64(golden_input, alpha, beta)
 
     got = res.to(torch.float64)

@@ -157,3 +157,53 @@ def test_producer_llama_gqa_rejects_missing_layer(gqa_trace, expect_error):
     table.foreign.add((31, 0))
     with expect_error(KeyError, "no fabric node"):
         producer._read_slot_kv_and_check_pcc(table, devices, 1, 33, trace)
+
+
+def _golden_metadata(path, **fields):
+    (path / "metadata.json").write_text(json.dumps(fields))
+    return path
+
+
+@pytest.fixture
+def pcc_window_env(monkeypatch):
+    for name in (
+        "PREFILL_PCC_TAIL_WINDOW",
+        "PREFILL_PCC_WINDOW_START",
+        "PREFILL_PCC_WINDOW_END",
+        "PREFILL_PCC_GOLDEN_OFFSET",
+        "PREFILL_PCC_GOLDEN_LEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.parametrize(
+    "capture_rows, real_len, expected",
+    [
+        ((250880, 256000), 256000, (250880, 0, 5120, 0)),
+        ((250880, 256000), 253440, (250880, 0, 2560, 0)),
+        ((100, 300), 300, (96, 4, 200, 0)),
+    ],
+    ids=["tail", "truncated-request", "unaligned-start"],
+)
+def test_pcc_window_follows_capture_rows(tmp_path, pcc_window_env, capture_rows, real_len, expected):
+    trace = _golden_metadata(tmp_path, token_ids=[], capture_rows=list(capture_rows))
+    assert producer._resolve_pcc_window(trace, real_len, 32) == expected
+
+
+def test_pcc_window_caps_prefix_golden_at_its_length(tmp_path, pcc_window_env):
+    trace = _golden_metadata(tmp_path, token_ids=list(range(4096)))
+    assert producer._resolve_pcc_window(trace, 8192, 32) == (0, 0, 4096, 0)
+
+
+def test_pcc_window_rejects_request_short_of_capture(tmp_path, pcc_window_env, expect_error):
+    trace = _golden_metadata(tmp_path, token_ids=[], capture_rows=[250880, 256000])
+    with expect_error(ValueError, "never reaches the captured window"):
+        producer._resolve_pcc_window(trace, 250880, 32)
+
+
+def test_pcc_window_rejects_golden_len_cap_on_windowed_golden(tmp_path, pcc_window_env, expect_error):
+    trace = _golden_metadata(tmp_path, token_ids=[], capture_rows=[250880, 256000])
+    pcc_window_env.setenv("PREFILL_PCC_GOLDEN_LEN", "56320")
+    with expect_error(ValueError, "PREFILL_PCC_GOLDEN_LEN caps the compare"):
+        producer._resolve_pcc_window(trace, 256000, 32)

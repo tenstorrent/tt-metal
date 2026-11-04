@@ -15,7 +15,7 @@ struct IndexedFillParams {
     int64_t dim;
     // Worker grid chosen for this op: defaults to all worker cores; may be restricted by
     // sharded output, sharded input native path, or explicit memory_config.
-    CoreRangeSet worker_grid;
+    tt::tt_metal::CoreRangeSet worker_grid;
 };
 
 struct IndexedFillInputs {

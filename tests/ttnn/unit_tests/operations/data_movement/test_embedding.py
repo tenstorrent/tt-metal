@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 
@@ -376,13 +376,14 @@ def test_tiled(
     assert_equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim, vocabulary_size", [(10, 96, 2048, 128256)])
 @pytest.mark.parametrize(
-    "output_memory_layout, num_cores_x, num_cores_y",
+    "batch_size, sentence_size, hidden_embedding_dim, vocabulary_size, output_memory_layout, num_cores_x, num_cores_y",
     [
-        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 8, 4),
-        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 6, 1),
-        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, 4, 6),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.WIDTH_SHARDED, 8, 4),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 6, 1),
+        (10, 96, 2048, 128256, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 4, 6),
+        # Shard too wide for a full-row staging buffer next to it: must chunk.
+        (1, 256, 17408, 1024, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 8, 1),
     ],
 )
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -773,3 +774,132 @@ def test_embedding_chunked_partial_last_chunk(
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
+
+
+def _embedding_indices(shape, vocabulary_size, embeddings_type):
+    """Random indices valid for the embeddings type; PADDED gets every fifth index set to its pad token."""
+    if embeddings_type == ttnn.EmbeddingsType.BINARY:
+        vocabulary_size = 2
+    indices = torch.randint(0, vocabulary_size, shape)
+    pad_token = None
+    if embeddings_type == ttnn.EmbeddingsType.PADDED:
+        pad_token = vocabulary_size - 1
+        indices[..., ::5] = pad_token
+    return indices, vocabulary_size, pad_token
+
+
+def _indices_to_device(indices, index_dtype, layout, device):
+    torch_indices = indices.to(torch.bfloat16) if index_dtype == ttnn.bfloat16 else indices
+    return ttnn.from_torch(torch_indices, dtype=index_dtype, layout=layout, device=device)
+
+
+# Row-major indices and output (RM program factory) for every embeddings type and index dtype. Long
+# sentences make each core re-read several blocks of indices into its index scratchpad.
+@pytest.mark.parametrize("index_dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+@pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim", [(3, 257, 128), (9, 512, 768)])
+def test_embedding_rm_index_dtypes_and_types(
+    device, index_dtype, embeddings_type, batch_size, sentence_size, hidden_embedding_dim
+):
+    torch.manual_seed(0)
+    indices, vocabulary_size, pad_token = _embedding_indices((batch_size, sentence_size), 250, embeddings_type)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    input_tensor = _indices_to_device(indices, index_dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
+# Row-major indices with a height-sharded row-major output: the reader writes its rows straight into
+# its own output shard (no writer kernel).
+@pytest.mark.parametrize("index_dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+@pytest.mark.requires_grid_size((4, 1))
+def test_embedding_rm_height_sharded_output(device, index_dtype, embeddings_type):
+    torch.manual_seed(0)
+    batch_size, sentence_size, hidden_embedding_dim, num_cores = 2, 128, 64, 4
+    indices, vocabulary_size, pad_token = _embedding_indices((batch_size, sentence_size), 200, embeddings_type)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (batch_size * sentence_size // num_cores, hidden_embedding_dim), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    input_tensor = _indices_to_device(indices, index_dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=output_mem_config,
+    )
+
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
+# A sharded row-major output must be in L1: the reader writes rows straight into its own shard.
+def test_embedding_rm_dram_sharded_output_rejected(device, expect_error):
+    batch_size, sentence_size, hidden_embedding_dim, vocabulary_size = 2, 128, 64, 200
+    indices = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (batch_size * sentence_size, hidden_embedding_dim), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    input_tensor = _indices_to_device(indices, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Embedding sharded Row Major output must be in L1"):
+        ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+
+
+# Tile-layout indices (tilized-indices program factory) for every embeddings type and index dtype.
+# The larger case makes each core re-read its index scratchpad: work is split in 16-row units, so
+# the sentence is scaled with the grid to give every core more than one index tile.
+@pytest.mark.parametrize("index_dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+@pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim", [(1, 32, 64), (2, 640, 128)])
+def test_embedding_tiled_input_index_dtypes_and_types(
+    device, index_dtype, embeddings_type, batch_size, sentence_size, hidden_embedding_dim
+):
+    torch.manual_seed(0)
+    if sentence_size > 32:
+        grid = device.compute_with_storage_grid_size()
+        sentence_size = max(sentence_size, 32 * grid.x * grid.y)
+    indices, vocabulary_size, pad_token = _embedding_indices((batch_size, sentence_size), 250, embeddings_type)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    input_tensor = _indices_to_device(indices, index_dtype, ttnn.TILE_LAYOUT, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))

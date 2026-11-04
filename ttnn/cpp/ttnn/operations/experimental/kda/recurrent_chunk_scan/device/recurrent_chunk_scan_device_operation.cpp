@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -115,7 +116,22 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
+        check_summary_memory_layout(attrs.output_mem_config, operation_name, "memory_config");
+        // The summary publishes one tile row of a core's value block per destination-register packet.
+        const auto distribution = kda_factory_detail::distribute_value_blocks(
+            in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);
+        const uint32_t dest_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
+        TT_FATAL(
+            distribution.value_tiles_per_core <= dest_tiles,
+            "{}: a summary core's {} value tiles exceed the {} destination-register tiles of this compute config",
+            operation_name,
+            distribution.value_tiles_per_core,
+            dest_tiles);
     }
+    TT_FATAL(
+        attrs.mode == RecurrentChunkScanMode::SUMMARY || (!attrs.tail && attrs.init),
+        "{}: tail and init apply only to the summary",
+        operation_name);
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -123,21 +139,17 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
     const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
-    const auto state_layout = TensorLayout(
-        summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // Summary precision and structure are independent of actual_start. Only live
-    // head/tail slots are defined; unsplit execution defines the head pair.
-    const auto first_shape =
-        summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
-                : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
-    spec_return_value_t specs = {
-        TensorSpec(first_shape, output_layout),
-        TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
+    const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // Summary structure is independent of actual_start: one [A | B] slot per segment kind.
     if (summary) {
-        specs.push_back(TensorSpec(first_shape, output_layout));
-        specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout));
+        const uint32_t slots = attrs.tail ? 2 : 1;
+        return {TensorSpec(
+            Shape({slots, attrs.batch_heads, attrs.key_dim, attrs.key_dim + attrs.value_dim}), output_layout)};
     }
-    return specs;
+    return {
+        TensorSpec(
+            Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}), output_layout),
+        TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -206,7 +218,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    const std::optional<Tensor>& actual_end) {
+    const std::optional<Tensor>& actual_end,
+    bool tail,
+    bool init) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -220,6 +234,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .value_dim = value_shape[3],
             .groups_per_head = groups_per_head,
             .mode = mode,
+            .tail = tail,
+            .init = init,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},

@@ -4,18 +4,17 @@
 
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
+#include <internal/l1_ecc_halt.hpp>
 #include "system_memory_manager.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
-#include <optional>
 #include <thread>
 #include <string>
-#include <tuple>
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
@@ -26,13 +25,12 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/kernels/cq_prefetch.hpp"
-#include <impl/debug/inspector/inspector.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/device/device_manager.hpp>
@@ -61,7 +59,9 @@ void loop_and_wait_with_timeout(
     std::chrono::duration<float> timeout_duration,
     const GetProgress& get_progress,
     ContextId context_id,
+    ChipId device_id,
     std::atomic<bool>* exit_condition = nullptr) {
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(tt::tt_metal::MetalContext::instance(context_id), device_id);
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -98,9 +98,11 @@ void loop_and_wait_with_timeout(
             auto elapsed = std::chrono::duration<float>(current_time - last_progress_time).count();
 
             if (elapsed >= timeout_duration.count()) {
+                ecc_watch.check_now();
                 on_timeout();
                 break;
             }
+            ecc_watch.poll();
 
             // Sleep briefly to avoid busy-waiting
             std::this_thread::yield();
@@ -110,6 +112,7 @@ void loop_and_wait_with_timeout(
             if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
                 break;
             }
+            ecc_watch.poll();
             func_body();
         } while (wait_condition());
     }
@@ -127,7 +130,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
+    prefetch_q_phases(num_hw_cqs, 1) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -745,7 +750,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             fetch_on_timeout,
             timeout_duration,
             get_dispatch_progress,
-            this->context_id);
+            this->context_id,
+            this->device_id);
     };
 
     wait_for_fetch_q_space();
@@ -756,6 +762,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
+        if (mem_map.prefetch_q_cached()) {
+            this->prefetch_q_phases[cq_id] ^= 1U;
+        }
         wait_for_fetch_q_space();
     }
 }
@@ -806,6 +815,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_timeout_duration_for_operations(),
         get_dispatch_progress,
         this->context_id,
+        this->device_id,
         &exit_condition);
 
     return write_ptr_and_toggle;
@@ -885,6 +895,16 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     // prefetcher is MSB of FetchQ entry.
     if (stall_prefetcher) {
         entry_val |= 1u << shift_for_msb;
+    }
+
+    if (dispatch_mem_map.prefetch_q_cached()) {
+        constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+        TT_ASSERT(entry_bytes == 4, "Cached fetch queue entries must be 4 bytes");
+        // The entry holds a uint32_t size shifted down by PREFETCH_Q_LOG_MINSIZE, so it never reaches the phase bit.
+        static_assert(
+            sizeof(command_size_B) * 8 - DispatchSettings::PREFETCH_Q_LOG_MINSIZE <= phase_bit,
+            "FetchQ entry size field would overlap the phase bit");
+        entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
     }
 
     if (entry_bytes == 2) {

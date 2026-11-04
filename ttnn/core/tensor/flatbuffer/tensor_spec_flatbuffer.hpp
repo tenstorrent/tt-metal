@@ -12,8 +12,8 @@
 namespace ttnn {
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set);
-CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set);
+    flatbuffers::FlatBufferBuilder& builder, const tt::tt_metal::CoreRangeSet& core_range_set);
+tt::tt_metal::CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set);
 
 flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type);
 tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type);

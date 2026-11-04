@@ -4,55 +4,55 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
+#include <functional>
+
+#include <algorithm>
+#include <array>
+
+#include <optional>
+
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
+
 #include "all_gather_async_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AllGatherProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link = 0;
-    uint32_t num_workers_per_direction = 0;
-    uint32_t num_mux_cores_per_direction_per_link = 0;
-    uint32_t num_cores_per_link = 0;
+// Returned by build_all_gather_async_minimal_default_program_descriptor: where the all-gather's reader and writer
+// landed in the caller's ProgramDescriptor (kernel indices double as kernel handles in a Program built from it).
+struct AllGatherDescriptorArtifacts {
+    size_t reader_kernel_index = 0;
+    size_t writer_kernel_index = 0;
 };
 
 struct DefaultMeshWorkloadFactory {
-    using shared_variables_t = AllGatherProgramArtifacts;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const AllGatherAsyncParams& operation_attributes,
         const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
-using AllGatherProgramArtifacts = experimental::prim::AllGatherProgramArtifacts;
+using AllGatherDescriptorArtifacts = experimental::prim::AllGatherDescriptorArtifacts;
 
-// Builder function that creates kernels and returns artifacts
-AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
-    tt::tt_metal::Program& program,
+// Appends the all-gather's CB, kernels, semaphores and fabric mux kernels to `desc`. Tensor addresses are buffer
+// bindings; the GlobalSemaphore addresses are not in the program hash, so the caller re-applies them on every cache
+// hit with apply_all_gather_async_minimal_default_semaphore_args().
+AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
@@ -75,20 +75,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-// Runtime argument override function
-void all_gather_async_minimal_default_helper_override_runtime_arguments(
+// Cache-hit refresh for a Program built from build_all_gather_async_minimal_default_program_descriptor: writes the
+// current barrier / semaphore addresses into the reader's and writer's common runtime args.
+void apply_all_gather_async_minimal_default_semaphore_args(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
+    const AllGatherDescriptorArtifacts& artifacts,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& output);
+    const std::vector<GlobalSemaphore>& semaphore);
 
 }  // namespace ttnn

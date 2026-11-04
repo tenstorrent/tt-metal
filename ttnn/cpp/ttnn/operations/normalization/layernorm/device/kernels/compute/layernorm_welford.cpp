@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/welford.h"
 #include "api/compute/transpose.h"
@@ -101,10 +102,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out = dfb_fusion;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_fusion_obj;
+    auto& dfb_im_or_out_obj = dfb_fusion_obj;
 #else
     constexpr auto dfb_im_or_out = dfb_out;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_out_obj;
+    auto& dfb_im_or_out_obj = dfb_out_obj;
 #endif
 
     //  Either in or in + b if doing fused pre-add
@@ -113,7 +114,7 @@ void kernel_main() {
     DataflowBuffer dfb_x_obj(dfb_x);
 #else
     constexpr auto dfb_x = dfb_in;
-    DataflowBuffer& dfb_x_obj = dfb_in_obj;
+    auto& dfb_x_obj = dfb_in_obj;
 #endif
 
     // Welford-fp32 alias of dfb_x. Shares SRAM with dfb_x but has its own buffer index
@@ -127,7 +128,7 @@ void kernel_main() {
 #else
     constexpr bool welford_fp32_alias = false;
     constexpr auto dfb_x_welford = dfb_x;
-    DataflowBuffer& dfb_x_welford_obj = dfb_x_obj;
+    auto& dfb_x_welford_obj = dfb_x_obj;
 #endif
 
 #ifdef COMPACT_FP32_FINALIZER
@@ -138,8 +139,8 @@ void kernel_main() {
 #else
     constexpr auto dfb_ex_welford = dfb_ex;
     constexpr auto dfb_ex2pe_fp32 = dfb_ex2pe;
-    DataflowBuffer& dfb_ex_welford_obj = dfb_ex_obj;
-    DataflowBuffer& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
+    auto& dfb_ex_welford_obj = dfb_ex_obj;
+    auto& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
 #endif
 
     constexpr uint32_t dst0 = 0;
@@ -152,6 +153,10 @@ void kernel_main() {
     // Unlike reductions with observable output padding, LayerNorm can therefore reuse var_dst.
     // A fourth retained input would alias slot 3 and overwrite the first one.
     constexpr uint32_t num_front_retained_limit = 3;
+    // The finaliser writes only the statistics row of mean_dst, and the compact normaliser's column broadcast
+    // multiplies the other lanes by zero, so they must be finite. A last tile's padding can be inf or NaN: with two
+    // tiles the first one goes to mean_dst and the last one to slot 3. With one tile mean_dst is cleared instead.
+    constexpr uint32_t first_input_dst = Wt == 2 ? mean_dst : retained_input_dst;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the statistics LLK is given transposed data, skip some rows when
@@ -241,11 +246,15 @@ void kernel_main() {
 #endif
 
         // Calculate E[x] and Var[x] using stable shifted two-pass statistics.
+        tile_regs_acquire();
+        if constexpr (compact_fp32_finalizer && Wt == 1) {
+            fill_tile_init();
+            fill_tile(mean_dst, 0.0f);
+        }
         reconfig_data_format_srca(dfb_x_welford);
         // Reconfigure the transpose op for the statistics intake buffer. When the alias is active,
         // dfb_x_welford has UnpackToDest mode so transpose_tile preserves fp32 precision.
         transpose_init(dfb_x_welford);
-        tile_regs_acquire();
         two_pass_stats_init_shifted();
         // Process all but the last tile
         for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
@@ -255,7 +264,7 @@ void kernel_main() {
                 dfb_x_obj.wait_front(static_cast<uint16_t>(wt + 1));
             }
             const uint32_t stats_input_dst =
-                wt < num_front_retained_limit ? (wt == 0 ? retained_input_dst : wt) : input_dst;
+                wt < num_front_retained_limit ? (wt == 0 ? first_input_dst : wt) : input_dst;
             transpose_tile(dfb_x_welford, wt, stats_input_dst);
             if (wt == 0) {
                 two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
@@ -276,7 +285,7 @@ void kernel_main() {
         }
         constexpr uint32_t last_tile_idx = Wt - 1;
         constexpr uint32_t last_pass1_dst = last_tile_idx < num_front_retained_limit
-                                                ? (last_tile_idx == 0 ? retained_input_dst : last_tile_idx)
+                                                ? (last_tile_idx == 0 || Wt == 2 ? retained_input_dst : last_tile_idx)
                                                 : input_dst;
         transpose_tile(dfb_x_welford, Wt - 1, last_pass1_dst);
         if constexpr (Wt == 1) {
@@ -289,7 +298,7 @@ void kernel_main() {
 
         constexpr uint32_t num_front_retained = Wt < num_front_retained_limit ? Wt : num_front_retained_limit;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
-            const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;
+            const uint32_t stats_input_dst = wt == 0 ? first_input_dst : (wt == last_tile_idx ? last_pass1_dst : wt);
             two_pass_stats_update_rows(stats_input_dst, 0, wt == last_tile_idx ? last_tile_rows : tile_width);
         }
         if constexpr (Wt > num_front_retained) {
@@ -503,10 +512,10 @@ void kernel_main() {
                 // added, and straight to the output otherwise.
 #ifdef FUSE_BETA
                 constexpr auto dfb_outg = dfb_fusion;
-                DataflowBuffer& dfb_outg_obj = dfb_fusion_obj;
+                auto& dfb_outg_obj = dfb_fusion_obj;
 #else
                 constexpr auto dfb_outg = dfb_out;
-                DataflowBuffer& dfb_outg_obj = dfb_out_obj;
+                auto& dfb_outg_obj = dfb_out_obj;
 #endif
                 mul_bcast_rows_init(dfb_fusion, dfb_gamma);
                 if (ncht == 0) {
@@ -574,4 +583,25 @@ void kernel_main() {
         }
 
     }  // NCHt loop
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps_obj.pop_front(1);
+
+    // Gamma and beta are read by tile offset on every block of every NCHt row, so the first row
+    // waits block.start() + block.full_block_size() per block and leaves gamma and beta in place
+    // for the rows that follow. That wait grows block by block and ends at the last block's start
+    // plus a whole block, the value total_buffer_size holds: total_with_remainder() reduces to
+    // last_start + blk. It is also what the reader pushes in total, one full block per block.
+    // So pop total_buffer_size once here rather than per block.
+#ifdef FUSE_GAMMA
+    if constexpr (do_gamma) {
+        DataflowBuffer(dfb_gamma).pop_front(static_cast<uint16_t>(total_buffer_size));
+    }
+#endif
+#ifdef FUSE_BETA
+    if constexpr (do_beta) {
+        DataflowBuffer(dfb_beta).pop_front(static_cast<uint16_t>(total_buffer_size));
+    }
+#endif
 }

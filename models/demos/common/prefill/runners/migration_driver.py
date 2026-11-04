@@ -4,7 +4,6 @@
 
 import json
 import os
-import struct
 import sys
 import time
 
@@ -102,11 +101,18 @@ class MigrationDriver:
         self.client.connect_to(remote_endpoint_id=self.dest_endpoint_id, role=role, service_name=service_name)
         logger.success(f"[migration_driver] cross-endpoint pairing established with remote_ep={self.dest_endpoint_id}")
 
-    def run(self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None) -> list:
+    def run(
+        self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None, kv_table=None
+    ) -> list:
         if self.client is None:
             raise RuntimeError("[migration_driver] run() called before attach()")
+        if os.environ.get("PREFILL_DFLASH", "0") == "1" and (
+            kv_table is None
+            or not any(kv_table.config_name(i).startswith("dflash_") for i in range(kv_table.num_configs()))
+        ):
+            raise RuntimeError("DFlash migration requires the published KV table with drafter configs")
         triples = self._resolve_pairs(stats, num_slots=num_slots)
-        self._issue(triples)
+        self._issue(triples, kv_table=kv_table)
         self._write_handoff(triples, slot_traces, pools_by_trace)
         self._write_done_sentinel(triples)
         return triples
@@ -173,17 +179,28 @@ class MigrationDriver:
             )
         return triples
 
-    def _issue(self, triples: list) -> int:
-        layer_ranges = [(int(l), int(l) + 1) for l in self.layers] if self.layers else [(0, self.num_layers)]
+    def _issue(self, triples: list, *, kv_table=None) -> int:
+        from models.demos.common.prefill.runners import prefill_producer as producer
+
+        # DFlash context caches occupy semantic rows after the target's layers.
+        # The published table, shared with decode, is authoritative for that extent;
+        # NUM_LAYERS alone omits every draft cache even when its configs are exported.
+        num_layers = self.num_layers
+        if kv_table is not None:
+            for config_id in range(kv_table.num_configs()):
+                if kv_table.config_name(config_id).startswith("dflash_"):
+                    num_layers = max(num_layers, int(kv_table.config(config_id).num_layers))
+        layers = [int(l) for l in self.layers] if self.layers else range(num_layers)
         if self.layers:
-            logger.info(f"[migration_driver] migrating layer subset {self.layers} (one migrate per layer)")
+            logger.info(f"[migration_driver] migrating layer subset {self.layers}")
         migrated = 0
         next_uuid = 1
         for src_slot, dst_slot, real_len in triples:
-            for layer_start, layer_end in layer_ranges:
+            runs = _layer_runs(layers, real_len, producer.ADAPTER.layer_position_range)
+            for layer_start, layer_end, pos_start, pos_end in runs:
                 logger.info(
                     f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} ep={self.dest_endpoint_id} "
-                    f"layers=[{layer_start},{layer_end}) pos=[0,{real_len})"
+                    f"layers=[{layer_start},{layer_end}) pos=[{pos_start},{pos_end})"
                 )
                 uuid = next_uuid
                 next_uuid += 1
@@ -194,13 +211,12 @@ class MigrationDriver:
                     dst_slot=dst_slot,
                     layer_start=layer_start,
                     layer_end_exclusive=layer_end,
-                    pos_start=0,
-                    pos_end_exclusive=real_len,
+                    pos_start=pos_start,
+                    pos_end_exclusive=pos_end,
                 )
                 self.client.wait_complete(token, self.timeout_ms)
             logger.success(
-                f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete "
-                f"({len(layer_ranges)} layer range(s))"
+                f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(runs)} layer run(s))"
             )
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
@@ -269,6 +285,24 @@ class MigrationDriver:
         return pairs
 
 
+def _layer_runs(layers, real_len: int, position_range) -> list:
+    """Consecutive layers sharing a position range, as ``(layer_start, layer_end, pos_start, pos_end)``.
+
+    One /migrate applies one position range to every config of its layers, so consecutive layers share
+    a call exactly when their ranges are equal. A Snapshot config moves whole whatever the range, so
+    Kimi-K3's KDA layers (``[0, W)``) share a call with its MLA layers (``[0, real_len)``) when
+    ``real_len == W``.
+    """
+    runs = []
+    for layer in sorted(int(l) for l in layers):
+        pos_start, pos_end = (int(p) for p in position_range(layer, real_len))
+        if runs and runs[-1][1] == layer and runs[-1][2:] == (pos_start, pos_end):
+            runs[-1] = (runs[-1][0], layer + 1, pos_start, pos_end)
+        else:
+            runs.append((layer, layer + 1, pos_start, pos_end))
+    return runs
+
+
 def _cache_plan(table, migrated_layers) -> list:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -289,7 +323,8 @@ def _cache_plan(table, migrated_layers) -> list:
     plan = []
     for cfg_id in range(table.num_configs()):
         cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
-        is_index = cfg_id == 1 and n_model_configs > 1
+        kind = adapter.cache_kind(cfg_id) if cfg_id < n_model_configs else "other"
+        is_index = kind == "index"
         n_rows = int(cfg.num_layers)
         rows, why = None, ""
         if rows_hook is not None:
@@ -323,7 +358,7 @@ def _cache_plan(table, migrated_layers) -> list:
                 "config_id": cfg_id,
                 "rows": rows,
                 "head_dim": None if head_dim is None else int(head_dim),
-                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "kind": kind,
                 "unaddressed": unaddressed,
                 "why": why,
             }
@@ -373,6 +408,12 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
     for entry in plan:
         cfg_id, rows = entry["config_id"], entry["rows"]
         if rows is None:
+            continue
+        if entry["kind"] not in ("kvpe", "index"):
+            # Not a token-addressed cache (Kimi-K3's KDA state configs); nothing to decode into KV rows.
+            logger.info(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} ({entry['kind']}) is not a KV cache; not dumped."
+            )
             continue
         if entry["head_dim"] is None:
             logger.warning(
@@ -460,16 +501,24 @@ def _verify_dst_vs_src_bytes(
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            n_full = (real_len // stride) * stride
-            tail_tokens += real_len - n_full
+            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, the
+            # whole synthetic window on Kimi-K3's KDA configs (a Snapshot, moved whole).
+            spans = {}
+            for layer, _ in picked:
+                pos_start, pos_end = producer.ADAPTER.layer_position_range(layer, real_len)
+                pos_end = min(int(pos_end), int(tcfg.max_sequence_length))
+                n_full = pos_start + ((pos_end - pos_start) // stride) * stride
+                tail_tokens += pos_end - n_full
+                spans[layer] = (int(pos_start), n_full)
+            reads = sum((end - start) // stride for start, end in spans.values())
             logger.info(
                 f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
-                f"{len(picked)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
-                f"= {2 * len(picked) * (n_full // stride)} UMD read(s)"
+                f"{len(picked)} layer(s), {reads} chunk(s) of {stride} position(s) = {2 * reads} UMD read(s)"
             )
             for layer, row in picked:
+                pos_start, n_full = spans[layer]
                 mismatches_in_layer = 0
-                for pos in range(0, n_full, stride):
+                for pos in range(pos_start, n_full, stride):
                     src_loc = table.lookup(row, pos, src, cfg_id)
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
                     if src_loc.size_bytes == 0 and dst_loc.size_bytes == 0:
@@ -804,34 +853,49 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
+    from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+        connect_layer_completion_channel,
+        start_layer_completion_drain,
+        wait_for_layer_completions,
+    )
+
     kv_table = producer._read_kv_chunk_table(timeout_s)
-    ack_channel = producer._connect_layer_ack_channel(timeout_s)
+    completion_channel = connect_layer_completion_channel(timeout_s)
 
     driver.attach()
 
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+    def push_forward(pushes: list) -> float:
+        for p in pushes:
+            logger.info(
+                f"[migration_driver] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
+            )
         push_start = time.perf_counter()
         producer._push(
             service,
             payload_bytes,
-            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl)),
-            producer._mtp_rows(pool, actual_start, actual_isl),
-            producer._pack_metadata(slot_id, actual_start, actual_end),
+            *producer._forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]),
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    stats = producer.run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
-    logger.info(
-        f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
-        f"requests={stats.completed}"
+    chunk_layers = producer._completion_layers_per_chunk(kv_table)
+    # Drains while the schedule runs; see prefill_producer.main.
+    drain = start_layer_completion_drain(
+        completion_channel, num_layers=producer._completion_layer_bound(chunk_layers), chunk_layers=chunk_layers
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    try:
+        stats = producer.run_schedule(cfg, push_fn=push_forward)
+        service.barrier()
+        logger.info(
+            f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
+            f"requests={stats.completed}"
+        )
+        wait_for_layer_completions(drain, chunk_layers * stats.total_chunks)
+    finally:
+        if drain is not None:
+            drain.stop()
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)
@@ -865,6 +929,7 @@ def main() -> None:
         triples = driver.run(
             stats,
             num_slots=kv_table.config().num_slots if kv_table is not None else None,
+            kv_table=kv_table,
             slot_traces=slot_traces,
             pools_by_trace=pools_by_trace,
         )
@@ -906,15 +971,8 @@ def main() -> None:
         all_ranks_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        sentinel = struct.pack("<iii", -1, -1, -1)
         logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        producer._push(
-            service,
-            payload_bytes,
-            producer._h2d_rows(producer._chunk_slice([], 0)),
-            producer._mtp_rows([], 0),
-            sentinel,
-        )
+        producer._push(service, payload_bytes, *producer._shutdown_payload())
         service.barrier()
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")

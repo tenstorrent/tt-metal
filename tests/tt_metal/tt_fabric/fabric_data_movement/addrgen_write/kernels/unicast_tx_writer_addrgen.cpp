@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -75,11 +75,8 @@ void kernel_main() {
     // TEMP (2D API): manual packet header.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
 
-    // Fabric route setup (temporary 2D API):
+    // Fabric route setup
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
 
     // Route setup - required for Basic and WithState variants
     if constexpr (api_variant == ApiVariant::Basic || api_variant == ApiVariant::WithState) {

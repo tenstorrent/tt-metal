@@ -4,22 +4,22 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
-#include <tt_stl/span.hpp>
-// clang-format off
 #include "hal.hpp"
+#include "binary_metadata.hpp"
 #include "tt_memory.h"
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
-// clang-format on
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
 class MetalContext;
@@ -32,6 +32,15 @@ namespace tt::llrt {
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
+    const std::string& path,
+    ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
+    const std::function<void(ll_api::memory&)>& update_callback = nullptr);
+
+// Return the host-side metadata harvested from a binary's ELF (op-to-op R/W inference, etc.). Shares the
+// same path-keyed cache and single read path as get_risc_binary: a pure cache hit if the binary was
+// already loaded, otherwise loaded once with LOADING (only consulted on first load; the metadata itself
+// is loading-independent -- it lives in non-alloc ELF sections). The returned reference is stable.
+const ll_api::BinaryMetadata& get_binary_metadata(
     const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     const std::function<void(ll_api::memory&)>& update_callback = nullptr);
@@ -77,6 +86,46 @@ void write_binary_to_address(
     ChipId chip_id,
     const tt::tt_metal::CoreCoord& core,
     uint32_t address);
+
+// Ethernet firmware execution-stage breadcrumb helpers (see eth_fw_stage_e in the Blackhole eth_fw_api.h).
+//
+// These read/decode the always-on eth_fw_stage breadcrumb, which records the coarse layer of the
+// ethernet firmware stack a core is executing (base FW vs Metal application FW vs a launched kernel).
+// Unlike watcher waypoints, the breadcrumb is written unconditionally by the firmware, so it can be
+// inspected on a stalled core via a plain UMD L1 read without a watcher build or a live repro.
+
+// Decode a raw eth_fw_stage value into a short human-readable label.
+std::string eth_fw_stage_to_string(uint32_t stage);
+
+// Index of the eth firmware stage slot written by a processor of core_type: the physical erisc it runs on.
+uint32_t eth_fw_stage_slot(const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, uint32_t processor);
+
+// Read the raw eth firmware stage breadcrumb of an ethernet core via UMD, one slot per physical erisc, including
+// slots no Metal processor writes (base FW's erisc0 in single-erisc mode). Empty when core_type doesn't map it.
+std::vector<uint32_t> read_eth_fw_stage_slots(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type);
+
+// Read the eth firmware stage breadcrumb of every processor running Metal FW on an ethernet core via UMD,
+// indexed by logical processor (as in get_hw_thread_idx()) and taken from the slot of the physical erisc that
+// processor runs on. Empty when core_type doesn't map the breadcrumb.
+std::vector<uint32_t> read_eth_fw_stages(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type);
+
+// Format slots returned by read_eth_fw_stage_slots() as "erisc<N>=<stage>" pairs joined by separator, marking a
+// slot no Metal processor of core_type writes (base FW's) as "erisc<N>(base)", or "n/a" when there are none.
+std::string format_eth_fw_stage_slots(
+    const tt_metal::Hal& hal,
+    tt_metal::HalProgrammableCoreType core_type,
+    const std::vector<uint32_t>& slots,
+    std::string_view separator = ", ");
 
 namespace internal_ {
 

@@ -86,8 +86,9 @@ void kernel_main() {
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_inp.pop_front(Wt);
-        cb_reduce.pop_front(1);
     }
+    // The reader pushes the reduce scaler once for all rows.
+    cb_reduce.pop_front(1);
 
     // if merge core, we need to do a final sum on the tile in cb_x2_idx and then write the result to cb_out_final_idx
     if (is_merge_core) {
@@ -107,8 +108,6 @@ void kernel_main() {
         cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);
         add_init(cb_x2_merge_idx, cb_zero_idx, true);

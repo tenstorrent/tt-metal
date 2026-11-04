@@ -26,6 +26,7 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from . import window_hash
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -48,6 +49,8 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+# counters.h counted_zones: a bit per fixed zone id (ZONE_ID_INIT 0, ZONE_ID_TILE_LOOP 1)
+COUNT_INIT, COUNT_TILE_LOOP = 1 << 0, 1 << 1
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -716,54 +719,47 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     how the perf kernels are written, not of the profiler, so it lives here and runs once per run.
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
-    Quasar has no entry rendezvous yet.
     """
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+    raw = profiler_data.zones().raw()
+    starts = raw[raw["type"] == "ZONE_START"]
+    if starts.empty:
         return
-    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
-    zones = profiler_data.zones().frame()
-    if zones.empty:
-        return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    begins = starts["timestamp"].to_numpy()
+    ends = raw[raw["type"] == "ZONE_END"]["timestamp"].to_numpy()
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
-    wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    span = {}
+    for key, begin, finish in zip(zip(starts[MARKER], starts["thread"]), begins, ends):
+        b, f = span.get(key, (begin, finish))
+        span[key] = (min(b, begin), max(f, finish))
+    wrappers = {
+        a
+        for (a, ta), (ba, fa) in span.items()
+        for (b, tb), (bb, fb) in span.items()
+        if ta == tb and a != b and ba <= bb <= fb <= fa
+    }
+    phases = {}
+    for (marker, _), (begin, finish) in span.items():
+        if marker not in wrappers:
+            b, f = phases.get(marker, (begin, finish))
+            phases[marker] = (min(b, begin), max(f, finish))
     prev = None
-    for row in phases.itertuples(index=False):
+    for marker, (first_open, last_close) in sorted(
+        phases.items(), key=lambda p: (p[1][0], p[0])
+    ):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
+            and marker not in NON_RENDEZVOUS_MARKERS
+            and prev[1] > first_open
         ):
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {marker} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
+        prev = (marker, last_close)
 
 
 RUN_TYPE_PRESETS = {
@@ -982,6 +978,18 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _read_counters_of_launch(self, variant_counter_results, run_index):
+        # A counted zone without its readout raises (counters.py) and fails the test instead of leaving a blank window.
+        if TestConfig.counted_zones_address() is None:
+            return  # ttsim: no launch word, nothing counts
+        counter_results = read_counters(
+            location=TestConfig.TENSIX_LOCATION,
+            zones=self.counted_zones,
+            token=self.launch_token,
+        )
+        counter_results["run_index"] = run_index
+        variant_counter_results.append(counter_results)
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
@@ -989,6 +997,7 @@ class PerfConfig(TestConfig):
         results = []
         counter_results_list = []
         code_sizes = {}
+        window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -1037,16 +1046,31 @@ class PerfConfig(TestConfig):
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
                     for c in components
                 )
+                window_rows += [
+                    (
+                        run_type.name,
+                        c,
+                        (
+                            window_hash.fingerprint(
+                                TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
+                            )
+                            if window_hash.enabled()
+                            else ""
+                        ),
+                    )
+                    for c in components
+                ]
 
             variant_raw_data = []
             variant_counter_results = []
+            # The measured launches count TILE_LOOP only: INIT's readout would sit between INIT and TILE_LOOP.
+            self.counted_zones = (
+                COUNT_TILE_LOOP if TestConfig.ENABLE_PERF_COUNTERS else 0
+            )
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
-                # Counter config is written by BRISC from built-in array (local L1 write).
-                # Python NOC write is skipped to avoid L1 controller state change that
-                # causes ~7 cycle overhead on Float16 unpack operations.
 
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
@@ -1054,32 +1078,27 @@ class PerfConfig(TestConfig):
                 assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    try:
-                        counter_results = read_counters(
-                            location=TestConfig.TENSIX_LOCATION
-                        )
-                        if counter_results is not None and not counter_results.empty:
-                            counter_results["run_index"] = run_index
-                            variant_counter_results.append(counter_results)
-                    except Exception as e:
-                        logger.warning("Error reading counters: {}", e)
+                    self._read_counters_of_launch(variant_counter_results, run_index)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
 
+            if TestConfig.ENABLE_PERF_COUNTERS:
+                # INIT counts in launches of its own, the same code up to INIT's end; their timing is not used.
+                self.counted_zones = COUNT_INIT
+                for run_index in range(run_count):
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    self._read_counters_of_launch(variant_counter_results, run_index)
+            self.counted_zones = 0
+
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            # A WC build intentionally suppresses ZONE_SCOPED timing events and
-            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
-            # so it still requires wall-clock stats even when counters are requested.
-            counter_only_build = (
-                TestConfig.ENABLE_PERF_COUNTERS
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            )
-            if not stats_df.empty or not counter_only_build:
-                PerfConfig._validate_profiler_stats(stats_df, run_type)
-                results.append(stats_df)
+            # Both builds record the zones' wall clock; a run without it fails, counters on included.
+            PerfConfig._validate_profiler_stats(stats_df, run_type)
+            results.append(stats_df)
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1124,6 +1143,19 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
+        window_hash.write_rows(
+            TestConfig.perf_run_dir(),
+            self.test_name,
+            PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
+            ),
+            window_rows,
+        )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:

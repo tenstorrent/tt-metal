@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -32,7 +33,6 @@ const KernelSpecName SH_WRITER{"sh_writer"};
 const KernelSpecName SH_COMPUTE{"sh_compute"};
 const DFBSpecName SH_IN{"sh_in"};
 const DFBSpecName SH_OUT{"sh_out"};
-const DFBSpecName SH_SHARDED_OUT{"sh_sharded_out"};
 const TensorParamName SH_INPUT{"sh_input"};
 const TensorParamName SH_OUTPUT{"sh_output"};
 
@@ -49,8 +49,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
     // WIDTH_SHARDED <-> BLOCK_SHARDED with a matching column shard width (enforced in validate()).
-    // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy via a dataflow
-    // buffer borrowed onto the output buffer), the executing core here may not be the physically-
+    // Unlike the same-shard-type out_sharded path below (a same-core SRAM-to-SRAM copy into the
+    // output shard through a LocalTensorAccessor), the executing core here may not be the physically-
     // owning core of the output shard, so a dedicated writer addresses the destination via
     // TensorAccessor page-id routing instead.
     bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
@@ -163,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .borrowed_from = src_sharded ? std::optional<TensorParamName>{SH_INPUT} : std::nullopt,
     };
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
@@ -175,19 +175,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     };
 
     Group<DataflowBufferSpec> dataflow_buffers = {std::move(in_dfb), std::move(out_dfb)};
-    const bool has_sharded_out_dfb = out_sharded && !cross_shard_type;
-    if (has_sharded_out_dfb) {
-        // The kernel advances the write pointer by aligned_page_size (which may be
-        // larger than block_row_size due to buffer alignment padding), so the buffer's
-        // entry size must match to avoid overflow.
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = SH_SHARDED_OUT,
-            .entry_size = aligned_page_size,
-            .num_entries = num_output_rows_unpadded,
-            .data_format_metadata = output_dfb_data_format,
-            .borrowed_from = SH_OUTPUT,
-        });
-    }
 
     /** reader
      */
@@ -237,33 +224,27 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                               "writer_unary_unpad_width_16_sharded.cpp"
                             : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
                               "writer_unary_unpad_batch_rows_sharded.cpp";
-        // SH_SHARDED_OUT is borrowed onto the output shard and this writer is its only toucher — it
-        // fills it by write pointer and nothing downstream drains it — so the writer binds both
-        // endpoints (a self-loop). Legal on Gen1 for a data-movement kernel; the kernel is unchanged.
-        writer.dfb_bindings = {
-            DFBBinding{
-                .dfb_spec_name = SH_OUT,
-                .accessor_name = "untilize_out",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            DFBBinding{
-                .dfb_spec_name = SH_SHARDED_OUT,
-                .accessor_name = "out",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = SH_SHARDED_OUT,
-                .accessor_name = "out",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            }};
-        writer.compile_time_args = {{"aligned_page_size", aligned_page_size}};
+        // The output shard lives on this same core, and only this writer accesses it: it writes the
+        // shard in place through a LocalTensorAccessor. A DFB borrowed onto the shard would need the
+        // writer bound as both its producer and consumer (a data-movement self-loop), which Gen2
+        // does not support.
+        writer.dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SH_OUT,
+            .accessor_name = "untilize_out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }};
+        writer.tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = SH_OUTPUT,
+            .accessor_name = "out",
+        }};
         if (unpad_tensor_w_16) {
-            writer.runtime_arg_schema = {
-                .runtime_arg_names = {"num_unpadded_output_rows", "num_padded_tiles_per_core"}};
+            writer.runtime_arg_schema = {.runtime_arg_names = {"num_padded_tiles_per_core"}};
         } else {
+            // The writer steps through the output shard by aligned_page_size per row, which may be
+            // larger than block_row_size due to buffer alignment padding.
+            writer.compile_time_args = {{"aligned_page_size", aligned_page_size}};
             writer.runtime_arg_schema = {
                 .runtime_arg_names = {
-                    "num_unpadded_output_rows",
                     "num_padded_tiles_per_batch",
                     "num_unpadded_rows_per_batch",
                     "padded_block_row_size_bytes",
@@ -311,7 +292,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             {"float32_dtype",
              (uint32_t)(input_dfb_data_format == tt::DataFormat::Float32 or
                         input_dfb_data_format == tt::DataFormat::UInt32 or
-                        input_dfb_data_format == tt::DataFormat::Int32)}};
+                        input_dfb_data_format == tt::DataFormat::Int32)},
+            {"one_byte_dtype",
+             (uint32_t)(input_dfb_data_format == tt::DataFormat::UInt8 ||
+                        input_dfb_data_format == tt::DataFormat::Int8)}};
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "num_rows_block",
@@ -328,12 +312,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     /** compute
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
-    if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
-        input_dfb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{SH_IN, UnpackMode::UnpackToDest}};
     }
 
@@ -414,16 +394,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         for (const auto& core : all_core_coords) {
             if (unpad_tensor_w_16) {
                 AddRuntimeArgsForNode(
-                    writer_run_args.runtime_arg_values,
-                    core,
-                    {{"num_unpadded_output_rows", num_output_rows_unpadded},
-                     {"num_padded_tiles_per_core", num_input_tiles}});
+                    writer_run_args.runtime_arg_values, core, {{"num_padded_tiles_per_core", num_input_tiles}});
             } else {
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values,
                     core,
-                    {{"num_unpadded_output_rows", num_output_rows_unpadded},
-                     {"num_padded_tiles_per_batch", ntiles_per_batch},
+                    {{"num_padded_tiles_per_batch", ntiles_per_batch},
                      {"num_unpadded_rows_per_batch", out_shard_spec.shape[0] / batch},
                      {"padded_block_row_size_bytes", shard_spec.shape[1] * output.element_size()},
                      {"unpadded_block_row_size_bytes", block_row_size},

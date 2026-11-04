@@ -4,9 +4,7 @@
 
 #include "mla_q_rope_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
-#include "mla_q_rope_program_factory.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::mla_q_rope::device {
@@ -15,39 +13,15 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "MlaQRope requires {} on device. Got {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "MlaQRope: {} buffer must be allocated.", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "MlaQRope requires {} TILE layout. Got {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "MlaQRope requires {} BFLOAT16. Got {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "MlaQRope requires {} INTERLEAVED. Got {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& q_in = tensor_args.q_in;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
     const auto& trans = tensor_args.trans_mat;
 
-    check_tensor(q_in, "q_in");
-    check_tensor(cos, "cos_cache");
-    check_tensor(sin, "sin_cache");
-    check_tensor(trans, "trans_mat");
+    check_device_tensor(q_in, "MlaQRope", "q_in");
+    check_device_tensor(cos, "MlaQRope", "cos_cache");
+    check_device_tensor(sin, "MlaQRope", "sin_cache");
+    check_device_tensor(trans, "MlaQRope", "trans_mat");
 
     TT_FATAL(
         q_in.device() == cos.device() && cos.device() == sin.device() && sin.device() == trans.device(),
@@ -159,24 +133,11 @@ MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_o
     return ttnn::create_device_tensor(spec, tensor_args.q_in.device());
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor). It is custom only to skip the
+// canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
-    // compile-time args, so a placement change must not reuse a cached program.
-    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
-        args,
-        tensor_args.q_in.dtype(),
-        tensor_args.q_in.logical_shape(),
-        tensor_args.cos_cache.logical_shape(),
-        tensor_args.q_in.memory_config(),
-        tensor_args.cos_cache.memory_config(),
-        tensor_args.sin_cache.memory_config(),
-        tensor_args.trans_mat.memory_config());
-}
-
-MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return MlaQRopeProgramFactory{};
+    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::mla_q_rope::device

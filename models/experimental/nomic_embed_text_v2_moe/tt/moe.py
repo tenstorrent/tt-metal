@@ -5,9 +5,9 @@
 
 This is the one place the activation layout changes. Blocks pass (B, 1, S, H), because attention
 mixes tokens along S and flattening the batch away would let one text attend to another. The
-expert matmuls need the opposite: they batch over the experts, (1, 1, T, H) x (1, E, H, F) giving
-(1, E, T, F), which takes every token on one axis. The flatten therefore lives here, at the same
-place the reference does its own x.view(-1, H), and nowhere else in the encoder.
+expert pass needs the opposite: it gathers each token's row from one (1, 1, T, H) token axis by
+index. The flatten therefore lives here, at the same place the reference does its own
+x.view(-1, H), and nowhere else in the encoder.
 """
 
 from __future__ import annotations
@@ -41,12 +41,11 @@ class TtNomicMoELayer(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
-        batch, _, seqlen, _ = x.shape
-
+        batch, seqlen = x.shape[0], x.shape[-2]
         flat = flatten_tokens(x)
-        dense_weights = self.router(flat)
-        out = self.experts(flat, dense_weights)
-        ttnn.deallocate(dense_weights)
+        routing = self.router(flat)
+        out = self.experts(flat, routing)
+        routing.deallocate()
         # flat is not freed: the reshape aliases x, which the block still needs as the residual
         # for norm2.
 

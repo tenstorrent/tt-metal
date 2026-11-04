@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -229,3 +229,22 @@ def test_fast_reduce_nc_split_invalid_width(device, split, expect_error):
     x, _, _ = get_tensors([1, 1, 32, 256], [1, 1, 32, 256], device, with_padding=False)
     with expect_error(RuntimeError, "tile-aligned"):
         ttnn.experimental.fast_reduce_nc_split(x, dim=1, split_output_width=split)
+
+
+# dim was bounded only by the rank, so dims=[2] or [3] were accepted and the reader treated shape[dim]
+# as a count of H*W tile planes, reading far past the input.
+@pytest.mark.parametrize("dims", [[2], [3]], ids=["H", "W"])
+def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
+    x, _, _ = get_tensors([1, 1, 32, 128], [1, 1, 32, 128], device, with_padding=False)
+    with expect_error(RuntimeError, "FastReduceNC reduces only outer dims"):
+        ttnn.experimental.fast_reduce_nc(x, dims=dims)
+
+
+@pytest.mark.parametrize("input_shape", [[1, 8, 128, 4096], [1, 32, 128, 2880]], ids=["dense8", "experts32"])
+def test_fast_reduce_nc_float32_default_config(input_shape, device):
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.float32)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.experimental.fast_reduce_nc(x, dims=[1]))
+    ref = torch.sum(torch_input.double(), dim=1, keepdim=True).float()
+    torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)

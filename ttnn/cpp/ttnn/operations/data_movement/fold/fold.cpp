@@ -130,6 +130,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     }
 
     uint32_t total_cores = grid_size.num_cores();
+    TT_FATAL(total_cores > 0, "fold: core_grid must contain at least one core");
 
     uint32_t tensor_height = tensor_shape[-2] * tensor_shape[-3] * tensor_shape[-4];
     uint32_t tensor_width = tensor_shape[-1];
@@ -325,7 +326,7 @@ static Tensor apply_halo_padding(
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -441,6 +442,7 @@ Tensor fold(
 
     const Tensor& input_tensor = input_tensor_;
     TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h and stride_w must be greater than 0");
 
     // use_transpose_as_fold takes a legacy composite path that bypasses prim::fold, so collapse_output cannot be
     // honoured there.

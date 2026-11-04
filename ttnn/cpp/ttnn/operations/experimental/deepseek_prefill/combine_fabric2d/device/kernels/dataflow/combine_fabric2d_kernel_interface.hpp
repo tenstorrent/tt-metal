@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "combine_fabric2d_chunk.hpp"
+
 // What both kernel roles and the host agree on: the wire format of a ring slot's forwarding metadata, the
 // sizes the compile-time arguments are built from, and the host-side geometry the two argument structs are
 // derived from. Each role's arguments live beside its kernel, in combine_fabric2d_sender_ct_args.hpp and
@@ -15,10 +17,13 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "combine_fabric2d_stream.hpp"
+
 #ifndef KERNEL_BUILD
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
@@ -31,11 +36,24 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-// One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
-// SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
+// The format every token moves in, from the untilized rows through the ring and the fabric to the output, so
+// also the output's dtype. A BFLOAT8_B dispatched buffer is unpacked to it by the untilize, so only the tile
+// read from DRAM is bfp8.
+constexpr tt::tt_metal::DataType TOKEN_DTYPE = tt::tt_metal::DataType::BFLOAT16;
+
+inline tt::DataFormat token_data_format() { return tt::tt_metal::datatype_to_dataformat_converter(TOKEN_DTYPE); }
+
+// One token's row of the embedding. Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR
+// dispatched buffer pages by exactly one token, a TILE one does not. Its bytes are TOKEN_DTYPE's whatever the
+// dispatched dtype.
 inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tensor_args.dispatched_buffer.element_size();
+           tt::datum_size(token_data_format());
+}
+
+// The dispatched buffer's format as the untilize's input CB declares it: BFLOAT16 or BFLOAT8_B.
+inline tt::DataFormat dispatched_data_format(const CombineFabric2dInputs& tensor_args) {
+    return tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype());
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -48,14 +66,23 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
            tensor_args.dispatched_buffer.tensor_spec().tile().get_width();
 }
 
+// One tile of the dispatched buffer as it sits in DRAM. A TILE buffer's page, since a bfp8 tile carries its
+// shared exponents on top of the mantissas and so is not tile_hw times any element size.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
+    if (dispatched_is_tiled(tensor_args)) {
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+    }
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
            tensor_args.dispatched_buffer.element_size();
 }
 
+// The page of the untilizers' one-word batch count, which the compute kernel reads as a UInt32 tile: a
+// bfloat16 tile's worth, independent of the dispatched buffer's format.
+constexpr uint32_t BATCH_COUNT_PAGE_BYTES = 32 * 32 * sizeof(uint16_t);
+
 // Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
 // divisor of the row so the blocks tile it exactly. Eight is what llk_pack_untilize asserts as its ceiling
-// off the dense path; a whole tile-row would not fit L1 on top of the output ring anyway, at 458 kB.
+// off the dense path.
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
 inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
@@ -65,6 +92,12 @@ inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
         }
     }
     return 1;
+}
+
+// Token slots in the dispatched buffer, which dispatch_fabric2d sizes as max_dispatch_buffer_token_size and drops
+// tokens past. Validation pins every dim before these two to 1, so the slot index is the whole of the page index.
+inline uint32_t dispatch_capacity(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-2]);
 }
 
 inline uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
@@ -81,9 +114,10 @@ inline uint32_t my_dg_index(const CombineFabric2dParams& args, const ttnn::MeshC
 
 struct L1Layout {
     uint32_t pkt_hdr_drain;
+    uint32_t pkt_hdr_credit;  // the courier's own header, so a credit never races the drain's
     uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
-    uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
+    uint32_t pkt_hdr_ring;  // one prebuilt payload header per packet of each ring slot
     // The reader's copy of the control tensors, read once at startup and then indexed from L1.
     // Laid out as [expert_offsets: dispatch_group_size x num_routed_experts][counts: num_routed_experts]
     // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
@@ -92,8 +126,10 @@ struct L1Layout {
     // An untilizer core's layout, which starts over at the allocator base: it shares no memory with the
     // cores above, and the base is where the framework puts its first circular buffer.
     // Zero where there are no untilizer cores, which is where there is nothing to untilize.
-    uint32_t unt_ring = 0;     // the batch ring, which IS cb_out
-    uint32_t unt_control = 0;  // its own copy of the control tables, past every circular buffer
+    uint32_t unt_ring = 0;  // the batch ring, which IS cb_out
+    uint32_t unt_control = 0;
+    // Overlapped only: the collector's per-step count array, at the base of a core that holds nothing else.
+    uint32_t collector_counts = 0;  // its own copy of the control tables, past every circular buffer
 };
 
 struct DramBuffers {
@@ -104,6 +140,8 @@ struct DramBuffers {
     tt::tt_metal::Buffer* counts = nullptr;
     tt::tt_metal::Buffer* region = nullptr;
     tt::tt_metal::Buffer* expert_offsets = nullptr;
+    // Null unless combine runs overlapped: only then is there an id table to read the walk order from.
+    tt::tt_metal::Buffer* expert_table = nullptr;
 };
 
 // The per-chip values that had to be worked out rather than read off the arguments, plus the stream.
@@ -111,33 +149,60 @@ struct KernelPlan {
     StreamId stream = 0;
     uint32_t my_expert_base = 0;
     uint32_t pages_per_stream = 0;
-    uint32_t ring_filled_addr = 0;
-    uint32_t ring_freed_addr = 0;
-    uint32_t fwd_arrived_addr = 0;
+    uint32_t ring_filled_slot = 0;
+    uint32_t ring_freed_slot = 0;
+    uint32_t final_arrived_addr = 0;
+    // Overlapped only: this ring's first row of global_expert_idx_table.
+    uint32_t expert_table_page_base = 0;
+    // Standalone only: the launch credit's address, and the downstream chip's stream core that sends back to
+    // this chip, which this chip's sender grants it to. Per LAUNCH, and so orthogonal to the per-page channel
+    // credits below: this one says the downstream chip has finished the previous launch and its region may be
+    // written again at all, those say which pages of this launch's region are free.
+    uint32_t launch_credit_addr = 0;
+    tt::tt_metal::CoreCoord launch_credit_core;
+    uint32_t credit_done_addr = 0;
+    uint32_t vc_pages = 0;  // the free parameter: pages per channel
+    // One entry per channel, in channel order. Addresses are uniform across the mesh, so these are the
+    // same numbers on every core -- what differs is which core a given counter is read or bumped on.
+    // These replace the single fwd_arrived_addr: arrival is per channel now, because each channel is its
+    // own dense FIFO with one producer and one consumer.
+    std::vector<uint32_t> vc_arrived_addr;
+    std::vector<uint32_t> vc_freed_addr;
+    std::vector<uint32_t> vc_outbox_addr;
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
 struct HandshakePeer {
     tt::tt_metal::CoreCoord noc;
-    uint32_t counter_addr = 0;
+    uint32_t counter_slot = 0;
 };
 
 // The untilizer group serving one reader, from that reader's side.
 struct ReaderUntilizers {
     uint32_t ring_addr = 0;
-    uint32_t my_freed_addr = 0;  // the counter this reader owns on each untilizer core
+    uint32_t my_freed_slot = 0;  // the counter this reader owns on each untilizer core
     std::vector<HandshakePeer> peers;
 };
 
 // The per-core values an untilizer needs that are not read off the arguments.
 struct UntilizerPlan {
     uint32_t my_expert_base = 0;
+    // Overlapped only: where the routed expert's id table starts, and the readiness count it publishes.
+    uint32_t expert_table_page_base = 0;
+    uint32_t ready_sem = 0;
     uint32_t my_index = 0;   // position in the group
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
     uint32_t control_addr = 0;
-    uint32_t produced_addr = 0;  // the counter this core owns on each of its consumers
+    uint32_t produced_slot = 0;  // the counter this core owns on each of its consumers
     std::vector<HandshakePeer> consumers;
+};
+
+// Overlapped only: the per-chip values the collector needs that are not read off the arguments.
+struct CollectorPlan {
+    uint32_t counts_addr = 0;
+    uint32_t ready_sem = 0;
+    std::vector<tt::tt_metal::CoreCoord> waiting;  // virtual; the cores `ready` is published to
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
@@ -160,6 +225,13 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
 
+// Overlapped only: control-table rows are 64-byte aligned because a DRAM read needs an aligned L1
+// destination, and the id table follows the offsets a whole row at a time.
+constexpr uint32_t align_control(uint32_t bytes) { return (bytes + 63u) & ~63u; }
+constexpr uint32_t expert_table_row_stride(uint32_t experts_per_chip) {
+    return align_control(experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)));
+}
+
 // Rows one untilize produces, which is one tile-row of the dispatched buffer. The least it can produce,
 // whatever the tokens wanted, so it is the unit a group of untilizers hands over.
 constexpr uint32_t UNT_BATCH_ROWS = 32;
@@ -173,49 +245,52 @@ constexpr uint32_t UNT_RING_BATCHES = 2;
 constexpr uint32_t UNT_CB_OUT = 0;
 constexpr uint32_t UNT_CB_IN = 1;
 constexpr uint32_t UNT_CB_BATCHES = 2;
-// Words per entry in a handshake block: [noc_x, noc_y, counter_addr].
+// Words per entry in a handshake block: [noc_x, noc_y, counter_slot].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 
-// Words per assignment in the reader's assignment block: [dst_chip_id, dst_dg_index, split_idx, split_count].
-constexpr uint32_t ASSIGNMENT_WORDS = 4;
-// Words per chunk descriptor.
-constexpr uint32_t CHUNK_WORDS = 4;
-
-// One chunk of a stream's forwarding region: whose tokens it carries, for which chip, and the share of each
-// run those two chips agreed on. Enough to compute the chunk's token count, and so its page range once every
-// chunk before it in the region has been counted too.
-//
-// Packed by position into the reader's compile-time args. to_words below is the only place that order is
-// written down, and from_words mirrors it, so the host that emits a chunk and the kernel that reads it back
-// cannot drift apart.
-struct ChunkDescriptor {
-    uint32_t origin_dg_index = 0;
-    uint32_t dst_dg_index = 0;
-    uint32_t split_idx = 0;
-    uint32_t split_count = 1;
-
-    void to_words(uint32_t* words) const {
-        words[0] = origin_dg_index;
-        words[1] = dst_dg_index;
-        words[2] = split_idx;
-        words[3] = split_count;
-    }
-
-    static ChunkDescriptor from_words(const uint32_t* words) {
-        return ChunkDescriptor{words[0], words[1], words[2], words[3]};
-    }
-
-#ifndef KERNEL_BUILD
-    void append_to(std::vector<uint32_t>& out) const {
-        uint32_t words[CHUNK_WORDS];
-        to_words(words);
-        out.insert(out.end(), words, words + CHUNK_WORDS);
-    }
-#endif
-};
+// Words per assignment in the reader's assignment block:
+// [dst_chip_id, dst_dg_index, split_idx, split_count, vc] -- the channel this chip's tokens for that
+// destination land in downstream, or VC_NONE when the destination IS the neighbour and they are delivered.
+constexpr uint32_t ASSIGNMENT_WORDS = 5;
+// Words per channel in the reader's channel block:
+// [arrived_addr, freed_addr, outbox_addr, next_vc].
+constexpr uint32_t VC_WORDS = 4;
+// One definition for both ops; see combine_fabric2d_chunk.hpp.
+using ::ttnn::operations::experimental::deepseek_prefill::combine_chunk::CHUNK_WORDS;
+using ::ttnn::operations::experimental::deepseek_prefill::combine_chunk::ChunkDescriptor;
 static_assert(sizeof(ChunkDescriptor) == CHUNK_WORDS * sizeof(uint32_t));
+
+// The chunk `stream` carries of `origin_dg_index`'s tokens for the chip `distance` hops downstream. The
+// opposite chip is equally far both ways, so its run is split across every stream; a nearer one is reached
+// in one direction only, so its run is split across that direction's links. Every own assignment, every
+// forwarding chunk and every expected final write is sized from this, on host and kernel alike.
+constexpr ChunkDescriptor stream_chunk(
+    StreamId stream, uint32_t origin_dg_index, uint32_t distance, uint32_t ring_extent, uint32_t num_streams) {
+    const bool opposite = distance == ring_extent / 2;
+    return ChunkDescriptor{
+        origin_dg_index,
+        ring_step(stream, origin_dg_index, static_cast<int32_t>(distance), ring_extent),
+        opposite ? stream : stream_link(stream),
+        opposite ? num_streams : num_streams / 2};
+}
+
 // Marks a schedule entry as "relay forwarding chunk k" rather than "own assignment k".
 constexpr uint32_t SCHED_FWD = 0x80000000u;
+
+// Pages a reader frees in one channel before it posts them back to the chip that wrote them. Bigger means
+// fewer credit packets on the cable and more pages the writer cannot see are free.
+//
+// Deliberately NOT tied to the reader's batch or to its schedule: a credit is owed the moment a page is
+// lifted, and which loop happened to lift it is not the upstream chip's concern. A reader also flushes
+// whatever it holds before it blocks and at end of stream, so a partial batch is never what somebody is
+// waiting on.
+constexpr uint32_t CREDIT_RETURN_BATCH = 16;
+
+// Channels a forwarding region is split into, at most. The real count is half_extent*(half_extent-1)/2,
+// six for the extent-8 production ring; this only bounds the per-channel arrays the kernels carry.
+constexpr uint32_t MAX_VCS = 16;
+// "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
+constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
 // Ring slot = token + forwarding metadata. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
 // (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
@@ -229,6 +304,9 @@ struct FwdMetadata {
     uint64_t dst_chip;    // final destination chip id
     uint64_t cmd;
     uint64_t this_addr;  // the address THIS hop writes to
+    // Channel this token lands in over there, so the sender knows which arrival counter to bump. Local
+    // to this hop and never sent: the receiving chip derives the channel from its own tables.
+    uint64_t vc;
 };
 
 // A forwarded packet is the token plus the first two words, sent as one contiguous run, so the layout below
@@ -243,12 +321,26 @@ static_assert(offsetof(FwdMetadata, dst_chip) == sizeof(uint64_t));
 static_assert(offsetof(FwdMetadata, cmd) == 2 * sizeof(uint64_t));
 static_assert(offsetof(FwdMetadata, this_addr) == 3 * sizeof(uint64_t));
 
+#ifndef KERNEL_BUILD
+// Bytes of a token its first fabric packet carries. A token goes whole when it fits the fabric payload with its
+// routing tail, else as two halves with the tail on the second, so the mesh needs only half a token of payload:
+// a larger payload means larger fabric router buffers, and so fewer of them.
+inline uint32_t first_packet_bytes(uint32_t token_size_bytes) {
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    return token_size_bytes + FORWARDING_METADATA_SIZE <= max_payload ? token_size_bytes : token_size_bytes / 2;
+}
+
+inline uint32_t packets_per_token(uint32_t token_size_bytes) {
+    return first_packet_bytes(token_size_bytes) == token_size_bytes ? 1 : 2;
+}
+#endif
+
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
 constexpr uint64_t CMD_FORWARD = 2;
-// A forward that also ends a chunk. The sender bumps the downstream reader's arrival counter right after
-// sending it, because that reader is waiting on exactly this chunk's pages and the residual of a partial
-// bump batch would otherwise sit uncounted until end of stream — which, on a ring, is a deadlock.
-constexpr uint64_t CMD_FORWARD_END = 3;
+// There is no chunk-ending forward. Splitting the region by movement class left a channel with no chunk
+// boundaries to close -- every page of it shares one destination -- so a forward is just a forward, and the
+// residual a chunk end used to flush is handled by announcing before going idle instead. See the wait in
+// sender_combine_fabric2d.cpp. The dispatch op still has its own dspf2d::CMD_FORWARD_END; this is not it.
 
 }  // namespace cmbf2d

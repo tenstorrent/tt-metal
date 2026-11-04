@@ -21,6 +21,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <optional>
 #include <bit>
@@ -580,10 +581,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
     const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
+    // The large-tensor reader reads gamma/beta as whole tiles, so row-major gamma/beta (32-wide pages) would be
+    // misread as tiles and silently give wrong results. TILE gamma/beta work with both input layouts.
     TT_FATAL(
-        !large_tensor_needed || !use_row_major_kernel || input_is_row_major,
-        "The LayerNorm large-tensor reader and compute kernel do not support row-major affine tensors with tiled "
-        "input");
+        !large_tensor_needed || !use_row_major_kernel,
+        "The LayerNorm large-tensor path does not support row-major gamma/beta; pass gamma/beta in TILE layout");
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and
@@ -1192,7 +1194,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         // Each entry is gated on the same condition as its binding: an entry naming a buffer the
         // kernel does not bind is rejected, and legacy set this one from float32_reduction alone,
         // writing into a vector slot for a buffer index that may not have been allocated.
-        if (large_tensor_needed && !use_welford && float32_reduction) {
+        //
+        // Not on Quasar: there unpack-to-dest is a kernel-wide sync mode (UnpackToDestEn), so one
+        // UnpackToDest buffer makes every tile_regs_acquire on the math thread wait on the
+        // UNPACK_MATH semaphore, which only unpack-to-dest unpacks post. The large-tensor kernel's
+        // reduces unpack to SrcA/SrcB, so math would stall at its first acquire. The accumulator
+        // is then restored through SrcA instead.
+        if (large_tensor_needed && !use_welford && float32_reduction && device->arch() != tt::ARCH::QUASAR) {
             unpack_to_dest.push_back(ACCUMULATE);
         }
         if (welford_fp32_alias) {

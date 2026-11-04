@@ -6,7 +6,12 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from ..format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
+from ..format_config import (
+    FOUR_BIT_INTEGER_RANGE,
+    MX_FORMAT_MAX_NORMAL,
+    MX_FORMAT_MIN_MAGNITUDE,
+    DataFormat,
+)
 from ..llk_params import format_dict
 from ..tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -49,6 +54,8 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
     be represented correctly in that scheme.
     """
+    if stimuli_format in FOUR_BIT_INTEGER_RANGE:
+        return FOUR_BIT_INTEGER_RANGE[stimuli_format]
     if stimuli_format not in _INTEGER_FORMAT_DTYPE:
         raise ValueError(f"Unsupported integer format: {stimuli_format}")
 

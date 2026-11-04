@@ -64,10 +64,12 @@ namespace tt::tt_metal::experimental {
 //   split across Programs (e.g. a prefetcher op and a consumer op) that share one pipe
 //   through their run args.
 //
-// MULTI-THREADED RECEIVERS (Gen2/Quasar): the receiver-side kernel's num_threads
-//   selects how many credit lanes the pipe uses on the receivers. It must divide the
-//   ring's entry count (ring_size / entry_size), and must not exceed the pipe's lane
-//   capacity. When a relay DFB is present, its PRODUCER kernel is that receiver kernel.
+// MULTI-THREADED RECEIVERS (2nd-gen (2xx) only): the receiver-side kernel's num_threads
+//   is how many credit lanes it consumes the pipe with on the receivers. It must divide
+//   the ring's entry count (ring_size / entry_size), and must not exceed the pipe's lane
+//   capacity. A pipe bound to it must have been carved with that many lanes
+//   (PrefetcherPipeSpace::create_pipe's num_credit_lanes). When a relay DFB is present, its
+//   PRODUCER kernel is that receiver kernel.
 //
 // ============================================================================
 

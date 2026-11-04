@@ -57,6 +57,7 @@ def run_test_linear_impl(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     num_iters=1,
     enable_trace=False,
     use_persistent_buffers=True,
@@ -73,6 +74,10 @@ def run_test_linear_impl(
     chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -131,22 +136,35 @@ def run_test_linear_impl(
             dtype=input_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=residual_memory_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
         if broadcast_gate:
-            tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            tt_addcmul_b = ttnn.from_torch(
+                torch_addcmul_b,
+                dtype=input_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=gate_memory_config,
+            )
         else:
             tt_addcmul_b = ttnn.from_torch(
                 torch_addcmul_b,
                 dtype=input_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                memory_config=gate_memory_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
             )
     else:
         tt_addcmul_a = None
         tt_addcmul_b = None
         addcmul_scalar = None
+
+    if fuse_addcmul and share_addcmul_inputs:
+        assert not broadcast_gate, "Aliased addcmul inputs require full-size ternary tensors"
+        tt_addcmul_b = tt_addcmul_a
+        torch_addcmul_b = torch_addcmul_a
 
     with torch.no_grad():
         torch_output = torch_input @ weight_input
@@ -173,6 +191,7 @@ def run_test_linear_impl(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync_en,
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -253,7 +272,7 @@ def run_test_linear_impl(
                 barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=num_buffers_per_channel,
                 scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
@@ -378,6 +397,7 @@ def run_test_linear(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     dtype=ttnn.bfloat16,
     weight_dtype=None,
     bias_dtype=None,
@@ -394,6 +414,10 @@ def run_test_linear(
     chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -482,6 +506,7 @@ def run_test_linear(
         activation=activation,
         math_fidelity=math_fidelity,
         fp32_acc=fp32_acc,
+        dst_full_sync_en=dst_full_sync_en,
         core_grid=core_grid,
         input_dtype=dtype,
         num_devices=device.get_num_devices(),
@@ -504,6 +529,10 @@ def run_test_linear(
         chunk_sizes=chunk_sizes,
         broadcast_gate=broadcast_gate,
         fuse_swiglu=fuse_swiglu,
+        residual_memory_config=residual_memory_config,
+        gate_memory_config=gate_memory_config,
+        num_buffers_per_channel=num_buffers_per_channel,
+        share_addcmul_inputs=share_addcmul_inputs,
     )
 
 
