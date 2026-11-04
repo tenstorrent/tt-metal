@@ -14,7 +14,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -37,7 +37,7 @@ tt::tt_metal::Program create_socket_forward_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket forward only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];
@@ -135,11 +135,23 @@ tt::tt_metal::Program create_socket_forward_program(
 
     for (uint32_t i = 0; i < num_bwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            upstream_fabric_node_id,
+            bwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
     for (uint32_t i = 0; i < num_fwd_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[i], program, my_core_coord, rt_args);
+            *mesh_device,
+            my_fabric_node_id,
+            downstream_fabric_node_id,
+            fwd_link_indices[i],
+            program,
+            my_core_coord,
+            rt_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);

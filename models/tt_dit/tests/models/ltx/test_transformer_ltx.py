@@ -31,6 +31,7 @@ from models.tt_dit.models.transformers.ltx.transformer_ltx import (
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.ltx import skip_without_checkpoint
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -736,7 +737,7 @@ def test_ltx_transformer_block(
     elif has_audio:
         sd = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
         if sd is None:
-            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
+            skip_without_checkpoint(f"22B checkpoint not found at {checkpoint_22b}")
         block_sd = {
             k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")
         }
@@ -1056,7 +1057,7 @@ def _run_inner_step(
         # AV PCC path: 22B with strict=False.
         state_dict = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
         if state_dict is None:
-            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
+            skip_without_checkpoint(f"22B checkpoint not found at {checkpoint_22b}")
     else:
         # Video PCC path: random scaled weights (1 layer) from the diffusers 3D model.
         torch_model = _make_diffusers_video_model(num_layers=1)
@@ -1546,7 +1547,7 @@ def _build_video_trace_setup(
         checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
         state_dict = _load_22b_state_dict(num_layers=num_layers, checkpoint_path=checkpoint_22b)
         if state_dict is None:
-            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
+            skip_without_checkpoint(f"22B checkpoint not found at {checkpoint_22b}")
     else:
         # Random scaled weights from the diffusers 3D video model — the video PCC path.
         torch_model = _make_diffusers_video_model(num_layers=num_layers)
@@ -1906,7 +1907,7 @@ def _build_block_trace_setup(
     if has_audio:
         sd = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
         if sd is None:
-            pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
+            skip_without_checkpoint(f"22B checkpoint not found at {checkpoint_22b}")
         block_sd = {
             k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")
         }

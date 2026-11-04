@@ -21,6 +21,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tiles_multiple.cpp
     device_print/test_checkpoint.cpp
     device_print/test_cb_hash.cpp
+    l1_ecc_halt/test_l1_ecc_halt.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_mcast_wrap_around.cpp
@@ -34,6 +35,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_waypoint.cpp
     watcher/test_runtime_args_known_garbage.cpp
     watcher/test_tile_counters_log.cpp
+    watcher/test_trisc_irq_mret_alias.cpp
     watcher/test_zero_mode_guard.cpp
 )
 

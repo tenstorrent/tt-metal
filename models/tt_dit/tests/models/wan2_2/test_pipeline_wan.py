@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import math
 import os
 
 import numpy as np
@@ -27,18 +28,35 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import check_first_frame_matches_seed, check_output_sanity, create_fractal_image
+from .common import DEMO_PROMPT, check_first_frame_matches_seed, check_output_sanity, demo_image
 
 PROMPTS = {
     "t2v": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
-    "i2v": "The cat in the hat runs up the hill to the house.",
+    "i2v": DEMO_PROMPT,
 }
+
+# I2V runs with the official I2V example's settings (Wan-Video/Wan2.2 README and
+# wan/configs/wan_i2v_A14B.py): size, flow shift, boundary and seed. The image is the repo's demo photo
+# instead of the example's.
+OFFICIAL_FLOW_SHIFT = 5.0
+OFFICIAL_BOUNDARY_RATIO = 0.9  # the checkpoint's model_index.json
+OFFICIAL_SEED = 0
+
+
+def official_size(max_area: int, image: PIL.Image.Image) -> tuple[int, int]:
+    """Wan's image2video.py: the image's aspect ratio at max_area, in whole latent patches."""
+    aspect = image.height / image.width
+    lat_h = round(math.sqrt(max_area * aspect) // 8 // 2 * 2)
+    lat_w = round(math.sqrt(max_area / aspect) // 8 // 2 * 2)
+    return lat_w * 8, lat_h * 8
+
 
 # Sanity check: the mean CLIP score must clear a floor well below normal output. No timing here: this
 # test also runs in the unit legs, under the watcher; timing is gated in test_performance_wan.py.
 CLIP_THRESHOLDS = {
     "t2v": 30.0,  # observed ~37
-    # The fractal seed image dominates the frames, so expect low scores; only near-random fails.
+    # Set while the I2V seed image was a synthetic fractal, which dominated the frames; only
+    # near-random output fails it.
     "i2v": 15.0,
 }
 
@@ -67,12 +85,12 @@ VBENCH_THRESHOLDS = {
     },
     # I2V uses ONLY subject_consistency + background_consistency. They measure intra-video feature
     # consistency (does the content stay coherent frame-to-frame), which still catches a pipeline
-    # that emits incoherent/garbage output. The other VBench dimensions are dropped because they're
-    # meaningless for this test's synthetic seed: the CI seed is a fractal, so `dynamic_degree`
-    # (RAFT optical-flow "is it moving") reads ~0 (a fractal can't be animated naturally) and
-    # `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless of correctness --
-    # neither reflects a real defect here. Floors are provisional: set below one observed i2v run
-    # (subject≈0.75, background≈0.89); tighten/loosen as more runs accrue.
+    # that emits incoherent/garbage output. The other VBench dimensions were dropped while the CI seed
+    # was a synthetic fractal, for which `dynamic_degree` (RAFT optical-flow "is it moving") reads ~0
+    # and `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless of correctness.
+    # Floors are provisional: set below one observed i2v run on the fractal seed (subject≈0.75,
+    # background≈0.89); tighten/loosen as runs on the official image accrue. Keyed by the
+    # parametrized resolution; I2V generates at the official size of about the same area.
     "i2v": {
         720: {
             "subject_consistency": 0.70,
@@ -161,16 +179,23 @@ def test_pipeline_inference(
 
     num_frames = 81
     num_inference_steps = 40
+    resolution = height
 
     if model_type == "i2v":
         pipeline_cls = WanPipelineI2V
-        seed_image = create_fractal_image(width, height) if no_prompt else PIL.Image.open("./prompt_image.png")
+        seed_image = demo_image() if no_prompt else PIL.Image.open("./prompt_image.png").convert("RGB")
+        width, height = official_size(width * height, seed_image)
+        seed_image = seed_image.resize((width, height))
         image_prompt = [ImagePrompt(image=seed_image, frame_pos=0)]
         guidance_scale, guidance_scale_2 = 3.5, 3.5
+        sampler_kwargs = {"flow_shift": OFFICIAL_FLOW_SHIFT, "boundary_ratio": OFFICIAL_BOUNDARY_RATIO}
+        default_seed = OFFICIAL_SEED
     else:
         pipeline_cls = WanPipeline
         image_prompt = None
         guidance_scale, guidance_scale_2 = 4.0, 3.0
+        sampler_kwargs = {}
+        default_seed = 42
 
     h_factor = tuple(mesh_device.shape)[tp_axis]
     w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -220,6 +245,7 @@ def test_pipeline_inference(
                 seed=seed,
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
+                **sampler_kwargs,
                 output_type="uint8",
                 on_event=log_event_section,
             )
@@ -283,7 +309,7 @@ def test_pipeline_inference(
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
         if int(ttnn.distributed_context_get_rank()) == 0:
-            thresholds = VBENCH_THRESHOLDS[model_type][height]
+            thresholds = VBENCH_THRESHOLDS[model_type][resolution]
             assert_vbench_quality(output_filename(number), prompt=prompt, thresholds=thresholds)
 
     def check_all(prompt, number, frames):
@@ -300,7 +326,7 @@ def test_pipeline_inference(
         assert not failures, "\n".join(failures)
 
     if no_prompt:
-        frames = run(prompt=prompt, number=0, seed=42)
+        frames = run(prompt=prompt, number=0, seed=default_seed)
         check_all(prompt, 0, frames)
     else:
         for i in itertools.count():

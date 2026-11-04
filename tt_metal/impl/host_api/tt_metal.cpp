@@ -5,7 +5,6 @@
 #include <allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
-#include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
@@ -21,17 +20,13 @@
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
-#include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <type_traits>
 #include <variant>
@@ -39,7 +34,7 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
@@ -74,7 +69,6 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
@@ -976,7 +970,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {

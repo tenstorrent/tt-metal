@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -31,6 +32,9 @@ class MeshDevice;
 
 namespace ttnn {
 
+struct D2DReceiverDescriptor;     // ttnn/tensor/d2d_pipeline_descriptor.hpp
+class D2DPipelineDescriptorFile;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
+
 // Receiver stage gate: the receiver holds each landed transfer until the gate selected
 // by the slot id in its metadata is open. Slot ids >= num_gates (e.g.
 // d2d_stream::kUngatedSlot) pass ungated. The two offsets must name different metadata
@@ -39,6 +43,8 @@ struct D2DStageGateConfig {
     uint32_t num_gates = 0;  // enabled when > 0
     uint32_t slot_id_offset_bytes = 0;
     uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
+
+    bool operator==(const D2DStageGateConfig&) const = default;
 };
 
 // Location of one coord's gates.
@@ -64,6 +70,14 @@ struct D2DStageGateDescriptor {
 // Producer/consumer worker ops synchronize with the service through the
 // per-handle getters (data_ready / consumed semaphores + counters).
 
+// One additional tensor ("segment") carried by a service alongside the primary one.
+// Same rules as the primary: the mapper derives the per-shard spec + topology, which
+// must cover the same mesh coords as the primary's.
+struct D2DStreamTensorConfig {
+    tt::tt_metal::TensorSpec global_spec;
+    std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+};
+
 // Configuration for a D2DStreamService pair. The same per-shard spec & topology
 // (derived from `global_spec` + `mapper`) is allocated on both the sender and
 // receiver mesh; `sender_mesh->shape() == receiver_mesh->shape()` is a hard
@@ -71,13 +85,19 @@ struct D2DStageGateDescriptor {
 struct D2DStreamConfig {
     // Logical shape & layout of the un-sharded global tensor. The mapper runs
     // once on a zero host tensor of this spec to derive the per-shard
-    // tt::tt_metal::TensorSpec + tt::tt_metal::TensorTopology shared by both sides. V0 supports UINT32,
-    // ROW_MAJOR, DRAM-interleaved.
+    // tt::tt_metal::TensorSpec + tt::tt_metal::TensorTopology shared by both sides.
     tt::tt_metal::TensorSpec global_spec;
 
     // Required. Same mapper describes both sides. Ownership is transferred into
     // the service (move). Construct via ttnn::distributed::create_mesh_mapper.
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+
+    // Further tensors shipped in the same transfer as the primary one (segment 0),
+    // in this order, with their own dtype / layout / shape. They share the socket,
+    // the worker handshake, the lease and the metadata blob of the primary tensor.
+    // Each must map to DRAM interleaved shards: the kernels drive all of them with one
+    // shared accessor block.
+    std::vector<D2DStreamTensorConfig> extra_tensors;
 
     // Forwarded (mostly verbatim) to MeshSocket::create_socket_pair. Controls
     // socket_storage_type (L1 or DRAM for the receiver-side FIFO), fifo_size,
@@ -150,6 +170,11 @@ struct D2DStreamConfig {
 
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;
+
+    // Relay mode: packets cross meshes only on a cable, through an exit and an entry relay kernel.
+    // Both sides must match. Needs a 2D fabric, share_fabric_links and no stage_gate.
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 turns it on for every stream.
+    bool relay = false;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -189,10 +214,13 @@ public:
     D2DStreamServiceSender(D2DStreamServiceSender&&) = delete;
     D2DStreamServiceSender& operator=(D2DStreamServiceSender&&) = delete;
 
-    // Sender-side workers write per-shard slices here.
+    // Sender-side workers write per-shard slices here. Segment 0.
     const Tensor& get_backing_tensor() const;
 
-    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    // All segments: [primary, extra_tensors...].
+    const std::vector<Tensor>& get_backing_tensors() const;
+
+    // Segment 0's per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
     const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::sender_worker_cores.
@@ -227,6 +255,9 @@ public:
     // forwarded is the bytes_acked word in the socket config: the receiver adds 1 per consumed transfer.
     tt::tt_metal::StreamOutputCounters get_output_counters(
         const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
+    // Echo of Config::metadata_size_bytes (0 = metadata disabled).
+    uint32_t get_metadata_size_bytes() const;
 
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
@@ -273,10 +304,13 @@ public:
     D2DStreamServiceReceiver(D2DStreamServiceReceiver&&) = delete;
     D2DStreamServiceReceiver& operator=(D2DStreamServiceReceiver&&) = delete;
 
-    // Receiver-side workers read per-shard slices here.
+    // Receiver-side workers read per-shard slices here. Segment 0.
     const Tensor& get_backing_tensor() const;
 
-    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    // All segments: [primary, extra_tensors...].
+    const std::vector<Tensor>& get_backing_tensors() const;
+
+    // Segment 0's per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
     const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::receiver_worker_cores.
@@ -321,6 +355,9 @@ public:
     // Direct L1 access, not ordered with the CQ.
     void set_stage_gate(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open);
     bool is_stage_gate_open(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const;
+
+    // This receiver's entry in a D2DPipelineDescriptor.
+    D2DReceiverDescriptor describe() const;
 
 private:
     friend class D2DStreamService;
@@ -380,6 +417,17 @@ public:
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
+    // Collective over `ctx` (default: world): every rank calls it with the receivers it owns,
+    // grouped by boundary: one list per pipeline stage it receives into, holding every receiver
+    // across that boundary (empty if none). `root` gathers them and writes them to
+    // d2d_pipeline_descriptor_path(service_id). Returns the file on `root`, which removes it when
+    // destroyed; null elsewhere.
+    static std::unique_ptr<D2DPipelineDescriptorFile> export_pipeline_descriptor(
+        const std::string& service_id,
+        const std::vector<std::vector<const D2DStreamServiceReceiver*>>& boundaries,
+        tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
+        std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
+
 private:
     // Shared per-side tail of all three factories. Given an already-constructed
     // MeshSocket endpoint (single-host via create_socket_pair, multi-host via the
@@ -390,21 +438,29 @@ private:
     // service cores if it throws before the handle takes ownership of them. Defined
     // here (not as a free helper) because only this friend can construct the
     // handle's private Impl. The per-shard spec, topology, and chunk plan are
-    // re-derived from `backing` + `cfg` inside.
+    // re-derived from `backings` + `cfg` inside. `backings` holds one tensor per
+    // segment; receiver_tensor_addrs holds one address per segment per coord.
     static std::unique_ptr<D2DStreamServiceSender> finalize_sender(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
-        const std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::DeviceAddr>& receiver_tensor_addrs,
-        const Tensor& backing,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, std::vector<tt::tt_metal::DeviceAddr>>&
+            receiver_tensor_addrs,
+        const std::vector<Tensor>& backings,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
-        const Tensor& backing,
+        const std::vector<Tensor>& backings,
         const D2DStreamConfig& cfg,
         const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& sender_lanes);
+
+    // Relay mode: finalize_* only allocates, because each side's relay programs need the peer's
+    // addresses. The factory swaps those (RelayInfo), then these build the programs.
+    struct RelayInfo;
+    static void build_relay_sender(D2DStreamServiceSender& sender, const RelayInfo& peer);
+    static void build_relay_receiver(D2DStreamServiceReceiver& receiver, const RelayInfo& peer);
 };
 
 }  // namespace ttnn

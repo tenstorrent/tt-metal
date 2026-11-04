@@ -45,6 +45,16 @@ def _require_tensor_prefetcher(device):
 
 _RING_DEPTH_PAGES = 4  # small ring so the validator stresses the credit handshakes
 
+# A held pipe consumer waits this many wall-clock cycles before its first pop. The wall clock ticks at
+# AICLK, which Blackhole runs at 1.35 GHz under load, and a slower clock only lengthens the hold. A
+# call that waits for the held consumer takes at least the hold; one that does not returns in
+# milliseconds. The timing checks split the two at half the hold, which leaves both outcomes the same
+# margin for host jitter.
+_HOLD_CYCLES = 1_000_000_000
+_BLACKHOLE_AICLK_HZ = 1_350_000_000
+_MIN_HOLD_S = _HOLD_CYCLES / _BLACKHOLE_AICLK_HZ
+_HELD_CALL_THRESHOLD_S = _MIN_HOLD_S / 2
+
 
 def _receiver_rows(num_dram_banks: int, recv_per_bank: int) -> int:
     """Rows the receiver grid for `recv_per_bank` receivers per bank occupies. A second delivery
@@ -482,12 +492,12 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
-def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_bank):
-    """The same pipe hits the consumer cache, while a same-address recarve misses it.
+def test_pipe_consumer_cache_reuses_recarved_pipe(device, K, N, dtype, recv_per_bank):
+    """A pipe recarved at the addresses and geometry of a dropped one hits the programs cached for it.
 
-    Dropping and recarving from one space deliberately reproduces every piece of geometry and
-    every allocation address. The replacement still has fresh persistent sender state, so a
-    compiled program whose pipe slots are sticky must not be reused for it.
+    Dropping and recarving from one space reproduces every piece of geometry and every allocation
+    address. The cached programs rebind to the replacement, and the validator checks the bytes the
+    replacement delivers through them.
     """
     tt_weight, pipes, _bank_to_receivers, page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, return_space=True
@@ -507,16 +517,10 @@ def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_ba
             device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
         )
         ttnn.synchronize_device(device)
-        after_first = device.num_program_cache_entries()
-        assert after_first == before_first + 1
-
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
-        before_second = device.num_program_cache_entries()
-        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
-        )
+        assert device.num_program_cache_entries() == before_first + 1
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size)
         ttnn.synchronize_device(device)
-        assert device.num_program_cache_entries() == before_second
+    entries = device.num_program_cache_entries()
 
     del pipes
     gc.collect()
@@ -529,12 +533,12 @@ def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_ba
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size)], prefetcher_pipes=replacement
         )
-        before_replacement = device.num_program_cache_entries()
         ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
             device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=replacement
         )
+        _queue_and_validate_pipes(device, tt_weight, replacement, bank_to_receivers, ring_size)
         ttnn.synchronize_device(device)
-        assert device.num_program_cache_entries() == before_replacement + 1
+    assert device.num_program_cache_entries() == entries
 
 
 def test_pipe_consumer_trace_replay(device):
@@ -593,11 +597,6 @@ def test_stop_drains_every_target_not_just_the_last(device):
         recv_per_bank=1,
         row_offset=_receiver_rows(num_dram_banks, held_recv_per_bank),
     )
-    # About 0.75 s at Blackhole's 1.35 GHz AICLK, and longer at any lower clock. Stop without the held
-    # set's acks returns in milliseconds, so half a second separates the two outcomes.
-    hold_cycles = 1_000_000_000
-    min_stop_wait_s = 0.5
-
     ttnn.experimental.start_tensor_prefetcher(device)
     held_from = None
     try:
@@ -609,16 +608,20 @@ def test_stop_drains_every_target_not_just_the_last(device):
 
         held_from = time.monotonic()
         ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=held_pipes, hold_cycles=hold_cycles
+            device,
+            num_iters=ring_size,
+            page_size_bytes=page_size,
+            prefetcher_pipes=held_pipes,
+            hold_cycles=_HOLD_CYCLES,
         )
     finally:
         ttnn.experimental.stop_tensor_prefetcher(device)
         stop_returned = time.monotonic()
         ttnn.synchronize_device(device)
     stop_waited_s = stop_returned - held_from
-    assert stop_waited_s >= min_stop_wait_s, (
+    assert stop_waited_s >= _HELD_CALL_THRESHOLD_S, (
         f"stop_tensor_prefetcher returned {stop_waited_s:.3f} s after the held pipe consumer started holding its "
-        f"acks, before the {min_stop_wait_s} s hold could have ended: it did not wait for those receivers"
+        f"acks, before the {_MIN_HOLD_S:.2f} s hold could have ended: it did not wait for those receivers"
     )
 
 
@@ -669,6 +672,56 @@ def test_stop_skips_targets_freed_mid_session(device):
         ttnn.synchronize_device(device)
         del freed_pipes, freed_space
         gc.collect()
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("cq_id", [0, 1], ids=["cq0", "cq1"])
+def test_pipes_carved_mid_session_wait_for_their_pages(device, cq_id):
+    """DRAM senders do not write a pipe carved while the prefetcher runs before its config pages land.
+
+    The carve writes the receivers' config pages through the calling thread's command queue, while a
+    request reaches the DRAM senders over their H2D sockets. A held pipe consumer keeps that queue busy
+    for a fixed wall-clock delay, so a request queued right after the carve gets to the senders long
+    before the pages land. The carve must make the running prefetcher wait for that queue, not for
+    another one, and must not drain the queue itself. Unfenced, the senders write into rings and credits
+    that the queued writes then clear, and the validator hangs.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    held_recv_per_bank = 2
+    K = 448
+    N = num_dram_banks * held_recv_per_bank * 2 * ttnn.TILE_SIZE
+    tt_weight_held, held_pipes, _bank_to_receivers, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, ttnn.bfloat8_b, held_recv_per_bank, num_entries=num_dram_banks * held_recv_per_bank
+    )
+    tt_weight, bank_to_receivers, push_page_size, carved_ring_size = _krow_major_weight_and_bank_map(
+        device,
+        K,
+        num_dram_banks * 2 * ttnn.TILE_SIZE,
+        ttnn.bfloat16,
+        recv_per_bank=1,
+        row_offset=_receiver_rows(num_dram_banks, held_recv_per_bank),
+    )
+    with tensor_prefetcher_session(device), ttnn.command_queue(cq_id):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight_held, ring_size)], prefetcher_pipes=held_pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device,
+            num_iters=ring_size,
+            page_size_bytes=page_size,
+            prefetcher_pipes=held_pipes,
+            hold_cycles=_HOLD_CYCLES,
+        )
+        carve_from = time.monotonic()
+        _space, pipes = _make_tensor_prefetcher_pipes(
+            device, bank_to_receivers, push_page_size * _RING_DEPTH_PAGES, single_sender=True
+        )
+        carve_s = time.monotonic() - carve_from
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, carved_ring_size)
+    assert carve_s < _HELD_CALL_THRESHOLD_S, (
+        f"creating the pipes took {carve_s:.3f} s while a held consumer occupied command queue {cq_id}: the carve "
+        "drained the queue instead of fencing it through the running prefetcher"
+    )
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])

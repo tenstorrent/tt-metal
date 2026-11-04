@@ -19,7 +19,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include <cstdint>
 #include "api/tensor/noc_traits.h"
 
