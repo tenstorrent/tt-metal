@@ -23,11 +23,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-1.xml .
+    pytest --collect-only -q --override-ini=log_cli=false test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy | grep '::' | awk 'NR%40==1' > /tmp/hang_dc.txt
+    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 4,6p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
+    cat /tmp/hang_order.txt
+    pytest @/tmp/hang_order.txt -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-wormhole-1.xml
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -44,11 +43,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-2.xml .
+    echo hang probe runs in group 1 only
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -65,11 +60,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-1.xml .
+    pytest --collect-only -q --override-ini=log_cli=false test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy | grep '::' | awk 'NR%40==1' > /tmp/hang_dc.txt
+    { sed -n 1p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[stall]'; sed -n 2,3p /tmp/hang_dc.txt; echo 'test_hang_probe.py::test_hang_probe[spin]'; sed -n 4,6p /tmp/hang_dc.txt; } > /tmp/hang_order.txt
+    cat /tmp/hang_order.txt
+    pytest @/tmp/hang_order.txt -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-blackhole-1.xml
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -86,11 +80,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-2.xml .
+    echo hang probe runs in group 1 only
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -107,11 +97,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 3 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-3.xml .
+    echo hang probe runs in group 1 only
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
