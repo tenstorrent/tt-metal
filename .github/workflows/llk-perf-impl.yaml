@@ -571,10 +571,5 @@ jobs:
       # upload action shells out to sftp.
       - name: Install the SFTP client
         run: apt-get update -qq && apt-get install -y -qq openssh-client
-      - name: Upload perf data
-        uses: ./.github/actions/upload-data-via-sftp
-        with:
-          ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/llk_perf_batchfile.txt
-          username: "llk-perf-run-writer"
-          hostname: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
+      - name: Upload perf data (trial: dry, nothing is sent)
+        run: ls -l "$GITHUB_WORKSPACE"/generated/llk_perf/
