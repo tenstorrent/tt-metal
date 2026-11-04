@@ -159,7 +159,9 @@ class TernaryPrefillLinear2:
                     runtime_args=cp,
                     common_runtime_args=[KB],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, dst_full_sync_en=True
+                        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("BONSAI_T2_FIDELITY", "LoFi")),
+                        fp32_dest_acc_en=True,
+                        dst_full_sync_en=True,
                     ),
                 ),
             ],

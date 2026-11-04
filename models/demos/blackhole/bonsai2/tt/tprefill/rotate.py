@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prefill rotation x' = blockdiag(H_1024) D x over the last dimension (what the ternary weights expect, as
 ternary/rotate.DecodeRotation for one token): D a sign per input, H the normalized 1024-point Sylvester Hadamard
-(entries +-1/32, exact in bf16). Per 1024-wide block one matmul at HiFi3: H (SrcA) needs 1 bit and HiFi3 covers all
+(entries +-1/32, exact in bf16). Per 1024-wide block one matmul at HiFi3 (call_ttnn; the kernel factors the block's transform, kernels/hrot_compute.cpp): H (SrcA) needs 1 bit and HiFi3 covers all
 of the bf16 activation's mantissa (SrcB) with SrcA's high bits; fp32 accumulation, bf16 out."""
+
+import os
 
 import numpy as np
 import torch
@@ -105,7 +107,10 @@ class PrefillRotation:
                     core_ranges=crs,
                     compile_time_args=[],
                     runtime_args=cp,
-                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=True),
+                    defines=[("HROT_DENSE", "1")] if os.environ.get("BONSAI_HROT_DENSE") == "1" else [],
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=True, dst_full_sync_en=True
+                    ),
                 ),
             ],
             semaphores=[],
