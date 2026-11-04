@@ -1,0 +1,6 @@
+# Unsatisfiable: a 4x2 slice needs 8 devices, this pin exposes 4, so Phase 1 must reject it.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "0,1,2,3"
