@@ -172,8 +172,13 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     layers = _layers()
     ep = os.environ.get("GLM53_MK_EP", "0") == "1"
     t0 = time.perf_counter()
-    backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep)
-    logger.info(f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, layers {layers}, B {B}, ep {ep}")
+    native = os.environ.get("GLM53_MK_NATIVE_T", "0") == "1"  # B > 4 as ONE launch of B rows (else 4-row chunks)
+    backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep,
+                           native_t=native)  # fmt: skip
+    logger.info(
+        f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, layers {layers}, B {B}, ep {ep}, "
+        f"native_t {native} (chunk {backend.chunk} x {backend.n_chunks})"
+    )
     t0 = time.perf_counter()
     kv = backend.allocate_kv_cache(max_batch=B, max_seq_len=SEQ)
     io = backend.allocate_decode_io(kv)
@@ -194,7 +199,7 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     ttnn.synchronize_device(mesh_device)
     step_us = (time.perf_counter() - t0) / N_REPLAY * 1e6
     logger.info(
-        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B}: traced decode step "
+        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B} native_t {native}: traced decode step "
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
     assert step_us > 0
