@@ -11,6 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -490,18 +491,17 @@ _BATCH_NORM_COMPUTE_MERGE_GATE = {
 
 @pytest.mark.parametrize(
     "input_shapes, training, weight, bias, input_dtype, param_dtype",
-    [
+    merge_gate_subset(
         (
-            pytest.param(shape, *affine, *dtypes, marks=pytest.mark.merge_gate)
-            if (shape, *affine, *dtypes) in _BATCH_NORM_COMPUTE_MERGE_GATE
-            else (shape, *affine, *dtypes)
-        )
-        for shape, affine, dtypes in product(
-            [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
-            [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
-            [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
-        )
-    ],
+            (shape, *affine, *dtypes)
+            for shape, affine, dtypes in product(
+                [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+                [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
+                [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+            )
+        ),
+        keep=_BATCH_NORM_COMPUTE_MERGE_GATE,
+    ),
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -1139,10 +1139,8 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
 
 @pytest.mark.parametrize(
     "check_mean, check_var",
-    [
-        (True, False),  # mean-only: batch_var must still be drained
-        pytest.param(False, True, marks=pytest.mark.merge_gate),  # var-only: batch_mean must still be drained (FPU)
-    ],
+    # mean-only (batch_var still drained), then var-only (batch_mean still drained, FPU). Gate the var-only row.
+    merge_gate_subset([(True, False), (False, True)], keep=[(False, True)]),
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):

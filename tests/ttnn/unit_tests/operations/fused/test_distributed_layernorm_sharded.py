@@ -17,6 +17,7 @@ import torch
 import pytest
 import math
 from itertools import product
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import (
@@ -324,10 +325,10 @@ _PRE_ALLGATHER_MERGE_GATE = (0, 4, ttnn.bfloat16)
 @pytest.mark.parametrize("input_width", [2048])
 @pytest.mark.parametrize(
     "seed, num_devices, input_df",
-    [
-        pytest.param(*values, marks=pytest.mark.merge_gate) if values == _PRE_ALLGATHER_MERGE_GATE else values
-        for values in product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16])
-    ],
+    merge_gate_subset(
+        product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16]),
+        keep=[_PRE_ALLGATHER_MERGE_GATE],
+    ),
 )
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))
