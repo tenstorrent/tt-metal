@@ -13,11 +13,11 @@ rebatch length, which sizes every spatial-path tensor; drawing it from the RNG
 would make the measured workload depend on the seed and on how many tensors were
 allocated before it.
 
-No trace capture. ``build_rebatch_plan`` still calls ``ttnn.to_torch`` on
-``bev_mask`` and the host result decides ``max_len`` / tensor shapes for the
-ops that follow; reads and writes both TT_FATAL inside a capture region.
-Until that host round-trip is gone the signposted region carries host dispatch,
-so read it as end-to-end device time, not as a traced-replay figure.
+No trace capture. The rebatch plan reads the cameras' visible counts back (a
+non-blocking ``cpu()`` and an event), and they size its tensors and fused MSDA's
+rows; reads and writes both TT_FATAL inside a capture region. The signposted
+region therefore carries host dispatch, so read it as end-to-end device time,
+not as a traced-replay figure.
 """
 
 import subprocess
@@ -123,7 +123,10 @@ def test_bevformer_encoder_perf(
     # Uploaded once so the profiled iterations measure the encoder, not the transfer
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # The encoder takes the camera features batch-first, [batch_size, num_cams, H*W, embed_dims].
+    tt_camera_features = ttnn.from_torch(
+        camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
 
     def op_fn():
         return tt_model(

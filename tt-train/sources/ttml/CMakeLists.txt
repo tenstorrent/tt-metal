@@ -13,6 +13,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
@@ -95,7 +96,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
@@ -441,6 +441,15 @@ if(COMMAND tt_configure_ccache_for_pch)
 endif()
 
 tt_reuse_precompile_headers(ttml ttml_pch)
+
+# Descriptor cache-hit parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK, see ttnn/CMakeLists.txt).
+# The #ifdef lives in ttnn's mesh device-operation adapter, which is instantiated in tt-train's own translation units,
+# and TTNN::TTNN does not forward the definition from ttnn_core. Define it on ttml and on the PCH provider: a definition
+# missing from the PCH resolves the #ifdef when the PCH is built, compiling the check out of every consumer.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml_pch PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

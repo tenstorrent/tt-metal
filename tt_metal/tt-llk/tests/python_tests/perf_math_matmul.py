@@ -7,9 +7,10 @@ import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
     PerfRunType,
     StochasticRounding,
 )
@@ -49,15 +50,8 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 # Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
 # mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
@@ -170,18 +164,18 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, cfg, throttle, 1)
             for fidelity, cfg, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
             (fidelity, cfg, 0, 1)
             for fidelity, cfg in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
             (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
         ),
     )

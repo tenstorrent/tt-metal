@@ -518,13 +518,17 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     pt_out = in0 @ in1
 
     if in1_dtype == ttnn.bfloat4_b:
+        # The golden uses the unquantized in1. Rounding randn to bfloat4_b (3 mantissa bits per 16-value block) adds
+        # noise of relative power r = 0.0137, so even exact arithmetic on the quantized in1 only reaches
+        # PCC ~ 1 / sqrt(1 + r) = 0.9932 (0.99298 to 0.99333 over seeds 0-39 at m = 32). LoFi and the bf16 output
+        # cost another ~1e-5, so 0.99 leaves room for the sampling spread.
         assert_numeric_metrics(
             pt_out,
             output_tensor,
             atol=0.04 * k,
             rtol=68.5 * k,
             frobenius_threshold=0.001 * k,
-            pcc_threshold=0.993,
+            pcc_threshold=0.99,
             check_ulp=False,
         )
     elif in1_dtype == ttnn.bfloat8_b:

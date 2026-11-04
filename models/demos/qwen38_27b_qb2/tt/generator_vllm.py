@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tt.generator import build_generator
+from models.demos.qwen38_27b_qb2.tt.generator import build_generator, fabric_router_config
 from models.demos.qwen38_27b_qb2.tt.model import ModelCache
 
 
@@ -28,6 +28,8 @@ class Qwen38ForCausalLM:
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
         "supports_device_penalties": False,
+        # The TT plugin applies this before opening the mesh, like text_demo.py's configure_fabric().
+        "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING, "router_config": fabric_router_config()},
     }
 
     @classmethod

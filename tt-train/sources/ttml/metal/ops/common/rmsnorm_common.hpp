@@ -47,7 +47,8 @@ constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 // How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
 // slice_tiles tiles, and num_slices = 1 keeps whole rows. Core i of the walk {i / num_cores_y, i % num_cores_y} handles
 // slice i % num_slices of row-group i / num_slices. Row-groups [0, num_groups_1) take rows_per_group_1 rows, the rest
-// rows_per_group_2.
+// rows_per_group_2. Plain arithmetic, so override_runtime_arguments() can recompute it on every cache hit; the core
+// ranges come from row_slice_cores().
 struct RowSlicePlan {
     uint32_t num_slices = 1U;
     uint32_t slice_tiles = 0U;
@@ -56,6 +57,13 @@ struct RowSlicePlan {
     uint32_t rows_per_group_2 = 0U;
     uint32_t num_cores = 0U;
     uint32_t num_cores_y = 0U;
+
+    [[nodiscard]] bool has_group_2() const {
+        return num_groups_1 * num_slices < num_cores;
+    }
+};
+
+struct RowSliceCores {
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
@@ -112,18 +120,23 @@ RowSlicePlan plan_row_slices(
         plan.num_groups_1 = extra_rows;
         plan.rows_per_group_1 = plan.rows_per_group_2 + 1U;
     }
+    return plan;
+}
 
-    const uint32_t num_cores_1 = plan.num_groups_1 * num_slices;
-    plan.all_cores = tt::tt_metal::num_cores_to_corerangeset(plan.num_cores, grid, /* row_wise */ false);
-    plan.core_group_1 = tt::tt_metal::num_cores_to_corerangeset(num_cores_1, grid, /* row_wise */ false);
-    if (num_cores_1 < plan.num_cores) {
-        plan.core_group_2 = tt::tt_metal::num_cores_to_corerangeset(
+// The cores of a plan made by plan_row_slices on the same grid: all of them, and those of each row-group size.
+inline RowSliceCores row_slice_cores(const RowSlicePlan& plan, const tt::tt_metal::CoreCoord grid) {
+    RowSliceCores cores;
+    const uint32_t num_cores_1 = plan.num_groups_1 * plan.num_slices;
+    cores.all_cores = tt::tt_metal::num_cores_to_corerangeset(plan.num_cores, grid, /* row_wise */ false);
+    cores.core_group_1 = tt::tt_metal::num_cores_to_corerangeset(num_cores_1, grid, /* row_wise */ false);
+    if (plan.has_group_2()) {
+        cores.core_group_2 = tt::tt_metal::num_cores_to_corerangeset(
             tt::tt_metal::CoreCoord{num_cores_1 / grid.y, num_cores_1 % grid.y},
             plan.num_cores - num_cores_1,
             grid,
             /* row_wise */ false);
     }
-    return plan;
+    return cores;
 }
 
 // One core's share of a RowSlicePlan, as handed out by for_each_row_slice_core.

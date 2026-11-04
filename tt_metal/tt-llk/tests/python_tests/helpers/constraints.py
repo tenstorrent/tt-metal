@@ -10,6 +10,7 @@ from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -24,8 +25,8 @@ def get_valid_dest_accumulation_modes(formats):
 
     Constraints (all architectures):
     - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+        - Input format is 32-bit
+        Reason: HW limitation, Unpacker cannot unpack 32-bit formats into SrcA and SrcB registers
 
     Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
@@ -46,7 +47,7 @@ def get_valid_dest_accumulation_modes(formats):
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
-    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
+    if in_fmt.is_32_bit():
         return [DestAccumulation.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
@@ -152,12 +153,22 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]:
         return [MathFidelity.LoFi]
 
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
+
+
+def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
+    if math_op is not None and math_op != MathOperation.Elwmul:
+        return [MathFidelity.LoFi]
+    input_format = formats.input_format
+    if input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
+    if input_format.is_block_float():
+        return [MathFidelity.LoFi]
+    elif input_format == DataFormat.Float16_b:
+        return [MathFidelity.LoFi, MathFidelity.HiFi2]
+    elif input_format == DataFormat.Float32:
+        return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+    return list(ALL_MATH_FIDELITIES)
 
 
 def get_perf_math_operations():

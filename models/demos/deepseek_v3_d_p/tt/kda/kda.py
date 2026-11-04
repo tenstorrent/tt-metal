@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA,
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
+    KDA_DECAY_LOGITS_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
@@ -47,15 +48,22 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 
 
 def reduce_scatter_tp_partials(
-    partials: ttnn.Tensor, tt_ccl: TT_CCL, cluster_axis: int | None, topology: ttnn.Topology
+    partials: ttnn.Tensor,
+    tt_ccl: TT_CCL,
+    cluster_axis: int | None,
+    topology: ttnn.Topology,
+    num_links: int | None = None,
 ) -> ttnn.Tensor:
-    """Reduce-scatter the output projection's TP partial sums over the hidden dimension into DRAM."""
+    """Reduce-scatter the output projection's TP partial sums over the hidden dimension into DRAM.
+
+    ``num_links`` defaults to the mesh's link count on ``cluster_axis``.
+    """
     return ttnn.experimental.reduce_scatter_minimal_async(
         partials,
         dim=-1,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-        num_links=tt_ccl.get_num_links(cluster_axis),
+        num_links=tt_ccl.get_num_links(cluster_axis) if num_links is None else num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=topology,
         cluster_axis=cluster_axis,
@@ -181,8 +189,8 @@ class ttKDA:
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
         self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
-        # A bounded gate's projection already applies sigmoid(scale * (x @ W + bias)); chunk preparation applies the
-        # lower bound, so only the softplus gate needs a separate activation.
+        # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the add after the decay projection; chunk
+        # preparation applies the lower bound. The softplus gate applies its own activation after the projection.
         self._bounded_gate = config.gate_lower_bound is not None
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
@@ -213,6 +221,11 @@ class ttKDA:
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        # Shapes are compared whole: iterating a ttnn.Shape ends in a C++ exception inside nanobind.
+        self._recurrent_state_shape = ttnn.Shape(
+            [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
+        )
+        self._convolution_state_shape = ttnn.Shape([1, self.config.conv_kernel_size - 1, self._convolution_width])
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -242,6 +255,7 @@ class ttKDA:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
+        self._tp_num_links = tt_ccl.get_num_links(self._tp_cluster_axis) if self.tensor_parallel_size > 1 else None
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation; the input
         # projection takes its fidelity from the program config.
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -266,18 +280,20 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
-        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
             mesh_device.compute_with_storage_grid_size(),
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
+        )
+        # The bounded gate's FP32 logits (4 bytes per element) between the projection and the offset add.
+        self.decay_logits_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -336,11 +352,7 @@ class ttKDA:
     def _validate_runtime_bound(bound: ttnn.Tensor, name: str) -> None:
         if not isinstance(bound, ttnn.Tensor):
             raise TypeError(f"{name} must be a device UINT32 scalar")
-        if (
-            bound.dtype != ttnn.uint32
-            or bound.layout != ttnn.ROW_MAJOR_LAYOUT
-            or any(dimension != 1 for dimension in bound.shape)
-        ):
+        if bound.dtype != ttnn.uint32 or bound.layout != ttnn.ROW_MAJOR_LAYOUT or bound.logical_volume() != 1:
             raise ValueError(f"device {name} must be a UINT32 row-major scalar")
 
     def _validate_forward(
@@ -367,12 +379,10 @@ class ttKDA:
             raise ValueError(
                 f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
-        expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
-        expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
-        if tuple(state.recurrent.shape) != expected_recurrent:
-            raise ValueError(f"recurrent state shape {tuple(state.recurrent.shape)} != {expected_recurrent}")
-        if tuple(state.convolution.shape) != expected_convolution:
-            raise ValueError(f"convolution state shape {tuple(state.convolution.shape)} != {expected_convolution}")
+        if state.recurrent.shape != self._recurrent_state_shape:
+            raise ValueError(f"recurrent state shape {state.recurrent.shape} != {self._recurrent_state_shape}")
+        if state.convolution.shape != self._convolution_state_shape:
+            raise ValueError(f"convolution state shape {state.convolution.shape} != {self._convolution_state_shape}")
         if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -411,16 +421,49 @@ class ttKDA:
         The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
         """
         weights = self.weights
-        gate = ttnn.linear(
+        if not self._bounded_gate:
+            gate = ttnn.linear(
+                projected,
+                weights.decay_output_projection,
+                bias=weights.decay_bias_flat,
+                program_config=self.decay_program_config,
+                memory_config=self.decay_memory_config,
+                compute_kernel_config=self.compute_config,
+                in0_column_offset=decay_rank_offset,
+            )
+            return self._softplus_decay(gate)
+        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights: FP32 logits plus the FP32 offset, one rounding
+        # to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py. The gate is allocated before the logits so that
+        # the freed logits leave their L1 next to the circular buffers rather than below the gate.
+        gate = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([*list(projected.shape)[:-1], weights.decay_output_projection.shape[-1]]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.device,
+            self.decay_memory_config,
+        )
+        logits = ttnn.linear(
             projected,
             weights.decay_output_projection,
-            bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
-            memory_config=self.decay_memory_config,
+            dtype=ttnn.float32,
+            memory_config=self.decay_logits_memory_config,
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        return gate if self._bounded_gate else self._softplus_decay(gate)
+        # The add reads the offset row for every output tile; a per-call L1 copy (a few KiB per core) spares those reads
+        # their DRAM round trip without holding L1 between calls.
+        offset = ttnn.to_memory_config(weights.decay_bias_flat, ttnn.L1_MEMORY_CONFIG)
+        ttnn.add(
+            logits,
+            offset,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+            memory_config=self.decay_memory_config,
+            output_tensor=gate,
+        )
+        ttnn.deallocate(offset)
+        ttnn.deallocate(logits)
+        return gate
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.multiply(
@@ -467,7 +510,9 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            output = reduce_scatter_tp_partials(output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology)
+            output = reduce_scatter_tp_partials(
+                output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology, self._tp_num_links
+            )
         return output
 
     def forward(
