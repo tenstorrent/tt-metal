@@ -5,6 +5,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 constexpr uint32_t cb_a = get_compile_time_arg_val(0);
 constexpr uint32_t cb_b = get_compile_time_arg_val(1);
@@ -69,13 +70,10 @@ void kernel_main() {
     } else {
         // The predecessor's sender writes each tile column of this head's entry state into cb_ein's storage, then
         // counts it.
-        volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_semaphore);
         for (uint32_t j = 0; j < kt; ++j) {
-            noc_semaphore_wait_min(arrived, j + 1);
+            kda_counter::wait(arrival_semaphore, j + 1);
             cb_push_back(cb_ein, kt);
         }
-        // Subtract instead of clearing: a faster predecessor may already be counting the next call's columns.
-        noc_semaphore_inc(get_noc_addr(arrival_semaphore), 0u - kt);
-        noc_async_atomic_barrier();
+        kda_counter::consume(arrival_semaphore, kt);
     }
 }

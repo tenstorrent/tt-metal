@@ -26,18 +26,34 @@ import ttnn
 _MAX_HEADS_PER_LINK = 14
 
 
-def persistent_semaphores(mesh_device, count: int) -> list:
-    """Zeroed global semaphores on every worker core that persist across calls, created up front so they sit with the
-    model's other long-lived L1 allocations. L1_SMALL, when the device has one, keeps a fabric mux from clobbering them
-    (ttnn::ccl::prefer_l1_small_buffer_type)."""
-    grid = mesh_device.compute_with_storage_grid_size()
-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+# Every persistent counter per mesh id, for reset_persistent_semaphores.
+_persistent_semaphores: dict[int, list] = {}
+
+
+def persistent_semaphores(mesh_device, count: int, cores=None) -> list:
+    """Zeroed global semaphores that persist across calls, on `cores` (default: every worker core), created up front so
+    they sit with the model's other long-lived L1 allocations. L1_SMALL, when the device has one, keeps a fabric mux
+    from clobbering them (ttnn::ccl::prefer_l1_small_buffer_type). The kernels consume their counts by subtraction
+    (persistent_counter.hpp), so they stay zero between calls."""
+    if cores is None:
+        grid = mesh_device.compute_with_storage_grid_size()
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
     buffer_type = ttnn.BufferType.L1_SMALL if l1_small.total_bytes_per_bank > 0 else ttnn.BufferType.L1
     semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0, buffer_type) for _ in range(count)]
+    _persistent_semaphores.setdefault(mesh_device.id(), []).extend(semaphores)
     # The zeroed counters must land before any device's program can increment a peer's.
     ttnn.synchronize_device(mesh_device)
     return semaphores
+
+
+def reset_persistent_semaphores(mesh_device) -> None:
+    """Zero every KDA persistent counter on the mesh. A run that stopped mid-call leaves counts behind that the next call
+    would take for its peers' arrivals; call this with the mesh idle before the next call."""
+    ttnn.synchronize_device(mesh_device)
+    for semaphore in _persistent_semaphores.get(mesh_device.id(), []):
+        ttnn.reset_global_semaphore_value(semaphore, 0)
+    ttnn.synchronize_device(mesh_device)
 
 
 class RelayAffinePrefix:

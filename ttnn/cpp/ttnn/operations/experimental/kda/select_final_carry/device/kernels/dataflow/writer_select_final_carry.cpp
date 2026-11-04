@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/select_final_carry/device/kernels/dataflow/select_final_carry_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -136,10 +137,7 @@ void kernel_main() {
 
     // Every rank on the line must have entered this program before the owner overwrites its output.
     increment_others(safe_get_noc_addr(barrier_x, barrier_y, barrier_semaphore, 0));
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_semaphore), line_targets);
-    // Subtract instead of clearing: a faster rank may already have announced the next call.
-    noc_semaphore_inc(get_noc_addr(barrier_semaphore), 0u - line_targets);
-    noc_async_atomic_barrier();
+    kda_counter::wait_and_consume(barrier_semaphore, line_targets);
 
     if (mode == broadcast) {
         for (uint32_t tile = send_begin; tile < send_end;) {
@@ -189,9 +187,7 @@ void kernel_main() {
         // Flushed after this link's data, the increment tells each receiver that its share has landed.
         increment_others(safe_get_noc_addr(drain_x, drain_y, arrival_semaphore, 0));
     } else if (drain) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_semaphore), arrivals);
-        noc_semaphore_inc(get_noc_addr(arrival_semaphore), 0u - arrivals);
-        noc_async_atomic_barrier();
+        kda_counter::wait_and_consume(arrival_semaphore, arrivals);
     }
     close_connections(fabric);
     noc_async_write_barrier();

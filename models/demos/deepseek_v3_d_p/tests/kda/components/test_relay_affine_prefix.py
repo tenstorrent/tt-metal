@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     pack_transform,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
@@ -217,6 +217,21 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
                 name=f"carry start={start} rank={rank} tp={tp}",
                 nrmse_threshold=0.03,
             )
+
+
+@_MESH
+def test_relay_affine_prefix_after_counter_reset(mesh_device):
+    """Counts an aborted call left on the persistent counters are zeroed by reset_persistent_semaphores, and the next
+    call is exact."""
+    start = 640
+    transforms = _Transforms(mesh_device, seed=start)
+    relay = _relay(mesh_device)
+    for semaphore in relay.semaphores:
+        ttnn.reset_global_semaphore_value(semaphore, 3)
+    reset_persistent_semaphores(mesh_device)
+    actual_start = make_actual_start(mesh_device, start)
+    entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
 
 # Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
