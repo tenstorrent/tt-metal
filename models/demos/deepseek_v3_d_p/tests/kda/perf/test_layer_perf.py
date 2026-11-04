@@ -52,8 +52,7 @@ _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
 # through device synchronization. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's
 # payload (kda_device_params).
-# TODO: re-baseline the KDA layer gates below (SP8xTP1, SP4xTP1) from CI. The gated call became
-# ttKDA.forward_slot (+ TP all-gather where TP > 1, + slab import/export), so the references predate it.
+# TODO: measure the SP8xTP1 and SP4xTP1 references for the forward_slot gate.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
         # Kimi-K3 HiFi3 (scan, affine prefix, output projection), composed, not measured on this base: 1.169 x 1.035,
