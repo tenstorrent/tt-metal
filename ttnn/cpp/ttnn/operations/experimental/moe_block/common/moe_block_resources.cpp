@@ -154,8 +154,8 @@ MoEBlockResources::MoEBlockResources(
     const MoEBlockConfig& config,
     const MoEDtypes& dtypes) :
     mesh_device_(&mesh_device), dims_(dims), config_(config), dtypes_(dtypes) {
-    dims_.validate();
-    config_.validate();
+    dims_.check();
+    config_.check();
     fabric_config_ = tt::tt_fabric::GetFabricConfig();
     max_payload_bytes_ = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     plan_ = moe_block::mesh_plan(

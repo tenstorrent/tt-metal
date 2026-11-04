@@ -81,7 +81,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("alpha", &ExpertActivation::alpha)
         .def_rw("beta", &ExpertActivation::beta)
         .def_rw("linear_beta", &ExpertActivation::linear_beta)
-        .def("validate", &ExpertActivation::validate);
+        .def("check", &ExpertActivation::check);
 
     nb::class_<RouterSpec> router(mod, "RouterSpec", "The router (MoEModel.router).");
     def_kwargs_init(router);
@@ -108,7 +108,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("latent_norm", &MoEModelDims::latent_norm)
         .def_rw("norm_eps", &MoEModelDims::norm_eps)
         .def_prop_ro("routed_width", &MoEModelDims::routed_width)
-        .def("validate", &MoEModelDims::validate);
+        .def("check", &MoEModelDims::check);
 
     nb::class_<MoEDtypes> dtypes(mod, "MoEDtypes", "Weight / activation dtypes and fidelities.");
     def_kwargs_init(dtypes);
@@ -131,7 +131,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)
         .def_rw("persist_l1_small", &MoEBlockConfig::persist_l1_small)
         .def_rw("words_slab_bytes", &MoEBlockConfig::words_slab_bytes)
-        .def("validate", &MoEBlockConfig::validate);
+        .def("check", &MoEBlockConfig::check);
 }
 
 void bind_routing(nb::module_& mod) {

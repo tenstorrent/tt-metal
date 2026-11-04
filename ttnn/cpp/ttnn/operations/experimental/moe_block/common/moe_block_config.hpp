@@ -29,7 +29,7 @@ struct ExpertActivation {
     std::optional<float> beta;         // situ
     std::optional<float> linear_beta;  // situ
 
-    void validate() const;
+    void check() const;  // TT_FATAL on an invalid field
     bool operator==(const ExpertActivation&) const = default;
 };
 
@@ -61,7 +61,7 @@ struct MoEModelDims {
 
     // Hr: the width on the wire and in the experts.
     uint32_t routed_width() const { return latent_dim.value_or(emb_dim); }
-    void validate() const;
+    void check() const;  // TT_FATAL on an invalid field
     bool operator==(const MoEModelDims&) const = default;
 };
 
@@ -102,7 +102,7 @@ struct MoEBlockConfig {
     uint32_t handoff_bytes() const { return persist_l1_small ? 4u : 16u; }
     // The combine's snap constant: the fp32 bits of C = 1.5 x 2^23 q, 0 when combine_snap is unset.
     uint32_t snap_bits() const;
-    void validate() const;
+    void check() const;  // TT_FATAL on an invalid field
     bool operator==(const MoEBlockConfig&) const = default;
 };
 

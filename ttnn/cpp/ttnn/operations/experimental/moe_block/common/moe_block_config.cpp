@@ -15,7 +15,7 @@ namespace config_detail {
 constexpr uint32_t TILE = 32;
 }  // namespace config_detail
 
-void ExpertActivation::validate() const {
+void ExpertActivation::check() const {
     if (kind == ExpertActivationKind::ClampedSilu || kind == ExpertActivationKind::SwigluOai) {
         TT_FATAL(limit.has_value() && *limit > 0, "moe_block: this expert activation needs a positive limit");
     }
@@ -27,7 +27,7 @@ void ExpertActivation::validate() const {
     }
 }
 
-void MoEModelDims::validate() const {
+void MoEModelDims::check() const {
     const uint32_t E = num_experts, K = top_k;
     TT_FATAL(K > 0 && K <= E, "moe_block: top_k {} must be in (0, {}]", K, E);
     TT_FATAL(
@@ -51,13 +51,13 @@ void MoEModelDims::validate() const {
         TT_FATAL(
             *shared_expert_hidden_dim % config_detail::TILE == 0,
             "moe_block: shared_expert_hidden_dim not tile aligned");
-        shared_expert_activation->validate();
+        shared_expert_activation->check();
     }
     if (latent_dim.has_value()) {
         TT_FATAL(
             *latent_dim % config_detail::TILE == 0 && *latent_dim < emb_dim, "moe_block: latent_dim {}", *latent_dim);
     }
-    routed_expert_activation.validate();
+    routed_expert_activation.check();
 }
 
 uint32_t snap_bits(std::optional<float> q) {
@@ -73,7 +73,7 @@ uint32_t snap_bits(std::optional<float> q) {
 
 uint32_t MoEBlockConfig::snap_bits() const { return moe_block::snap_bits(combine_snap); }
 
-void MoEBlockConfig::validate() const {
+void MoEBlockConfig::check() const {
     TT_FATAL(num_links >= 1 && num_links <= 2, "moe_block: num_links {} (1 or 2)", num_links);
     (void)snap_bits();
 }
