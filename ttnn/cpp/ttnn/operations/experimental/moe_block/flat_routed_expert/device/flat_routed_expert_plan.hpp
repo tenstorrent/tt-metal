@@ -59,10 +59,12 @@ struct FlatRoutedExpertPlan {
     bool gu_full_sync = false;
     // gate/up K blocks per CB handshake in the row-pass K loop (1 without row passes)
     uint32_t gu_kg = 1;
-    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), gate/up CB 16
-    // and h_local (3). A caller sizing the arena leaves this much L1 below it (the program
-    // factory checks its CBs against it)
+    // the program's static (non-arena) CBs, bytes a core: 0 - every CB is in the arena (h_local 3 and the pack CB 16 on
+    // the gate/up cores, meta 6 and counts / regions / ids 7 at one offset on every arena core). Kept for callers that
+    // size the L1 below the arena (nothing to leave).
     uint32_t static_l1_bytes = 0;
+    // meta (6) and the dynamic counts (7): bytes, and 4 x the half the program factory sizes (SE_DYN_HALF)
+    uint32_t meta_bytes = 0, dyn_bytes = 0;
     // reader cell 0: idle (kept out of the relay / down pool, so the cells the others take are where they were)
     Core spare{0, 0};
     // weight slots (one per reader cell, slot r in bank r % banks)
@@ -75,7 +77,10 @@ struct FlatRoutedExpertPlan {
     float dring = 2.0f;
     std::vector<uint32_t> pcds, col0s;
     // arena (per core, 2 KB aligned offsets)
-    uint32_t x_off = 0, hl_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0, arena_tiles = 0;
+    // hl_off / hp_off: the gate/up cores' h_local (3) and pack (16) CBs; meta_off / dyn_off: CBs 6 / 7 on every arena
+    // core, past every role's own bytes (one address on all of them, as the static CBs had)
+    uint32_t x_off = 0, hl_off = 0, hp_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0, arena_tiles = 0;
+    uint32_t meta_off = 0, dyn_off = 0;
     // arena bytes each role uses (the arena is max of them: the rest of a role core's arena is free)
     uint32_t gu_bytes = 0, dn_bytes = 0, relay_bytes = 0;
     // weight regions (bytes per core region)
