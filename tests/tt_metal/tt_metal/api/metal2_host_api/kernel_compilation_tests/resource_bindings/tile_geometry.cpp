@@ -53,11 +53,59 @@ ProgramSpec MakeNonPublicGeometryProgramSpec(const GeometryCase& geometry, const
     return spec;
 }
 
+std::string MakeNonPublicTensorShapeQuerySource(const GeometryCase& geometry, const std::string& query) {
+    const Tile tile = geometry.tile.value_or(Tile{});
+    const auto face = tile.get_face_shape();
+    return fmt::format(
+        R"(
+#include "api/llk_operand_from_tokens.h"
+#include <type_traits>
+void kernel_main() {{
+    static_assert(std::is_same_v<decltype({0}), ckernel::TensorShape>);
+    constexpr ckernel::TensorShape shape = {0};
+    static_assert(shape.face_r_dim == {1} && shape.face_c_dim == {2} &&
+                  shape.num_faces_r_dim == {3} && shape.num_faces_c_dim == {4});
+}}
+)",
+        query,
+        face[0],
+        face[1],
+        geometry.rows / face[0],
+        geometry.columns / face[1]);
+}
+
 class BindingTokenGeometry : public test_helpers::ProgramSpecTestBlackhole,
                              public ::testing::WithParamInterface<GeometryCase> {
 protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
+
+// A DFB binding exposes its aggregate LLK shape through the public getter.
+TEST_P(BindingTokenGeometry, DfbTensorShape) {
+    const GeometryCase geometry = GetParam();
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.kernels[1].source =
+        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)")};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// A scratchpad binding exposes its aggregate LLK shape through the public getter.
+TEST_P(BindingTokenGeometry, ScratchpadTensorShape) {
+    const GeometryCase geometry = GetParam();
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.kernels[1].source =
+        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)")};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// Common and per-node tensor bindings expose their aggregate LLK shape through the public getter.
+TEST_P(BindingTokenGeometry, TensorBindingTensorShape) {
+    const GeometryCase geometry = GetParam();
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.kernels[1].source = KernelSpec::SourceCode{
+        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)")};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
 
 // A bound resource exposes its tile height as a constant in DM and all compute stages.
 TEST_P(BindingTokenGeometry, TileHeight) {
@@ -168,6 +216,38 @@ INSTANTIATE_TEST_SUITE_P(
         GeometryCase{"TinyFaces", Tile({2, 32}, {1, 16}), 2, 32, 4, true, false},
         GeometryCase{"PerNode", std::nullopt, 32, 32, 4, false, false, true}),
     [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
+
+struct ShapeWithoutFormatCase {
+    const char* name;
+    const char* query;
+    bool per_node = false;
+};
+
+class BindingTokenTensorShapeWithoutFormat : public test_helpers::ProgramSpecTestBlackhole,
+                                             public ::testing::WithParamInterface<ShapeWithoutFormatCase> {
+protected:
+    distributed::MeshDevice& fixture_device() { return *mesh_device_; }
+};
+
+// An aggregate shape query returns default geometry without requiring a storage format.
+TEST_P(BindingTokenTensorShapeWithoutFormat, DefaultGeometry) {
+    const ShapeWithoutFormatCase missing = GetParam();
+    const GeometryCase geometry{"Default", std::nullopt, 32, 32, 4, false, false, missing.per_node};
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.kernels[1].source = KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, missing.query)};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResourceShapes,
+    BindingTokenTensorShapeWithoutFormat,
+    ::testing::Values(
+        ShapeWithoutFormatCase{"Dfb", "get_tensor_shape(DFBBindingToken<>{0})"},
+        ShapeWithoutFormatCase{"Scratchpad", "get_tensor_shape(ScratchpadBindingToken{0, 1024})"},
+        ShapeWithoutFormatCase{"Tensor", "get_tensor_shape(decltype(tensor::local){binding_details::LLKMetadata{}})"},
+        ShapeWithoutFormatCase{
+            "PerNodeTensor", "get_tensor_shape(decltype(tensor::local){binding_details::LLKMetadata{}})", true}),
+    [](const ::testing::TestParamInfo<ShapeWithoutFormatCase>& info) { return info.param.name; });
 
 }  // namespace
 }  // namespace tt::tt_metal::experimental
