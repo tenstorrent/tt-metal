@@ -852,6 +852,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = tt::DataFormat::Float16_b;
+    // The output and sum slots are Float32: the packer accumulates every step onto them in L1, so an increment far
+    // below the running total (a late exact block after the pooled entries) is not rounded away.
+    tt::DataFormat state_df = tt::DataFormat::Float32;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -862,6 +865,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t state_tile_size = tt::tile_size(state_df);
 
     log_debug(tt::LogOp, "data formats: q {}, k {}, v {}, out {}, scalar {}", q_df, k_df, v_df, out_df, scalar_df);
 
@@ -916,9 +920,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.exp_max_diff = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
         l.out = tile_cb(out0_t, out_tile_size, out_df);
         l.stats_in = tile_cb(statistics_tiles * slots, im_tile_size, im_df);
-        l.prev_out = tile_cb(out_im_tiles * slots, out_tile_size, out_df);
+        l.prev_out = tile_cb(out_im_tiles * slots, state_tile_size, state_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for normalize_row_streaming
-        l.sum_in = tile_cb(statistics_tiles * slots, stats_tile_size, stats_df);
+        l.sum_in = tile_cb(statistics_tiles * slots, state_tile_size, state_df);
         // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
         // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
         l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);

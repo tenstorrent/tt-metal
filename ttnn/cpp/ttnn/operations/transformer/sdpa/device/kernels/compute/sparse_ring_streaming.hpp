@@ -259,8 +259,16 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
         st.batch_completes = false;
         ++st.batch_idx;
     }
+    // The output slots are Float32 (the packer converts from DEST and accumulates in Float32), the S5 packs
+    // intermediate-format: one packer switch per flush, around its P@V members. The pack MOP follows DEST's format,
+    // so pk_w stays valid across it.
+    bool pv_pack_fmt = false;
     while (st.s6_next < st.n_done && (final || static_cast<uint32_t>(st.cbatch[st.s6_next]) + 1u < st.batch_idx)) {
         const uint32_t g = st.s6_next;
+        if (!pv_pack_fmt) {
+            sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
+            pv_pack_fmt = true;
+        }
         if (!st.v_waited) {
             CircularBuffer(cb_v_in).wait_front(st.v_wait_tiles);
             st.v_waited = true;
@@ -287,6 +295,89 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
             st.pk_w);
         ++st.s6_next;
     }
+    if (pv_pack_fmt) {
+        sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
+    }
+}
+
+// Normalization of one slot, consumed from the front of the Float32 output and sum slots into cb_out. Per Q tile row:
+// the sum tile goes through DEST into cb_recip_scratch (the matmul unpack does not read Float32 into the 16-bit
+// DEST), col_identity collapses its partial sums and the reciprocal replaces it, then the output row is scaled by it.
+// Unpacker in the intermediate format and packer in cb_recip_scratch's on entry and exit.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_out,
+    uint32_t cb_sum_in,
+    uint32_t cb_prev_out>
+static __attribute__((noinline, noclone)) void res_normalize_slot() {
+    constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t batch = vDHt < kDst ? vDHt : kDst;
+    CircularBuffer(cb_col_identity).wait_front(1);
+    sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_sum_in, cb_recip_scratch, cb_recip_scratch>();
+    for (uint32_t s = 0; s < Sq_chunk_t; ++s) {
+        copy_init(cb_sum_in);
+        CircularBuffer(cb_sum_in).wait_front(1);
+        CircularBuffer(cb_recip_scratch).reserve_back(1);
+        tile_regs_acquire();
+        copy_tile(cb_sum_in, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        if (s > 0) {
+            sdpa_maybe_pack_reconfig_data_format<cb_out, cb_recip_scratch>();
+        }
+        configure_single_tile_pack(cb_recip_scratch);
+        pack_tile(0, cb_recip_scratch);
+        tile_regs_release();
+        CircularBuffer(cb_recip_scratch).push_back(1);
+        CircularBuffer(cb_sum_in).pop_front(1);
+
+        sdpa_maybe_reconfig_data_format<cb_sum_in, cb_col_identity, cb_recip_scratch, cb_recip_scratch>();
+        matmul_block_init(cb_recip_scratch, cb_col_identity, 0, 1, 1, 1);
+        CircularBuffer(cb_recip_scratch).wait_front(1);
+        tile_regs_acquire();
+        matmul_block(cb_recip_scratch, cb_col_identity, 0, 0, 0, 0, 1, 1, 1);
+        recip_tile_init();
+#ifdef ARCH_BLACKHOLE
+        MATH((recip_tile(0, VectorMode::C)));
+#else
+        MATH((recip_tile_first_column_wh_idst0_direct()));
+#endif
+        tile_regs_commit();
+        CircularBuffer(cb_recip_scratch).pop_front(1);
+        CircularBuffer(cb_recip_scratch).reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, cb_recip_scratch);
+        tile_regs_release();
+        CircularBuffer(cb_recip_scratch).push_back(1);
+
+        sdpa_maybe_reconfig_data_format<cb_col_identity, cb_prev_out, cb_recip_scratch, cb_recip_scratch>();
+        mul_bcast_cols_init(cb_prev_out, cb_recip_scratch);
+        sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_out>();
+        CircularBuffer(cb_prev_out).wait_front(vDHt);
+        CircularBuffer(cb_recip_scratch).wait_front(1);
+        CircularBuffer(cb_out).reserve_back(vDHt);
+        for (uint32_t base = 0; base < vDHt; base += batch) {
+            const uint32_t n = vDHt - base < batch ? vDHt - base : batch;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < n; ++j) {
+                mul_tiles_bcast_cols(cb_prev_out, cb_recip_scratch, base + j, 0, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < n; ++j) {
+                pack_tile(j, cb_out);
+            }
+            tile_regs_release();
+        }
+        CircularBuffer(cb_out).push_back(vDHt);
+        CircularBuffer(cb_recip_scratch).pop_front(1);
+        CircularBuffer(cb_prev_out).pop_front(vDHt);
+    }
+    sdpa_maybe_reconfig_data_format<cb_prev_out, cb_recip_scratch, cb_recip_scratch, cb_recip_scratch>();
+    sdpa_maybe_pack_reconfig_data_format<cb_out, cb_recip_scratch>();
 }
 
 // ---- Per-piece step ----
@@ -712,8 +803,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 
-        // ---- S4 (rescale only). ----
+        // ---- S4 (rescale only): the Float32 slots pass through the 16-bit DEST, so a rescale rounds them to bf16
+        //      once (the lazy threshold keeps rescales rare); the accumulation between rescales stays Float32. ----
         if (rescale) {
+            sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
+            sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
             for (uint32_t g = 0; g < n_slots; ++g) {
                 if (!slot_init(g)) {
                     continue;
@@ -721,6 +815,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
                     cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, slots[g], slots[g], slots[g]);
             }
+            sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
+            sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
         }
     }  // S2-S4
 
@@ -776,9 +872,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     }
 
     // ---- S6b: the row sums P@I in batches of stat_slots_per_acq members (matmul row stride W_g, re-issued when it
-    //      changes). One partial sum per column, collapsed at normalization, bounds the bf16 accumulation error on
-    //      long rows. Every S5 token has been taken by now, so all exp'd scores are in L1. ----
+    //      changes), L1-accumulated onto the Float32 sum slots: one partial sum per column, collapsed at
+    //      normalization. Every S5 token has been taken by now, so all exp'd scores are in L1. ----
     sdpa_maybe_reconfig_data_format<cb_v_in, cb_sum_identity, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_sum_in>();
     configure_single_tile_pack(cb_sum_in);
     {
         uint32_t rs_stride = 0;
@@ -818,6 +915,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         }
     }
     sdpa_maybe_reconfig_data_format<cb_sum_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_sum_in, cb_qkt_im>();
 
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
     CircularBuffer(cb_max_scratch).pop_front(stats_cap);
@@ -835,7 +933,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * cb_max_in, cb_prev_out}, one SLOT per resident chunk in Q-chunk order, updated in place (see
  * sdpa_resident_piece_step_compact for the contract). The slot CBs are filled once per pass, on its first active ring
  * iteration (exactly full, write pointer held at the base), and are neither pushed nor popped until its last ring
- * iteration, where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are
+ * iteration, where res_normalize_slot consumes the n_res slots from the front in order and the unused slots are
  * popped, so every slot CB is empty with its pointers at the base for the next pass.
  *
  * Steps are per piece: per streamed piece, one step per group of the head's resident chunks that keep a block of it,
@@ -914,30 +1012,35 @@ void sdpa_ring_resident(
     [[maybe_unused]] const volatile uint8_t* block_counts) {
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
-    // float) and otherwise assumes every state, scratch and scale CB carries the intermediate format.
+    // float) and the Float32 output and sum slots, and otherwise assumes every max, scratch and scale CB carries the
+    // intermediate format.
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     static_assert(
-        !sdpa_unpack_format_changed<cb_qkt_im, cb_prev_out>() && !sdpa_unpack_format_changed<cb_qkt_im, cb_max_in>() &&
-            !sdpa_unpack_format_changed<cb_qkt_im, cb_sum_in>() &&
+        !sdpa_unpack_format_changed<cb_qkt_im, cb_max_in>() &&
             !sdpa_unpack_format_changed<cb_qkt_im, cb_max_scratch>() &&
             !sdpa_unpack_format_changed<cb_qkt_im, cb_exp_max_diff>() &&
-            !sdpa_unpack_format_changed<cb_qkt_im, cb_identity_scale_in>(),
-        "resident mode: the state, scratch and scale CBs must use the step's intermediate format");
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_identity_scale_in>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_recip_scratch>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_col_identity>() &&
+            !sdpa_unpack_format_changed<cb_prev_out, cb_sum_in>(),
+        "resident mode: the max, scratch and scale CBs must use the step's intermediate format, the output and sum "
+        "slots one format");
 #endif
 #ifdef TRISC_PACK
     static_assert(
-        pack_dst_format[cb_prev_out] == pack_dst_format[cb_qkt_im] &&
+        pack_dst_format[cb_prev_out] == static_cast<uint32_t>(DataFormat::Float32) &&
+            pack_dst_format[cb_sum_in] == static_cast<uint32_t>(DataFormat::Float32) &&
             pack_dst_format[cb_max_in] == pack_dst_format[cb_qkt_im] &&
-            pack_dst_format[cb_sum_in] == pack_dst_format[cb_qkt_im] &&
             pack_dst_format[cb_max_scratch] == pack_dst_format[cb_qkt_im] &&
-            pack_dst_format[cb_exp_max_diff] == pack_dst_format[cb_qkt_im],
-        "resident mode: the state and scratch CBs must use the step's intermediate format");
+            pack_dst_format[cb_exp_max_diff] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_recip_scratch] == pack_dst_format[cb_qkt_im],
+        "resident mode: the output and sum slots must be Float32, the max and scratch CBs the step's intermediate "
+        "format");
 #endif
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
     constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
     constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
-    constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     // Blocks of kBlockTiles tiles (block_tiles); a piece holds kBlocksPerPiece of them. The plan page carries this
     // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only blocks holding a real token).
@@ -1369,21 +1472,12 @@ void sdpa_ring_resident(
                 pack_reconfig_data_format(cb_out);
                 configure_single_tile_pack(cb_out);
                 zero_block(cb_identity_scale_in, cb_out, out_tiles);
-                pack_reconfig_data_format(cb_recip_scratch);  // normalize_row_streaming's exit state
+                pack_reconfig_data_format(cb_recip_scratch);  // res_normalize_slot's exit state
                 sdpa_cb_pop_front_out_of_line(cb_sum_in, Sq_chunk_t);
                 sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
                 continue;
             }
-            normalize_row_streaming<
-                false,
-                vDHt,
-                norm_dst_size,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_out,
-                scale_fp32,
-                false,
-                INVALID_CB>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
+            res_normalize_slot<Sq_chunk_t, vDHt, cb_col_identity, cb_recip_scratch, cb_out, cb_sum_in, cb_prev_out>();
         }
         if (n_res < resident_slots) {
             sdpa_cb_pop_front_out_of_line(cb_sum_in, (resident_slots - n_res) * Sq_chunk_t);
