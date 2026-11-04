@@ -22,12 +22,15 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     P150_AND_RING,
     REFERENCE,
     REFERENCE_LAYERS,
+    SIMULATOR_GRID,
+    SIMULATOR,
+    simulator_config,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import compute_kernel_config
 from models.experimental.kimi_k3_moonvit_v2.tt.rms_norm import RMSNorm
 
 # Per-layer norms, under `vision_tower.encoder.blocks.<layer>`.
-ENCODER_NORMS = ["norm0", "norm1"]
+ENCODER_NORMS = pytest.mark.parametrize("name", ["norm0", "norm1"])
 
 
 def check_rms_norm(mesh_device, torch_norm, eps: float, rows: MeshRows) -> None:
@@ -43,33 +46,68 @@ def check_rms_norm(mesh_device, torch_norm, eps: float, rows: MeshRows) -> None:
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.01)
 
 
+def check_encoder_rms_norm(mesh_device, sp_axis, config, reference, layer, name, grid) -> None:
+    """`grid` padded to `config.max_patches`, the ring's length; one chip runs its quarter (`MeshRows`)."""
+    torch_norm = reference.vision_tower.encoder.blocks[layer].get_submodule(name)
+    assert torch_norm.eps is None
+    ((_, h, w),) = grid
+    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
+
+
+def check_final_rms_norm(mesh_device, sp_axis, config, reference, grid) -> None:
+    """`grid` padded to `config.max_patches`, the ring's length; one chip runs its quarter (`MeshRows`)."""
+    torch_norm = reference.vision_tower.encoder.final_layernorm
+    assert torch_norm.eps is None
+    ((_, h, w),) = grid
+    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
+
+
+def check_projector_rms_norm(mesh_device, sp_axis, config, reference, grid) -> None:
+    """The merged tokens of `grid`, padded to `config.max_patches / 4` (the ring's length after merging);
+    one chip runs its quarter (`MeshRows`)."""
+    torch_norm = reference.mm_projector.post_norm
+    assert torch_norm.eps == config.projector_norm_eps
+    ((_, h, w),) = grid
+    rows = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
+    check_rms_norm(mesh_device, torch_norm, config.projector_norm_eps, rows)
+
+
 @P150_AND_RING
 @REFERENCE_LAYERS
 @ROW_GRIDS
-@pytest.mark.parametrize("name", ENCODER_NORMS)
+@ENCODER_NORMS
 def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, size, layer, name):
-    torch_norm = reference.vision_tower.encoder.blocks[layer].get_submodule(name)
-    assert torch_norm.eps is None
-    ((_, h, w),) = row_grid(size)
-    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
+    check_encoder_rms_norm(mesh_device, sp_axis, config, reference, layer, name, row_grid(size))
+
+
+@SIMULATOR
+@ENCODER_NORMS
+def test_encoder_rms_norm_small(mesh_device, sp_axis, num_links, config, reference, name):
+    """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
+    check_encoder_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, 0, name, SIMULATOR_GRID)
 
 
 @P150_AND_RING
 @REFERENCE
 @ROW_GRIDS
 def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    torch_norm = reference.vision_tower.encoder.final_layernorm
-    assert torch_norm.eps is None
-    ((_, h, w),) = row_grid(size)
-    check_rms_norm(mesh_device, torch_norm, config.norm_eps, MeshRows(h * w, config.max_patches, sp_axis))
+    check_final_rms_norm(mesh_device, sp_axis, config, reference, row_grid(size))
+
+
+@SIMULATOR
+def test_final_rms_norm_small(mesh_device, sp_axis, num_links, config, reference):
+    """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
+    check_final_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)
 
 
 @P150_AND_RING
 @REFERENCE
 @ROW_GRIDS
 def test_projector_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    torch_norm = reference.mm_projector.post_norm
-    assert torch_norm.eps == config.projector_norm_eps
-    ((_, h, w),) = row_grid(size)
-    rows = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
-    check_rms_norm(mesh_device, torch_norm, config.projector_norm_eps, rows)
+    check_projector_rms_norm(mesh_device, sp_axis, config, reference, row_grid(size))
+
+
+@SIMULATOR
+def test_projector_rms_norm_small(mesh_device, sp_axis, num_links, config, reference):
+    """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS patches."""
+    check_projector_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)

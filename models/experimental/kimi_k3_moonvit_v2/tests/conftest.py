@@ -7,6 +7,8 @@ load its `state_dict()`. `mesh_device` replaces the repo-wide fixture for this f
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -17,9 +19,34 @@ from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
     load_vision_state_dict,
 )
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
-from models.experimental.kimi_k3_moonvit_v2.tests.common import LOUDBOX_SHAPE, RING_SIZE, TEST_LAYERS
+from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    LOUDBOX_SHAPE,
+    ON_SIMULATOR,
+    RING_SIZE,
+    SIMULATOR_MARK,
+    TEST_LAYERS,
+)
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 from tests.scripts.common import get_updated_device_params
+
+
+TESTS_DIR = Path(__file__).parent
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", f"{SIMULATOR_MARK}: sized for ttsim (`SIMULATOR` in common.py)")
+
+
+def pytest_collection_modifyitems(config, items):
+    """On ttsim, skip this folder's device tests that are not marked `simulator`. CPU-only tests
+    (no `mesh_device`) still run."""
+    if not ON_SIMULATOR:
+        return
+    skip = pytest.mark.skip(reason=f"not a sim test (no `{SIMULATOR_MARK}` mark); too slow on ttsim")
+    for item in items:
+        in_folder = TESTS_DIR in Path(item.path).parents
+        if in_folder and "mesh_device" in item.fixturenames and item.get_closest_marker(SIMULATOR_MARK) is None:
+            item.add_marker(skip)
 
 
 @pytest.fixture
