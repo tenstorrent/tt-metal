@@ -59,6 +59,36 @@ ttnn::Tensor embedding(
         }
     }
 
+    // Decide ahead of time whether this invocation needs the reshape / to_layout /
+    // typecast adjustments after the primitive. If the caller's out= already has the
+    // final shape, layout, and dtype, we can forward it to the primitive so the
+    // primitive writes straight into it and no copy is needed. Otherwise, run the
+    // primitive without out=, perform the adjustments, and copy into out= once at the
+    // end.
+    const ttnn::Shape final_shape = (original_input_rank == 1)
+        ? ttnn::Shape({sentence_size, hidden_embedding_dim})
+        : ttnn::Shape({batch_size, sentence_size, hidden_embedding_dim});
+    const ttnn::Layout final_layout = layout.value_or(weight_arg.layout());
+    const ttnn::DataType final_dtype = dtype.value_or(weight.dtype());
+    // Layout adjustments only apply when the final layout is TILE; in ROW_MAJOR the
+    // primitive output passes through to_layout as a no-op and typecast is skipped.
+    const bool typecast_needed_after =
+        final_layout == ttnn::TILE_LAYOUT && final_dtype != weight.dtype();
+
+    const bool out_matches_final = optional_output_tensor.has_value() &&
+        optional_output_tensor->storage_type() == StorageType::DEVICE &&
+        optional_output_tensor->logical_shape() == final_shape &&
+        optional_output_tensor->layout() == final_layout &&
+        optional_output_tensor->dtype() == final_dtype;
+
+    // Forward out= to the primitive only when no post-primitive reshape / layout /
+    // typecast would change the buffer. Otherwise a stale copy of the primitive's
+    // output would live in out= after the subsequent adjustments produced a new
+    // tensor.
+    const bool reshape_changes_tensor = embedding_input_tensor.logical_shape() != final_shape;
+    const bool forward_out_to_primitive =
+        out_matches_final && !reshape_changes_tensor && !typecast_needed_after;
+
     auto embeddings = ttnn::prim::embedding(
         embedding_input_tensor,
         weight,
@@ -66,16 +96,23 @@ ttnn::Tensor embedding(
         embeddings_type,
         memory_config,
         pad_token,
-        optional_output_tensor);
+        forward_out_to_primitive ? optional_output_tensor : std::nullopt);
+
+    if (forward_out_to_primitive) {
+        // Primitive wrote into out= directly; no reshape / layout / dtype adjustment
+        // applies on this path by construction.
+        return embeddings;
+    }
+
     // Don't include batch_size if there was none
     if (original_input_rank == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
     } else {
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
-    embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
-    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
-        embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
+    embeddings = ttnn::to_layout(embeddings, final_layout);
+    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != final_dtype) {
+        embeddings = ttnn::typecast(embeddings, final_dtype);
     }
     if (optional_output_tensor.has_value() &&
         optional_output_tensor->storage_type() == StorageType::DEVICE &&
