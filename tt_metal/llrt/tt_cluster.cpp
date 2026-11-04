@@ -996,9 +996,8 @@ bool Cluster::requires_snoop_for_dm_coherence() const {
         // ttsim and Emule hold no data in a DM L2, so a plain write is already coherent and their
         // UMD IoWindows don't take WindowFlags::Snoop.
         case TargetDevice::Simulator: return rtoptions_.get_simulator_path().extension() != ".so";
-        case TargetDevice::Emule: return false;
-        // Mock never reaches a device.
-        case TargetDevice::Mock: return false;
+        case TargetDevice::Emule:
+        case TargetDevice::Mock: return false;  // Mock never reaches a device.
         default: return true;
     }
 }

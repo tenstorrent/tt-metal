@@ -180,7 +180,12 @@ struct dfb_global_header_t {
 static_assert(HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= 24, "DFB txn-id masks no longer fit dm0_packed");
 constexpr uint32_t DFB_DM0_PACKED_MASK_BITS = 24u;
 // dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B, 2 = 8 B.
-inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) { return stride == 8u ? 2u : (stride == 16u ? 1u : 0u); }
+inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) {
+    if (stride == 8u) {
+        return 2u;
+    }
+    return stride == 16u ? 1u : 0u;
+}
 inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 3u); }
 // blob_offset must be 64B aligned: its low bits are dropped to carry the stride code.
 inline uint64_t dfb_dm0_packed_make(
@@ -498,7 +503,10 @@ static_assert(offsetof(dfb_dm0_txn_descriptor_image_t, threshold) == 23, "thresh
 
 // Smallest source stride holding num_counters counters (bytes 5..) plus the threshold in the last byte.
 inline uint32_t dfb_dm0_desc_stride_for(uint32_t max_counters) {
-    return max_counters <= 2u ? 8u : (max_counters <= 10u ? 16u : 32u);
+    if (max_counters <= 2u) {
+        return 8u;
+    }
+    return max_counters <= 10u ? 16u : 32u;
 }
 inline uint32_t dfb_dm0_desc_threshold_offset(uint32_t stride) {
     return stride == 32u ? static_cast<uint32_t>(offsetof(dfb_dm0_txn_descriptor_image_t, threshold)) : stride - 1u;

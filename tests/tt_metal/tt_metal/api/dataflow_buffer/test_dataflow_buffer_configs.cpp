@@ -2836,9 +2836,9 @@ TEST_F(UnitMeshFixture, DfbConfigDmCachedLinesDisjoint) {
         if (ghdr->has_dm0_isr) {
             next_region = dfb_dm0_packed_blob_offset(ghdr->dm0_packed);
         } else {
-            for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-                if (ghdr->hart_desc[h].num_entries > 0) {
-                    next_region = std::min<uint32_t>(next_region, ghdr->hart_desc[h].blob_start);
+            for (const auto& hart : ghdr->hart_desc) {
+                if (hart.num_entries > 0) {
+                    next_region = std::min<uint32_t>(next_region, hart.blob_start);
                 }
             }
         }
