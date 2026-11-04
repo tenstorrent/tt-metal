@@ -72,6 +72,18 @@ inline std::string get_soc_description_file(
     return path;
 }
 
+// TT_METAL_EMU_SOC_DESC's per-chip entries, keyed by logical chip id; empty for a single descriptor.
+std::unordered_map<tt::ChipId, std::string> per_chip_soc_descs(const tt::llrt::RunTimeOptions& rtoptions) {
+    const auto& paths = rtoptions.get_emu_soc_desc_paths();
+    std::unordered_map<tt::ChipId, std::string> per_chip;
+    if (paths.size() > 1) {
+        for (size_t chip = 0; chip < paths.size(); chip++) {
+            per_chip.emplace(static_cast<tt::ChipId>(chip), paths[chip]);
+        }
+    }
+    return per_chip;
+}
+
 std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
     TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
     std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc =
@@ -558,7 +570,11 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
-        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+        // TT_METAL_EMU_SOC_DESC, when set, gives the mock chips the emulator's descriptors.
+        const auto& emu_soc_descs = rtoptions_.get_emu_soc_desc_paths();
+        const std::string sdesc_path = emu_soc_descs.empty()
+                                           ? get_soc_description_file(this->arch_, this->target_type_, rtoptions_)
+                                           : emu_soc_descs.front();
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
         auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
@@ -566,6 +582,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
             .sdesc_path = sdesc_path,
+            .sdesc_paths_per_chip = per_chip_soc_descs(rtoptions_),
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
@@ -583,11 +600,16 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 #endif
     } else if (this->target_type_ == TargetDevice::EmuAxi) {
         const auto [host, port] = parse_host_port(rtoptions_.get_emu_server(), "TT_METAL_EMU_SERVER");
+        // A test cluster descriptor (TT_METAL_MOCK_CLUSTER_DESC_PATH) presents the package as several chips.
+        auto test_cluster_desc = rtoptions_.get_mock_enabled() ? get_mock_cluster_desc(rtoptions_)
+                                                               : std::unique_ptr<umd::ClusterDescriptor>{};
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::EMU_AXI,
             .num_host_mem_ch_per_mmio_device = 0,
-            .sdesc_path = rtoptions_.get_emu_soc_desc_path(),
-            .target_devices = {0},
+            .sdesc_path = rtoptions_.get_emu_soc_desc_paths().front(),
+            .sdesc_paths_per_chip = per_chip_soc_descs(rtoptions_),
+            .target_devices = test_cluster_desc ? std::unordered_set<tt::ChipId>{} : std::unordered_set<tt::ChipId>{0},
+            .cluster_descriptor = test_cluster_desc.get(),
             .emu_host = host,
             .emu_port = port,
             // Chippy owns clock, cold reset, CCE remap, GDDR, and (on mmk) the D2D

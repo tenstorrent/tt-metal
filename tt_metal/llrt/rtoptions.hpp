@@ -313,7 +313,7 @@ class RunTimeOptions {
 
     std::filesystem::path simulator_path = "";
     std::string emu_server;
-    std::string emu_soc_desc_path;
+    std::vector<std::string> emu_soc_desc_paths;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;
     std::string grendel_jtag_transport = "jtag2axi_v2";
@@ -859,7 +859,10 @@ public:
     }
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
     const std::string& get_emu_server() const { return emu_server; }
-    const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
+    // TT_METAL_EMU_SOC_DESC: one SoC descriptor for the emulated package, or a comma-separated list that gives logical
+    // chip i the i-th, so a test cluster descriptor can present the package as several chips. The Mock target uses the
+    // list too, when set, so host-only runs see the same chips.
+    const std::vector<std::string>& get_emu_soc_desc_paths() const { return emu_soc_desc_paths; }
     const std::string& get_grendel_jtag_server() const { return grendel_jtag_server; }
     const std::string& get_grendel_jtag_soc_desc_path() const { return grendel_jtag_soc_desc_path; }
     const std::string& get_grendel_jtag_transport() const { return grendel_jtag_transport; }

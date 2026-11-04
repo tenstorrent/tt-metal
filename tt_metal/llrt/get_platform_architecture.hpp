@@ -111,7 +111,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         rtoptions.get_target_device() == tt::TargetDevice::EmuAxi ||
         rtoptions.get_target_device() == tt::TargetDevice::GrendelJtag) {
         const std::string& soc_desc = rtoptions.get_target_device() == tt::TargetDevice::EmuAxi
-                                          ? rtoptions.get_emu_soc_desc_path()
+                                          ? rtoptions.get_emu_soc_desc_paths().front()
                                           : rtoptions.get_grendel_jtag_soc_desc_path();
         arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
         // Grendel package descriptors report ARCH::GRENDEL; Metal runs them through the Quasar HAL.
