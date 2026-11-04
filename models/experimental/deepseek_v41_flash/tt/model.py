@@ -29,6 +29,12 @@ replay thread and the DRISC prefetch rings. This file only replaces the parts V4
 * Whether an index source splits its keys over the TP ranks is a variant too: a split select only wins
   past ~45k keys (~31k for the candidate source), so a step before that runs the unsplit trace even when
   ``max_seq`` would take the layer past it (:meth:`DeepSeekV41Model._split_layers`).
+* With ``image_rows``, every variant has an image twin, in which the learned routers rank image-span tokens
+  with ``bias_vl``. A step's tokens choose it when the step is posted (:meth:`DeepSeekV41Model.replay_traced`),
+  so the text trace, the one generation runs, carries no image mask and no per-layer bias gather.
+  With ``vision_stage`` too, the model opens the :class:`~.vision.ImageSockets` (``image_sockets``) a vision tower
+  on that stage and an :class:`~.vision.EmbeddingRowWriter` take their traced transfers on, beside the Engram
+  sockets and before any ring, so they sit clear of what a prefill replay overwrites.
 
 Prefill (:meth:`DeepSeekV41Model.build_prefill`) builds a
 :class:`~.prefill.model.DeepSeekV41PrefillModel` on the decode stages, sharing the routed experts,
@@ -57,6 +63,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     decoder_layer_weights,
     dequantized,
     expert_provider,
+    load_vision_config,
     pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.attention import (
@@ -81,7 +88,12 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41DeviceSampler, DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
-from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
+from models.experimental.deepseek_v41_flash.tt.vision import (
+    ImageSockets,
+    extend_embedding,
+    image_mask,
+    open_image_sockets,
+)
 from models.experimental.deepseek_v4_flash.tt import common as v4_common
 from models.experimental.deepseek_v4_flash.tt.common import (
     CCL_TOPOLOGY,
@@ -227,6 +239,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         use_prefetcher: Optional[bool] = None,
         layer_submesh_ids: Optional[Sequence[int]] = None,
         image_rows: int = 0,
+        vision_stage: Optional[int] = None,
         verify_rows: int = 1,
         balance_dram_banks: bool = True,
     ):
@@ -348,6 +361,23 @@ class DeepSeekV41Model(DeepSeekV4Model):
             for li in config.engram_layer_ids
             if li < n
         }
+        self.image_sockets: Optional[ImageSockets] = None
+        if vision_stage is not None:
+            if not image_rows:
+                raise ValueError("a vision stage writes image rows: pass image_rows too")
+            if not 0 <= vision_stage < self.num_submeshes:
+                raise ValueError(f"vision stage {vision_stage} is past the {self.num_submeshes} pipeline stages")
+            # The row writes ride on stage 0's Engram rows sockets (written only between steps), so the table's stage,
+            # whose L1 decode fills, takes no new FIFO; stage 0 opens its own only if no Engram layer is there.
+            table_sockets = next(
+                (sockets for li, sockets in engram_sockets.items() if self.layer_submesh_ids[li] == 0),
+                None,
+            )
+            if table_sockets is None:
+                table_sockets = open_rows_sockets(self.first_device, rows_page_bytes(config))
+            self.image_sockets = open_image_sockets(
+                load_vision_config(loader.snapshot_dir), self.submeshes[vision_stage], table_sockets
+            )
         self.embed_tokens = DeepSeekV4Embedding(loader, self.first_device, cache=cache)
         if image_rows:
             # Image spans embed as ids past the vocabulary (see :mod:`.vision`), rows filled by
@@ -447,6 +477,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # Held by whoever touches the pools' book-keeping or queues work on cq 0: the replay thread and
         # the posting thread both do.
         self._cq_lock = threading.RLock()
+        # Held while ensure_session_capacity reads or grows a session's blocks and publishes its page tables,
+        # so a capacity check on one thread never sees blocks whose page table is not queued yet. Taken after
+        # _cq_lock, never before it.
+        self._paged_lock = threading.Lock()
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
         # Depth of the ratio > 1 compressor windows under speculative decode (None before prepare_spec_decode).
@@ -690,6 +724,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "has_r2_pool": 2 in kv_ratios or 2 in row_ratios,
                 "has_r2_select": 2 in index_ratios,
                 "has_candidates": any(li in self._candidate_layers for li in layers_here),
+                # A hash-routed MoE takes no ranking bias, so only a learned router tells image tokens apart.
+                "routes_images": any(not self.layers[li].mlp.is_hash for li in layers_here),
                 "traces": {},
                 "tids": {},
                 "outputs": {},
@@ -911,8 +947,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 starts.add((keys + 1) * ratio - 1)
         return sorted(p for p in starts if p < self._decode_max_seq)
 
-    def _variant_key(self, pos: int) -> tuple[bool, int, tuple[int, frozenset[int]]]:
-        """``(causal, r=2 pool phase, (select mode, split layers))`` for absolute ``pos``.
+    def _variant_key(self, pos: int, image: bool = False) -> tuple[bool, int, tuple[int, frozenset[int], bool]]:
+        """``(causal, r=2 pool phase, (select mode, split layers, image))`` for absolute ``pos``.
 
         Causal starts at ``sliding_window - 1`` when the profile asks for it and the step has several
         users (:attr:`_causal_variants`). An r=2 group pools on odd positions (``(pos + 1) % 2 == 0``)
@@ -920,36 +956,46 @@ class DeepSeekV41Model(DeepSeekV4Model):
         selects on every step, so it is not a variant bit. The select mode is 0 before the r=2
         select, 1 after it and 2 once the select is two-level (:meth:`_two_level`). The split layers
         (:meth:`_split_layers`) are the index sources whose select at ``pos`` splits its keys.
+
+        ``image`` (only with ``image_rows``) is the twin whose routers rank an image-span token with ``bias_vl``:
+        it derives the token's ``image_mask`` and gathers each router's bias row from it. The text trace adds
+        the resident bias and has neither, so a step is posted with the image trace only when it is fed an image
+        token (:meth:`replay_traced`).
         """
         causal = self._causal_variants and pos >= self.sliding_window - 1
         split = self._split_layers(pos)
+        image = bool(image and self.image_rows)
         if self._two_level(pos):
-            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), (2, split))
+            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), (2, split, image))
         if not self._pool_crs:
-            return (causal, 0, (0, split))
-        return (causal, int((pos + 1) % 2 == 0), (int(pos >= 1), split))
+            return (causal, 0, (0, split, image))
+        return (causal, int((pos + 1) % 2 == 0), (int(pos >= 1), split, image))
 
-    def _reachable_variants(self) -> list[tuple[bool, int, tuple[int, frozenset[int]]]]:
+    def _reachable_variants(self) -> list[tuple[bool, int, tuple[int, frozenset[int], bool]]]:
         """The variants some position below ``max_seq`` asks for: :meth:`_variant_key` at each of
-        :meth:`_variant_starts` and the position after it, which has the other r=2 phase."""
+        :meth:`_variant_starts` and the position after it, which has the other r=2 phase, each with its image
+        twin when the model takes images."""
         positions = [p for start in self._variant_starts() for p in (start, start + 1) if p < self._decode_max_seq]
-        return list(dict.fromkeys(self._variant_key(p) for p in positions))
+        images = (False, True) if self.image_rows else (False,)
+        return list(dict.fromkeys(self._variant_key(p, image) for image in images for p in positions))
 
     @staticmethod
-    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: tuple = (0, frozenset())) -> tuple:
+    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: tuple = (0, frozenset(), False)) -> tuple:
         """Drop variant bits this submesh's layers do not branch on.
 
-        ``index_sparse`` is the ``(select mode, split layers)`` of :meth:`_variant_key`. A sliding-only stage
-        collapses to one trace; a ratio-1 stage keeps only the causal bit, the two-level bit if it holds the
-        candidate source or a consumer, and the split of its own index sources.
+        ``index_sparse`` is the ``(select mode, split layers, image)`` of :meth:`_variant_key`. A sliding-only
+        stage collapses to one trace per image bit; a ratio-1 stage keeps only the causal bit, the two-level bit
+        if it holds the candidate source or a consumer, and the split of its own index sources. A stage of
+        hash-routed MoE layers only ignores the image bit.
         """
-        mode, split = index_sparse
+        mode, split, image = index_sparse
         return (
             causal and sm["has_compressed"],
             bool(pool_flags.get(2, False)) and sm["has_r2_pool"],
             bool(mode) and sm["has_r2_select"],
             mode == 2 and sm["has_candidates"],
             split.intersection(sm["layers"]),
+            image and sm["routes_images"],
         )
 
     def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: tuple) -> int:
@@ -1085,7 +1131,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             sid = self._resident[0]
         if pos >= self._decode_max_seq:
             raise PagedCacheFull(f"position {pos} is past max_seq {self._decode_max_seq}")
-        with self._cq_lock:
+        # Nearly every step is already covered (blocks are grown ahead), and then the command queue is not
+        # needed: taking _cq_lock would wait for the replay thread to finish issuing another step's traces.
+        with self._paged_lock:
+            if paged.covers(sid, pos):
+                return
+        with self._cq_lock, self._paged_lock:
             ahead = min(pos + _GROW_AHEAD_TOKENS, self._decode_max_seq - 1)
             try:
                 changed = paged.ensure_capacity(sid, ahead)
@@ -1149,6 +1200,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
         paged.reset_session(sid)
         self._session_pos[sid] = 0
         self._write_page_tables()
+
+    def end_session_at(self, sid: int, pos: int) -> None:
+        """Put session ``sid`` back at ``pos`` after the steps it had posted past ``pos`` were each fed the packet
+        of ``pos - 1`` instead of their own (the server's early stop of its decode lookahead).
+
+        Rerunning the session's newest position rewrites every row it reads as it was: its ring and window rows,
+        and the entries of the groups closed so far, which is all a select scores. A pool trace run at a
+        non-pool position also writes the open group's entry, which the step that closes that group rewrites.
+        Those steps' replays recorded their own positions, so this waits for them to be dispatched first.
+        """
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        if not 0 < pos <= self._session_pos[sid]:
+            raise ValueError(f"session {sid} is at {self._session_pos[sid]}, cannot end it at {pos}")
+        self._session_pos[sid] = pos
 
     def truncate_session(self, sid: int, pos: int) -> None:
         """Rewind session ``sid`` to position ``pos`` (at most its current one), keeping the compressed entries
@@ -1282,40 +1349,55 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos[sid] = pos
 
     # -- replay: every posted step is bound to the session resident when it was posted -- #
-    def replay_traced(self, pos: int) -> None:
+    def _has_image_token(self, token_id) -> bool:
+        """Whether the step's tokens include an image-span row (an id past the vocabulary)."""
+        return bool(self.image_rows) and any(t >= self.config.vocab_size for t in self._step_tokens(token_id))
+
+    def replay_traced(self, pos: int, token_id=None) -> None:
         """V4's :meth:`~DeepSeekV4Model.replay_traced` for the resident session, which the step keeps:
         its packet (:meth:`write_step_packet`) and its capacity / position book-keeping
-        (:meth:`_execute_traces`) are for that session even if another is activated meanwhile."""
+        (:meth:`_execute_traces`) are for that session even if another is activated meanwhile.
+
+        The trace is chosen here, before the packet: the image one if ``token_id`` (what the step will be fed)
+        holds an image token, else the text one. A step posted without its token, as a generated one is, cannot
+        be fed an image token."""
         if not self._resident or None in self._resident:
             raise RuntimeError("call activate_sessions() before decoding")
         sid = self._resident[0]
+        image = token_id is not None and self._has_image_token(token_id)
         if self._eager_decode:
-            self._packet_sids.append(sid)
+            self._packet_sids.append((sid, image))
             self._eager_pending.append((pos, sid))
             return
         if not self._traced_captured:
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
         self._ensure_replay_thread()
-        self._packet_sids.append(sid)
-        self._replay_queue.put((pos, sid, self._spec_hold_writes))
+        self._packet_sids.append((sid, image))
+        self._replay_queue.put((pos, sid, self._spec_hold_writes, image))
 
     def write_step_packet(self, token_id, pos: int) -> None:
-        """Push the packet of the oldest posted step, in its session's slot (eager: then run it)."""
-        sid = self._packet_sids.popleft()
+        """Push the packet of the oldest posted step, in its session's slot (eager: then run it). An image token
+        in a step posted with the text trace still gets its packet, as every posted step must, then raises."""
+        sid, image = self._packet_sids.popleft()
         self._write_packet(token_id, pos, sid)
         if self._eager_decode:
             posted = self._eager_pending.popleft()
             assert posted == (pos, sid), f"eager decode: packet for {(pos, sid)}, but {posted} was posted next"
-            self._execute_traces((pos, sid, False))
+            self._execute_traces((pos, sid, False, self._has_image_token(token_id)))
+        elif not image and self._has_image_token(token_id):
+            raise RuntimeError(
+                f"image token {token_id} at pos {pos} went to a step posted with the text trace, which ranks it with "
+                "the text bias: pass the step's tokens to replay_traced / replay_traced_ahead"
+            )
 
     def _execute_traces(self, step) -> None:
-        """Replay the variant of ``step`` = ``(pos, sid, held)`` on every submesh, after growing that session's
-        blocks for it (normally already done when it was posted). With a drafter, the drafter's receive of the
-        step's row follows unless ``held`` (:meth:`spec_release_writes` queues it then)."""
-        pos, sid, held = step
+        """Replay the variant of ``step`` = ``(pos, sid, held, image)`` on every submesh, after growing that
+        session's blocks for it (normally already done when it was posted). With a drafter, the drafter's
+        receive of the step's row follows unless ``held`` (:meth:`spec_release_writes` queues it then)."""
+        pos, sid, held, image = step
         self.ensure_session_capacity(pos, sid)
         self._session_pos[sid] = pos + 1
-        variant = self._variant_key(pos)
+        variant = self._variant_key(pos, image)
         if self._eager_decode:
             self._run_eager_step(variant)
             return
@@ -1327,7 +1409,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     raise RuntimeError("the decode step sends the drafter its row: call capture_spec_traces() first")
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
-    def _step_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
+    def _step_context(
+        self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool, image: bool = False
+    ) -> dict:
         """Token, positions, RoPE rows and the SDPA bounds for one step: per-ratio ``sdpa_lengths`` with one
         user, else the per-ratio mask or ``cur_pos``.
 
@@ -1362,7 +1446,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "ring_offset": None,
             "win_offset": None,
             # Image-span tokens (ids past the vocabulary) rank their experts with ``bias_vl``.
-            "image_mask": image_mask(token, self.config.vocab_size) if self.image_rows else None,
+            "image_mask": image_mask(token, self.config.vocab_size) if image else None,
         }
         win_base_f = None
         if self._slotted:
@@ -1530,10 +1614,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return ttnn.typecast(total, ttnn.bfloat16)
 
     def _decode_submesh_static(
-        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: tuple = (0, frozenset())
+        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: tuple = (0, frozenset(), False)
     ) -> ttnn.Tensor:
-        """One submesh's layers for this variant. ``index_sparse`` is the ``(select mode, split layers)`` of
-        :meth:`_variant_key`.
+        """One submesh's layers for this variant. ``index_sparse`` is the ``(select mode, split layers, image)``
+        of :meth:`_variant_key`.
 
         Entering a stage receives streams, the packet, ``pre_mix`` and the shared KV groups, in
         that order. Leaving sends the same. The global-last layer collapses, normalises, applies
@@ -1542,7 +1626,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         (:meth:`_send_step_row`), then its logits (:meth:`_send_step_logits`).
         """
         r2_pool = bool(pool_flags.get(2, False))
-        mode, split = index_sparse
+        mode, split, image = index_sparse
         r2_select = bool(mode)
         two_level = mode == 2
         stage = sm["index"]
@@ -1585,7 +1669,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 streams = ttnn.to_memory_config(sm["streams_in"], sm["streams_memory_config"])
                 pre_mix = sm["pre_mix_in"]
             if ctx is None:
-                ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select)
+                ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select, image and sm["routes_images"])
             if is_first:
                 with _region("EMBED"):
                     embedded = ttnn.embedding(
@@ -2286,7 +2370,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.ensure_session_capacity(positions[-1])
         self._spec_hold_writes = True
         try:
-            self.replay_traced_ahead(positions)
+            self.replay_traced_ahead(positions, tokens)
         finally:
             self._spec_hold_writes = False
         for token, pos in zip(tokens, positions):

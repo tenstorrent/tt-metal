@@ -372,6 +372,18 @@ class PagedKVManager:
         return sid in self._sessions
 
     # -- capacity / page tables ----------------------------------------------- #
+    def covers(self, sid: int, pos: int) -> bool:
+        """Whether ``sid`` already has blocks for every logical row a step at ``pos`` touches, i.e.
+        :meth:`ensure_capacity` would neither allocate nor raise. Changes nothing."""
+        session = self._sessions[sid]
+        for name, g in self.groups.items():
+            if pos >= g.max_seq:
+                return False
+            row = session.rows[name]
+            if g.compressed_blocks_for(pos) > sum(1 for b in row[g.ring_blocks :] if b != ZERO_BLOCK):
+                return False
+        return True
+
     def ensure_capacity(self, sid: int, pos: int) -> list[str]:
         """Make sure ``sid`` has blocks for every logical row a step at ``pos`` touches.
 

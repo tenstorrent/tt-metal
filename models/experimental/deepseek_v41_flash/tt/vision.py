@@ -19,11 +19,16 @@ index table -- reads the zero row ``n`` wherever a window leaves the image, as t
 
 Traced: ``capture`` records one trace per ViT bucket (ViT and aligner, the aligner padded to the most tokens an
 image of that bucket can make, :func:`aligner_pad`), and :class:`EmbeddingRowWriter` one for the row write into
-the embedding table. Their inputs and outputs are allocated at capture, so an image then only copies its host
-inputs into them and replays: no program compiles (no new CCL semaphores in L1_SMALL) and nothing is allocated.
+the embedding table. Their device buffers are allocated at capture, so an image then only replays: no program
+compiles (no new CCL semaphores in L1_SMALL) and nothing is allocated. A traced image's data moves over host
+sockets only (:class:`ImageSockets`), as a decode step's does: each trace takes its inputs with
+``recv_async_h2d`` and the tower's sends the aligner rows back with ``send_async_d2h``.
 """
 
+import functools
 import importlib.util
+import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,8 +36,11 @@ import torch
 
 import ttnn
 from models.experimental.deepseek_v41_flash.tt.config import dequantized
+from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets
 from models.experimental.deepseek_v4_flash.tt.decode.moe import _tp_all_reduce
+from models.experimental.deepseek_v4_flash.tt.model import _d2h_page_plan
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import _rot_transformation_mat
+from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
@@ -51,6 +59,65 @@ DELIMITER_ROWS = {IMAGE_START: 0, IMAGE_NEW_LINE: 1, IMAGE_END: 2}
 FIRST_IMAGE_ROW = 3
 # Rows per ``write_embedding_rows`` write: one fixed shape, so one program.
 EMBEDDING_ROW_BLOCK = 32
+
+# Receiver / sender cores of the tower's host sockets, clear of the pipeline's (0,0)-(0,4) (see ``decode/engram.py``).
+TOWER_IN_CORE = (0, 5)  # its packed inputs
+TOWER_OUT_CORE = (0, 6)  # D2H: the aligner rows
+# A socket's FIFO takes its size of L1 on every worker core of its stage (the allocator runs in lockstep) and the
+# decode stages have next to none to spare beside decode's circular buffers, so the tower's inputs share one socket a
+# chip of two small pages; the table's stage opens none (EmbeddingRowWriter rides on sockets it already has).
+TOWER_PAGE_BYTES = 256
+SOCKET_FIFO_PAGES = 2
+
+
+def tower_row_width(vision_config) -> int:
+    """bf16 columns of one packed tower input row: the patch (padded to tiles), its cos and sin, and a tile column
+    whose first element is the mask (see :meth:`DeepSeekV41Vision._packed_inputs`)."""
+    patch_k = -(-3 * vision_config.patch_size**2 // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    head_dim = vision_config.hidden_size // vision_config.num_attention_heads
+    return patch_k + 2 * head_dim + ttnn.TILE_SIZE
+
+
+@dataclass
+class ImageSockets:
+    """The host sockets every traced image transfer goes over. An H2D socket feeds one chip, so a replicated input
+    goes over one per chip of its stage (in mesh order); the D2H socket sends from chip 0 of the vision stage."""
+
+    tower_in: list  # H2D on the vision stage, TOWER_PAGE_BYTES pages: an image's packed rows, then its ids
+    tower_out: ttnn.D2HSocket  # the aligner rows, a page a fixed slice of one row
+    # H2D on the table's stage, shared with what else writes them (the Engram rows of a decode step or a prefill
+    # chunk), so written only with no step in flight; EmbeddingRowWriter pads its blocks to their page.
+    table: list
+
+
+def open_image_sockets(vision_config, vision_device: ttnn.MeshDevice, table_sockets: list) -> ImageSockets:
+    """Open the tower's :class:`ImageSockets` on ``vision_device``, beside the already open ``table_sockets`` (one
+    H2D socket per chip of the embedding table's stage, of any page size) the row writes take.
+
+    The FIFO and configs are long-lived L1 buffers: open them before the stage's decode rings are built (as
+    :func:`~.decode.engram.open_rows_sockets` says), so they sit above the rings and clear of what a prefill replay
+    overwrites, and before any trace capture on the stage.
+    """
+    pipeline = active_system_config().pipeline
+    alignment = pipeline.pcie_alignment
+    row_bytes = 2 * tower_row_width(vision_config)
+    if TOWER_PAGE_BYTES % alignment or row_bytes % TOWER_PAGE_BYTES:
+        raise ValueError(
+            f"a {TOWER_PAGE_BYTES} B tower page must be {alignment} B-aligned and divide a {row_bytes} B packed row"
+        )
+    out = ttnn.D2HSocket(
+        vision_device,
+        ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*TOWER_OUT_CORE)),
+        pipeline.d2h_fifo_bytes,
+    )
+    # A fixed page whatever the bucket: a slice of one row, so every bucket's rows split into whole pages.
+    _, cols = _d2h_page_plan(vision_config.text_hidden_size, 2, pipeline.d2h_fifo_bytes, alignment)
+    out.set_page_size(2 * cols)
+    return ImageSockets(
+        tower_in=open_rows_sockets(vision_device, TOWER_PAGE_BYTES, SOCKET_FIFO_PAGES, TOWER_IN_CORE),
+        tower_out=out,
+        table=table_sockets,
+    )
 
 
 def span_ids(types: torch.Tensor, slots: torch.Tensor, vocab_size: int) -> torch.Tensor:
@@ -155,56 +222,122 @@ def write_embedding_rows(table: ttnn.Tensor, rows: torch.Tensor, ids, vocab_size
     ttnn.synchronize_device(device)
 
 
+def _page_bytes(*tensors: torch.Tensor) -> torch.Tensor:
+    """``tensors`` back to back as raw bytes (uint8), the stream of socket pages their receives take in order."""
+    return torch.cat([t.contiguous().reshape(-1).view(torch.uint8) for t in tensors])
+
+
+def _over_sockets(dispatch, sockets: list, data: torch.Tensor, read=None) -> None:
+    """Call ``dispatch``, which queues the programs that receive ``data`` (:func:`_page_bytes`) on every one of
+    ``sockets`` and send ``read``, while ``data`` goes into each socket and ``read`` = ``(D2H socket, host tensor)``
+    fills, one thread a socket; return once they are all done.
+
+    The transfers start first: a socket write blocks while its FIFO is full and a D2H FIFO holds barely a page, so
+    neither can wait for the dispatch, nor the dispatch for them (a program-cache miss may sync the host while the
+    device sits in a receive). A socket copies raw bytes: bf16 is read as an int16 view, which DLPack takes.
+    """
+    jobs = [(socket.write_tensor, data) for socket in sockets]
+    if read is not None:
+        socket, out = read
+        jobs.append((socket.read_tensor, out.view(torch.int16) if out.dtype == torch.bfloat16 else out))
+    with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="image-sockets") as pool:
+        pending = [pool.submit(job, t) for job, t in jobs]
+        dispatch()
+        for job in pending:
+            job.result()
+
+
 class EmbeddingRowWriter:
     """:func:`write_embedding_rows` as one captured trace on the table's device, allocating nothing once built.
 
-    Holds one block's rows and ids in buffers of its own; :meth:`write` copies each block into them and replays the
-    write. Those buffers are scratch, rewritten before every replay, so another trace's replay may overwrite them in
-    between. Build it last, after every other allocation and capture on the device: the trace's addresses must not
-    land on a buffer allocated after it.
+    The trace takes one block's rows, then its ids, off :class:`ImageSockets`' ``table`` sockets (one per chip, the
+    table being replicated) into buffers of its own, then writes them into the table; :meth:`write` streams every
+    block in and replays once a block. Those sockets are another layer's, so their page is whatever it is: a block's
+    rows are padded with zero rows to whole pages and its ids fill one page. The buffers are scratch, rewritten by
+    every replay, so another trace's replay may overwrite them in between. Build it last, after every other
+    allocation and capture on the device: the trace's addresses must not land on a buffer allocated after it.
     """
 
-    def __init__(self, table: ttnn.Tensor, vocab_size: int):
+    def __init__(self, table: ttnn.Tensor, vocab_size: int, sockets: ImageSockets):
         self.table = table
         self.vocab_size = vocab_size
+        self.sockets = sockets
         self.device = table.device()
         n, hidden = EMBEDDING_ROW_BLOCK, table.shape[-1]
+        page = sockets.table[0].get_page_size()
+        if page % 4 or page // 4 < n:
+            raise ValueError(f"a {page} B socket page cannot carry a block's {n} uint32 ids")
+        # Rows a whole number of pages holds, and the block padded to a multiple of them.
+        per = math.lcm(2 * hidden, page) // (2 * hidden)
+        self.padded_rows = -(-n // per) * per
         replicate = ttnn.ReplicateTensorToMesh(self.device)
         self.view = ttnn.reshape(table, [1, 1, table.shape[-2], hidden])
+        # Row-major, so a tensor page is one socket page.
         self.rows = ttnn.from_torch(
-            torch.zeros(1, 1, n, hidden),
+            torch.zeros(1, 1, self.padded_rows * 2 * hidden // page, page // 2),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
         )
-        # Every id past the table: the compile run writes nothing.
         self.ids = ttnn.from_torch(
-            torch.full((n,), table.shape[-2], dtype=torch.int32),
+            torch.zeros(1, 1, 1, page // 4, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
         )
-        ttnn.transformer.deepseek_v4_prefill_write_rows(self.rows, self.view, self.ids)
+        # The compile run takes a block of zero rows at every id past the table, so it writes nothing.
+        blank = (torch.zeros(n, hidden, dtype=torch.bfloat16), torch.full((n,), table.shape[-2], dtype=torch.int32))
+        _over_sockets(self._write_graph, sockets.table, self._block_pages([blank]))
         self.trace = ttnn.begin_trace_capture(self.device, cq_id=0)
-        ttnn.transformer.deepseek_v4_prefill_write_rows(self.rows, self.view, self.ids)
+        self._write_graph()
         ttnn.end_trace_capture(self.device, self.trace, cq_id=0)
         ttnn.synchronize_device(self.device)
 
+    def _block_pages(self, blocks) -> torch.Tensor:
+        """The socket pages of ``blocks`` (:func:`_row_blocks`), in replay order: each one's rows padded to
+        :attr:`padded_rows`, then its ids padded to a page."""
+        n, hidden = EMBEDDING_ROW_BLOCK, self.table.shape[-1]
+        rows = torch.zeros(self.padded_rows, hidden, dtype=torch.bfloat16)
+        ids = torch.zeros(self.ids.shape[-1], dtype=torch.int32)
+        pages = []
+        for block_rows, block_ids in blocks:
+            rows[:n] = block_rows.reshape(n, hidden)
+            ids[:n] = block_ids
+            pages.append(_page_bytes(rows, ids))
+        return torch.cat(pages)
+
+    def _write_graph(self) -> None:
+        """One block: its rows and ids off the sockets, then into the table."""
+        for socket in self.sockets.table:
+            ttnn.experimental.recv_async_h2d(self.rows, socket)
+        for socket in self.sockets.table:
+            ttnn.experimental.recv_async_h2d(self.ids, socket)
+        n, hidden = EMBEDDING_ROW_BLOCK, self.table.shape[-1]
+        padded = ttnn.reshape(self.rows, [1, 1, self.padded_rows, hidden])
+        rows = ttnn.slice(padded, [0, 0, 0, 0], [1, 1, n, hidden])
+        ids = ttnn.slice(self.ids, [0, 0, 0, 0], [1, 1, 1, n])
+        flat_ids = ttnn.reshape(ids, [n])
+        ttnn.transformer.deepseek_v4_prefill_write_rows(rows, self.view, flat_ids)
+        for part, whole in ((rows, padded), (padded, self.rows), (flat_ids, ids), (ids, self.ids)):
+            if part.buffer_address() != whole.buffer_address():
+                ttnn.deallocate(part)
+
     def write(self, rows: torch.Tensor, ids) -> None:
-        """:func:`write_embedding_rows` of ``rows`` at ``ids``, by trace replays. Synchronous; call it with no decode
-        or prefill in flight."""
-        for block_rows, block_ids in _row_blocks(self.table, rows, ids, self.vocab_size):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(block_rows, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), self.rows
-            )
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(block_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.ids
-            )
-            ttnn.execute_trace(self.device, self.trace, cq_id=0, blocking=False)
+        """:func:`write_embedding_rows` of ``rows`` at ``ids``, by trace replays fed over the sockets. Synchronous;
+        call it with no decode or prefill in flight (the sockets are shared with them)."""
+        blocks = list(_row_blocks(self.table, rows, ids, self.vocab_size))
+        if not blocks:
+            return
+
+        def replay_all() -> None:
+            for _ in blocks:
+                ttnn.execute_trace(self.device, self.trace, cq_id=0, blocking=False)
+
+        _over_sockets(replay_all, self.sockets.table, self._block_pages(blocks))
         ttnn.synchronize_device(self.device)
 
 
@@ -237,9 +370,9 @@ _INPUT_FORMATS = {
 
 @dataclass
 class _VisionTrace:
-    tid: int
-    inputs: dict  # name -> its persistent device input
-    out: ttnn.Tensor  # [1, 1, nt_pad, text_hidden_size], rewritten by every replay
+    tid: int | None  # None until captured
+    rows: ttnn.Tensor  # [1, 1, n_pad * tower_row_width / cols, cols] bf16 (cols a socket page), the packed rows
+    ids: ttnn.Tensor  # [1, 1, 1 + nt_pad * ratio**2 / w, w] uint32, cu_window_seqlens then the gather index
     nt_pad: int
 
 
@@ -323,6 +456,7 @@ class DeepSeekV41Vision:
             raise ValueError(f"the vision tower does not split over TP{self.tp}")
         self.eps = 1e-6
         self.patch_k = -(-3 * v.patch_size**2 // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        self.row_width = tower_row_width(v)
         r2 = v.downsample_ratio**2
         tp, d, inter, heads, hd = self.tp, v.hidden_size, v.intermediate_size, v.num_attention_heads, self.head_dim
 
@@ -420,6 +554,7 @@ class DeepSeekV41Vision:
             packer_l1_acc=False,
         )
         self.traces: dict[int, _VisionTrace] = {}  # by ViT bucket, once captured
+        self.sockets: ImageSockets | None = None  # what the traces take their inputs on and send their rows out of
 
     def _upload(self, t: torch.Tensor, dtype, layout) -> ttnn.Tensor:
         """A host tensor replicated over the stage, DRAM-interleaved."""
@@ -572,13 +707,85 @@ class DeepSeekV41Vision:
         ttnn.deallocate(features)
         return out
 
-    def _bucket_inputs(self, n_pad: int, nt_pad: int) -> dict[str, torch.Tensor]:
-        """Host inputs of an image (blank) filling the ViT bucket ``n_pad``, for the compile and capture runs."""
+    def _bucket_image(self, n_pad: int) -> tuple[torch.Tensor, int, int]:
+        """``(patches, n_h, n_w)`` of a blank image filling the ViT bucket ``n_pad``, for the compile and capture runs."""
         n_h = 24
         n_w = (n_pad - 1) // n_h
         p = self.config.patch_size
-        patches = torch.zeros(n_h * n_w, 3, p, p, dtype=torch.bfloat16)
+        return torch.zeros(n_h * n_w, 3, p, p, dtype=torch.bfloat16), n_h, n_w
+
+    def _bucket_inputs(self, n_pad: int, nt_pad: int) -> dict[str, torch.Tensor]:
+        """Host inputs of :meth:`_bucket_image`."""
+        patches, n_h, n_w = self._bucket_image(n_pad)
         return {**self._vit_inputs(patches, n_h, n_w, n_pad), "index": self._index_input(n_h, n_w, nt_pad)}
+
+    def _packed_inputs(
+        self, patches: torch.Tensor, n_h: int, n_w: int, n_pad: int, nt_pad: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The :data:`_INPUT_FORMATS` inputs of one image as the socket pages a trace receives: ``rows``
+        ``[n_pad, tower_row_width]`` bf16, row ``i`` patch ``i`` (``patch_k``), its cos and sin (``head_dim`` each),
+        then its mask and zeros (a tile); and ``ids`` ``[1 + nt_pad * ratio**2 / w, w]`` int32 (``w`` words a page),
+        ``cu_window_seqlens`` and zeros, then the gather index."""
+        vit = self._vit_inputs(patches, n_h, n_w, n_pad)
+        pk, hd = self.patch_k, self.head_dim
+        rows = torch.zeros(n_pad, self.row_width, dtype=torch.bfloat16)
+        rows[:, :pk] = vit["x"][0, 0]
+        rows[:, pk : pk + hd] = vit["cos"][0, 0]
+        rows[:, pk + hd : pk + 2 * hd] = vit["sin"][0, 0]
+        rows[:, pk + 2 * hd] = vit["mask"][0, 0, :, 0]
+        w = self.sockets.tower_in[0].get_page_size() // 4
+        index = self._index_input(n_h, n_w, nt_pad).reshape(-1, w)
+        head = torch.zeros(1, w, dtype=torch.int32)
+        head[0, : vit["cu"].numel()] = vit["cu"]
+        return rows, torch.cat([head, index])
+
+    def _socket_graph(self, trace: _VisionTrace, n_pad: int) -> None:
+        """What one trace of :meth:`capture` records: the packed inputs off the sockets, split into
+        :data:`_INPUT_FORMATS`' tensors, :meth:`_graph`, and its rows out of the D2H socket."""
+        sockets, nt_pad, r = self.sockets, trace.nt_pad, self.config.downsample_ratio
+        for socket in sockets.tower_in:
+            ttnn.experimental.recv_async_h2d(trace.rows, socket)
+        for socket in sockets.tower_in:
+            ttnn.experimental.recv_async_h2d(trace.ids, socket)
+        pk, hd = self.patch_k, self.head_dim
+        rows = ttnn.reshape(trace.rows, [1, 1, n_pad, self.row_width])
+        tiled = ttnn.to_layout(rows, ttnn.TILE_LAYOUT)
+        if rows.buffer_address() != trace.rows.buffer_address():
+            ttnn.deallocate(rows)
+        inputs = {
+            name: ttnn.slice(tiled, [0, 0, 0, start], [1, 1, n_pad, start + width])
+            for name, start, width in (("x", 0, pk), ("cos", pk, hd), ("sin", pk + hd, hd), ("mask", pk + 2 * hd, 1))
+        }
+        ttnn.deallocate(tiled)
+        w = trace.ids.shape[-1]
+        cu = ttnn.slice(trace.ids, [0, 0, 0, 0], [1, 1, 1, 3])
+        inputs["cu"] = ttnn.reshape(cu, [3])
+        index = ttnn.slice(trace.ids, [0, 0, 1, 0], [1, 1, trace.ids.shape[2], w])
+        inputs["index"] = ttnn.reshape(index, [1, nt_pad * r * r])
+        for part, whole in ((cu, inputs["cu"]), (index, inputs["index"])):
+            if part.buffer_address() != whole.buffer_address():
+                ttnn.deallocate(part)
+        out = self._graph(inputs, n_pad, nt_pad)
+        for t in inputs.values():
+            ttnn.deallocate(t)
+        out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(out)
+        # Row-major, so a tensor page is one socket page: the rows as slices of the D2H socket's page.
+        cols = sockets.tower_out.get_page_size() // 2
+        paged = ttnn.reshape(out_rm, [nt_pad * self.config.text_hidden_size // cols, cols])
+        ttnn.experimental.send_async_d2h(paged, sockets.tower_out)
+        if paged.buffer_address() != out_rm.buffer_address():
+            ttnn.deallocate(paged)
+        ttnn.deallocate(out_rm)
+
+    def _exchange(self, dispatch, nt_pad: int, rows: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+        """Run ``dispatch`` (a :meth:`_socket_graph` run or replay) on the packed inputs ``rows`` / ``ids`` -> its
+        aligner rows ``[nt_pad, text_hidden_size]`` (bf16, host), off the D2H socket."""
+        hidden, socket = self.config.text_hidden_size, self.sockets.tower_out
+        cols = socket.get_page_size() // 2
+        out = torch.empty(nt_pad * hidden // cols, cols, dtype=torch.bfloat16)
+        _over_sockets(dispatch, self.sockets.tower_in, _page_bytes(rows, ids), (socket, out))
+        return out.reshape(nt_pad, hidden)
 
     def _upload_inputs(self, host: dict[str, torch.Tensor]) -> dict[str, ttnn.Tensor]:
         return {name: self._upload(t, *_INPUT_FORMATS[name]) for name, t in host.items()}
@@ -605,7 +812,7 @@ class DeepSeekV41Vision:
     def encode(self, patches: torch.Tensor, n_h: int, n_w: int) -> torch.Tensor:
         """One image's patches ``[n_h * n_w, 3, p, p]`` -> its aligner rows ``[n_llm_h * n_llm_w,
         text_hidden_size]`` (bf16, host), in reading order. Once :meth:`capture` has run, by replaying its
-        bucket's trace into buffers allocated then, so it allocates nothing on the device; eagerly before."""
+        bucket's trace, its inputs and rows over the sockets, so it allocates nothing on the device; eagerly before."""
         r = self.config.downsample_ratio
         nt = -(-n_h // r) * -(-n_w // r)
         n_pad = _bucket(n_h * n_w + 1, VIT_BUCKETS, SDPA_CHUNK)  # + 1: the zero row the gather reads
@@ -619,12 +826,12 @@ class DeepSeekV41Vision:
         trace = self.traces.get(n_pad)
         if trace is None or nt > trace.nt_pad:
             raise ValueError(f"no vision trace for a {n_h}x{n_w}-patch image ({nt} tokens)")
-        host = {**self._vit_inputs(patches, n_h, n_w, n_pad), "index": self._index_input(n_h, n_w, trace.nt_pad)}
-        for name, t in host.items():
-            dtype, layout = _INPUT_FORMATS[name]
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, dtype=dtype, layout=layout), trace.inputs[name])
-        ttnn.execute_trace(self.device, trace.tid, cq_id=0, blocking=False)
-        return ttnn.to_torch(ttnn.get_device_tensors(trace.out)[0])[0, 0, :nt].to(torch.bfloat16)
+        rows = self._exchange(
+            lambda: ttnn.execute_trace(self.device, trace.tid, cq_id=0, blocking=False),
+            trace.nt_pad,
+            *self._packed_inputs(patches, n_h, n_w, n_pad, trace.nt_pad),
+        )
+        return rows[:nt]
 
     def image_rows(self, patches: torch.Tensor, n_h: int, n_w: int, types: torch.Tensor) -> torch.Tensor:
         """The embedding rows of a whole image span ``[len(types), text_hidden_size]`` (bf16, host): the
@@ -648,21 +855,41 @@ class DeepSeekV41Vision:
                 ttnn.deallocate(t)
         ttnn.synchronize_device(self.device)
 
-    def capture(self):
-        """Capture one trace per ViT bucket, ViT and aligner (padded to :func:`aligner_pad`), over input and output
-        buffers allocated here; from then on :meth:`encode` only copies an image in and replays.
+    def capture(self, sockets: ImageSockets):
+        """Capture one trace per ViT bucket, ViT and aligner (padded to :func:`aligner_pad`), over buffers allocated
+        here, taking its inputs off ``sockets`` and sending its rows out of them (see :meth:`_socket_graph`); from
+        then on :meth:`encode` only streams an image in, replays and reads the rows back.
 
         The buffers are scratch, rewritten by every encode, so another trace's replay may overwrite them in
         between. Call it last, after every other allocation and capture on the device: a trace's addresses must not
         land on a buffer allocated after it.
         """
+        self.sockets = sockets
         r, cap = self.config.downsample_ratio, self.config.max_image_tokens
+        page = sockets.tower_in[0].get_page_size()
+        w = page // 4
         for n_pad in VIT_BUCKETS:
             nt_pad = aligner_pad(n_pad, r, cap)
-            inputs = self._upload_inputs(self._bucket_inputs(n_pad, nt_pad))
-            ttnn.deallocate(self._graph(inputs, n_pad, nt_pad))  # programs at these buffers' addresses
-            tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-            out = self._graph(inputs, n_pad, nt_pad)
-            ttnn.end_trace_capture(self.device, tid, cq_id=0)
-            self.traces[n_pad] = _VisionTrace(tid, inputs, out, nt_pad)
+            if nt_pad * r * r % w:
+                raise ValueError(f"the {nt_pad * r * r}-entry gather index does not fill {w}-word socket pages")
+            # Row-major, so a tensor page is one socket page: the packed rows as page slices.
+            trace = _VisionTrace(
+                None,
+                self._upload(
+                    torch.zeros(1, 1, n_pad * 2 * self.row_width // page, page // 2),
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                self._upload(
+                    torch.zeros(1, 1, 1 + nt_pad * r * r // w, w, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+                nt_pad,
+            )
+            # The compile run: programs at these buffers' addresses.
+            packed = self._packed_inputs(*self._bucket_image(n_pad), n_pad, nt_pad)
+            self._exchange(functools.partial(self._socket_graph, trace, n_pad), nt_pad, *packed)
+            trace.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._socket_graph(trace, n_pad)
+            ttnn.end_trace_capture(self.device, trace.tid, cq_id=0)
+            self.traces[n_pad] = trace
         ttnn.synchronize_device(self.device)
