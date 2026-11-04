@@ -118,6 +118,14 @@ python3 eval_gsm8k.py --models Qwen/Qwen3-0.6B-Base=base ichovpanTT/qwen3-0.6b-b
     --n-samples 16 --temperature 1.0 --limit 200
 ```
 
+`TT_METAL_RUNTIME_ROOT` must be set: the script puts its temporary tensor caches in
+`$TT_METAL_RUNTIME_ROOT/generated/tt-train/`. To evaluate a GRPO checkpoint, convert it to
+HuggingFace format first, then pass the output directory to `--models`:
+
+```bash
+python3 convert_ttml_ckpt_to_hf.py <run dir>/checkpoints/grpo_step_100 <out dir>
+```
+
 ---
 
 ## Device Config
