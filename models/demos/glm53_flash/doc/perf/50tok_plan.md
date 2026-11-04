@@ -375,3 +375,8 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   The persistent program remains the vehicle (phases on disjoint cores overlap, exchanges fused), but the order of
   work changes: MHC + all-reduce latency first. `chain_tracy_b1` profiles layer 4 at 8 users (today's path and the
   block) for the budget in the floor's regime.
+- 2026-11-04 07:07 `gate84_B4_persist2` (step 2, resident x by multicast) PASSED bit-exact but SLOWER: step 40.42 ms
+  vs 38.37 (step 1) / 37.69 (today); unit 0.691 vs 0.646 (step 1) / 0.603 ms. Eight 16-tile chunk multicasts into
+  two 60-core rects (path-reserved, serialized on the workers' NOC) cost ~45 us per layer more than the x_g write
+  plus the gate|up cores' own 256 KB reads they replace. Unless the layer profile (`tracy_l4_b4_persist2`) shows the
+  loss elsewhere, step 2 is shelved: step 1's x path stays.
