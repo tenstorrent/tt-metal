@@ -649,11 +649,8 @@ MLA_SDPA_CONFIG = {
     # cannot corroborate that on a wider mesh -- it forces FABRIC_1D_RING, which does not map beyond
     # 2 SP for any variant (K2.6's case fails identically), so the sweep is small-mesh-only.
     640: _CHUNKED_5K_SDPA,
-    # SP=4 keeps the SP=8 tiling (two k-chunks per slab). It must not fall to the k=32 default: at k=32
-    # ring_mla's output scale grows ~10% per prior chunk (1.9x the reference after 10 chunks) while each
-    # chunk's PCC stays ~0.984, so test_mla_chunked_prefill production-50k+5k fails its full-region gate
-    # at 0.964 on SP=4 -- and equally on SP=8 forced to k=32. Measured on the K3 4x4 stage: k=640 gives
-    # 0.9925, matching 8x4.
+    # SP=4 keeps the SP=8 tiling (k=640, two k-chunks per slab): at the k=32 default ring_mla's output
+    # scale drifts with every prior chunk, on SP=4 and SP=8 alike, and fails the chunked-prefill gate.
     1280: _CHUNKED_5K_SDPA,
 }
 

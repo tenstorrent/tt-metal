@@ -44,11 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_mode
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
-    PLACEMENTS,
-    _compose,
-    _model_state_dict,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import PLACEMENTS, _compose, _model_state_dict
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -93,8 +89,8 @@ SNAPSHOT_STRIDE = 640
 SHALLOW_OUTPUT_PCC = 0.99
 DEEP_OUTPUT_PCC = 0.98
 # The bars are scored per chunk, and the score falls with context depth, so a smaller chunk's last window holds
-# only the deepest tokens of the same 55k. Measured at depth 24 on 8x4 (layer 19, the worst at every size; #63860,
-# jobs 168797/168917): 5120's last chunk [51200, 56320) scores 0.9809, while 2560 splits the same tokens into
+# only the deepest tokens of the same 55k. Measured at depth 24 on 8x4 (layer 19, the worst at every size):
+# 5120's last chunk [51200, 56320) scores 0.9809, while 2560 splits the same tokens into
 # 0.9811 and 0.9791. Chunk 0 is 0.985-0.986 at both sizes. So 2560-token chunks get a 0.975 depth-24 bar.
 SMALL_CHUNK_DEEP_OUTPUT_PCC = 0.975
 # The carry is a 5120-step bf16 recurrence per chunk compounded across chunks, and it is compared

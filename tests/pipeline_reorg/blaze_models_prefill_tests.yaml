@@ -2137,11 +2137,9 @@
 # discovery binds the ranks against the 8-mesh descriptor: it finds the ring order from the cabling, so
 # the hosts can come in any order. The stage shape, 2560-token chunks (640 tokens per chip), the TP-deduped
 # KV, tracing and the slot count all come from the kimi_k3 manifest, so this leg carries no fabric_profile
-# -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it. 127 slots at the 1M window: the per-stage
-# capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a full 1M request at each N) fits 129
-# traced on every stage. Stage 1, the tightest, runs out at 130. 127 keeps two slots of margin, as #63502
-# did on 8x4 (PR #61481). The request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd,
-# the tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
+# -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it. 127 slots: every stage fits 129 traced at
+# the 1M window, so two slots of margin. The request runs to 1M like GLM-5.3's: only the 55k the golden
+# spans is PCC'd, the tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
 # prefill SC4 perf" summary job. run_multirank_pcc.sh's sc4_8x4 keeps the 4 stages of 8x4 for hand
 # comparisons; no leg runs it.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
@@ -2161,10 +2159,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Run 41533146872 (2026-11-03): 12 min for this step and 19 min for the job, against 24-27 min for
-      # the 8x4 layout this replaced, with the same 1.5 TB of weights. 90 keeps over 4x of the job for a
-      # cold Weka cache. shield/demo bh_sc4 is a SUM over the team's legs on that SKU, not a per-leg cap:
-      # 60 (GLM-5.3) + 30 (DSpark) + 90 of 380.
+      # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
+      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 30 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
       release_ready: false
@@ -2179,8 +2175,8 @@
 # MLA layer and is the deepest depth the golden's decoder-output stream covers, making this a real
 # accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
 # 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
-# no baseline for 93, so its numbers are gated and reported in this job's summary but kept out of the
-# sc4 summary.
+# no baseline for 93, so its numbers are gated against their own kimi_k3 sc1 baseline and reported in
+# this job's summary, kept out of the sc4 summary.
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
