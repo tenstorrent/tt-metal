@@ -29,11 +29,11 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
 
     auto* ref_device = input_tensor.device();
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Input must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input must be allocated in buffer on device!");
     TT_FATAL(cos.storage_type() == ttnn::StorageType::DEVICE, "Cos must be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "Cos must be allocated in buffer on device!");
+    TT_FATAL(cos.is_allocated(), "Cos must be allocated in buffer on device!");
     TT_FATAL(sin.storage_type() == ttnn::StorageType::DEVICE, "Sin must be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "Sin must be allocated in buffer on device!");
+    TT_FATAL(sin.is_allocated(), "Sin must be allocated in buffer on device!");
     TT_FATAL(input_tensor.device() == ref_device, "All tensors must be on same device!");
     TT_FATAL(cos.device() == ref_device, "All tensors must be on same device!");
     TT_FATAL(sin.device() == ref_device, "All tensors must be on same device!");

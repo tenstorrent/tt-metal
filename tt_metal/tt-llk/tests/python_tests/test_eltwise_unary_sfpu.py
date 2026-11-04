@@ -33,7 +33,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
-from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -47,6 +47,7 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
+    swept_unary_ops,
     unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -78,7 +79,8 @@ from helpers.test_variant_parameters import (
     DestSync,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
+from helpers.utils import passed_test, result_tensor
 
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
@@ -130,7 +132,7 @@ BROAD_SWEEP_OPS = [
 # ops sfpu_domains marks as deliberately unswept. Sorted so the parametrize ids are stable
 # across runs.
 STANDARD_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
+    swept_unary_ops() - set(BROAD_SWEEP_OPS),
     key=lambda op: op.name,
 )
 
@@ -294,14 +296,23 @@ def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
     )
 
 
-def _skip_bh_unless_fp32(formats, dest_acc):
-    """Blackhole with dest_acc=No only supports the Float32->Float32 combination."""
+def bh_unless_fp32_skip_reason(formats, dest_acc, arch):
+    """Why a driver calling :func:`_skip_bh_unless_fp32` skips this variant on *arch*,
+    or ``None``: Blackhole with dest_acc=No only supports Float32->Float32. The exact-op
+    guard in test_sfpu_accuracy_budget.py asks it at the table's architecture."""
     if (
         dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and arch == ChipArchitecture.BLACKHOLE
         and formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     ):
-        pytest.skip(reason="This combination is not supported on BH architecture")
+        return "This combination is not supported on BH architecture"
+    return None
+
+
+def _skip_bh_unless_fp32(formats, dest_acc):
+    reason = bh_unless_fp32_skip_reason(formats, dest_acc, TestConfig.CHIP_ARCH)
+    if reason:
+        pytest.skip(reason=reason)
 
 
 _UNARY_SWEEP_ARGNAMES = (
@@ -362,9 +373,7 @@ def test_eltwise_unary_sfpu(
 # what varies is whether specials can be injected, which specials_safe() decides per
 # (input, output, dest_acc).
 
-_EDGE_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
-)
+_EDGE_SWEEP_OPS = sorted(swept_unary_ops(), key=lambda o: o.name)
 
 # What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
 # still executes and reports XPASS if the behaviour changes.
@@ -413,8 +422,9 @@ def _assert_signed_zero_partition_valid():
             "reclassified -- an entry here means the kernel regressed."
         ),
         MathOperation.Heaviside: (
-            "heaviside(-0.0) returns the scalar now. Same sfpi::abs(v) guard and the same "
-            "SFPSETCC reasoning as Sign."
+            "heaviside(-0.0) returns the scalar now. Its zero arm ignores the sign bit, as Sign's "
+            "does (SFPABS + SFPSETCC NE0 on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
+            "reasoning."
         ),
         MathOperation.Signbit: (
             "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
@@ -694,7 +704,7 @@ def _int_unary_stimuli_spec(mathop):
     if not edges:
         raise AssertionError(
             f"{mathop.name} has no op_edge_points() entry, so the int sweep cannot probe "
-            "its comparison scalar — add one in sfpu_domains._OP_EDGE_POINTS"
+            "its comparison scalar — add one in sfpu_domains._OP_EDGES"
         )
     straddle = [float(v + d) for v in edges for d in (-1, 0, 1)]
     # Positive-only keeps signed and unsigned interpretations identical (safe under
@@ -731,6 +741,7 @@ def test_eltwise_unary_sfpu_int(
 
 
 _INT32_MAX = 2**31 - 1
+_INT32_MIN = -(2**31)
 
 # Both signs are swept. Every threshold reaches the vInt branch; what the negative half alone
 # reaches is the overflow-safe compare it is split on, and Wormhole's hand-built threshold
@@ -907,24 +918,34 @@ _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 # out-of-range path. One is kept to pin that wrap.
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
-# Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
-# zero. 2**30 keeps a large right shift working on a non-zero operand.
-_SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
+# Powers of two, a few odd values and zero, applied with both signs; _INT32_MAX is the int32 end
+# the custom stimuli deliver (they clamp INT32_MIN to -_INT32_MAX).
+_SHIFT_STIMULUS_MAGNITUDES = [
+    0,
+    1,
+    2,
+    3,
+    7,
+    255,
+    256,
+    1023,
+    65535,
+    65536,
+    2**30,
+    _INT32_MAX,
+]
 
 
 def _shift_stimulus_values(mathop, shift_amount):
-    """Values that stay representable after *mathop* shifts them by *shift_amount*.
-
-    A left shift is the only one that can leave int32, so the value set is chosen per variant.
-    Positive-only, because Dst stores integers as sign-magnitude and a negative operand does
-    not survive the round trip -- which also means the out-of-range half only covers the
-    positive side, where the two kernels' rules coincide at 0.
-    """
-    magnitudes = _SHIFT_STIMULUS_MAGNITUDES
-    if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
-        limit = _INT32_MAX >> shift_amount
-        magnitudes = [m for m in magnitudes if m <= limit]
-    return [float(m) for m in magnitudes]
+    """Both signs of each magnitude, minus left shifts that would leave int32."""
+    values = set()
+    for m in _SHIFT_STIMULUS_MAGNITUDES:
+        for v in (m, -m):
+            if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
+                if not _INT32_MIN <= v << shift_amount <= _INT32_MAX:
+                    continue
+            values.add(v)
+    return [float(v) for v in sorted(values)]
 
 
 @pytest.mark.nightly
@@ -940,17 +961,11 @@ def test_eltwise_unary_sfpu_int_shift(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    """Sweep the unary shift ops over the amounts worth driving, in range and out.
+    """The unary shifts over _UNARY_SHIFT_AMOUNTS, on two's-complement Int32 operands of both signs.
 
-    Not the full axis -- see _UNARY_SHIFT_AMOUNTS for which amounts are kept and why.
+    Two's complement is what ttnn feeds and the kernels' raw I32 loads expect.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
-    if not any(v for v in values):
-        # Only 0 survives the representable-result filter, so the variant would assert
-        # 0 << n == 0 and nothing else. Skipped rather than left as a green vacuous pass.
-        pytest.skip(
-            reason=f"every non-zero value overflows int32 at a left shift of {shift_amount}"
-        )
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -962,6 +977,39 @@ def test_eltwise_unary_sfpu_int_shift(
         input_dimensions,
         spec_A=StimuliSpec.custom(values=values, seed=0),
         shift_amount=shift_amount,
+        twos_complement=True,
+    )
+
+
+# Negative two's-complement operands pin the arithmetic right shift; 32 and 63 clamp to 31 (-1 for
+# every negative lane). The nightly sweep above covers these amounts and all values but
+# -(2**31 - 2**7); this test keeps them in the PR gate.
+_RIGHT_SHIFT_SIGNED_VALUES = [
+    -1, -2, -3, -255, -256, -65536, -(2**30), -(2**31 - 2**7), 0, 1, 7, 2**30
+]  # fmt: skip
+_RIGHT_SHIFT_SIGNED_AMOUNTS = [0, 1, 7, 31, 32, 63]
+
+
+@parametrize(
+    mathop=[MathOperation.RightShift],
+    shift_amount=_RIGHT_SHIFT_SIGNED_AMOUNTS,
+)
+def test_eltwise_unary_sfpu_int_right_shift_signed(
+    mathop: MathOperation, shift_amount: int
+):
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec.custom(
+            values=[float(v) for v in _RIGHT_SHIFT_SIGNED_VALUES], seed=0
+        ),
+        shift_amount=shift_amount,
+        twos_complement=True,
     )
 
 
@@ -1240,7 +1288,7 @@ def _threshold_op_stimuli_spec(mathop):
     if threshold is None:
         raise AssertionError(
             f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
+            "land on its comparison threshold — add one in sfpu_domains._OP_EDGES"
         )
 
     def dist(size, dtype, generator):
@@ -1459,12 +1507,7 @@ def eltwise_unary_sfpu(
     if not check_golden:
         return res_from_L1
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Gate on the op's tolerance only: its step budgets were measured over the whole
     # format, so only callers whose stimuli they were measured on opt into them.
@@ -1640,12 +1683,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         check_golden=False,
     )
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.

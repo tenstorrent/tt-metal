@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "api/core_local_mem.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
@@ -93,17 +94,20 @@ FORCE_INLINE void read_input_row_staged_from_dram(
     // The factory enables this helper only when DRAM pages are aligned but the split
     // C-in slice is smaller than the DRAM read alignment.  Always stage through an
     // aligned scratch window so every read follows the same alignment-safe path.
-    const uint64_t src_noc_addr = reader.get_noc_addr(page_idx, c_in_offset_bytes, noc.get_noc_id());
-    const uint32_t src_align_offset = static_cast<uint32_t>(src_noc_addr) & alignment_mask;
-    const uint64_t aligned_src_noc_addr = src_noc_addr - src_align_offset;
+    // Page bases are DRAM-read aligned (factory-gated), so aligning the in-page offset aligns the address.
+    const uint32_t src_align_offset = c_in_offset_bytes & alignment_mask;
+    const uint32_t aligned_c_in_offset_bytes = c_in_offset_bytes - src_align_offset;
     const uint32_t aligned_read_size = (src_align_offset + size_bytes + alignment_mask) & ~alignment_mask;
 
     const uint32_t scratch_unaligned = scratch_cb.get_write_ptr();
     const uint32_t scratch_l1_addr = (scratch_unaligned + alignment_mask) & ~alignment_mask;
 
-    // Aligning backward gives us a raw full NOC address rather than a reader page/offset pair.
-    noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
-        aligned_src_noc_addr, scratch_l1_addr, aligned_read_size, noc.get_noc_id());
+    noc.async_read(
+        reader,
+        scratch_cb,
+        aligned_read_size,
+        {.page_id = page_idx, .offset_bytes = aligned_c_in_offset_bytes},
+        {.offset_bytes = scratch_l1_addr - scratch_unaligned});
     // Scratch must be populated before it is used as the source for the local L1 copy.
     noc.async_read_barrier();
 
@@ -854,6 +858,9 @@ void kernel_main() {
     constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
     constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
     constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
+    // The staged DRAM read issues untagged reads; the factory never pairs it with the trid ring.
+    static_assert(
+        !(enable_dram_read_staging && gather_trids != 0), "DRAM read staging and the trid ring are exclusive");
     constexpr bool halo_mode = get_compile_time_arg_val(42) == 1;
     // Logical-pad masking
     constexpr bool mask_mode = get_compile_time_arg_val(43) == 1;
@@ -899,7 +906,7 @@ void kernel_main() {
         off_noc.async_read(
             offset_reader, pad_off_cb, 2u * sizeof(uint32_t), {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
         off_noc.async_read_barrier();
-        volatile tt_l1_ptr uint32_t* off_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1);
+        CoreLocalMem<volatile uint32_t> off_p(off_l1);
         g_mask_h_start = off_p[0];
         g_mask_w_start = off_p[1];
     }

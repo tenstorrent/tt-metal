@@ -66,7 +66,7 @@ protected:
     // `sem_addr`.
     void run_single_node(const std::string& kernel_src, uint32_t sem_addr) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -147,7 +147,7 @@ protected:
     // Launch the single-thread cache-line-width check on a core.
     void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -190,7 +190,7 @@ protected:
         slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base, init);
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -274,7 +274,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     const CoreCoord node_0_virtual = mesh_device_->worker_core_from_logical_core(node_0);
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device_);
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 

@@ -43,7 +43,6 @@ from ttml.common.performance import (
 )
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
-    build_causal_mask,
     build_mesh,
     create_optimizer,
     get_tt_metal_runtime_root,
@@ -238,18 +237,17 @@ def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
     return max(0, min(warmup, total_steps))
 
 
-def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps: int) -> Callable[[int], float]:
-    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR.
+def build_lr_lambda(training_cfg: TrainingConfig, total_steps: int) -> Callable[[int], float]:
+    """Return a `step -> factor` callable that scales each param group's initial LR.
 
+    Training scheduler type `warmup_linear` runs warmup → linear decay; anything else is a constant factor of 1.0.
     `total_steps` is the horizon the curve is shaped over — the run may stop before reaching it.
     """
-    base_lr = optimizer.get_lr()
-
     if training_cfg.scheduler_type == "warmup_linear":
         sched = SpeedrunScheduler(
             SpeedrunSchedulerConfig(
-                max_lr=base_lr,
-                min_lr=base_lr * training_cfg.min_lr_ratio,
+                max_lr=1.0,
+                min_lr=training_cfg.min_lr_ratio,
                 warmup_steps=resolve_warmup_steps(training_cfg, total_steps),
                 hold_steps=0,
                 total_steps=total_steps,
@@ -257,7 +255,7 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps:
         )
         return sched.lr_at
 
-    return lambda _step: base_lr
+    return lambda _step: 1.0
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
@@ -347,7 +345,6 @@ def generate(
     prompt: str,
     max_new_tokens: int,
     sequence_length: int,
-    mask: ttml.autograd.Tensor | None,
     temperature: float = 1.0,
     top_k: int = 0,
 ) -> tuple[str, float, float]:
@@ -381,17 +378,14 @@ def generate(
 
     vocab_size = tokenizer.vocab_size
     # Built lazily on the first step (the padded logit width is only known after a forward) and
-    # reused across steps; it survives the per-step reset_graph below like `mask` does.
+    # reused across steps; it is a plain ttnn tensor, so the per-step reset_graph below leaves it alone.
     pad_mask: Any | None = None
     start = time.time()
     first_token_s = 0.0
     for step in range(max_new_tokens):
         model_input = ttml.autograd.create_tensor(input_ttnn, requires_grad=False)
-        # Clone the mask each step; the autograd graph reset below invalidates prior tensors.
-        mask_for_model = (
-            None if mask is None else ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
-        )
-        logits = model(model_input, mask_for_model)
+        # No mask: the fused SDPA applies the causal mask itself, and DeepSeek's MLA takes none.
+        logits = model(model_input, None)
 
         last_logits = _extract_last_step_logits(logits)
         if pad_mask is None and last_logits.get_value().shape[3] > vocab_size:
@@ -510,17 +504,10 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
+    # Applies precision.master_dtype before building the optimizer; a resumed checkpoint loads into those tensors later.
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
-
-    # DeepSeek's composite SDPA needs the mask passed explicitly; gpt2/llama/qwen3 use a fused
-    # SDPA that materializes its own causal mask internally, so only build it for DeepSeek.
-    attn_mask_for_model = None
-    if model_cfg.model_type == "deepseek":
-        attn_mask_for_model = ttml.autograd.Tensor.from_numpy(
-            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-        )
 
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
@@ -582,7 +569,7 @@ def run_training(
     # Shape the LR curve over lr_schedule_steps (default: the run length). A larger horizon runs only
     # a prefix of a longer curve; warmup + decay otherwise complete exactly at the end of training.
     schedule_horizon = training_cfg.lr_schedule_steps or effective_max_steps
-    schedule = build_lr_schedule(training_cfg, optimizer, schedule_horizon)
+    lr_lambda = build_lr_lambda(training_cfg, schedule_horizon)
 
     sft_cfg = SFTConfig(
         max_steps=effective_max_steps,
@@ -607,9 +594,8 @@ def run_training(
         eval_dataloader=None,
         config=sft_cfg,
         optimizer=optimizer,
-        lr_schedule=schedule,
+        lr_lambda=lr_lambda,
         callbacks=callbacks,
-        attention_mask=attn_mask_for_model,
         checkpoint_saver=saver,
         checkpoint_loader=loader,
         compute_loss_func=_causal_lm_loss,
@@ -652,9 +638,14 @@ def run_training(
 
     optimizer_fields: list[tuple[str, str]] = [
         ("name", optimizer.get_name()),
-        ("lr", f"{optimizer.get_lr():.2e}"),
+        ("lr", ", ".join(f"{lr:.2e}" for lr in optimizer.get_group_lrs())),
         ("schedule", schedule_str),
     ]
+    native = ttml.autograd.PreferredPrecision.NATIVE
+    master_dtypes = {
+        t.get_value(native).dtype.name.lower() for t in model.parameters().values() if t.get_requires_grad()
+    }
+    optimizer_fields.append(("master dtype", ", ".join(sorted(master_dtypes))))
     if training_cfg.use_clip_grad_norm:
         optimizer_fields.append(("clip", f"max-norm {training_cfg.clip_grad_norm_max_norm}"))
 
@@ -743,13 +734,6 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     model, tokenizer, model_cfg, loaded_step = load_for_inference(args.model_path)
     seq_len = model_cfg.max_sequence_length
 
-    # As in training: only DeepSeek's composite SDPA needs the mask; the fused SDPA applies it itself.
-    causal_mask = None
-    if model_cfg.model_type == "deepseek":
-        causal_mask = ttml.autograd.Tensor.from_numpy(
-            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-        )
-
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     vocab_str = (
@@ -805,7 +789,6 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
         args.prompt,
         args.max_new_tokens,
         seq_len,
-        causal_mask,
         temperature=args.temperature,
         top_k=args.top_k,
     )

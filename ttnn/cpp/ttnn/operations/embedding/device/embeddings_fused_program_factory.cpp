@@ -137,7 +137,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         const uint64_t other_l1_bytes =
             sp_alignment +  // gap from the end of the DFBs to the first scratchpad
             round_up(TILE_HEIGHT * input_element_size_bytes, sp_alignment) +
-            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), sp_alignment) : 0);
+            (use_local_cache ? round_up(cache_entries * tt::round_up(weight_page_size, 32u), sp_alignment) : 0);
         const uint64_t l1_capacity =
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         const uint64_t output_bytes =
@@ -241,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     spec.dataflow_buffers.push_back(std::move(out_dfb));
 
     if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
         scratchpads.push_back(
             ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
