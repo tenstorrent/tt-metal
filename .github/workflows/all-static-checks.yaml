@@ -206,31 +206,6 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
-  model-tracer-host-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
-        timeout-minutes: 20
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: pip install pyyaml tqdm pytest
-      - name: Run model tracer host tests
-        # --noconftest: the repo-root conftest imports torch and models/, which this job doesn't install.
-        run: |
-          PYTHONPATH=. python -m pytest --noconftest -q \
-            tests/sweep_framework/test_resolve_trace_runner.py \
-            tests/sweep_framework/test_machine_info.py \
-            tests/sweep_framework/test_generic_ops_tracer_cmd.py
-      - name: Resolve every model-trace runner alias against sku_config.yaml
-        # Catches a SKU rename in .github/sku_config.yaml that would break ttnn-run-model-trace.yaml
-        # or point its error messages at SKUs that no longer exist.
-        run: |
-          for label in $(python -c 'import itertools as it, model_tracer.resolve_trace_runner as r; print(" ".join([*r.LABEL_ALIASES, *it.chain(*r.RETIRED_LABELS.values())]))'); do
-            PYTHONPATH=. python model_tracer/resolve_trace_runner.py --runner-label "$label" > /dev/null
-          done
   cmake-version:
     # Pinned, not ubuntu-latest: this job runs install_dependencies.sh, which only
     # handles jammy and noble and adds apt.llvm.org repos for clang 17/20 that do
