@@ -87,8 +87,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         # so we need to handle it separately.
         # See https://github.com/pytorch/pytorch/issues/127882
         if dim is None:
-            # PyTorch supports the correction argument only for var and std.
-            # ttnn supports it for all except prod, but it is ignored for all except var and std.
+            # Both PyTorch and ttnn support the correction argument only for var and std.
             if op in ("var", "std"):
                 torch_result = torch_op(torch_tensor, correction=correction)
             else:
@@ -109,10 +108,8 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 
     ttnn_errored = False
     try:
-        # ttnn.prod doesn't support the correction argument.
+        # Only ttnn.std and ttnn.var take the correction argument.
         if op in ("var", "std"):
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
-        elif op != "prod":
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
         else:
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)

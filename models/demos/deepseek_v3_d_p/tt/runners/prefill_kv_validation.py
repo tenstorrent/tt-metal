@@ -131,11 +131,12 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
 
 
-def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
+def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config, position0: int = 0) -> "torch.Tensor":
     """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
 
     GLM-5.3 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
     a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    Row r was roped at prompt position ``position0 + r``.
     """
     from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 
@@ -145,9 +146,9 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
     pe, nope = golden_ik[:, :rope_dim].float(), golden_ik[:, rope_dim:]
 
     def tables(interleave):
-        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=n)
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=position0 + n)
         assert cos.shape[-1] == rope_dim, f"rope table is {cos.shape[-1]} wide, expected {rope_dim}"
-        return cos[0, 0].float(), sin[0, 0].float()
+        return cos[0, 0, position0:].float(), sin[0, 0, position0:].float()
 
     def rot_half_split(x):  # rotate_half: [a, b] -> [-b, a]
         h = rope_dim // 2
@@ -177,27 +178,24 @@ def _load_golden_index_k(
     *,
     rope_layout: str = "interleaved",
     hf_config=None,
+    position0: int | None = None,
 ) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
     _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
-    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based.
+    ``position0`` is the prompt position of the first returned row, which re-basing rotates by. It
+    defaults to ``start``; a windowed (tail) trace stores position ``capture_start + r`` at row r, so
+    pass the absolute position there."""
     key = f"indexer_k_layer_{layer_idx}"
     golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
         raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
-    if start:
-        raise NotImplementedError(
-            f"{key}: a {rope_layout!r} golden cannot be read at start={start}. Re-basing rotates by "
-            f"absolute position, and the rope table is built from position 0, so a windowed read would "
-            f"be re-based by the wrong angles. Score this layer from row 0, or capture the trace with "
-            f"the device's interleaved pairing."
-        )
     if hf_config is None:
         hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
-    return _rebase_index_k_rope(golden, hf_config)
+    return _rebase_index_k_rope(golden, hf_config, start if position0 is None else position0)
 
 
 def kv_cache_pcc_check(
@@ -242,17 +240,19 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
-    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
-    # un-rotates with an SP-only period.
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
 
     assert not resolve_has_indexer(pipeline.hf_config), (
-        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
-        "SP-only block-cyclic period, and every sparse/DSA model TP-dedups. Validate such a cache with the "
-        "producer's device-less read-back instead of PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
+        "kv_cache_pcc_check checks the KVPE cache only, so a sparse/DSA model's index-key cache would go "
+        "unchecked. Validate such a cache with the producer's device-less read-back instead of "
+        "PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
     )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
+    tp = cfg.tp_factor
+    # Deduped: every (row, col) chip holds a distinct stripe, so reassemble in linear chip order.
+    kv_dedup = is_tp_deduped_kv_cache(kvpe_cache.storage, cfg.mesh_shape)
     chunk_size = cfg.chunk_size
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
@@ -298,11 +298,17 @@ def kv_cache_pcc_check(
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
 
     def _to_host(tensor):
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        host = ttnn.to_torch(tensor, mesh_composer=composer)  # [slots, tp, seq_len_cache / tp, row]
+        if not kv_dedup:
+            return host[:, :1]  # TP-replicated: any one column is a full replica
+        local = host.shape[2] // sp  # rows per chip
+        return torch.cat(
+            [host[:, t : t + 1, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=2
+        )  # [slots, 1, seq_len_cache, row] in linear chip order
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
-    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    p = blockcyclic_positions(sp * tp if kv_dedup else sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
     min_pcc = 1.0
     failures = []

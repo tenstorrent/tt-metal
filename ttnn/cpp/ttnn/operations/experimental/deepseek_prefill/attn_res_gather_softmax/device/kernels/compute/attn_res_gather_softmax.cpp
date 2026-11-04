@@ -154,7 +154,11 @@ ALWI void settle_row(PrefixDFB& prefix_buf, PendingDFB& pending_buf, TotalDFB& t
 // The gather leaves `cb_scalars` rank-major, which is the layout this reads it in;
 // nothing is reordered on arrival.
 void derive_row_weights(CircularBuffer& cb_row_obj) {
-    unary_op_init_common(cb_scalars, cb_row);
+    // Full re-init (hw_configure + pack_dest/math_pack_sync), matching the removed unary_op_init_common.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+    // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_scalars, cb_row);
+    copy_init(cb_scalars);
 
     tile_regs_acquire();
     // The live score, from the statistics up:

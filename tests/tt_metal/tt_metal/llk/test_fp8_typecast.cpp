@@ -59,7 +59,7 @@ static vector<std::uint32_t> run_fp8_typecast(
     // kernels that keep >1 tile resident (copy_block/pack_block: wait_front(BLOCK)) must pass a depth >= their
     // block size, else wait_front/reserve_back can never be satisfied in a 1-tile CB and the device deadlocks.
     std::uint32_t cb_depth_tiles = 1) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     std::uint32_t input_tile_size = tt::tile_size(input_fmt);
