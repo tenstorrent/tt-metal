@@ -21,8 +21,8 @@ jobs:
         image: {from-job: ci-build-image, image: tt-metal-ci-build}
         accelerator: {type: n150, count: 1}
         resources:
-          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
-          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
     env:
       - {name: HOME, value: /tmp/home}
       - {name: CHIP_ARCH, value: wormhole}
@@ -48,10 +48,12 @@ jobs:
               --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
             # The guest's /workspace is a 9p share, slow for the many small
             # reads of kernel compiles: run from a local copy (torrentci#2327).
-            # tests/sfpi-info.sh links to ../../sfpi-info.sh, which reads ./sfpi-version
-            # (both in tt_metal/), so copy tt-llk with every tt_metal/sfpi-* file.
-            - mkdir -p /tmp/tm && cp -a tt_metal/tt-llk tt_metal/sfpi-* /tmp/tm/
-            - . /tmp/venv/bin/activate && cd /tmp/tm/tt-llk/tests && ./setup_testing_env.sh
+            # Kernel builds include headers from across the tree (tt_metal/hw,
+            # hostdevcommon, ttnn), so copy the whole checkout minus .git to the
+            # guest's local disk and time it: the copy-in cost for torrentci#2327.
+            - mkdir -p /tmp/ws && time tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
+            - du -sh /tmp/ws
+            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: group-1
         kind: shell
         shell:
@@ -59,7 +61,7 @@ jobs:
             # pytest's progress dots are one output event each and exhaust the
             # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/tm/tt-llk/tests/python_tests &&
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests &&
               rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
               -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --durations=25
               --junitxml=pytest-report-wormhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?;
@@ -71,7 +73,7 @@ jobs:
             # pytest's progress dots are one output event each and exhaust the
             # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/tm/tt-llk/tests/python_tests &&
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests &&
               rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
               -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --durations=25
               --junitxml=pytest-report-wormhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?;
