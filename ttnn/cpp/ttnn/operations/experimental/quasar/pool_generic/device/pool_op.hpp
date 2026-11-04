@@ -21,6 +21,12 @@
 #include <utility>
 
 namespace ttnn::operations::pool::quasar {
+
+// TILE output: the compute kernel untilize-packs each output stick into pre_tilize as a full 32x32 tile, since
+// the Quasar 1x32 pack_untilize misreads a 32x32-layout DEST (#64327; see compute_pool_2d.cpp). The pack of
+// stick s writes rows s..s+31, so the last stick of a tile row spills up to 31 rows past it: pre_tilize holds
+// two tile rows (64 sticks) and each round consumes all of it. The factory and the L1 estimates both use this.
+inline constexpr uint32_t QUASAR_POOL_PRE_TILIZE_TILE_ROWS = 2;
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {

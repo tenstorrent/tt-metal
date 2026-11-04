@@ -501,6 +501,8 @@ UNIT_CASES = [
             pool="avg",
             stride=(1, 1),
             padding=(0, 0),
+            # one core: its 84 output sticks run two full pre_tilize rounds and a partial one
+            cores=1,
             out_layout="tile",
         ),
     ),
