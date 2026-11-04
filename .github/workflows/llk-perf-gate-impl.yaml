@@ -179,46 +179,19 @@ jobs:
           name: ${{ inputs.stage2_baseline_artifact }}
           path: stage2_baseline
 
-      - name: Take the baseline stage 2 read
-        if: ${{ hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) != '' }}
-        env:
-          ARCH: ${{ inputs.arch }}
-        run: |
-          mkdir -p baseline_perf
-          cp "stage2_baseline/${ARCH}/baseline.csv" baseline_perf/baseline.csv
-          cp "stage2_baseline/${ARCH}/baseline_metadata.json" baseline_metadata.json
-          echo "true" > have_baseline.txt
-
       - name: Read the baseline from the warehouse
-        if: >-
-          ${{ inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
-          && hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) == '' }}
+        if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
         env:
           SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
           SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
           SNOWFLAKE_WAREHOUSE: PUBLIC
           SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
-          ARCH: ${{ inputs.arch }}
-          GATE: ${{ inputs.gate }}
-          MEASURED_RUN: ${{ inputs.perf_run_id || github.run_id }}
-          MATCH_REF: ${{ inputs.baseline_match_ref }}
-          WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
-          COMMITS_ARG=()
-          if [ -n "$MATCH_REF" ]; then
-            # Commits and trees only: enough for the merge base and the 200 commits before it.
-            git fetch --no-tags --filter=blob:none --depth=250 origin "$(git rev-parse HEAD)"
-            # An empty list is passed on, so the reader skips instead of taking any run.
-            COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
-              || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
-            COMMITS=$(echo "$COMMITS" | paste -sd, -)
-            echo "Expected baseline commit: ${COMMITS%%,*}"
-            COMMITS_ARG=(--commits "$COMMITS")
-          fi
-          python3 ${{ env.LLK_PATH }}/perf/gate.py baseline --gate "$GATE" --arch "$ARCH" \
-            --exclude-run "$MEASURED_RUN" "${COMMITS_ARG[@]}" --wait-minutes "${WAIT_MINUTES:-0}"
+          python3 ${{ env.LLK_PATH }}/perf/gate.py baseline --gate "${{ inputs.gate }}" --arch "${{ inputs.arch }}" \
+            --exclude-run "${{ inputs.perf_run_id || github.run_id }}" --wait-minutes "${{ inputs.baseline_wait_minutes }}" \
+            --match-ref "${{ inputs.baseline_match_ref }}" --reuse stage2_baseline
 
       # The REST budget belongs to the installation and is shared by every
       # workflow in the repository, so a busy hour can refuse a download although
@@ -250,34 +223,6 @@ jobs:
           run-id: ${{ inputs.baseline_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Record the baseline run as the baseline
-        if: inputs.baseline_run_id != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
-          ARCH: ${{ inputs.arch }}
-        run: |
-          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
-          echo "Baseline ${ARCH} CSVs from run ${BASELINE_RUN_ID}: ${COUNT}"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::Run ${BASELINE_RUN_ID} published no perf-data-${ARCH}-* artifacts."
-            echo "false" > have_baseline.txt
-            echo '{}' > baseline_metadata.json
-            exit 1
-          fi
-
-          BASELINE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BASELINE_RUN_ID}" \
-            --jq '.head_sha') || BASELINE_SHA=""
-          python3 - "$BASELINE_SHA" "$BASELINE_RUN_ID" > baseline_metadata.json <<'PYTHON'
-          import json
-          import sys
-
-          sha, run_id = sys.argv[1], sys.argv[2]
-          print(json.dumps({"commit_sha": sha, "run_id": run_id}))
-          PYTHON
-          echo "true" > have_baseline.txt
-          echo "Baseline commit: ${BASELINE_SHA:-unknown}"
-
       - name: Take the baseline from this run's artifacts
         id: baseline_artifact_download
         if: inputs.baseline_artifact_pattern != ''
@@ -299,24 +244,6 @@ jobs:
           pattern: ${{ inputs.baseline_artifact_pattern }}
           merge-multiple: true
           path: baseline_perf
-
-      - name: Record the branch point as the baseline
-        if: inputs.baseline_artifact_pattern != ''
-        env:
-          BASELINE_COMMIT: ${{ inputs.baseline_commit }}
-          PATTERN: ${{ inputs.baseline_artifact_pattern }}
-        run: |
-          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
-          echo "Branch-point CSVs (${PATTERN}): ${COUNT}"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::Nothing matched ${PATTERN}; the branch point measured nothing."
-            echo "false" > have_baseline.txt
-            echo '{}' > baseline_metadata.json
-            exit 1
-          fi
-          printf '{"commit_sha": "%s", "source": "branch point, measured in this run"}\n' \
-            "$BASELINE_COMMIT" > baseline_metadata.json
-          echo "true" > have_baseline.txt
 
       - name: Download the PR's perf data
         id: current_download
@@ -343,6 +270,14 @@ jobs:
           run-id: ${{ inputs.perf_run_id || github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download the merge gate's stage 2
+        if: inputs.gate == 'merge'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-stage2-${{ inputs.arch }}-*
+          path: stage2
+
       # Writes verdict-<arch>.json in every case; the steps below read only that.
       - name: Compare regressions
         if: ${{ !cancelled() }}
@@ -354,41 +289,15 @@ jobs:
           CURRENT_LABEL: >-
             ${{ github.event_name == 'pull_request' && 'PR head'
                 || github.event_name == 'merge_group' && 'merge queue' || github.ref_name }}
+          BASELINE_COMMIT: ${{ inputs.baseline_artifact_pattern != '' && inputs.baseline_commit || '' }}
+          BASELINE_RUN: ${{ inputs.baseline_run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 ${{ env.LLK_PATH }}/perf/gate.py compare --gate "$GATE" --arch "$ARCH" \
             --current 'current_perf/**/*.csv' --baseline 'baseline_perf/**/*.csv' \
+            --baseline-commit "$BASELINE_COMMIT" --baseline-run "$BASELINE_RUN" --stage2 'stage2/**/stage2.json' \
             --current-sha "$CURRENT_SHA" --current-label "$CURRENT_LABEL" --incomplete "$INCOMPLETE"
           cat perf_gate_report.md 2>/dev/null || true
-
-      - name: Download the merge gate's stage 2
-        if: ${{ !cancelled() && inputs.gate == 'merge' }}
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: llk-perf-stage2-${{ inputs.arch }}-*
-          path: stage2
-
-      - name: Add stage 2 to the report
-        if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
-        # Report-only: a stage-2 fault must not fail the gate.
-        continue-on-error: true
-        env:
-          ARCH: ${{ inputs.arch }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # --jq runs once per page, so count lines rather than taking a length per page.
-          LEGS=$(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
-            --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
-          GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          # Report-only: stage 2 adds to the report and does not change the verdict.
-          python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
-            --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
-            --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md \
-            || echo "Stage 2 could not build its report (exit $?); see the job log." > stage2.md
-          printf '\n' >> perf_gate_report.md
-          cat stage2.md >> perf_gate_report.md
 
       - name: Comment on PR
         if: >-

@@ -1,0 +1,7 @@
+formats.input_A,formats.input_B,formats.register_A,formats.register_B,formats.output,formats.sfpu_src,formats.sfpu_dst,unpack_to_dest,dest_acc,speed_of_light,math_fidelity,mathop,broadcast_type,ct_dim,tile_cnt,loop_factor,marker,mean(L1_TO_L1),TEXT_SIZE(L1_TO_L1)
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,1,1,64,INIT,307.0,9465
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,1,1,64,KERNEL,3981.0,9465
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,1,1,64,TILE_LOOP,3266.0,9465
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,8,8,64,INIT,294.0,10117
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,8,8,64,KERNEL,15343.0,10117
+Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,Float16_b,False,DestAccumulation.No,False,MathFidelity.LoFi,MathOperation.Elwsub,BroadcastType.Column,8,8,64,TILE_LOOP,14635.0,10117

@@ -29,7 +29,6 @@ def _run(
     arch="blackhole",
     current=(1000, 2000),
     baseline=(1000, 2000),
-    have=True,
     **kw,
 ):
     """One compare in tmp_path; returns the verdict it wrote."""
@@ -40,8 +39,6 @@ def _run(
     meta = tmp_path / "baseline_metadata.json"
     if kw.pop("meta", True):
         meta.write_text(json.dumps({"commit_sha": "abc", **kw.pop("base", {})}))
-    flag = tmp_path / "have_baseline.txt"
-    flag.write_text("true" if have else "false")
     argv = [
         "compare",
         "--gate",
@@ -54,8 +51,6 @@ def _run(
         str(tmp_path / "base/**/*.csv"),
         "--baseline-meta",
         str(meta),
-        "--have-baseline",
-        str(flag),
         "--out-dir",
         str(tmp_path),
         "--incomplete",
@@ -108,7 +103,7 @@ def test_the_module_threshold_of_the_policy_applies(tmp_path):
     "kw, status",
     [
         ({"incomplete": "A blackhole leg was cancelled."}, "incomplete"),
-        ({"have": False}, "no-baseline"),
+        ({"baseline": None}, "no-baseline"),
         ({"meta": False}, "no-compare"),
         ({"current": None}, "no-compare"),
         ({"sol": "True"}, "no-compare"),
@@ -159,3 +154,91 @@ def test_policy_prints_the_compare_arguments(capsys):
 def test_arches_lists_the_stage2_arches(capsys):
     gate.main(["arches", "--gate", "merge", "--stage2"])
     assert capsys.readouterr().out.split() == ["blackhole"]
+
+
+REPLAY = pathlib.Path(__file__).parent / "replay_merge_blackhole"
+
+
+def _replay(tmp_path, *extra, current=None):
+    """Merge gate run 41816768387, Blackhole, cut to six modules over its four legs."""
+    argv = ["compare", "--gate", "merge", "--arch", "blackhole"]
+    argv += ["--current", f"{current or REPLAY / 'current'}/**/*.csv"]
+    argv += ["--baseline", f"{REPLAY}/baseline/*.csv"]
+    argv += ["--baseline-meta", str(REPLAY / "baseline_metadata.json")]
+    argv += ["--stage2", f"{REPLAY}/stage2/**/stage2.json", "--out-dir", str(tmp_path)]
+    assert gate.main(argv + list(extra)) == 0
+    return json.loads((tmp_path / "verdict-blackhole.json").read_text())
+
+
+def test_replay_of_a_real_merge_gate_run_passes(tmp_path):
+    """The gate of that run passed; the old regression_compare.py gives the same 348 points."""
+    v = _replay(tmp_path)
+    assert v["status"] == "pass" and not v["fails"]
+    assert v["counts"] == {"points": 348, "regressions": 0, "improvements": 0, "new": 0}
+    assert v["baseline"]["commit_sha"].startswith("9406a58a8a9")
+    assert v["stage2"] == {"legs": 4, "notes": [], "outcomes": {}}
+
+
+def test_replay_with_a_slower_leg_is_a_regression_stage2_has_not_judged(tmp_path):
+    import shutil
+
+    current = tmp_path / "current"
+    shutil.copytree(REPLAY / "current", current)
+    (csv,) = current.glob("*-blackhole-4/perf_eltwise_unary_typecast/*.csv")
+    lines = csv.read_text().splitlines()
+    col = lines[0].split(",").index("mean(L1_TO_L1)")
+    slow = []
+    for line in lines[1:]:
+        cells = line.split(",")
+        if cells[col]:
+            cells[col] = str(float(cells[col]) * 1.5)
+        slow.append(",".join(cells))
+    csv.write_text("\n".join([lines[0], *slow]) + "\n")
+
+    v = _replay(tmp_path, current=current)
+    assert v["status"] == "regression" and v["counts"]["regressions"] > 0
+    assert v["stage2"]["outcomes"] == {"unmeasured": v["counts"]["regressions"]}
+
+
+def test_replay_without_a_baseline_fails(tmp_path):
+    argv = ["compare", "--gate", "merge", "--arch", "blackhole"]
+    argv += [
+        "--current",
+        f"{REPLAY / 'current'}/**/*.csv",
+        "--baseline",
+        f"{tmp_path}/none/*.csv",
+    ]
+    argv += [
+        "--baseline-meta",
+        str(REPLAY / "baseline_metadata.json"),
+        "--out-dir",
+        str(tmp_path),
+    ]
+    gate.main(argv)
+    v = json.loads((tmp_path / "verdict-blackhole.json").read_text())
+    assert v["status"] == "no-baseline" and v["fails"]
+
+
+def test_replay_with_a_stage2_crash_still_decides(tmp_path):
+    """Stage 2 is report-only: a corrupt stage2.json is a line in the report, not a failed gate."""
+    import shutil
+
+    stage2 = tmp_path / "s2"
+    shutil.copytree(REPLAY / "stage2", stage2)
+    next(stage2.rglob("stage2.json")).write_text("{not json")
+    v = _replay(tmp_path, "--stage2", f"{stage2}/**/stage2.json")
+    assert v["status"] == "pass" and "error" in v["stage2"]
+    assert (
+        "Stage 2 could not build its report"
+        in (tmp_path / "perf_gate_report.md").read_text()
+    )
+
+
+def test_replay_with_a_leg_that_left_no_stage2_says_so(tmp_path):
+    import shutil
+
+    stage2 = tmp_path / "s2"
+    shutil.copytree(REPLAY / "stage2", stage2)
+    shutil.rmtree(next(stage2.iterdir()))
+    v = _replay(tmp_path, "--stage2", f"{stage2}/**/stage2.json")
+    assert v["stage2"]["notes"] == ["3 of 4 leg(s) left a stage-2 result."]
