@@ -70,6 +70,10 @@ def cs_cand(sc, lids, colid, cols):
     assert (
         sc.dtype == ttnn.bfloat16 and sc.layout == ttnn.ROW_MAJOR_LAYOUT and lids.dtype == ttnn.uint32 and n % 32 == 0
     )
+    if os.environ.get("DSV41_OL_CSCAND", "0") == "1" and K % 128 == 0 and n * 2 <= 98304 and R * 4 <= 110:
+        from models.demos.blackhole.deepseek_v41_flash.tt import ol_idx
+
+        return ol_idx.cs_cand_fast(sc, lids, colid, cols, split=4)
     vals = ttnn.allocate_tensor_on_device(
         ttnn.Shape([R, 1, 1, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )

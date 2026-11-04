@@ -147,6 +147,9 @@ def rope_concat(o, c, s, users, nh, compact=False):
     bf = ttnn.bfloat16
     X, R, SC, XS, O, P, R2, RI, M, PP = range(10)
     unf = T > 8 and T % 8 != 0  # the stock spec _finish rotates these T with the unfused addcmul formula
+    _pbc = (
+        unf and os.environ.get("DSV41_OL_POSTBCAST", "0") == "1" and o.memory_config().buffer_type == ttnn.BufferType.L1
+    )  # otherlayers: raw cos / sin tiles broadcast by the unpacker (ol_kernels/post2_reader.cpp, qpost2_compute.cpp)
     rset, pset = _crs(rc), _crs(pc)
     cbs = [
         _cb(rset, X, 1, 2048, bf),
@@ -171,9 +174,24 @@ def rope_concat(o, c, s, users, nh, compact=False):
         prt[cx][cy] = [u0, cnt]
         u0 += cnt
     reader = _kernel(
-        "post_reader.cpp",
+        "../ol_kernels/post2_reader.cpp" if _pbc else "post_reader.cpp",
         rset,
-        [X, R, SC, XS, T, nh, 16, ROW, int(unf), R2, RI] + _acc(o) + _acc(c) + _acc(s),
+        [
+            X,
+            R,
+            (int(o.memory_config().buffer_type == ttnn.BufferType.L1) if _pbc else SC),
+            XS,
+            T,
+            nh,
+            16,
+            ROW,
+            int(unf),
+            R2,
+            RI,
+        ]
+        + _acc(o)
+        + _acc(c)
+        + _acc(s),
         rt,
         ttnn.ReaderConfigDescriptor(),
         [o.buffer_address(), c.buffer_address(), s.buffer_address()],
@@ -187,7 +205,7 @@ def rope_concat(o, c, s, users, nh, compact=False):
         [out.buffer_address()],
     )
     compute = _kernel(
-        "post_compute.cpp",
+        "../ol_kernels/qpost2_compute.cpp" if _pbc else "post_compute.cpp",
         rset,
         [X, R, O, int(unf), R2, RI, M, PP],
         ttnn.RuntimeArgs(),
@@ -204,7 +222,7 @@ def rope_concat(o, c, s, users, nh, compact=False):
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute, passk], semaphores=[], cbs=cbs)
     prog.custom_program_hash = _hash(
-        0xA71, T, nh, unf, compact, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out))
+        0xA71, _pbc, T, nh, unf, compact, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out))
     )
     ttnn.generic_op([o, c, s, out], prog)
     return out

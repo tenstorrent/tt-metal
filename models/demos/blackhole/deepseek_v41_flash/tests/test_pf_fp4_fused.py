@@ -40,6 +40,46 @@ def test_fp4_fused_matches(device, shape, scale):
     assert ndiff == 0
 
 
+@pytest.mark.parametrize(
+    "shape", [(8, 1, 32, 128), (12, 1, 32, 128), (1, 1, 32, 128), (16, 1, 32, 128), (2, 8, 256, 128)]
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
+def test_fp4_nb1_matches(device, shape):
+    """DSV41_FP4_NB1: one core per 32-column tile (nb=1) vs the whole-row block (nb=4): bit-identical; traced device-side time of both (k calls per trace, difference of two trace lengths)."""
+    torch.manual_seed(2)
+    x = (torch.randn(*shape) * torch.logspace(-2, 2, shape[-2]).reshape(1, 1, -1, 1)).to(torch.bfloat16)
+    x[..., 3, :32] = 0
+    x[..., 5, 32:64] = 6.0 * 2.0**4
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    a, b = pf_fp4.fp4_fused(t, nb=4), pf_fp4.fp4_fused(t, nb=1)
+    ndiff = int((ttnn.to_torch(a) != ttnn.to_torch(b)).sum())
+    print(f"FP4 nb1 {shape}: {ndiff} elements differ", flush=True)
+
+    def traced_us(nb, k=8, reps=20):
+        def cap(kk):
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            for _ in range(kk):
+                pf_fp4.fp4_fused(t, nb=nb)
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            return tid
+
+        def run(tid):
+            for _ in range(3):
+                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            return (time.perf_counter() - t0) / reps * 1e6
+
+        t1, tk = cap(1), cap(k)
+        return (run(tk) - run(t1)) / (k - 1)
+
+    print(f"FP4 nb1 {shape}: nb4 {traced_us(4):.1f} us, nb1 {traced_us(1):.1f} us per call (traced)", flush=True)
+    assert ndiff == 0
+
+
 # the chunk shapes of the indexer in the grid cells: q [U, 64 heads, C, 128] and the pooled keys [U, 1, C/4, 128]
 @pytest.mark.parametrize(
     "shape",

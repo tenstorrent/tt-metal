@@ -100,11 +100,17 @@ def pos_buckets(max_pos, factor=2):
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
 
 
-def ids_sort(ids):
-    """ids uint32 ROW_MAJOR [R,1,1,k] -> the same ids ascending per row (sentinels 0xFFFFFFFF last): ONE JIT program, one core per row, 3-pass radix sort (tt/mhc_kernels/ids_sort.cpp)."""
+def ids_sort(ids, max_id=None):
+    """ids uint32 ROW_MAJOR [R,1,1,k] -> the same ids ascending per row (sentinels 0xFFFFFFFF last): ONE JIT program, one core per row, 3-pass radix sort (tt/mhc_kernels/ids_sort.cpp);
+    DSV41_OL_IDS_BM=1 with ``max_id`` (every real id < max_id): the bitmap sort of tt/ol_kernels/ids_sort_bm.cpp (distinct ids; 75 -> ~10 us at k = 512).
+    """
     import struct  # noqa: F401
 
     from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel
+
+    bm_nw = 0
+    if max_id is not None and os.environ.get("DSV41_OL_IDS_BM", "0") == "1" and int(max_id) <= (1 << 18):
+        bm_nw = (int(max_id) + 31) // 32
 
     shape = [int(v) for v in ids.shape]
     k = shape[-1]
@@ -114,7 +120,11 @@ def ids_sort(ids):
     assert ids.dtype == ttnn.uint32 and ids.layout == ttnn.ROW_MAJOR_LAYOUT and k % 2 == 0
     mesh = ids.device()
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape(shape),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.L1_MEMORY_CONFIG if (bm_nw and os.environ.get("DSV41_OL_IDS_L1", "0") == "1") else ttnn.DRAM_MEMORY_CONFIG,
     )
     grid = mesh.compute_with_storage_grid_size()
     cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][: min(R, grid.x * grid.y)]
@@ -124,6 +134,30 @@ def ids_sort(ids):
     for t, (cx, cy) in enumerate(cores):
         rt[cx][cy] = [t, nc, len(range(t, R, nc))]
     u32 = ttnn.uint32
+    if bm_nw:
+        sw = (bm_nw + 31) // 32
+        cbs = [
+            _cb(core_set, 0, 1, k * 4, u32),
+            _cb(core_set, 1, 1, k * 4, u32),
+            _cb(core_set, 2, 1, (bm_nw + sw) * 4, u32),
+        ]
+        ct = [0, 1, 2, k, bm_nw] + _acc(ids) + _acc(out)
+        kern = ttnn.KernelDescriptor(
+            kernel_source=os.path.join(os.path.dirname(os.path.abspath(__file__)), "ol_kernels", "ids_sort_bm.cpp"),
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=ct,
+            runtime_args=ttnn.RuntimeArgs(),  # no per-core runtime arguments (ol_core_idx)
+            common_runtime_args=[ids.buffer_address(), out.buffer_address(), int(grid.x)],
+            config=ttnn.ReaderConfigDescriptor(),
+            defines=[("OL_ZONES", "1")] if os.environ.get("DSV41_OL_ZONES", "0") == "1" else [],
+        )
+        prog = ttnn.ProgramDescriptor(kernels=[kern], semaphores=[], cbs=cbs)
+        prog.custom_program_hash = _hash(
+            0x1D6, os.environ.get("DSV41_OL_ZONES", "0"), R, k, bm_nw, tuple(_acc(ids)), tuple(_acc(out))
+        )
+        ttnn.generic_op([ids, out], prog)
+        return out
     cbs = [_cb(core_set, 0, 1, k * 4, u32), _cb(core_set, 1, 1, k * 4, u32), _cb(core_set, 2, 1, 256 * 4, u32)]
     ct = [0, 1, 2, k] + _acc(ids) + _acc(out)
     kern = _kernel(
@@ -141,7 +175,7 @@ def ids_sort(ids):
     return out
 
 
-def canonical_ids(ids):
+def canonical_ids(ids, max_id=None):
     """Selected entry ids [R,1,1,topk] uint32 row-major -> the same ids in ASCENDING order (sentinels last).
 
     ``topk_large_indices`` returns the set of the top-k entries in score order, and entries with EQUAL (bf16) scores come out in an order that depends on how the scanned width is cut into
@@ -154,7 +188,7 @@ def canonical_ids(ids):
     if mode == "0":
         return ids
     if mode != "ttnn":
-        return ids_sort(ids)
+        return ids_sort(ids, max_id)
     shape = [int(v) for v in ids.shape]
     k = shape[-1]
     R = ids.volume() // k
@@ -517,7 +551,7 @@ class DSV41DecodeIndexer:
         DSV41_IDX_FP4=chain restores the op chain."""
         from models.demos.blackhole.deepseek_v41_flash.tt import pf_fp4
 
-        return pf_fp4.fp4_fused(q)
+        return pf_fp4.fp4_fused(q, out_l1=os.environ.get("DSV41_OL_QL1", "0") == "1")
 
     @staticmethod
     def _fp4_fused_rows(k):
@@ -694,7 +728,7 @@ class DSV41DecodeIndexer:
                         )
                         row = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
                     ids.append(ttnn.experimental.topk_large_indices(row, k=self.topk, valid_length_tensor=st["valid"]))
-                return canonical_ids(ttnn.concat(ids, dim=0))
+                return canonical_ids(ttnn.concat(ids, dim=0), max_id=self.n_score)
             scores = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)  # [U,1,1,T] row-major
         if (
             "nvalid" in st
@@ -702,7 +736,7 @@ class DSV41DecodeIndexer:
             scores = mask_scores(scores, st["nvalid"], self._arange_for(self.n_score))
         ids = ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
         ids = ids if ids.shape[0] == scores.shape[0] else ttnn.reshape(ids, [scores.shape[0], 1, 1, self.topk])
-        return canonical_ids(ids)
+        return canonical_ids(ids, max_id=int(scores.shape[-1]))
 
     # ---- column-sharded key slab -----------------------------------------------------------------------------------------------
     def _cs_ent(self, ent):

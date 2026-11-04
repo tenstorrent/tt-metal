@@ -32,12 +32,15 @@ from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import _PagedMi
 _FUSED_SCORE = os.environ.get("DSV41_IDX_FUSED", "1") == "1"
 
 
-def _canonical_ids(ids):
-    """select() of the base tree post-processes the selected ids with indexer.canonical_ids when that exists (ascending id order); the fused path returns from SpecIndexer.forward without select(), so it applies the same pass."""
+def _canonical_ids(ids, max_id=None):
+    """select() of the base tree post-processes the selected ids with indexer.canonical_ids when that exists (ascending id order); the fused path returns from SpecIndexer.forward without select(), so it applies the same pass.
+    max_id: all ids are < max_id (the scored width): lets the sort take the bitmap kernel (DSV41_OL_IDS_BM=1)."""
     from models.demos.blackhole.deepseek_v41_flash.tt import indexer as _ix
 
     f = getattr(_ix, "canonical_ids", None)
-    return f(ids) if f is not None else ids
+    if f is None:
+        return ids
+    return f(ids, max_id=max_id) if max_id is not None else f(ids)
 
 
 RING_SPEC = 160  # 128 + margin (k <= 5 needs 133; 160 keeps the ring a multiple of 32)
@@ -57,15 +60,37 @@ class SpecIndexer(DSV41DecodeIndexer):
         self.n = n
         self.R = self.T * n
 
-    def project(self, x, qr, st):
+    def project(self, x, qr, st, want_w=True):
         U, n, R = self.T, self.n, self.R
         w = ttnn.linear(x, self.wproj, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8))  # [1,1,R,32]
         self._w_flat = w  # [1,1,R,32] tile: the gates as the fused score op reads them
-        q = ttnn.linear(
-            qr, self.wq_b, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8)
-        )  # [1,1,R,4096]
-        q = ttnn.reshape(q, (R, 1, HEADS, DIM))
-        q = ttnn.addcmul(ttnn.multiply(q, st["C"]), ttnn.matmul(q, self.P, compute_kernel_config=self.ckc), st["S"])
+        qb1d = int(
+            os.environ.get("DSV41_OL_QB_1D", "0")
+        )  # otherlayers: the attention wq_b 1D multicast config (same [1280, 4096] shape): 39 -> ~21 us
+        if qb1d:
+            from models.demos.blackhole.deepseek_v41_flash.tt.attention import _cfg_1d
+
+            qkw = dict(program_config=_cfg_1d(int(qr.shape[-1]), int(self.wq_b.shape[-1]), qb1d))
+        else:
+            qkw = dict(core_grid=ttnn.CoreGrid(y=2, x=8))
+        qpost = os.environ.get("DSV41_OL_QPOST", "0") == "1"
+        if qpost:  # otherlayers: the wq_b output stays in L1 (transient) for the RoPE program
+            qkw["memory_config"] = ttnn.L1_MEMORY_CONFIG
+        q = ttnn.linear(qr, self.wq_b, compute_kernel_config=self.ckc, **qkw)  # [1,1,R,4096]
+        if qpost:
+            from models.demos.blackhole.deepseek_v41_flash.tt import ol_idx
+
+            if ol_idx.qpost_ok(q, st["C"], st["S"], R):
+                # one program: heads -> rows relayout + RoPE (x * C + (x @ P) * S), bit-identical to the reshape / multiply / matmul / addcmul chain below
+                q = ol_idx.idx_qpost(q, st["C"], st["S"], R, out_l1=True)
+            else:
+                q = ttnn.reshape(q, (R, 1, HEADS, DIM))
+                q = ttnn.addcmul(
+                    ttnn.multiply(q, st["C"]), ttnn.matmul(q, self.P, compute_kernel_config=self.ckc), st["S"]
+                )
+        else:
+            q = ttnn.reshape(q, (R, 1, HEADS, DIM))
+            q = ttnn.addcmul(ttnn.multiply(q, st["C"]), ttnn.matmul(q, self.P, compute_kernel_config=self.ckc), st["S"])
         if self.fp4_q:
             if _FP4_FUSED and q.dtype == ttnn.bfloat16 and q.layout == ttnn.TILE_LAYOUT:
                 q = self._fp4_fused_q(q)
@@ -73,7 +98,7 @@ class SpecIndexer(DSV41DecodeIndexer):
                 x4 = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (R, 1, HEADS * 4, 32))
                 q = ttnn.typecast(ttnn.reshape(self._fp4_blocks(x4), (R, 1, HEADS, DIM)), ttnn.bfloat16)
         q = ttnn.reshape(q, (U, 1, n * HEADS, DIM))  # the n rows of a user stacked on the head axis
-        return q, ttnn.reshape(w, (R, 1, 1, HEADS))
+        return q, (ttnn.reshape(w, (R, 1, 1, HEADS)) if want_w else None)
 
     def _nvalid_u32(self, st):
         """st["nvalid"] (float32 [R,1,1,1] tile, valid entries of every row) -> uint32 [1,1,1,32] row-major (the fused score op's mask input); cached in ``st``."""
@@ -100,7 +125,9 @@ class SpecIndexer(DSV41DecodeIndexer):
             # fused score + validity mask (tt/idx_score.py, bit-identical to score() + mask_scores(); DSV41_IDX_FUSED=0 restores the chain)
             from models.demos.blackhole.deepseek_v41_flash.tt.idx_score import score_mask_fused
 
-            q, w = self.project(x, qr, st)
+            q, w = self.project(
+                x, qr, st, want_w=os.environ.get("DSV41_OL_QPOST", "0") != "1"
+            )  # (the fused score reads self._w_flat)
             if self.cs and not self.head_mode:
                 # column-sharded slab: this column scores its local slots (valid local counts per row), local top-k, candidate all_gather, global top-k (tt/indexer_colshard.py)
                 from models.demos.blackhole.deepseek_v41_flash.tt.indexer_colshard import _cs_fast, cs_select
@@ -124,7 +151,7 @@ class SpecIndexer(DSV41DecodeIndexer):
             ids = ttnn.experimental.topk_large_indices(sc, k=self.topk, valid_length_tensor=st["valid"])
             ids = ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
             return _canonical_ids(
-                ids
+                ids, int(sc.shape[-1])
             )  # the ascending-order pass of select() when the base has it (DSV41_IDX_SORT), else identity
         return super().forward(x, qr, st, return_scores)
 
@@ -258,6 +285,22 @@ class SpecIndexer(DSV41DecodeIndexer):
         k = ttnn.linear(lat_pre, self.wk, compute_kernel_config=self.ckc)  # [1,1,R,128]
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=self.k_norm_w, epsilon=self.k_eps)
         k = ttnn.addcmul(ttnn.multiply(k, st["iCg"]), ttnn.matmul(k, self.P, compute_kernel_config=self.ckc), st["iSg"])
+        if os.environ.get("DSV41_OL_KEYROWS", "0") == "1" and self.cs and getattr(self, "U_slab", None) in (None, U):
+            from models.demos.blackhole.deepseek_v41_flash.tt import ol_idx
+
+            if ol_idx.keyrows_ok(k, U, n, self._kcfg):
+                # otherlayers: fp4 + the per-block-index update tiles in ONE program (pad, fp4_fused, slice, to_layout and n x (slice, to_layout, to_memory_config) removed)
+                kjs = ol_idx.key_rows(k, U, n, self._kcfg)
+                ents, ents_head = self._cs_ent_lists(st)
+                for j in range(n):
+                    ttnn.experimental.paged_update_cache(
+                        self.k_cache, kjs[j], update_idxs_tensor=ents[j], page_table=None
+                    )
+                    ttnn.experimental.paged_update_cache(
+                        self.k_head, kjs[j], update_idxs_tensor=ents_head[j], page_table=None
+                    )
+                    ttnn.deallocate(kjs[j])
+                return
         if _FP4_FUSED and k.dtype == ttnn.bfloat16:
             k = self._fp4_fused_rows(k)
         else:

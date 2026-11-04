@@ -158,6 +158,17 @@ def test_fusedec_layer(mesh_device):
                     ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
                     ttnn.ReadDeviceProfiler(md)
                 rec_["trace_id"] = int(tid)
+                # otherlayers: wall time per replay of the captured layer (back-to-back non-blocking replays, mean of FD_WALLREPS): the profiler-free metric of the arm
+                import time as _time
+
+                _nw = int(os.environ.get("FD_WALLREPS", "30"))
+                ttnn.synchronize_device(md)
+                _t0 = _time.perf_counter()
+                for _ in range(_nw):
+                    ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(md)
+                rec_["wall_us"] = (_time.perf_counter() - _t0) / _nw * 1e6
+                print(f"LAYERWALL {name} {rec_['wall_us']:.1f} us", flush=True)
                 if _l1 is not None:
                     rec_["l1_clean"] = bool(L1C.assert_clean(md, _l1, "post-replay " + name))
             if ref is None:

@@ -14,13 +14,13 @@ from models.demos.blackhole.deepseek_v41_flash.tt import attn_fused as AF
 NH, HD = 9, 512
 
 
-def _up(md, t, layout, dtype=ttnn.bfloat16):
+def _up(md, t, layout, dtype=ttnn.bfloat16, mc=ttnn.DRAM_MEMORY_CONFIG):
     return ttnn.from_torch(
         t.contiguous(),
         device=md,
         dtype=dtype,
         layout=layout,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=mc,
         mesh_mapper=ttnn.ReplicateTensorToMesh(md),
     )
 
@@ -36,7 +36,12 @@ def _inputs(md, T, seed):
         1, T, 1, 64
     )  # the inverse rotation: negated sin
     return (
-        _up(md, o, ttnn.ROW_MAJOR_LAYOUT),
+        _up(
+            md,
+            o,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mc=ttnn.L1_MEMORY_CONFIG if os.environ.get("DSV41_PF_OL1") == "1" else ttnn.DRAM_MEMORY_CONFIG,
+        ),
         _up(md, C.to(torch.bfloat16), ttnn.TILE_LAYOUT),
         _up(md, S.to(torch.bfloat16), ttnn.TILE_LAYOUT),
     )
