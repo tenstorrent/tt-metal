@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -164,8 +165,12 @@ MoEExpertRowsDeviceOperation::spec_return_value_t MoEExpertRowsDeviceOperation::
         ttnn::Shape({rows, shape.hidden_size}),
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
+    const uint32_t table_bytes =
+        expert_rows::table_layout(
+            shape.tokens, shape.top_k, shape.local_experts, tt::tt_metal::hal::get_dram_alignment())
+            .bytes;
     const auto table_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape({1, expert_rows::table_layout(shape.tokens, shape.top_k, shape.local_experts).bytes / kBf16Bytes}),
+        ttnn::Shape({1, table_bytes / kBf16Bytes}),
         tt::tt_metal::TensorLayout(
             DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
     return {rows_spec, table_spec};
@@ -332,6 +337,8 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"mask_words", static_cast<uint32_t>(all_mask.size())},
         {"sem_entries", sem_entries},
         {"sem_table", sem_table},
+        {"l1_alignment", tt::tt_metal::hal::get_l1_alignment()},
+        {"dram_alignment", tt::tt_metal::hal::get_dram_alignment()},
         {"routing_own_mapping", routing.own_mapping},
         {"routing_source_mappings", routing.source_mappings},
         {"routing_token_ids", routing.token_ids},

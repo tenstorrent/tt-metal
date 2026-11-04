@@ -44,6 +44,8 @@ constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
 constexpr uint32_t mask_words = get_named_compile_time_arg_val("mask_words");
 constexpr uint32_t sem_entries = get_named_compile_time_arg_val("sem_entries");
 constexpr uint32_t sem_table = get_named_compile_time_arg_val("sem_table");
+constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
+constexpr uint32_t dram_alignment = get_named_compile_time_arg_val("dram_alignment");
 // cb_routing byte offsets (RoutingLayout, moe_expert_rows_plan.hpp)
 constexpr uint32_t routing_own_mapping = get_named_compile_time_arg_val("routing_own_mapping");
 constexpr uint32_t routing_source_mappings = get_named_compile_time_arg_val("routing_source_mappings");
@@ -78,17 +80,17 @@ constexpr uint32_t deal_single = get_named_compile_time_arg_val("deal_single");
 constexpr uint32_t bias_rows = has_bias ? 1 : 0;  // the bias K row of the prepared weights
 // jobs of several row tiles: held units, padded passes, per-job row tiles
 constexpr bool weight_stationary = row_tiles > 1;
-constexpr expert_rows::TableLayout table_block = expert_rows::table_layout(tokens, top_k, local_experts);
+constexpr expert_rows::TableLayout table_block =
+    expert_rows::table_layout(tokens, top_k, local_experts, dram_alignment);
 // what the other cores read of the ctl block (expert_rows::ctl_bytes)
-constexpr uint32_t ctl_bytes =
-    weight_stationary ? expert_rows::align_up(expert_rows::ctl_bytes(expert_groups), expert_rows::l1_word_bytes)
-                      : expert_rows::ctl_header_bytes;
+constexpr uint32_t ctl_bytes = weight_stationary
+                                   ? expert_rows::align_up(expert_rows::ctl_bytes(expert_groups), l1_alignment)
+                                   : expert_rows::ctl_header_bytes;
 
 constexpr uint32_t block_bytes = block_tiles * weight_tile_bytes;
 constexpr uint32_t packet_tiles = expert_rows::div_up(block_tiles, block_packets);  // tiles per NoC packet of a block
 static_assert(packet_tiles * weight_tile_bytes <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
-static_assert(
-    top_k >= 1 && top_k <= 32, "top_k in 1..32 (kMaxTopK, moe_expert_rows_plan.hpp): one u16 per k on the stack");
+static_assert(top_k >= 1 && top_k <= 32, "top_k in 1..32 (kMaxTopK, moe_expert_rows_plan.hpp)");
 constexpr uint32_t index_page_entries = index_page_bytes / expert_rows::u16_bytes;
 constexpr uint16_t not_local = 0xFFFFu;
 
@@ -213,14 +215,11 @@ FORCE_INLINE void collect_local_entries(uint32_t routing, const EntryArea& area,
         const tt_l1_ptr uint16_t* source_expert = reinterpret_cast<const tt_l1_ptr uint16_t*>(
             routing + routing_source_mappings + (token / tokens_per_source - range.first_source) * mapping_page_bytes);
         const tt_l1_ptr uint16_t* ids = token_ids + (token - range.first) * index_page_entries;
-        uint16_t experts[top_k];
         for (uint32_t k_index = 0; k_index < top_k; ++k_index) {
             const uint32_t id = ids[k_index];
-            experts[k_index] = id < global_experts ? source_expert[id] : not_local;
-        }
-        for (uint32_t k_index = 0; k_index < top_k; ++k_index) {
-            if (experts[k_index] < local_experts) {
-                area.expert[entry_count] = experts[k_index];
+            const uint32_t expert = id < global_experts ? source_expert[id] : not_local;
+            if (expert < local_experts) {
+                area.expert[entry_count] = expert;
                 area.token[entry_count] = token;
                 area.score[entry_count] = token_scores[(token - range.first) * index_page_entries + k_index];
                 area.k_index[entry_count] = k_index;
@@ -536,13 +535,13 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint3
         noc.async_read(
             UnicastEndpoint{},
             CoreLocalMem<uint32_t>(routing + routing_jobs),
-            expert_rows::align_up(table_jobs * expert_rows::job_record_bytes, expert_rows::l1_word_bytes),
+            expert_rows::align_up(table_jobs * expert_rows::job_record_bytes, l1_alignment),
             {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_jobs},
             {});
         noc.async_read(
             UnicastEndpoint{},
             CoreLocalMem<uint32_t>(routing + routing_table + table_block.row_tokens),
-            expert_rows::align_up(routed_rows * expert_rows::u16_bytes, expert_rows::l1_word_bytes),
+            expert_rows::align_up(routed_rows * expert_rows::u16_bytes, l1_alignment),
             {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_table + table_block.row_tokens},
             {});
         noc.async_read_barrier();
@@ -848,7 +847,7 @@ void kernel_main() {
     const TokenRange range = token_range(core_index, program_cores);
     // entries per token at most: one per k
     const uint32_t capacity = expert_rows::entry_capacity(tokens, top_k, program_cores);
-    const uint32_t area_bytes = expert_rows::entry_area_bytes(capacity);
+    const uint32_t area_bytes = expert_rows::entry_area_bytes(capacity, l1_alignment);
     const Noc noc;
     cb_routing.reserve_back(1);
     const uint32_t routing = cb_routing.get_write_ptr();

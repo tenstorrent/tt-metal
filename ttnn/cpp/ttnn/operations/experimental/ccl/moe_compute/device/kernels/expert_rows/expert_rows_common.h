@@ -65,23 +65,19 @@ constexpr uint32_t single_chunk_tiles(uint32_t chunk_tiles, uint32_t row_tiles, 
     return chunk_tiles * row_tiles < hidden_tiles ? chunk_tiles * row_tiles : hidden_tiles;
 }
 
-// NoC transfers between L1s move whole 16-byte words.
-constexpr uint32_t l1_word_bytes = 16;
-// DRAM alignment: each part of the routing scratch and table block starts at a multiple, so it can be read on its own.
-constexpr uint32_t part_alignment = 64;
-
 // Byte offsets in the routing table block (written by rows_reader.cpp, read by place.cpp and rows_combine.cpp): a u32
 // head (routed rows), u16 per-expert row counts and first rows, each routed row's token and k, then one entry per
-// (token, k) in token order: expert, token, score and k.
+// (token, k) in token order: expert, token, score and k. Each part starts at a multiple of dram_alignment, so it can be
+// read on its own.
 struct TableLayout {
     uint32_t row_counts, first_rows, row_tokens, row_k, entry_experts, entry_tokens, entry_scores, entry_k, bytes;
 };
 
-constexpr TableLayout table_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts) {
-    const uint32_t expert_part = align_up(local_experts * u16_bytes, part_alignment);
-    const uint32_t entry_part = align_up(tokens * top_k * u16_bytes, part_alignment);
+constexpr TableLayout table_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts, uint32_t dram_alignment) {
+    const uint32_t expert_part = align_up(local_experts * u16_bytes, dram_alignment);
+    const uint32_t entry_part = align_up(tokens * top_k * u16_bytes, dram_alignment);
     TableLayout layout{};
-    layout.row_counts = part_alignment;  // after the head
+    layout.row_counts = dram_alignment;  // after the head
     layout.first_rows = layout.row_counts + expert_part;
     layout.row_tokens = layout.first_rows + expert_part;
     layout.row_k = layout.row_tokens + entry_part;
@@ -99,7 +95,7 @@ struct CtlHeader {
     uint32_t table_jobs, active_experts, routed_rows, unused;
 };
 constexpr uint32_t ctl_header_bytes = sizeof(CtlHeader);
-static_assert(ctl_header_bytes == 16, "the ctl header is one 16-byte L1 word");
+static_assert(ctl_header_bytes == 16, "the ctl header is 16 bytes");
 constexpr uint32_t ctl_bytes(uint32_t expert_groups) { return ctl_header_bytes + u16_bytes * (expert_groups + 1); }
 
 // An entry area of the routing scratch: u32 entry count, then u16 expert, token, score and k of each entry; a core
@@ -107,7 +103,9 @@ constexpr uint32_t ctl_bytes(uint32_t expert_groups) { return ctl_header_bytes +
 constexpr uint32_t entry_capacity(uint32_t tokens, uint32_t top_k, uint32_t program_cores) {
     return div_up(tokens, program_cores) * top_k;
 }
-constexpr uint32_t entry_area_bytes(uint32_t capacity) { return align_up(4 + 4 * u16_bytes * capacity, l1_word_bytes); }
+constexpr uint32_t entry_area_bytes(uint32_t capacity, uint32_t l1_alignment) {
+    return align_up(4 + 4 * u16_bytes * capacity, l1_alignment);
+}
 
 // One job of the routing table: rows [first_row, first_row + rows) of one local expert.
 struct JobRecord {

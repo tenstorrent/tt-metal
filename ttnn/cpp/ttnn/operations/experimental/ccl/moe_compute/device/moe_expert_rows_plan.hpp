@@ -183,7 +183,7 @@ PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts
 // Rows of one double-buffer half on one core (output kTilizeOutput), in selective_reduce_combine's fused-source layout.
 uint32_t double_buffer_half_rows(const tt::tt_metal::TensorSpec& dense, uint32_t hidden_size, uint32_t width_shards);
 
-// rows_combine.cpp's scratch: the table head; the sender's row tokens and row k, each with part_alignment bytes of
+// rows_combine.cpp's scratch: the table head; the sender's row tokens and row k, each with DRAM alignment bytes of
 // slack for the DRAM read's source offset; its rows in send order; two staging buffers of batch_rows rows.
 struct CombineLayout {
     uint32_t sender_rows_max = 0, row_stride = 0, batch_rows = 0;

@@ -4,6 +4,7 @@
 
 // The expert rows path's placement program, on the combine cores: place.cpp writes moe_compute's outputs from the rows
 // and the routing table; with a combine, rows_combine.cpp sends every routed row to the combine output.
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "moe_compute_device_operation.hpp"
@@ -105,6 +106,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"grid_h", grid.y},
         {"program_cores", static_cast<uint32_t>(cores.size())},
         {"row_bytes", row_bytes},
+        {"dram_alignment", tt::tt_metal::hal::get_dram_alignment()},
         {"scratch_e_t", place.scratch_e_t},
         {"scratch_activation", place.scratch_activation},
         {"scratch_count_row", place.scratch_count_row},
@@ -162,6 +164,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"row_stride", layout.row_stride},
         {"batch_rows", layout.batch_rows},
         {"sender_rows_max", layout.sender_rows_max},
+        {"dram_alignment", tt::tt_metal::hal::get_dram_alignment()},
         {"top_k", top_k},
         {"local_experts", local_experts},
         {"scratch_head", layout.scratch_head},

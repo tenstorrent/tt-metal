@@ -24,9 +24,10 @@ constexpr uint32_t row_bytes = get_named_compile_time_arg_val("row_bytes");
 constexpr uint32_t row_stride = get_named_compile_time_arg_val("row_stride");  // a staged row, DRAM-aligned
 constexpr uint32_t batch_rows = get_named_compile_time_arg_val("batch_rows");
 constexpr uint32_t sender_rows_max = get_named_compile_time_arg_val("sender_rows_max");
+constexpr uint32_t dram_alignment = get_named_compile_time_arg_val("dram_alignment");
 // the routing table block rows_reader.cpp wrote
 constexpr expert_rows::TableLayout table_block = expert_rows::table_layout(
-    tokens, get_named_compile_time_arg_val("top_k"), get_named_compile_time_arg_val("local_experts"));
+    tokens, get_named_compile_time_arg_val("top_k"), get_named_compile_time_arg_val("local_experts"), dram_alignment);
 // byte offsets in the scratch CB
 constexpr uint32_t scratch_head = get_named_compile_time_arg_val("scratch_head");
 constexpr uint32_t scratch_tokens = get_named_compile_time_arg_val("scratch_tokens");
@@ -48,13 +49,13 @@ constexpr uint32_t tokens_per_device = tokens;
 #endif
 
 // Reads a u16 table part's entries [first, first + count) into L1 at dst; DRAM reads keep the source's offset modulo
-// part_alignment, so the read starts at the aligned entry below `first`. Returns the L1 address of entry `first`.
+// dram_alignment, so the read starts at the aligned entry below `first`. Returns the L1 address of entry `first`.
 template <typename TableAccessor>
 FORCE_INLINE uint32_t read_table_slice(
     const Noc& noc, const TableAccessor& table, uint32_t part, uint32_t first, uint32_t count, uint32_t dst) {
     const uint32_t begin = part + first * expert_rows::u16_bytes;
-    const uint32_t aligned_begin = begin / expert_rows::part_alignment * expert_rows::part_alignment;
-    const uint32_t end = expert_rows::align_up(begin + count * expert_rows::u16_bytes, expert_rows::part_alignment);
+    const uint32_t aligned_begin = begin / dram_alignment * dram_alignment;
+    const uint32_t end = expert_rows::align_up(begin + count * expert_rows::u16_bytes, dram_alignment);
     noc.async_read(
         table, CoreLocalMem<uint32_t>(dst), end - aligned_begin, {.page_id = 0, .offset_bytes = aligned_begin}, {});
     return dst + (begin - aligned_begin);
@@ -149,8 +150,7 @@ void kernel_main() {
     cb_scratch.reserve_back(1);
     const uint32_t scratch = cb_scratch.get_write_ptr();
 
-    noc.async_read(
-        table, CoreLocalMem<uint32_t>(scratch + scratch_head), expert_rows::part_alignment, {.page_id = 0}, {});
+    noc.async_read(table, CoreLocalMem<uint32_t>(scratch + scratch_head), dram_alignment, {.page_id = 0}, {});
     noc.async_read_barrier();
     const uint32_t routed_rows = *reinterpret_cast<const tt_l1_ptr uint32_t*>(scratch + scratch_head);
     const uint32_t first = sender * routed_rows / num_senders;

@@ -34,8 +34,10 @@ constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
 constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
 constexpr uint32_t program_cores = get_named_compile_time_arg_val("program_cores");
 constexpr uint32_t row_bytes = get_named_compile_time_arg_val("row_bytes");
+constexpr uint32_t dram_alignment = get_named_compile_time_arg_val("dram_alignment");
 // the routing table block rows_reader.cpp wrote
-constexpr expert_rows::TableLayout table_block = expert_rows::table_layout(tokens, top_k, local_experts);
+constexpr expert_rows::TableLayout table_block =
+    expert_rows::table_layout(tokens, top_k, local_experts, dram_alignment);
 // byte offsets in the scratch CB
 constexpr uint32_t scratch_e_t = get_named_compile_time_arg_val("scratch_e_t");
 constexpr uint32_t scratch_activation = get_named_compile_time_arg_val("scratch_activation");
@@ -58,9 +60,8 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, const TableAccessor& ta
         {});
     noc.async_read_barrier();
     const uint32_t routed_rows = *reinterpret_cast<const tt_l1_ptr uint32_t*>(scratch + scratch_table);
-    // every part of routed_rows u16 starts at a multiple of part_alignment
-    const uint32_t part_bytes =
-        expert_rows::align_up(routed_rows * expert_rows::u16_bytes, expert_rows::part_alignment);
+    // every part of routed_rows u16 starts at a multiple of dram_alignment
+    const uint32_t part_bytes = expert_rows::align_up(routed_rows * expert_rows::u16_bytes, dram_alignment);
     if (routed_rows) {
         const uint32_t parts[] = {
             table_block.row_tokens,

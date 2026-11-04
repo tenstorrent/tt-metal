@@ -38,9 +38,9 @@ constexpr uint32_t kChunkIntermediateSlots = 1;
 constexpr uint32_t kActivatedSlots = 2;  // cb_activated: the activated tiles of two jobs
 constexpr uint32_t kRowsSlots = 2;       // cb_rows: two output groups of one row tile
 
-uint32_t align_to_part(uint32_t bytes) { return tt::align(bytes, expert_rows::part_alignment); }
+uint32_t align_to_part(uint32_t bytes) { return tt::align(bytes, tt::tt_metal::hal::get_dram_alignment()); }
 
-// Consecutive parts of a layout, each at a multiple of part_alignment.
+// Consecutive parts of a layout, each at a multiple of the DRAM alignment.
 struct LayoutCursor {
     uint32_t end = 0;
     uint32_t take(uint32_t bytes) {
@@ -53,9 +53,10 @@ struct LayoutCursor {
 RoutingLayout routing_layout(
     const MoEExpertRowsShape& shape, uint32_t program_cores, uint32_t sources_per_core, uint32_t expert_groups) {
     const uint32_t tokens_per_core = tt::div_up(shape.tokens, program_cores);
-    const uint32_t area_bytes =
-        expert_rows::entry_area_bytes(expert_rows::entry_capacity(shape.tokens, shape.top_k, program_cores));
-    const auto block = expert_rows::table_layout(shape.tokens, shape.top_k, shape.local_experts);
+    const uint32_t area_bytes = expert_rows::entry_area_bytes(
+        expert_rows::entry_capacity(shape.tokens, shape.top_k, program_cores), tt::tt_metal::hal::get_l1_alignment());
+    const auto block = expert_rows::table_layout(
+        shape.tokens, shape.top_k, shape.local_experts, tt::tt_metal::hal::get_dram_alignment());
     LayoutCursor cursor;
     RoutingLayout layout;
     layout.own_mapping = cursor.take(shape.global_experts * kBf16Bytes);
@@ -88,7 +89,7 @@ uint32_t weight_cb_blocks(uint32_t chunk_blocks, uint32_t block_slots) {
 }
 
 // cb_ctl: u32 job count, then with several row tiles per job the row tiles of each of the group's jobs
-uint32_t ctl_cb_bytes(uint32_t words) { return tt::align(kWordBytes * words, expert_rows::part_alignment); }
+uint32_t ctl_cb_bytes(uint32_t words) { return align_to_part(kWordBytes * words); }
 
 // The CBs of a buffering choice, when they fit cb_budget bytes per core.
 std::optional<CbSizes> cb_sizes(
@@ -627,7 +628,7 @@ std::vector<uint32_t> core_mask(const std::vector<CoreCoord>& cores, CoreCoord g
 PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts) {
     const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
     PlaceLayout layout;
-    layout.table = expert_rows::table_layout(tokens, top_k, local_experts);
+    layout.table = expert_rows::table_layout(tokens, top_k, local_experts, tt::tt_metal::hal::get_dram_alignment());
     layout.count_words = tt::align(local_experts * kWordBytes, l1_align) / kWordBytes;
     layout.e_t_entry_words = tt::align(2 * kWordBytes, l1_align) / kWordBytes;  // token, k (the ring's e_t entry)
     layout.e_t_page_bytes = (tokens + 1) * layout.e_t_entry_words * kWordBytes;
@@ -656,10 +657,10 @@ CombineLayout combine_layout(uint32_t tokens, uint32_t top_k, uint32_t hidden_si
     layout.sender_rows_max = tt::div_up(tokens * top_k, senders);
     layout.row_stride = align_to_part(hidden_size * kBf16Bytes);
     layout.batch_rows = std::clamp(kStageBytes / layout.row_stride, 1u, kMaxBatchRows);
-    const uint32_t slice_bytes =
-        align_to_part(layout.sender_rows_max * expert_rows::u16_bytes) + expert_rows::part_alignment;
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t slice_bytes = align_to_part(layout.sender_rows_max * expert_rows::u16_bytes) + dram_alignment;
     LayoutCursor cursor;
-    layout.scratch_head = cursor.take(expert_rows::part_alignment);
+    layout.scratch_head = cursor.take(dram_alignment);
     layout.scratch_tokens = cursor.take(slice_bytes);
     layout.scratch_k = cursor.take(slice_bytes);
     layout.scratch_order = cursor.take(layout.sender_rows_max * expert_rows::u16_bytes);
