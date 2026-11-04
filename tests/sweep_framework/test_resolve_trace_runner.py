@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import pytest
 
 from model_tracer.resolve_trace_runner import (
@@ -23,6 +25,18 @@ SKUS = {
     "bh_sc4": {"runs_on": ["exabox-multihost-ci-sc4-8kw"]},
     "bh_legacy_alloc": {"runs_on": ["arch-blackhole"], "allocation": {"hosts": 2}},
 }
+
+
+@pytest.fixture
+def expect_error():
+    # all-static-checks.yaml runs this file with --noconftest, so the root conftest's
+    # fixture isn't available.
+    @contextlib.contextmanager
+    def expect_error_(error, message):
+        with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: host job has no root conftest
+            yield exc_info
+
+    return expect_error_
 
 
 def test_alias_resolves_to_sku():
