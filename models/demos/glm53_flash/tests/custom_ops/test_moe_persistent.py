@@ -97,7 +97,8 @@ def _expected(x: torch.Tensor, r: torch.Tensor, w13: torch.Tensor, w2: torch.Ten
 
 
 @pytest.mark.timeout(2400)
-@pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+@pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
 def test_moe_persistent(mesh_device, weights):
     mesh = GLMMesh.from_device(mesh_device)
     if COLS < 2 or COLS * T > TILE or ROWS * T > TILE:
