@@ -35,16 +35,9 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                                 defines.push_back("BLAZE_RUNTIME_RELOAD");
                             }
                             // BRISC firmware writes RISC_PREFETCH_CTRL once at boot, before it releases the other
-                            // RISCs on the core.
-                            if (params.is_fw) {
-                                auto risc_prefetch_ctrl = params.rtoptions.get_risc_prefetch_ctrl();
-                                // The pinned ttsim release refuses writes to this register, so the arch default is
-                                // skipped there.
-                                if (not risc_prefetch_ctrl.has_value() and
-                                    not params.rtoptions.get_simulator_enabled()) {
-                                    risc_prefetch_ctrl = default_risc_prefetch_ctrl();
-                                }
-                                if (risc_prefetch_ctrl.has_value()) {
+                            // RISCs on the core. Skipped on ttsim, whose pinned release refuses writes to it.
+                            if (params.is_fw and not params.rtoptions.get_simulator_enabled()) {
+                                if (const auto risc_prefetch_ctrl = default_risc_prefetch_ctrl()) {
                                     defines.push_back(fmt::format("RISC_PREFETCH_CTRL_VALUE={}", *risc_prefetch_ctrl));
                                 }
                             }

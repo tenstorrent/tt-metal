@@ -101,7 +101,6 @@ enum class EnvVarID {
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
     TT_METAL_DISABLE_L1_ECC_HALT,                       // Disable the Blackhole L1 ECC halt
     TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
-    TT_METAL_RISC_PREFETCH_CTRL,                        // Tensix RISC I$ prefetcher control word
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
@@ -789,33 +788,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (gathering disabled)
         // Usage: export TT_METAL_ENABLE_GATHERING=1
         case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
-
-        // TT_METAL_RISC_PREFETCH_CTRL
-        // Value BRISC firmware writes to RISC_PREFETCH_CTRL at boot on Wormhole and Blackhole.
-        // Bits 2:0 enable the TRISCs, bit 3 BRISC, bit 4 NCRISC, bits 12:5 are Max_Req_Count.
-        // Default: unset (the arch default from the HAL: 0x8F on Wormhole, register left off on Blackhole and ttsim)
-        // When set, the value is written on the simulator too, so a ttsim release that models the register can be
-        // tested. Usage: export TT_METAL_RISC_PREFETCH_CTRL=0 to turn the prefetchers off
-        case EnvVarID::TT_METAL_RISC_PREFETCH_CTRL: {
-            std::string ctrl_value = trim_copy(value);
-            if (ctrl_value.empty()) {
-                this->risc_prefetch_ctrl = std::nullopt;
-                break;
-            }
-            try {
-                size_t parse_pos = 0;
-                unsigned long long parsed_ctrl = std::stoull(ctrl_value, &parse_pos, 0);
-                if (parse_pos != ctrl_value.size() || parsed_ctrl > 0x1FFF) {
-                    TT_THROW("TT_METAL_RISC_PREFETCH_CTRL must be a 13-bit value: {}", value);
-                }
-                this->risc_prefetch_ctrl = static_cast<uint32_t>(parsed_ctrl);
-            } catch (const std::invalid_argument&) {
-                TT_THROW("TT_METAL_RISC_PREFETCH_CTRL must be a 13-bit value: {}", value);
-            } catch (const std::out_of_range&) {
-                TT_THROW("TT_METAL_RISC_PREFETCH_CTRL value out of range: {}", value);
-            }
-            break;
-        }
 
         // TT_METAL_FABRIC_BW_TELEMETRY
         // Enable fabric bandwidth telemetry data collection.
