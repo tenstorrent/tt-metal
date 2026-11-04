@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host plans of the fused tail. The pure parts (schedules, geometry, splits) are faithful ports of
-// models/demos/moe_block/tt/{tail_engine,tail_a2a}.py and ttnn/ttnn/bringup/combine_rf/{fabric_all_gather_py,lin2d}.py
-// on mstaletovic/moe-trim; tests/ttnn/unit_tests/operations/experimental/moe_block/fused_tail/test_fused_tail_host.py
-// compares them against that Python. The per-resources plans (TailEnginePlan, TailA2APlan) add the device-dependent
-// parts (port cores, fabric ties) and are built once per MoEBlockResources.
+// Host plans of the fused tail: the pure parts (schedules, geometry, splits), and the per-resources plans
+// (TailEnginePlan, TailA2APlan) that add the device-dependent parts (port cores, fabric ties), built once per
+// MoEBlockResources.
 //
 // A tail's TP group is a mesh row (cluster_axis 1): position p = the chip's column, G = the mesh's columns. Fwd sends
 // toward p + 1 (X+), Bwd toward p - 1 (X-); a ring when the row wraps (torus X and G > 2).
@@ -47,11 +45,11 @@ struct Unit {
     auto operator<=>(const Unit&) const = default;
 };
 
-// fabric_all_gather_py._schedule: (units sent toward p + 1, units sent toward p - 1), own first.
-std::pair<std::vector<Unit>, std::vector<Unit>> gather_schedule(uint32_t p, uint32_t G, bool ring, bool balance);
-// tail_engine.chunk_order: chip p's chunk positions -> TP positions (own first, then by hop distance).
+// The gather's schedule: (units sent toward p + 1, units sent toward p - 1), own first.
+std::pair<std::vector<Unit>, std::vector<Unit>> gather_schedule(uint32_t p, uint32_t G, bool ring);
+// Chip p's chunk positions -> TP positions (own first, then by hop distance).
 std::vector<uint32_t> chunk_order(uint32_t p, uint32_t G, bool ring);
-// tail_engine._split: n into `parts` contiguous ranges, as even as possible.
+// n into `parts` contiguous ranges, as even as possible.
 std::vector<std::pair<uint32_t, uint32_t>> even_split(uint32_t n, uint32_t parts);
 // lin2d.column_split: per-column tiles, multiples of `unit`, as even as possible.
 std::vector<uint32_t> column_split(uint32_t n_tiles, uint32_t columns, uint32_t unit);

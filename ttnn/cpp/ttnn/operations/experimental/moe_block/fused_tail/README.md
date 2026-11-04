@@ -15,10 +15,6 @@ layout `[1, 1, S/SP, H/TP]`. The TP group is the mesh row (a ring when the fabri
 projection once a layer in the engine's layout (per chip its output columns, the norm weight folded in, each engine
 column's K ranges as one DRAM burst each).
 
-Reference: `models/demos/moe_block/tt/tail_engine.py` (TailEngine) and `tail_a2a.py` (TailA2A) on
-`mstaletovic/moe-trim`. The kernels (`device/kernels/tail_engine/`, `device/kernels/tail_a2a/`) are those programs'
-kernels, unchanged in what they compute and in their NoC / fabric traffic.
-
 ## Programs
 
 **TailEngine** (`GX x 10` engine cores, `GX` = grid columns - 1, plus four gather ports in the last column):
@@ -32,7 +28,7 @@ kernels, unchanged in what they compute and in their NoC / fabric traffic.
   group).
 - persistent (resources): `fused_tail/engine_words` (per-step counters that only count up, a call count),
   `fused_tail/engine_ready` (the fence), `fused_tail/engine_port_epoch` (the ports' call counts).
-- the reference's per-call L1 arena is gone: the regions are program CBs. The landing CB is created first, on the
+- no per-call L1 arena: the regions are program CBs. The landing CB is created first, on the
   engine and port cores, so it sits at one address on every core of every chip; kernels read the slot bases with
   `get_write_ptr`. The ring depth (`NSLOT`) is chosen from the free L1 when the plan is built (hashed).
 
@@ -44,7 +40,7 @@ Ethernet core):
   destination's output; a fused arrival increment every 8th run; ready / arrival fence, re-armed by the waiters.
 - persistent (resources): `fused_tail/a2a_zready`, `fused_tail/a2a_arrival`, `fused_tail/a2a_ready` (port cores),
   `fused_tail/a2a_z` (DRAM staging).
-- ring ties (a destination half the ring away) follow the fabric (`get_eth_forwarding_direction`), as the reference.
+- ring ties (a destination half the ring away) follow the fabric (`get_eth_forwarding_direction`).
 
 ## Caching and host cost
 

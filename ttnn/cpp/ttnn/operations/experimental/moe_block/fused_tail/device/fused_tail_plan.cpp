@@ -36,9 +36,9 @@ std::optional<uint32_t> row_neighbor(uint32_t p, uint32_t G, bool ring, TailDir 
     return (ring || p > 0) ? std::optional<uint32_t>((p + G - 1) % G) : std::nullopt;
 }
 
-std::pair<std::vector<Unit>, std::vector<Unit>> gather_schedule(uint32_t p, uint32_t G, bool ring, bool balance) {
+std::pair<std::vector<Unit>, std::vector<Unit>> gather_schedule(uint32_t p, uint32_t G, bool ring) {
     std::vector<Unit> fwd, bwd;
-    if (ring && balance && G % 2 == 0 && G >= 4) {
+    if (ring && G % 2 == 0 && G >= 4) {
         const uint32_t h = G / 2;
         for (uint32_t i = 0; i < h; ++i) {
             fwd.push_back({(p + G - i) % G, i == h - 1 ? 1u : 0u});
@@ -273,7 +273,7 @@ std::shared_ptr<const TailA2APlan> make_tail_a2a_plan(MoEBlockResources& resourc
         dirs[static_cast<size_t>(Dir::YPlus)].reset();
         dirs[static_cast<size_t>(Dir::YMinus)].reset();
     }
-    const auto cores = place_ports(mesh, row_plan, PortPlacement::Noc1);
+    const auto cores = place_ports(mesh, row_plan);
     std::set<std::pair<size_t, size_t>> taken;
     std::vector<CoreRange> ranges;
     for (const auto& [key, core] : cores) {
@@ -420,7 +420,7 @@ std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> engine_relays(
     uint32_t p, uint32_t G, bool ring, const TailEngineGeometry& g, uint32_t wg) {
     std::set<Unit> units;  // (every block landed here by a port: from either neighbour)
     for (uint32_t c = 0; c < G; ++c) {
-        const auto [fwd, bwd] = gather_schedule(c, G, ring, true);
+        const auto [fwd, bwd] = gather_schedule(c, G, ring);
         if (row_neighbor(c, G, ring, TailDir::Fwd) == p) {
             units.insert(fwd.begin(), fwd.end());
         }

@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The fused tail's programs, one a chip (models/demos/moe_block/tt/tail_engine.py TailEngine._program and
-// tail_a2a.py TailA2A._program on mstaletovic/moe-trim). Differences from the reference, none of them in what the
-// kernels compute or in their NoC / fabric traffic:
+// The fused tail's programs, one a chip (TailEngine, TailA2A):
 //  * no per-call arena tensor: the engine's regions are program CBs; the landing CB comes first, on the engine and
 //    the port cores, so it sits at the same address there and on every chip, and the kernels read the slots' bases
 //    with get_write_ptr instead of taking them as runtime args;
 //  * the fence's ready / arrival words are persistent word tensors of the resources (not global semaphores);
-//  * TailA2A creates no port on a direction without a neighbour (the reference ran no-op kernels there).
+//  * TailA2A creates no port on a direction without a neighbour.
 
 #include "fused_tail_program_factory.hpp"
 
@@ -245,7 +243,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::engine_workload(
         if (!row_neighbor(p, G, plan.ring, d)) {
             return std::vector<Unit>{};
         }
-        const auto s = gather_schedule(p, G, plan.ring, true);
+        const auto s = gather_schedule(p, G, plan.ring);
         return d == TailDir::Fwd ? s.first : s.second;
     };
 
