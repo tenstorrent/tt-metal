@@ -1,0 +1,2026 @@
+{
+  "summary": {
+    "total": 154,
+    "supported_pass": 46,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 108,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=in_place-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "in_place",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=model_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "model_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[1x1x1024x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[2x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x288x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x400x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[3x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x256x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[5x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[6x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x384x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[7x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[11x1x352x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x500x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=seq_padded]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "seq_padded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op_loose[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op_loose[4x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op_loose[2x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_golden.py::test_op_loose[8x1x512x768-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-output_mode=new-placement=op_layout-residual_mode=no_residual-seq_alignment=tile_aligned]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "layout": "TILE",
+          "placement": "op_layout",
+          "residual_mode": "no_residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_rows_with_a_shared_offset[1.0-2-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_rows_with_a_shared_offset[1.0-8-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_rows_with_a_shared_offset[3.0-2-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_rows_with_a_shared_offset[3.0-8-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_constant_rows_give_beta[2-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nomic_residual_layer_norm/test_regression.py::test_constant_rows_give_beta[8-512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "placement": "op_layout",
+          "residual_mode": "residual",
+          "output_mode": "new",
+          "seq_alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ]
+  }
+}
