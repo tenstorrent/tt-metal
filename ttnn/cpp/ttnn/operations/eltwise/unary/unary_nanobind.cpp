@@ -2004,8 +2004,8 @@ void py_module(nb::module_& mod) {
             &ttnn::selu,
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("scale") = 1.0507f,
-            nb::arg("alpha") = 1.67326f,
+            nb::arg("scale") = 1.0507009873554805f,
+            nb::arg("alpha") = 1.6732632423543772f,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("sub_core_grids") = nb::none());
