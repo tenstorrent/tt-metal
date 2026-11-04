@@ -1297,6 +1297,7 @@ class FabricRowGather:
                 dst = self.nodes[(chip + step) % self.chips]
                 for link, t in enumerate(self.transports):
                     args = ttnn.setup_fabric_connection(
+                        mesh_device=self.device,
                         src_fabric_node_id=self.nodes[chip],
                         dst_fabric_node_id=dst,
                         link_idx=link,
