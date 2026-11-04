@@ -26,7 +26,7 @@ where ``cpu`` is one of:
   * tt-bh-tensix
   * tt-qsr32-tensix
 
-A ``-march=<xyz>`` that comes after ``-mcpu`` on the command line replaces the ISA string implied by ``-mcpu``, while ``-mcpu`` still sets the tuning.
+A ``-march=<xyz>`` anywhere on the command line replaces the ISA implied by ``-mcpu``, which still sets the tuning.
 
 Further, the following options disable parts of the SFPI enabled compiler:
 

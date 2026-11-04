@@ -365,7 +365,7 @@ class TestConfig:
                 TestConfig.DATA_FORMAT_ENUM = BLACKHOLE_DATA_FORMAT_ENUM_VALUES
                 TestConfig.PROCESSOR_COUNT = 5
             case ChipArchitecture.QUASAR:
-                # sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb (issue 61945).
+                # sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb.
                 TestConfig.ARCH_NON_COMPUTE = (
                     "-mcpu=tt-qsr32 -march=rv32im_zaamo_zba_zbb_xttzbkb"
                 )

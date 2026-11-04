@@ -413,9 +413,8 @@ public:
 
     std::string common_flags(const Params& params) const override {
         // TODO: Use correct tt-qsr cpu options #32893
-        // sfpi 7.92.0 and 7.93.0 give tt-qsr32 zba_zbc instead of zba_zbb (issue 61945). The
-        // -march after -mcpu replaces the ISA and keeps the tt-qsr32 tuning. Drop it once sfpi
-        // ships zbb on tt-qsr32.
+        // sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb; the explicit -march restores zbb and
+        // keeps the -mcpu tuning.
         std::string cflags = params.processor_class == HalProcessorClassType::DM
                                  ? "-mcpu=tt-qsr64-rocc "
                                  : "-mcpu=tt-qsr32-tensix -march=rv32im_zaamo_zba_zbb_xtttensixqsr_xttzbkb ";
@@ -432,9 +431,8 @@ public:
         if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
-        // -march: the TRISC ISA from common_flags (rv32im_zaamo_zba_zbb_xtttensixqsr_xttzbkb)
-        //   plus zve32f and zvl128b (VLEN >= 128). Appended after common_flags, so it replaces
-        //   that -march while keeping the tt-qsr32-tensix tuning.
+        // -march: the common_flags ISA plus zve32f_zvl128b (VLEN >= 128). Appended after
+        //   common_flags, so it replaces that -march while keeping the tt-qsr32-tensix tuning.
         // -fno-lto: with -flto the RVV builtins are re-expanded by the link-stage LTRANS units,
         //   which do not carry the vector -march, breaking codegen at link time (observed on
         //   Blackhole with sfpi 7.70.0). Compile-only: the link stays stock, this object just
