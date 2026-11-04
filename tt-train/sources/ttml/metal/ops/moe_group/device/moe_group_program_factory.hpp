@@ -4,37 +4,28 @@
 
 #pragma once
 
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 #include "moe_group_device_operation_types.hpp"
 
 namespace ttml::metal::ops::moe_group::device {
 
 struct MoeGroupProgramFactory {
-    struct shared_variables_t {
-        uint32_t num_cores{};
-        tt::tt_metal::CoreCoord scan_coord{};
-        tt::tt_metal::KernelHandle scan_kernel{};
-        tt::tt_metal::KernelHandle reader_kernel_g1{};
-        tt::tt_metal::KernelHandle reader_kernel_g2{};
-        tt::tt_metal::KernelHandle writer_kernel_g1{};
-        tt::tt_metal::KernelHandle writer_kernel_g2{};
-        tt::tt_metal::CoreRangeSet worker_all;
-        tt::tt_metal::CoreRangeSet worker_group_1;
-        tt::tt_metal::CoreRangeSet worker_group_2;
-        uint32_t num_cores_y{};
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
+    // The only thing a cache hit runs: rewrites the buffer addresses on every core. Every other runtime arg follows
+    // from the program hash.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttml::metal::ops::moe_group::device
