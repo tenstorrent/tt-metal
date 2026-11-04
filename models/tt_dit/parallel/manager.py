@@ -857,6 +857,13 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+            for pool in (
+                self.rs_ping_pong_semaphores_fused,
+                self.exp_ring_ping_pong_semaphores,
+                self.barrier_semaphores,
+            ):
+                for sem in pool[axis]:
+                    ttnn.reset_global_semaphore_value(sem, 0)
             # Lazily-allocated fused NP+Conv3d pools; skipped entirely until something asks for them.
             for pool in (
                 self.np_fused_ping_pong_semaphores,
@@ -866,6 +873,11 @@ class CCLManager:
                 if pool is not None:
                     for sem in pool[axis]:
                         ttnn.reset_global_semaphore_value(sem, 0)
+        # Lazily-allocated strided AG+MM pools, keyed by (mesh_axis, num_workers_per_link).
+        for sem_sets in self._strided_ag_mm_sem_cache.values():
+            for sems in sem_sets:
+                for sem in sems:
+                    ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
@@ -931,7 +943,7 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
-        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+        return self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
 
     def reduce_scatter(
         self,
