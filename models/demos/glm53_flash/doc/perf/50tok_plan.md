@@ -322,3 +322,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
 - 2026-11-04 05:17 `gate84_B4_fabar_g11` (11 gate|up groups, no persistent program): ids bit-identical to
   `gate84_B4_fabar_r2` (12 groups), per-user pcc min 0.794 / chain 0.9547 both, step 37.34 vs 37.69 ms. The group
   count moves neither the rounding nor the step at 32 users; the persistent gates keep fabar_r2's ids as the target.
+- 2026-11-04 05:18-05:35 the first device launch of the persistent program (`tracy_l4_b4_persist_g11`, the layer
+  profile picked the fixed tree up) HUNG. tt-triage on the live hang: the gather phase completed (workers in phase B,
+  x_g written), the exchange core stuck in `noc_async_write_barrier` after the four release multicasts, the release
+  semaphores (12-15) set on four cores only, every gate|up core still waiting. The chips' worker grid is NOC x 2-7 and
+  10-15 (8-9 are not Tensix) and the rect spanned it; a NOC multicast may target Tensix cores only. Fix 9f921e1de41:
+  `grid_mcast_rects` splits every grid multicast into Tensix-only contiguous rects (the sender's own rect uses the
+  loopback variant); the step-2 landing multicast takes the same rects (71cf14a9ee0). SIGTERM freed the chips;
+  `gate84_B1_fabar` opened the mesh fine afterwards.

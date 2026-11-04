@@ -111,3 +111,12 @@ Lessons: the Galaxy chips' compute grid is 12 x 10 (120 cores), so every worker 
 the 8 cores the fused expert placement leaves at 12 groups -> `persistent_fused_groups` (11 groups when
 `GLM53_MOE_PERSIST=1`). The step-2 tree (wt_persist2 @b986e535e83) carries both fixes and passes the landing offset
 as a runtime arg (one exchange-writer variant per chunk width, not per chunk).
+
+### Lesson (2026-11-04): grid multicasts need Tensix-only rects
+
+The Galaxy Blackhole chips' 12 x 10 worker grid maps to NOC columns 2-7 and 10-15 (8-9 are DRAM / non-Tensix), so a
+single multicast rect from logical (0, 0) to (11, 9) covers non-Tensix cores and never completes (the release reached
+four cores; the exchange core spun in its write barrier). `grid_mcast_rects` derives the physically contiguous rects
+from `worker_core_from_logical_core`, and the kernels loop over them (`n_rects, (x0, y0, x1, y1, num_dests,
+loopback) x n` runtime args; the loopback variant only for the rect holding the sender). Every later grid-wide
+multicast (the weight-prefetch ring's releases, the layer loop's phase barriers) must use the same rects.
