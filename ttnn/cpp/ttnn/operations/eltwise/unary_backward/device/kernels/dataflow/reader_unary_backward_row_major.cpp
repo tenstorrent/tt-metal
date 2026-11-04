@@ -17,6 +17,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "row_major_pages.hpp"
 
@@ -54,11 +55,12 @@ void kernel_main() {
     const auto grad = TensorAccessor(grad_args, grad_addr);
     const auto input = TensorAccessor(input_args, input_addr);
 
+    Noc noc;
     DataflowBuffer dfb_grad(cb_id_grad);
     DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_scratch(cb_id_scratch);
     const uint32_t scratch = aligned_scratch(
-        cb_id_scratch,
-        (grad_paging.alignment > input_paging.alignment) ? grad_paging.alignment : input_paging.alignment);
+        dfb_scratch, (grad_paging.alignment > input_paging.alignment) ? grad_paging.alignment : input_paging.alignment);
 
     const uint32_t end_block = start_block + num_blocks;
     for (uint32_t block = start_block; block < end_block; ++block) {
@@ -72,8 +74,8 @@ void kernel_main() {
 
             dfb_grad.reserve_back(onepage);
             dfb_input.reserve_back(onepage);
-            const uint32_t grad_cb = get_write_ptr(cb_id_grad);
-            const uint32_t input_cb = get_write_ptr(cb_id_input);
+            const uint32_t grad_cb = dfb_grad.get_write_ptr();
+            const uint32_t input_cb = dfb_input.get_write_ptr();
             for (uint32_t r = 0; r < actual_rows; ++r) {
                 const uint32_t row = base_row + r;
                 const uint32_t cb_base = r * (last - first);
@@ -86,7 +88,7 @@ void kernel_main() {
                     last,
                     cb_base,
                     [&](uint32_t page, uint32_t src, uint32_t dst, uint32_t bytes) {
-                        read_piece(grad, grad_paging, page, src, grad_cb + dst, bytes, grad_region_end, scratch);
+                        read_piece(noc, grad, grad_paging, page, src, grad_cb + dst, bytes, grad_region_end, scratch);
                     });
                 for_each_row_piece(
                     input_paging,
@@ -95,10 +97,11 @@ void kernel_main() {
                     last,
                     cb_base,
                     [&](uint32_t page, uint32_t src, uint32_t dst, uint32_t bytes) {
-                        read_piece(input, input_paging, page, src, input_cb + dst, bytes, input_region_end, scratch);
+                        read_piece(
+                            noc, input, input_paging, page, src, input_cb + dst, bytes, input_region_end, scratch);
                     });
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             dfb_grad.push_back(onepage);
             dfb_input.push_back(onepage);
         }
