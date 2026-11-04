@@ -15,8 +15,8 @@
 namespace ckernel::sfpu {
 
 // Whether the predicated SFPSTORE of each row advances Dest itself, through ADDR_MOD_6 =
-// {dest.incr = SFP_DESTREG_STRIDE} from _init_sfpu_isinf_isnan_ (the store names it ADDR_MOD_2 under
-// the SFPU addr-mod base), or the body increments Dest with a TTINCRWC per row. A throttled matmul
+// {dest.incr = SFP_DESTREG_STRIDE} from isinf_isnan_init (the store names it ADDR_MOD_2 under the SFPU
+// addr-mod base), or the body increments Dest with a TTINCRWC per row. A throttled matmul
 // (MM_THROTTLE > 0) programs ADDR_MOD_6 for its own MOP, and the fused-activation matmul / conv
 // kernels run matmul_block between the activation's init and its body, so in a kernel built with
 // MM_THROTTLE neither the init nor the body touches ADDR_MOD_6.
@@ -27,23 +27,31 @@ constexpr bool ISINF_ISNAN_STORE_INCR = true;
 #endif
 
 /**
- * @brief Programs the Dest increment _calculate_sfpu_isinf_isnan_ advances through: ADDR_MOD_6 =
- * {dest.incr = SFP_DESTREG_STRIDE}, one SFPU row per predicated store. Writes nothing in a kernel
- * built with MM_THROTTLE (see ISINF_ISNAN_STORE_INCR).
+ * @brief Programs the state _calculate_sfpu_isinf_isnan_ reads: ADDR_MOD_6 and the RWC counters.
  *
- * @note Call after any other init that writes ADDR_MOD_6 with another increment (square 4, topk 32),
- *       before @ref _calculate_sfpu_isinf_isnan_.
+ * ADDR_MOD_6 = {dest.incr = SFP_DESTREG_STRIDE}, one SFPU row per predicated store; a kernel built with
+ * MM_THROTTLE leaves ADDR_MOD_6 alone (see ISINF_ISNAN_STORE_INCR).
+ *
+ * @note ADDR_MOD_6 is shared: call this after any init that programs it differently, and re-run that
+ *       op's init before its body if it runs after this one.
  */
-inline void _init_sfpu_isinf_isnan_() {
+inline void isinf_isnan_init() {
     if constexpr (ISINF_ISNAN_STORE_INCR) {
-        addr_mod_t{
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
-        }
-            .set(ADDR_MOD_6);
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = sfpi::SFP_DESTREG_STRIDE}}.set(
+            ADDR_MOD_6);
     }
+    math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+inline void isfinite_init() { isinf_isnan_init(); }
+
+inline void isinf_init() { isinf_isnan_init(); }
+
+inline void isnan_init() { isinf_isnan_init(); }
+
+inline void isneginf_init() { isinf_isnan_init(); }
+
+inline void isposinf_init() { isinf_isnan_init(); }
 
 // 1.0 on the lanes the enclosing v_if enables; outside an MM_THROTTLE kernel the store also advances
 // Dest by one SFPU row (ADDR_MOD_2, see ISINF_ISNAN_STORE_INCR).
@@ -67,10 +75,11 @@ sfpi_inline void _isinf_isnan_store_true_() {
  * only an all-bits-zero difference matches. The default 0.0 is stored first and 1.0 is stored over it
  * on the lanes that satisfy the predicate.
  *
- * @tparam operation One of isinf, isposinf, isneginf, isnan, isfinite.
- * @tparam APPROXIMATION_MODE Unused; the predicates are exact.
- * @tparam ITERATIONS Number of Dest rows to process.
- * @note Call @ref _init_sfpu_isinf_isnan_ first: the store advances Dest through ADDR_MOD_6.
+ * @tparam operation: One of isinf, isposinf, isneginf, isnan, isfinite.
+ * @tparam APPROXIMATION_MODE: Unused; the predicates are exact.
+ * @tparam ITERATIONS: Number of Dest rows to process.
+ * @note Call @ref isinf_isnan_init first; outside an MM_THROTTLE kernel it programs the ADDR_MOD_6 the
+ *       store advances Dest through (see ISINF_ISNAN_STORE_INCR).
  */
 template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_() {
@@ -114,21 +123,5 @@ inline void _calculate_sfpu_isinf_isnan_() {
         }
     }
 }
-
-// The kernel's predicated store advances Dest through ADDR_MOD_6, which _init_sfpu_isinf_isnan_ programs.
-inline void isinf_isnan_init() {
-    _init_sfpu_isinf_isnan_();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-inline void isfinite_init() { isinf_isnan_init(); }
-
-inline void isinf_init() { isinf_isnan_init(); }
-
-inline void isnan_init() { isinf_isnan_init(); }
-
-inline void isneginf_init() { isinf_isnan_init(); }
-
-inline void isposinf_init() { isinf_isnan_init(); }
 
 }  // namespace ckernel::sfpu

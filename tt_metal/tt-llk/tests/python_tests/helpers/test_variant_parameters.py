@@ -297,6 +297,17 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class MM_THROTTLE(TemplateParameter):
+    """``#define MM_THROTTLE <level>``: builds the throttled-matmul fallback of the WH SFPU kernels
+    that otherwise advance Dest through ADDR_MOD_6."""
+
+    level: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MM_THROTTLE {self.level}"
+
+
+@dataclass
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
