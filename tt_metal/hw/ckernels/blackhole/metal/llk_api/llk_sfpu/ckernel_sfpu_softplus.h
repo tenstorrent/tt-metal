@@ -113,11 +113,11 @@ inline void softplus_init() {
 }
 
 // One row. The scalars and the polynomial's three lowest coefficients are supplied by the caller: for
-// calculate_softplus, beta and threshold (and beta_reciprocal unless INP_FLOAT32, see there) are sfpi::vFloats
-// built once before its loop (a runtime float used per row otherwise costs RISC-built SFPLOADIs on every row)
-// and the coefficients are vConstFloatPrgm0/1/2 from
-// softplus_init; the SDPA fused kernel passes plain floats and literals and is unchanged. Identical
-// arithmetic either way (sfpi (through 7.89.0) never hoists a loop-invariant literal by itself).
+// calculate_softplus, beta and threshold (and beta_reciprocal unless INP_FLOAT32, see there) are
+// ttpoly::softplus::vFloats built once before its loop (a runtime float used per row otherwise costs RISC-built
+// SFPLOADIs on every row) and the coefficients are vConstFloatPrgm0/1/2 from softplus_init; the SDPA fused kernel
+// passes plain floats and literals and is unchanged. Identical arithmetic either way (sfpi (through 7.89.0) never
+// hoists a loop-invariant literal by itself).
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -192,8 +192,35 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         beta, beta_reciprocal, threshold, SOFTPLUS_PRGM_C0, SOFTPLUS_PRGM_C1, SOFTPLUS_PRGM_C2);
 }
 
+bool bf16_dest_softplus();
+template <int ITERATIONS>
+void calculate_softplus_bf16();
+void init_softplus_bf16();
+// The param0 the generated softplus kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param0_bits = 0x3f800000u;
+// The param1 the generated softplus kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param1_bits = 0x3f800000u;
+// The param2 the generated softplus kernel is fitted for, as FP32 bits; any other param2 runs the stock kernel.
+inline constexpr std::uint32_t softplus_bf16_param2_bits = 0x41a00000u;
+// Whether BF16 DEST runs the generated softplus kernel as one call over the whole tile.
+inline constexpr bool softplus_bf16_whole_tile = true;
+// Sets up the generated BF16 softplus kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void softplus_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_softplus_bf16();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_softplus() && param0 == ckernel::sfpu::softplus_bf16_param0_bits &&
+            param1 == ckernel::sfpu::softplus_bf16_param1_bits && param2 == ckernel::sfpu::softplus_bf16_param2_bits) {
+            calculate_softplus_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // The runtime scalars, converted to vectors once and kept in LRegs (per row they would each be
     // RISC-built SFPLOADIs); the polynomial's lowest coefficients come from Prgm0/1/2 (softplus_init).
     // The fp32-input body (degree-8 poly plus the exp tail) leaves room for only two of them: a third
@@ -214,3 +241,5 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_softplus_bf16.h"

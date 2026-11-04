@@ -31,6 +31,23 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    MATH(if constexpr (ckernel::sfpu::softplus_bf16_whole_tile && !is_fp32_dest_acc_en && !APPROX) {
+        if (beta == ckernel::sfpu::softplus_bf16_param0_bits &&
+            beta_reciprocal == ckernel::sfpu::softplus_bf16_param1_bits &&
+            threshold == ckernel::sfpu::softplus_bf16_param2_bits) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_softplus,
+                (APPROX, is_fp32_dest_acc_en, 32),
+                idst,
+                VectorMode::None,
+                beta,
+                beta_reciprocal,
+                threshold);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -46,7 +63,11 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void softplus_tile_init() {
+    MATH(SFPU_UNARY_INIT(softplus));
+    MATH(ckernel::sfpu::softplus_bf16_tile_init<!is_fp32_dest_acc_en>());
+}
 
 #ifndef ARCH_QUASAR
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
