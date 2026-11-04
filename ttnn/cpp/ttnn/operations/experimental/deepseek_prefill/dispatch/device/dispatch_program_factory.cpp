@@ -1101,6 +1101,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                     *mesh_device, src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    *mesh_device,
                     src_fabric_node_id,
                     dst_nodes,
                     per_conn_links,
@@ -1118,7 +1119,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                 // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
                 for (const auto& dst_node : dst_nodes) {
                     tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args);
+                        *mesh_device, src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args);
                 }
             }
         }

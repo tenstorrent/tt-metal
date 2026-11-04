@@ -22,6 +22,7 @@ Every test delivers through DRAM-sender PrefetcherPipes
    spellings. See the comments on those tests for the capture-vs-replay semantics they cover.
 """
 
+import gc
 import math
 import time
 import zlib
@@ -1906,6 +1907,36 @@ def test_tensor_prefetcher_sparse_matmul_pipes(device, weight_layout, per_core_N
     assert (
         device.num_program_cache_entries() == cache_entries_after_first
     ), "second sparse matmul over pipes did not hit the program cache"
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_recarved(device):
+    """Pipes re-carved in place of dropped ones, at their addresses with their geometry, reuse the sparse
+    matmul's cached program: the cache hit rebinds it to the replacements, which deliver the second run's
+    experts."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    addresses = [(pipe.buffer_address(), pipe.config_address()) for pipe in pipes]
+
+    selections = [(0, 2, 3, 6), (1, 4, 5, 7)]
+    cache_entries_after_first = None
+    for run, active in enumerate(selections):
+        if run > 0:
+            del pipes
+            gc.collect()
+            pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+                space, setup["bank_to_receivers"], support_multi_receiver_shards=False
+            )
+            assert [(pipe.buffer_address(), pipe.config_address()) for pipe in pipes] == addresses
+        with tensor_prefetcher_session(device):
+            sparsity = _to_device_mask(device, _sparse_mask(setup["E"], active))
+            tt_out = _sparse_matmul_over_pipes(setup, pipes, sparsity)
+            _check_sparse_output(setup, tt_out, active, f"sparse_pipes_recarved run={run}")
+        if run == 0:
+            cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "sparse matmul over re-carved pipes did not hit the program cache"
 
 
 @pytest.mark.parametrize("weight_layout", list(_SPARSE_WEIGHT_LAYOUTS), ids=list(_SPARSE_WEIGHT_LAYOUTS))
