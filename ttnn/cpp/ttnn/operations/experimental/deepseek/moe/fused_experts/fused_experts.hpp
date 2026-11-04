@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -138,6 +139,10 @@ namespace ttnn::experimental::deepseek::moe {
 //                     DRAM, which the router cores stream; the bias the [1, 1, 1, E] bfloat16 ROW_MAJOR row, DRAM
 //                     interleaved. The input must be the one-row L1 replica, covering the router
 //                     cores as well as the expert grid.
+//   all_reduce_cluster_axis / all_reduce_num_links / all_reduce_topology: all-reduce the per-chip
+//                     partial over this mesh axis inside the op; requires the one-row 6-expert path
+//                     and the L1 WIDTH_SHARDED [1, H/16] output on (0,0)-(1,7). The result has the
+//                     same spec, replicated over the axis.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
@@ -173,6 +178,9 @@ Tensor fused_experts(
     const std::optional<Tensor>& shared_down_weights = std::nullopt,
     std::optional<float> shared_swiglu_limit = std::nullopt,
     const std::optional<Tensor>& router_weight = std::nullopt,
-    const std::optional<Tensor>& router_bias = std::nullopt);
+    const std::optional<Tensor>& router_bias = std::nullopt,
+    std::optional<uint32_t> all_reduce_cluster_axis = std::nullopt,
+    uint32_t all_reduce_num_links = 1,
+    tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear);
 
 }  // namespace ttnn::experimental::deepseek::moe

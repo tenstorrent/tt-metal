@@ -126,6 +126,13 @@ void bind_fused_experts(nb::module_& mod) {
                 best to {0,0}, which merges them and weights the winners by their scores. Needs the 6-expert path and the one-row
                 L1 replica, and the replica must cover the router cores too.
             router_bias: The [1, 1, 1, E] bfloat16 ROW_MAJOR ranking bias, DRAM interleaved.
+            all_reduce_cluster_axis: All-reduce the per-chip partial over this mesh axis inside the
+                op; requires the one-row 6-expert path and the L1 WIDTH_SHARDED ``[1, H/16]`` output
+                on (0,0)-(1,7). The result has the same spec, replicated over the axis. None (the
+                default) returns the per-chip partial.
+            all_reduce_num_links: Fabric links the all-reduce uses. Defaults to 1.
+            all_reduce_topology: Fabric topology of the all-reduce (``ttnn.Topology``). Defaults to
+                ``ttnn.Topology.Linear``.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -148,7 +155,10 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("shared_down_weights") = std::nullopt,
         nb::arg("shared_swiglu_limit") = std::nullopt,
         nb::arg("router_weight") = std::nullopt,
-        nb::arg("router_bias") = std::nullopt);
+        nb::arg("router_bias") = std::nullopt,
+        nb::arg("all_reduce_cluster_axis") = std::nullopt,
+        nb::arg("all_reduce_num_links") = 1,
+        nb::arg("all_reduce_topology") = tt::tt_fabric::Topology::Linear);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

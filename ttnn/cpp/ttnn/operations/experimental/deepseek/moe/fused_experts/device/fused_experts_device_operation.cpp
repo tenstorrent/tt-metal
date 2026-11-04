@@ -5,16 +5,21 @@
 #include "fused_experts_device_operation.hpp"
 
 #include <algorithm>
+#include <array>
 
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
 
 FusedExpertsDeviceOperation::program_factory_t FusedExpertsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    if (operation_attributes.all_reduce.has_value()) {
+        return MultiCoreAllReduce{};
+    }
     return MultiCore{};
 }
 
@@ -571,6 +576,40 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             dn_shard[-1]);
     }
 
+    if (attributes.all_reduce.has_value()) {
+        const auto& ar = *attributes.all_reduce;
+        const auto& mem = attributes.output_memory_config;
+        const auto grid = x.device()->compute_with_storage_grid_size();
+        const std::array<uint32_t, 2> ar_shard_shape{1, hidden / kDownCoresPerExpert};
+        TT_FATAL(ar.ring_size > 1, "fused_experts: all_reduce needs more than one chip on axis {}", ar.cluster_axis);
+        TT_FATAL(
+            ar.num_links >= 1 && ar.num_links <= kDownCoresPerExpert,
+            "fused_experts: all_reduce num_links must be in [1, {}], got {}",
+            kDownCoresPerExpert,
+            ar.num_links);
+        TT_FATAL(batch == 1, "fused_experts: all_reduce runs on one token row only, got {}", batch);
+        TT_FATAL(
+            x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fused_experts: all_reduce needs a ROW_MAJOR input, got {}",
+            x.layout());
+        TT_FATAL(
+            mem.buffer_type() == tt::tt_metal::BufferType::L1 &&
+                mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+                mem.shard_spec().has_value() &&
+                mem.shard_spec()->grid ==
+                    tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {1, kGridY - 1})) &&
+                mem.shard_spec()->orientation == tt::tt_metal::ShardOrientation::COL_MAJOR &&
+                mem.shard_spec()->shape == ar_shard_shape,
+            "fused_experts: all_reduce needs the L1 WIDTH_SHARDED [1, H/16] output on (0,0)-(1,7), COL_MAJOR, got {}",
+            mem);
+        // The 6-expert path (num_experts == 6 on a >= 12-wide grid) is the only one with that output.
+        TT_FATAL(
+            attributes.num_experts == kParallelExperts && grid.x >= 12,
+            "fused_experts: all_reduce needs the 6-expert path (num_experts {} on a {}-wide grid)",
+            attributes.num_experts,
+            grid.x);
+    }
+
     // TODO: validate per-expert weight shapes against H / 2I / I, dtypes, and tile alignment.
 }
 
@@ -649,7 +688,12 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.shared_swiglu_limit,
         // The same goes for the router's weight and bias.
         tensor_args.router_weight,
-        tensor_args.router_bias);
+        tensor_args.router_bias,
+        attributes.all_reduce.has_value(),
+        attributes.all_reduce.has_value() ? attributes.all_reduce->cluster_axis : 0u,
+        attributes.all_reduce.has_value() ? attributes.all_reduce->ring_size : 0u,
+        attributes.all_reduce.has_value() ? attributes.all_reduce->num_links : 0u,
+        attributes.all_reduce.has_value() ? static_cast<uint32_t>(attributes.all_reduce->topology) : 0u);
     return hash;
 }
 
@@ -706,7 +750,10 @@ FusedExpertsDeviceOperation::invoke(
     const std::optional<Tensor>& shared_down_weights,
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
-    const std::optional<Tensor>& router_bias) {
+    const std::optional<Tensor>& router_bias,
+    std::optional<uint32_t> all_reduce_cluster_axis,
+    uint32_t all_reduce_num_links,
+    tt::tt_fabric::Topology all_reduce_topology) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -729,6 +776,14 @@ FusedExpertsDeviceOperation::invoke(
         .output_memory_config = memory_config.value_or(
             fused_experts_input_is_replicated(input_tensor) ? ttnn::DRAM_MEMORY_CONFIG : input_tensor.memory_config()),
     };
+    if (all_reduce_cluster_axis.has_value()) {
+        attributes.all_reduce = FusedAllReduceParams{
+            .cluster_axis = *all_reduce_cluster_axis,
+            .ring_size = ttnn::ccl::get_topological_dimension(input_tensor, all_reduce_cluster_axis),
+            .num_links = all_reduce_num_links,
+            .topology = all_reduce_topology,
+        };
+    }
     tensor_args_t tensor_args{
         .input_tensor = input_tensor,
         .routing_indices = routing_indices,
@@ -768,7 +823,10 @@ fused_experts(
     const std::optional<Tensor>& shared_down_weights,
     std::optional<float> shared_swiglu_limit,
     const std::optional<Tensor>& router_weight,
-    const std::optional<Tensor>& router_bias) {
+    const std::optional<Tensor>& router_bias,
+    std::optional<uint32_t> all_reduce_cluster_axis,
+    uint32_t all_reduce_num_links,
+    tt::tt_fabric::Topology all_reduce_topology) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -790,7 +848,10 @@ fused_experts(
         shared_down_weights,
         shared_swiglu_limit,
         router_weight,
-        router_bias);
+        router_bias,
+        all_reduce_cluster_axis,
+        all_reduce_num_links,
+        all_reduce_topology);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
