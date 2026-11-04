@@ -58,21 +58,10 @@ _MEAN_255 = torch.tensor(IMAGE_MEAN) * (1.0 / _RESCALE_FACTOR)
 _STD_255 = torch.tensor(IMAGE_STD) * (1.0 / _RESCALE_FACTOR)
 
 
-def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
-    """The token grid (grid_h, grid_w) of a resized image, after checking that it is one prepare can return.
-
-    Raises TypeError unless pixels is a uint8 numpy array, and ValueError unless it is (height, width, 3) with height
-    and width positive multiples of 28, an area of 4 to 576 tokens (56 x 56 to 672 x 672 pixels) and an aspect ratio
-    of at most MAX_RESIZED_ASPECT_RATIO: every image prepare returns passes, and nothing else the vision encoder has
-    not been built for does.
-    """
-    if not isinstance(pixels, np.ndarray):
-        raise TypeError(f"pixels must be a numpy array, got {type(pixels).__name__}")
-    if pixels.dtype != np.uint8:
-        raise TypeError(f"pixels must be uint8, got {pixels.dtype}")
-    if pixels.ndim != 3 or pixels.shape[2] != NUM_CHANNELS:
-        raise ValueError(f"pixels must be an RGB image (height, width, 3), got shape {pixels.shape}")
-    height, width = pixels.shape[:2]
+def check_size(height: int, width: int) -> Tuple[int, int]:
+    """The token grid (grid_h, grid_w) of a resized image of height x width pixels, after checking that prepare can
+    give that size: height and width positive multiples of 28, an area of 4 to 576 tokens (56 x 56 to 672 x 672
+    pixels) and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. Raises ValueError otherwise."""
     if height < FACTOR or width < FACTOR or height % FACTOR or width % FACTOR:
         raise ValueError(
             f"pixels height and width must be positive multiples of {FACTOR}, got height {height} and width {width}"
@@ -89,6 +78,22 @@ def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
             f" got height {height} and width {width}"
         )
     return grid_h, grid_w
+
+
+def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
+    """The token grid (grid_h, grid_w) of a resized image, after checking that it is one prepare can return.
+
+    Raises TypeError unless pixels is a uint8 numpy array, and ValueError unless it is (height, width, 3) of a size
+    that check_size takes: every image prepare returns passes, and nothing else the vision encoder has not been built
+    for does.
+    """
+    if not isinstance(pixels, np.ndarray):
+        raise TypeError(f"pixels must be a numpy array, got {type(pixels).__name__}")
+    if pixels.dtype != np.uint8:
+        raise TypeError(f"pixels must be uint8, got {pixels.dtype}")
+    if pixels.ndim != 3 or pixels.shape[2] != NUM_CHANNELS:
+        raise ValueError(f"pixels must be an RGB image (height, width, 3), got shape {pixels.shape}")
+    return check_size(*pixels.shape[:2])
 
 
 def patch_rows(pixels: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:

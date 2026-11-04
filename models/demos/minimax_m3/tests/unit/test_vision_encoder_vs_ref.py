@@ -213,6 +213,7 @@ def test_vision_media_opens_its_own_chip(vision_reference, tmp_path):
 
     reference = vision_reference(NUM_LAYERS)
     hf_config = MiniMaxM3VLConfig(vision_config={"num_hidden_layers": NUM_LAYERS}).to_dict()
+    assert vision_config(hf_config) == reference.config
     write_checkpoint(tmp_path, reference, hf_config)
     media = MiniMaxM3Media(hf_config)
     media.load(str(tmp_path), {"warmup": []})

@@ -7,6 +7,7 @@ import os
 import pickle
 import subprocess
 import sys
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -119,33 +120,97 @@ def test_media_imports_without_ttnn():
     assert out.returncode == 0 and out.stdout.strip() == "[]", out.stdout + out.stderr
 
 
-def test_failed_encode_leaves_no_valid_header(monkeypatch, expect_error):
-    """encode writes a value's header only after its embeddings: if they fail, the slot holds no valid header, not
-    the one a previous value left there, so prefill rejects it."""
+def test_failed_encode_leaves_no_stale_value(monkeypatch, expect_error):
+    """encode clears every slot's header first and writes each value's header only after its embeddings: when an item
+    fails, the slots of the items before it hold their new values and the others no valid header, never the value a
+    previous call left there, so prefill rejects them."""
     media = MiniMaxM3Media(CONFIG)
     media.load("", {"stub_embeddings": True})
+    items = [media.prepare("image", rgba(100, 60)), media.prepare("image", rgba(60, 100, seed=1))]
+    values = [memoryview(bytearray(media.value_size(item))) for item in items]
+    media.encode(items, values)  # a valid value in each slot
+    encoded = [bytes(value) for value in values]
+    stub_rows = media_module._stub_rows
+    for failing in (1, 0):
+        calls = []
+
+        def fail_at(item, hidden):
+            calls.append(item)
+            if len(calls) - 1 == failing:
+                raise RuntimeError("the chip went away")
+            return stub_rows(item, hidden)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(media_module, "_stub_rows", fail_at)
+            with expect_error(RuntimeError, "the chip went away"):
+                media.encode(items, values)
+        assert all(bytes(value) == want for value, want in zip(values[:failing], encoded)), "a finished item's value"
+        for value in values[failing:]:
+            with expect_error(ValueError, "no embeddings"):
+                media_format.read_header(value)
+
+
+def test_encode_checks_its_slots_and_state_first(expect_error):
+    """encode raises ValueError for a slot that is not its item's value size before it writes into any slot, and
+    RuntimeError before load and after close."""
+    media = MiniMaxM3Media(CONFIG)
     item = media.prepare("image", rgba(100, 60))
-    value = memoryview(bytearray(media.value_size(item)))
-    media.encode([item], [value])
-    media_format.read_header(value)  # a valid value in the slot
+    good = memoryview(bytearray(b"\x01" * media.value_size(item)))
+    with expect_error(RuntimeError, "encode before load"):
+        media.encode([item], [good])
+    media.load("", {"stub_embeddings": True})
+    long = memoryview(bytearray(media.value_size(item) + 2))
+    with expect_error(ValueError, "needs"):
+        media.encode([item, item], [good, long])
+    assert bytes(good) == b"\x01" * len(good), "encode wrote into a slot before it checked them all"
+    media.close()
+    with expect_error(RuntimeError, "after close"):
+        media.encode([item], [good])
 
-    def fail(item, hidden):
-        raise RuntimeError("the chip went away")
 
-    monkeypatch.setattr(media_module, "_stub_rows", fail)
-    with expect_error(RuntimeError, "the chip went away"):
-        media.encode([item], [value])
-    with expect_error(ValueError, "no embeddings"):
-        media_format.read_header(value)
+@pytest.mark.parametrize("chained", [False, True], ids=["raised", "chained"])
+def test_failed_load_frees_the_encoder_before_closing_its_chip(tmp_path, monkeypatch, expect_error, chained):
+    """If building the encoder fails on the chip that load opened, load frees the device tensors that the failed
+    call's frames hold (the exception's traceback keeps those frames, and so does the traceback of an exception it
+    chains) before it closes the chip, then raises."""
+    ttnn = pytest.importorskip("ttnn")
+    from models.demos.minimax_m3.vision import encoder as encoder_module
+
+    class DeviceTensor:  # stands in for a tensor on the chip
+        pass
+
+    tensors, closed = [], []
+
+    def build():
+        tensor = DeviceTensor()  # held only by this frame
+        tensors.append(weakref.ref(tensor))
+        raise RuntimeError("out of device memory")
+
+    def from_weights_path(mesh_device, weights_path, config):
+        if not chained:
+            build()
+        try:
+            build()
+        except RuntimeError as error:  # only the chained exception's traceback keeps build's frame
+            raise RuntimeError("out of device memory, while building the encoder") from error
+
+    monkeypatch.setattr(ttnn, "open_mesh_device", lambda shape: "chip")
+    monkeypatch.setattr(ttnn, "close_mesh_device", lambda mesh: closed.append((mesh, tensors[0]() is None)))
+    monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
+    with expect_error(RuntimeError, "out of device memory"):
+        MiniMaxM3Media(CONFIG).load(str(tmp_path), {"warmup": []})
+    assert closed == [("chip", True)], f"load closed its chip with the failed call's tensors alive: {closed}"
 
 
 @pytest.mark.parametrize(
     "warmup, message",
     [
         ([[100, 100]], "multiples of 28"),
-        ([5], "multiples of 28"),
-        ([[28, 28]], "makes 1 tokens"),
-        ([[700, 700]], "makes 625"),
+        ([5], r"\[height, width\] in pixels"),
+        ([[28, 28]], r"got 1 \(1 down"),
+        ([[700, 700]], "got 625"),
+        ([[28, 16128]], "aspect ratio must be at most 339"),  # 576 tokens, but 576:1
+        (None, "must be a list"),
     ],
 )
 def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup, message):
