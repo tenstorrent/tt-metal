@@ -439,7 +439,7 @@ models:
     bh_galaxy: 470
     bh_sc1: 2375
     bh_sc1_high_power: 498
-    bh_sc4: 60
+    bh_sc4: 210  # TEMPORARY +150 for the DeepSeek-V4-Pro SC4 KV chunk table leg; revert before merge
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

@@ -2210,13 +2210,39 @@
     bh_sc1:
       # Not yet measured. The 43-layer Flash depth section is bounded at 67 min, nearly all checkpoint load;
       # ten of those layers, the producer's read-back and the mesh unwind are bounded here.
-      timeout: 40
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
   budget_type: demo
   sp_config: sc1
+
+# Its own test_type, as K3's sc4 leg has: four galaxies are the scarcest resource in the pool, so the leg is
+# dispatchable without also claiming the single-galaxy one. The `runner` and `kv_cache` tags select both.
+- name: "(DeepSeek-V4-Pro) prefill KV chunk table accuracy 55k@5k, all layers, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh dsv4_pro
+  test_type: dsv4_pro_prefill_runner_kv_pcc
+  test_tags: [dsv4_pro, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Not yet measured. Pro's layers 0-9 load from the native checkpoint in 51.7 min (the depth leg); each
+      # rank loads 15-16 of the 61 layers in parallel, then 11 chunks, the read-back and the mesh unwind.
+      timeout: 150
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc4
 
 # ===== Op-level, no model under test ===================================================================
 
