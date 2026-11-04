@@ -123,11 +123,11 @@ _CACHE_HIT = [
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
-    ([1, 32, 64], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+    ([32, 32], {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
 ]
 _CACHE_HIT_IDS = [
     "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major",
-    "[1, 32, 64]@L1|memory_config=BufferType.DRAM|int32|row_major",
+    "[32, 32]@L1|memory_config=BufferType.DRAM|int32|row_major",
 ]
 
 
@@ -201,15 +201,15 @@ _SEQ_SWITCH = [
     (
         [1, 1, 32, 32],
         {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.L1_MEMORY_CONFIG, "dtype": ttnn.int32},
+        [64, 32],
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
 ]
 _SEQ_SWITCH_IDS = [
-    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major->[1, 1, 64, 64]|dtype=DataType.INT32&memory_config=BufferType.L1|bfloat16|row_major",
+    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major->[64, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
 ]
 
 
