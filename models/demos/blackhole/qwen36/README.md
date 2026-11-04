@@ -260,10 +260,22 @@ single-device paths ignore `start_pos` and recompute from 0.
 | Env var | Default | Meaning |
 |---|---|---|
 | `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
-| `QWEN36_PREFIX_CACHE_SLOTS` | `32` | snapshot slots, allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there |
+| `QWEN36_PREFIX_CACHE_SLOTS` | `32` | snapshot slots, allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there. On the BH Galaxy (TP8 rows, 31.9 GiB per device) one slot is 21.75 MiB per device (48 x (384 KiB fp32 state + 80 KiB tile-padded conv carry)); the production configuration (525312-token KV pool per rank, every prefill and verify trace) allocates 13.1 GiB per device with 64 slots, so 256 slots (+4.1 GiB) leave about 13 GiB free |
+| `QWEN36_PREFIX_CACHE_FAST_ALLOC` | `0` | `1`: allocate the snapshot slots (and the host-tier staging set) on device, uninitialized (`ttnn.allocate_tensor_on_device`), instead of uploading host zeros tensor by tensor (measured on a TP=8 Galaxy row: 25 ms per slot, so 1.6 s per 64 slots and 6.5 s for 256, against 1.3 ms per slot on device). A slot is never read before a save writes it |
 | `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
+| `QWEN36_PREFIX_END_AT_CAP` | `0` | `1` (MTP spec path): the end-of-prompt snapshot sits at the resume cap of the next request that extends the prompt, `((floor(L/64)*64 - 1)//128)*128`, instead of `((L-3)//128)*128`. The default position is one 128-block above that cap whenever `L mod 128` is in `[3, 63]`, so about half of the next turns miss it and resume from an older snapshot. Never more save points than today (no extra split; a stride point at the old position goes with it); a next turn that matched further resumes at most 128 tokens below its cap |
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
+| `QWEN36_PREFIX_CACHE_VALUE_EVICT` | `0` | `1`: value-aware eviction. End-of-prompt checkpoints (and the last-full-chunk point of shorter prompts) and snapshots hit >= `QWEN36_PREFIX_CACHE_PROTECT_HITS` (`2`) times are evicted only after every other unpinned snapshot; at most `QWEN36_PREFIX_CACHE_PROTECT_FRAC` (`0.5`) of the slots are protected (the most recently used ones). Pure stride snapshots still go first |
+| `QWEN36_PREFIX_HOST_SLOTS` | `0` | `N > 0`: host-RAM spill tier of N snapshots (about 150 MB of host RAM each at TP=8, per DP rank). An evicted snapshot is read to host (exact bytes of every device) before its slot is reused; a later hit writes it back through one extra device staging slot (allocated before trace capture). A spill is a blocking device read inside the prefill |
+| `QWEN36_PREFIX_HOST_SPILL_MIN_POS` | `2048` | only snapshots at positions >= this are spilled (shorter ones are cheaper to recompute) |
+| `QWEN36_PREFIX_HOST_MIN_GAIN` | `1024` | a host snapshot is used only when it resumes at least this many tokens later than the best device snapshot (or than 0) |
+| `QWEN36_PREFIX_HOST_SPILL_LOW` | `0` | `1` also spills pure stride snapshots |
+| `QWEN36_PREFIX_SUMMARY_EVERY` | `1000` | spec engine: one INFO summary line every N prefills, with the true resume metrics: `vllm_cached_tok` (what vLLM counts as cached), `gdn_resumed_tok` (where the GDN state really resumed), `hidden_recompute_tok` (cached by vLLM but recomputed), `below_cap_tok` (recomputed because no snapshot existed at the MTP-safe cap), and the tier (`from_device` / `from_host` / `from_0`) |
+
+`QWEN36_PREFIX_SNAPSHOT_MIN_LEN` also controls end-of-prompt checkpoints for chat-sized prompts: e.g. `512` takes the
+`((L-3)//128)*128` snapshot for every prompt >= 512 tokens (one extra short-trace segment per prefill), so the next turn
+of the conversation resumes within its own new tokens instead of at the last 2048-token chunk boundary or at 0.
 
 ## Chunked prefill (vLLM serving, batched TP path)
 
@@ -298,6 +310,19 @@ until the plugin relaxes that for TT-owned recurrent state; the continuation sto
 |---|---|---|
 | `QWEN36_CHUNKED_PREFILL` | `0` | `1` advertises `supports_chunked_prefill` and builds the continuation store (needs `--no-enable-prefix-caching`) |
 | `QWEN36_CHUNK_STATE_SLOTS` | `4` | continuation snapshot slots (about 19 MB of DRAM per device per slot at TP=8) |
+
+### Prefill attention at depth (chunked SDPA)
+
+Each prefill chunk's attention reads the whole K/V prefix before it (`chunked_scaled_dot_product_attention`, one core
+per 128-row Q chunk and query head). Two opt-in flags change only where K/V is read from and how the Q rows are split
+over the cores; every row still meets its 128-token K chunks in the same order with the same masks, so outputs are
+bit-identical (checked by `tests/test_sdpa_prefix_reuse_ops.py` and by greedy md5s of the whole model).
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_SDPA_PREFIX_REUSE` | `0` | `auto` (recommended): prefix chains for the 8192-row chunks, one Q chunk per core for the 2048-row chunks and the short traces, plus read batches for split calls on few cores. Or explicit `SDPAProgramConfig.prefix_reuse` bits for every call: `1` K/V read batches sized by the cores that read DRAM, `2` K/V prefix chains (the cores reading one KV head's prefix, across Q chunks and the KV head's query heads, take each K/V chunk from the previous core; only the first core of a chain reads DRAM), `4` one Q chunk per core when there are no more Q chunks than cores; bits 8-15 cap the chain length (default 8) |
+| `QWEN36_SDPA_PREFILL_QSPLIT` | `0` | smallest Q chunk (`32` recommended, or `64`) for calls with few Q chunks (the short traces); the K chunk stays 128. Splits up to `QWEN36_SDPA_PREFILL_QSPLIT_UNITS` Q chunks (default 2/5 of the grid: 48) |
+| `QWEN36_SDPA_PREFILL_READ_BATCH_UNITS` | 1/5 of the grid (24) | with `auto`: a split call of at most this many Q chunks (the 128- and 256-row short traces in 32-row Q chunks) also sizes its K/V read batches by the cores that read DRAM (bit `1`); `0` never |
 
 ## Multimodal serving: vision buckets and `max_pixels` (vLLM)
 

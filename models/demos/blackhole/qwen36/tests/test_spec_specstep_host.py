@@ -11,6 +11,10 @@ device tests are test_spec_verify_specstep.py and test_gdn_spec_step.py):
   layers hold going in, next to the QWEN36_VERIFY_STAGING_CACHE page-table skip, with the parity flip after the
   synchronize (also with the QWEN36_VERIFY_SHARDED_ARGMAX logits trace); the composite selectors are untouched;
 * the engine / model flag plumbing (gdn_verify_spec_step, set_gdn_fused_decode, spec_memory_costs).
+* QWEN36_SPEC_STEP_VALUE_BLOCKS: parsed to 1 / 2 / 4, and the op's value_blocks kwarg is passed only when > 1 and
+  only to a T > 1 verify (the T = 1 seed keeps one core per (user, head)).
+* QWEN36_SPEC_STEP_OPT: the kernel_opts bitmask (decimal / 0x), unknown bits refused, passed only when non-zero and
+  only with fp32_state.
 
 No device, no op. Run: pytest models/demos/blackhole/qwen36/tests/test_spec_specstep_host.py -q
 """
@@ -23,7 +27,10 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.tp import (
     HOLD_SENTINEL,
+    SPEC_STEP_OPT_KNOWN,
     TPGatedDeltaNet,
+    gdn_spec_step_kernel_opts,
+    gdn_spec_step_value_blocks,
     spec_conv_sel,
     spec_ctrl_page,
     spec_ctrl_words,
@@ -527,3 +534,113 @@ def test_verify_rejects_rows_outside_one_to_B(expect_error):
     g._spec_shape = (4, 4)
     with expect_error(AssertionError, "buffers are sized for"):
         TPGatedDeltaNet.forward_verify_recurrent(g, "x", 8, n_users=2, spec_ctrl="ctrl")
+
+
+# --------------------------------------------------------------------------- #
+# QWEN36_SPEC_STEP_VALUE_BLOCKS (gdn_spec_step value_blocks: state column split over cores)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("env,want", [(None, 1), ("", 1), ("1", 1), ("2", 2), (" 4 ", 4)])
+def test_value_blocks_env(monkeypatch, env, want):
+    if env is None:
+        monkeypatch.delenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", raising=False)
+    else:
+        monkeypatch.setenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", env)
+    assert gdn_spec_step_value_blocks() == want
+
+
+@pytest.mark.parametrize("env", ["3", "8", "0", "-2"])
+def test_value_blocks_env_rejects_other_values(monkeypatch, env):
+    monkeypatch.setenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", env)
+    with pytest.raises(ValueError, match="QWEN36_SPEC_STEP_VALUE_BLOCKS"):
+        gdn_spec_step_value_blocks()
+
+
+def _spec_step_layer():
+    g = types.SimpleNamespace(
+        tw={"conv_taps_rows": "taps", "dt_bias_fp32": "dtb", "neg_exp_A_fp32": "nea", "norm_w_1d": "w"},
+        Nv=6,
+        Nk=2,
+        Dk=128,
+        Dv=128,
+        qkvz_dim_tp=2048,
+        K=4,
+        scale=128**-0.5,
+        _decode_step_fp32_state=True,
+        _spec_max_users=0,
+    )
+    g._spec_hnew_depth = TPGatedDeltaNet._spec_hnew_depth
+    return g
+
+
+@pytest.mark.parametrize("env,want", [(None, None), ("1", None), ("2", 2), ("4", 4)])
+def test_gdn_spec_step_passes_value_blocks_only_when_split(monkeypatch, env, want):
+    if env is None:
+        monkeypatch.delenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", raising=False)
+    else:
+        monkeypatch.setenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", env)
+    calls = []
+    kda = types.SimpleNamespace(gdn_spec_step=lambda *a, **kw: calls.append((a, kw)) or "gated")
+    monkeypatch.setattr(ttnn, "experimental", types.SimpleNamespace(kda=kda), raising=False)
+    g = _spec_step_layer()
+    assert TPGatedDeltaNet._gdn_spec_step(g, "qkv", "wa", "wb", "ring", "ctrl", 4, 8, max_users=8) == "gated"
+    ((args, kw),) = calls
+    assert args[:5] == ("qkv", "wa", "wb", "ring", "ctrl") and args[13:15] == (4, 8)
+    assert kw.get("value_blocks") == want
+    assert kw["max_users"] == 8 and kw["fast_mode"] is True and kw["fp32_state"] is True
+
+
+@pytest.mark.parametrize("env,T,want", [("2", 1, None), ("4", 1, None), ("4", 2, 4), ("2", 12, 2)])
+def test_gdn_spec_step_value_blocks_only_for_verify(monkeypatch, env, T, want):
+    monkeypatch.setenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", env)
+    monkeypatch.delenv("QWEN36_SPEC_STEP_OPT", raising=False)
+    calls = []
+    kda = types.SimpleNamespace(gdn_spec_step=lambda *a, **kw: calls.append((a, kw)) or "gated")
+    monkeypatch.setattr(ttnn, "experimental", types.SimpleNamespace(kda=kda), raising=False)
+    g = _spec_step_layer()
+    TPGatedDeltaNet._gdn_spec_step(g, "qkv", "wa", "wb", "ring", "ctrl", T, 8, max_users=8)
+    ((_, kw),) = calls
+    assert kw.get("value_blocks") == want
+
+
+# --------------------------------------------------------------------------- #
+# QWEN36_SPEC_STEP_OPT (gdn_spec_step kernel_opts: bit-identical kernel restructurings)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "env,want", [(None, 0), ("", 0), ("0", 0), ("1", 1), ("7", 7), ("0xff", 255), (" 255 ", 255), ("130", 130)]
+)
+def test_kernel_opts_env(monkeypatch, env, want):
+    if env is None:
+        monkeypatch.delenv("QWEN36_SPEC_STEP_OPT", raising=False)
+    else:
+        monkeypatch.setenv("QWEN36_SPEC_STEP_OPT", env)
+    assert gdn_spec_step_kernel_opts() == want
+
+
+@pytest.mark.parametrize("env", ["256", "0x100", "-1", "abc", "1.5"])
+def test_kernel_opts_env_rejects(monkeypatch, env):
+    monkeypatch.setenv("QWEN36_SPEC_STEP_OPT", env)
+    with pytest.raises(ValueError, match="QWEN36_SPEC_STEP_OPT"):
+        gdn_spec_step_kernel_opts()
+
+
+def test_kernel_opts_known_mask():
+    assert SPEC_STEP_OPT_KNOWN == 255
+
+
+@pytest.mark.parametrize(
+    "env,fp32_state,want", [(None, True, None), ("0", True, None), ("255", True, 255), ("7", False, None)]
+)
+def test_gdn_spec_step_passes_kernel_opts_only_when_set(monkeypatch, env, fp32_state, want):
+    monkeypatch.delenv("QWEN36_SPEC_STEP_VALUE_BLOCKS", raising=False)
+    if env is None:
+        monkeypatch.delenv("QWEN36_SPEC_STEP_OPT", raising=False)
+    else:
+        monkeypatch.setenv("QWEN36_SPEC_STEP_OPT", env)
+    calls = []
+    kda = types.SimpleNamespace(gdn_spec_step=lambda *a, **kw: calls.append((a, kw)) or "gated")
+    monkeypatch.setattr(ttnn, "experimental", types.SimpleNamespace(kda=kda), raising=False)
+    g = _spec_step_layer()
+    g._decode_step_fp32_state = fp32_state
+    TPGatedDeltaNet._gdn_spec_step(g, "qkv", "wa", "wb", "ring", "ctrl", 4, 8, max_users=8)
+    ((_, kw),) = calls
+    assert kw.get("kernel_opts") == want

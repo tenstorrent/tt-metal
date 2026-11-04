@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt import weight_prefetch
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
@@ -58,6 +59,72 @@ def gdn_verify_spec_step_enabled():
     path byte for byte. With the op, plain decode stays on gdn_decode_step (set_gdn_fused_decode(True) is ignored),
     so decode, seed and verify share one kernel family."""
     return os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1"
+
+
+def gdn_spec_step_value_blocks():
+    """QWEN36_SPEC_STEP_VALUE_BLOCKS (default "1" = off): gdn_spec_step's value_blocks -- split each (user, value
+    head)'s recurrent state columns over up to this many cores (tt-lab's 4-core GDN head split). The op takes the
+    largest divisor of Dv/32 <= the value whose B*Nv*blocks cores fit the grid (TP = 8, Nv = 6, >= 96-core grid: 2
+    at the B = 8 bucket, 4 at B <= 4) and stays bit-identical (out, ring, window) to one core per (user, head). Only
+    the T > 1 verify splits; the T = 1 seed keeps one core per (user, head) (faster there). Values: 1, 2 or 4; 1
+    passes nothing to the op, so a ttnn build without the attribute keeps working."""
+    env = os.environ.get("QWEN36_SPEC_STEP_VALUE_BLOCKS", "1").strip() or "1"
+    vb = int(env)
+    if vb not in (1, 2, 4):
+        raise ValueError(f"QWEN36_SPEC_STEP_VALUE_BLOCKS must be 1, 2 or 4, got {env!r}")
+    return vb
+
+
+# gdn_spec_step kernel_opts bits (GdnSpecStepKernelOpt in gdn_spec_step_device_operation_types.hpp)
+SPEC_STEP_OPT_FUSED_DECAY = 1  # the next token's exact-fp32 state decay fused into this token's state add
+SPEC_STEP_OPT_GATE_SCALARS = 2  # gate math on the writer, scalar tiles filled in DST (no reader broadcast-tile fills)
+SPEC_STEP_OPT_EARLY_SRC = 4  # the reader hands the conv inputs to the compute before the taps / masks
+SPEC_STEP_OPT_HOIST_INV = 8  # rsqrt(q stats + eps) * scale once per op instead of once per token
+SPEC_STEP_OPT_QKSHARE = 16  # value_blocks > 1: the head's blocks split the q/k conv and swap the tiles over the NoC
+SPEC_STEP_OPT_A3_HALF = 32  # the conv's SFPU tail on the tile half that holds the user's rows
+SPEC_STEP_OPT_GSC_SPLIT = 64  # with 2 and value_blocks > 1: the head's blocks split the gate math and swap the results
+SPEC_STEP_OPT_VS_TAIL = 128  # value_blocks > 1: each block normalizes / gates only its own output columns
+SPEC_STEP_OPT_KNOWN = (
+    SPEC_STEP_OPT_FUSED_DECAY
+    | SPEC_STEP_OPT_GATE_SCALARS
+    | SPEC_STEP_OPT_EARLY_SRC
+    | SPEC_STEP_OPT_HOIST_INV
+    | SPEC_STEP_OPT_QKSHARE
+    | SPEC_STEP_OPT_A3_HALF
+    | SPEC_STEP_OPT_GSC_SPLIT
+    | SPEC_STEP_OPT_VS_TAIL
+)
+
+
+def gdn_spec_step_kernel_opts():
+    """QWEN36_SPEC_STEP_OPT (default "0" = off): gdn_spec_step's kernel_opts bitmask of bit-identical kernel
+    restructurings of the fast_mode + fp32_state program (out, ring and window stay torch.equal to 0):
+    1 = fused next-token decay (no hn32 buffer / reload per token); 2 = gate scalars (the writer computes the
+    beta / decay gates and the compute fills the scalar tiles in DST: the reader's 2*T broadcast-tile fills were the
+    op's critical path); 4 = early src (the conv inputs reach the compute before the taps / masks are built);
+    8 = hoisted q scale (rsqrt(q stats + eps) * scale once per op, not per token); 16 = q/k share (with
+    QWEN36_SPEC_STEP_VALUE_BLOCKS > 1: the head's value blocks split the q/k conv and swap the exact conv tiles over
+    the NoC); 32 = the conv's SFPU tail (tap sum + silu) on the tile half holding the user's rows; 64 = gate split
+    (with 2 and value blocks: the head's blocks split the gate math); 128 = each value block normalizes / gates only
+    its own output columns. Recommended: 250 (= 2|8|16|32|64|128) with QWEN36_SPEC_STEP_VALUE_BLOCKS=4 (fits the
+    70656 B kernel config buffer at TP = 8 / 4 for B 1..8, T 1..12); all eight bits at once (255) overflows it at
+    value_blocks 2 (B = 8), and 250 does at TP = 2 (Nv = 24) with T = 12 and value blocks.
+    0 passes nothing to the op, so a ttnn build without the attribute keeps working. Decimal or 0x-prefixed; unknown
+    bits are refused."""
+    env = os.environ.get("QWEN36_SPEC_STEP_OPT", "0").strip() or "0"
+    try:
+        opts = int(env, 0)
+    except ValueError:
+        raise ValueError(f"QWEN36_SPEC_STEP_OPT must be an integer bitmask, got {env!r}") from None
+    if opts < 0 or opts & ~SPEC_STEP_OPT_KNOWN:
+        raise ValueError(f"QWEN36_SPEC_STEP_OPT has unknown bits: {env!r} (known mask {SPEC_STEP_OPT_KNOWN:#x})")
+    return opts
+
+
+# x8 (kernel_opts bit 10, kGdnSpecOptNarrowGateReads; port of x7 5c6149788ed onto r9): the gate-scalar writer reads only
+# the face rows it uses (the a|b rows of the user, dt_bias / -exp(A)'s face row) instead of whole DRAM pages that every
+# core reads from one bank. Bit-identical; QWEN36_SPEC_STEP_NARROW_GR=1 adds it wherever gate scalars (bit 1) are on.
+SPEC_STEP_OPT_NARROW_GR = 1024
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -180,6 +247,8 @@ def kda_conv_prefill(
     conv_sel=None,
     emit_state=True,
     wide_input=False,
+    snap_rows=None,
+    snap_out=None,
 ):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
@@ -199,10 +268,17 @@ def kda_conv_prefill(
     wide_input: qkv is the whole TILE DRAM projection [1, T, W>=C] whose conv columns are 0..C-1 (note 57 A): the op
                   reads it in place via input_column_offset=0 (no untilize/tilize round trip). The caller frees it.
     emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
+    snap_rows / snap_out (QWEN36_PREFILL_INTRACE_SNAP; both or neither): snap_rows is a persistent [1, R] uint32 row
+                  index tensor, snap_out a persistent [1, R, C] bf16 ROW_MAJOR buffer; the R conv-input rows snap_rows
+                  names are gathered out of the row-major copy (one embedding, an exact row copy) into snap_out: the
+                  three rows before each in-chunk snapshot position, i.e. the cross-chunk carry a chunk ending there
+                  would keep (rows 3k..3k+2 = snapshot k, see prefill_plan.snap_index_words).
     """
     C = sum(widths)
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
     assert qkv.shape[1] == T, f"kda_conv_prefill: T={T} but qkv has {qkv.shape[1]} rows"
+    # The snapshot row gather reads the row-major copy (width C); wide_input skips that copy.
+    assert not (wide_input and snap_rows is not None), "kda_conv_prefill: wide_input with snap_rows is not supported"
     _dram = ttnn.DRAM_MEMORY_CONFIG
     # The op's input contract is row-major: one untilize of the conv columns.
     if wide_input:
@@ -227,6 +303,10 @@ def kda_conv_prefill(
     )
     if hist is not history:
         ttnn.deallocate(hist)
+    if snap_rows is not None:
+        rows = ttnn.embedding(snap_rows, ttnn.reshape(xin, (T, C)), layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        ttnn.copy(rows, snap_out)
+        ttnn.deallocate(rows)
     if not emit_state:
         if not wide_input:
             ttnn.deallocate(xin)
@@ -260,6 +340,98 @@ def kda_conv_prefill(
         return q, k, v, new_state
     new_state = ttnn.slice(xin, (0, T - n_hist, 0), (1, T, C), memory_config=_dram)
     ttnn.deallocate(xin)
+    new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT, memory_config=_dram)
+    return q, k, v, new_state
+
+
+SNAP_TILE_BLOCK = 128  # prefill_plan.ALIGN: every in-replay snapshot row offset is a multiple of it
+
+
+def snap_tile_gather_ok(snap, T):
+    """(r67) Whether a prefill body of T rows handed `snap` (QWEN36_PREFILL_INTRACE_SNAP) can keep the
+    QWEN36_PREFILL_GDN_GLUE TILE conv: no snapshot ops, or QWEN36_PREFILL_SNAP_TILE staged the TILE-input gather's rows
+    ("conv_idx_tile") and T is a whole number of 128-row blocks. Otherwise the snapshot rows come from the row-major
+    conv input (TPGatedDeltaNet.forward_prefill's merge guard)."""
+    return snap is None or (snap.get("conv_idx_tile") is not None and T % SNAP_TILE_BLOCK == 0)
+
+
+def snap_rows_from_tile(qkv, T, C, snap_rows_tile, snap_out):
+    """QWEN36_PREFILL_SNAP_TILE: kda_conv_prefill's in-replay snapshot gather, from the TILE conv input.
+
+    qkv: [1, T, >= C] bf16 TILE (T a multiple of 128), conv channels in columns [0, C). A snapshot at row offset r (a
+    multiple of 128, prefill_plan.ALIGN) needs rows r-3..r-1, i.e. rows 29..31 of the last tile row (rows 96..127) of
+    128-row block r/128 - 1. Every block's last tile row is sliced out of a metadata view [T/128, 128, W] (tile-aligned:
+    T/4 rows of the conv columns), untilized, and the rows named by snap_rows_tile ([1, R] uint32, see
+    prefill_plan.snap_tile_index_words) are embedding-gathered into snap_out ([1, R, C] bf16 ROW_MAJOR), exactly as
+    kda_conv_prefill gathers them from its full row-major copy: pure data movement of the same bf16 values."""
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    t = ttnn.TILE_SIZE
+    nb = T // SNAP_TILE_BLOCK
+    assert nb * SNAP_TILE_BLOCK == T, f"snap_rows_from_tile: T={T} is not a multiple of {SNAP_TILE_BLOCK}"
+    blocks = ttnn.reshape(qkv, (nb, SNAP_TILE_BLOCK, qkv.shape[-1]))  # tile-aligned split of the rows: a view of qkv
+    last = ttnn.slice(blocks, (0, SNAP_TILE_BLOCK - t, 0), (nb, SNAP_TILE_BLOCK, C), memory_config=_dram)
+    last_rm = ttnn.to_layout(last, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+    ttnn.deallocate(last)
+    rows = ttnn.embedding(
+        snap_rows_tile, ttnn.reshape(last_rm, (nb * t, C)), layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram
+    )
+    ttnn.copy(rows, snap_out)
+    ttnn.deallocate(rows)
+    ttnn.deallocate(last_rm)
+
+
+def kda_conv_prefill_tile(
+    qkv, T, history, taps, widths, actual_start, conv_sel=None, snap_rows_tile=None, snap_out=None
+):
+    """QWEN36_PREFILL_GDN_GLUE: kda_conv_prefill on the projection's TILE output, read in place.
+
+    qkv: [1, T, >= C] bf16 TILE (T a multiple of 32) whose conv channels are columns [0, C), C = sum(widths): the q|k|v
+    slice, or the whole fused qkvzab projection (not with conv_sel). qkv_causal_conv1d_silu takes TILE input (its reader
+    walks the padded tile rows), so the untilized ROW_MAJOR copy kda_conv_prefill makes, which the op tilizes right back,
+    is skipped. new_state is cut from qkv's last tile row (one 32-row untilize instead of T rows), or selected by conv_sel
+    exactly as kda_conv_prefill does. Same q / k / v / new_state values as kda_conv_prefill on qkv[..., :C]; qkv is not
+    freed (the caller owns it). history, taps, widths, actual_start, conv_sel: as kda_conv_prefill.
+    snap_rows_tile / snap_out (QWEN36_PREFILL_SNAP_TILE with QWEN36_PREFILL_INTRACE_SNAP; both or neither): the
+    in-replay snapshot conv rows, gathered from the TILE input (snap_rows_from_tile) into the same snap_out rows
+    kda_conv_prefill's snap_rows gather fills."""
+    C = sum(widths)
+    n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
+    assert qkv.shape[1] == T and T % ttnn.TILE_SIZE == 0, f"kda_conv_prefill_tile: T={T}, qkv {qkv.shape}"
+    assert qkv.layout == ttnn.TILE_LAYOUT, qkv.layout
+    assert qkv.shape[-1] >= C, f"kda_conv_prefill_tile: qkv width {qkv.shape[-1]} < conv channels {C}"
+    assert conv_sel is None or qkv.shape[-1] == C, "conv_sel selects rows of the q/k/v columns only"
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    hist = history if history.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(history, ttnn.ROW_MAJOR_LAYOUT)
+    q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        qkv,
+        hist,
+        *taps,
+        *widths,
+        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C)),
+        actual_start=actual_start,
+        predecessor_carry=hist,  # as kda_conv_prefill: validated against history, never read on the TP mesh
+        memory_config=_dram,
+    )
+    if hist is not history:
+        ttnn.deallocate(hist)
+    if snap_rows_tile is not None:
+        snap_rows_from_tile(qkv, T, C, snap_rows_tile, snap_out)
+    if conv_sel is not None:
+        assert conv_sel.shape[1] == n_hist and conv_sel.shape[-1] == T, (conv_sel.shape, n_hist, T)
+        # kda_conv_prefill's exact one-hot row selection, from the same TILE projection values
+        qkv_d = qkv if qkv.memory_config().buffer_type == ttnn.BufferType.DRAM else ttnn.to_memory_config(qkv, _dram)
+        new_state = ttnn.matmul(
+            conv_sel, qkv_d, memory_config=_dram, compute_kernel_config=exact_select_cfg(), dtype=ttnn.bfloat16
+        )
+        if qkv_d is not qkv:
+            ttnn.deallocate(qkv_d)
+        return q, k, v, new_state
+    # The chunk's last three input rows, from the last tile row of the TILE input.
+    last = ttnn.slice(qkv, (0, T - ttnn.TILE_SIZE, 0), (1, T, C), memory_config=_dram)
+    last_rm = ttnn.to_layout(last, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+    ttnn.deallocate(last)
+    new_state = ttnn.slice(last_rm, (0, ttnn.TILE_SIZE - n_hist, 0), (1, ttnn.TILE_SIZE, C), memory_config=_dram)
+    ttnn.deallocate(last_rm)
     new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT, memory_config=_dram)
     return q, k, v, new_state
 
@@ -417,8 +589,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     qkv_per = args.gdn_qkv_dim_tp
     z_per = args.gdn_z_dim_tp
     nv_per = args.gdn_nv_tp
-    # In-proj weight dtype (QWEN36_BFP4_GDN_IN, opt-in): BFP4. Out-proj stays BFP8.
+    # In-proj weight dtype (QWEN36_BFP4_GDN_IN, opt-in): BFP4. Out-proj (QWEN36_BFP4_GDN_OUT, opt-in): BFP4.
     _in_dtype = ttnn.bfloat4_b if tpc.bfp4_gdn_in_enabled() else ttnn.bfloat8_b
+    _out_dtype = ttnn.bfloat4_b if tpc.bfp4_gdn_out_enabled() else ttnn.bfloat8_b
 
     if cache_dir is not None:
         import os
@@ -478,6 +651,21 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
             dtype=_in_dtype,
         )
+        if _proj1d:
+            # QWEN36_WEIGHT_PREFETCH (gdn_in): receiver-contiguous decode copy for the Tensor prefetcher.
+            _pc = getattr(args, "gdn_qkvz_decode_1d_progcfg", None)
+            weight_prefetch.attach_twin(
+                mesh,
+                tw["qkvz"],
+                weight_prefetch.load_prefetched(
+                    "gdn_in", "gdn.qkvzab", mesh, fused, -1, _in_dtype, c("qkvzab.il"), _pc, tp
+                ),
+                _pc,
+            )
+            if getattr(args, "gdn_qkvz_dsmc_progcfg_bfp4", None) is not None and _in_dtype == ttnn.bfloat4_b:
+                # QWEN36_BFP4_LAYOUT (gdn_in=dsmc): DRAM-width-sharded decode twin made on device (prefill keeps the
+                # interleaved weight for its AGMM).
+                tw["qkvz_dec"] = ttnn.to_memory_config(tw["qkvz"], args.gdn_qkvz_dsmc_weight_memcfg_bfp4)
     else:
         fused = torch.cat(
             [
@@ -514,8 +702,22 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out.dramshard" if _out_sharded else "out"),
-        dtype=ttnn.bfloat8_b,
+        dtype=_out_dtype,
     )
+    if not _out_sharded and getattr(args, "proj_1d_decode", False):
+        # QWEN36_WEIGHT_PREFETCH (gdn_out): receiver-contiguous decode copy for the Tensor prefetcher.
+        _pc = getattr(args, "gdn_out_decode_1d_progcfg", None)
+        weight_prefetch.attach_twin(
+            mesh,
+            tw["out"],
+            weight_prefetch.load_prefetched(
+                "gdn_out", "gdn.out_proj", mesh, sd[P + "out_proj.weight"], 0, ttnn.bfloat8_b, c("out"), _pc, tp
+            ),
+            _pc,
+        )
+        if getattr(args, "gdn_out_dsmc_progcfg_bfp4", None) is not None and _out_dtype == ttnn.bfloat4_b:
+            # QWEN36_BFP4_LAYOUT (gdn_out=dsmc): DRAM-width-sharded decode twin made on device.
+            tw["out_dec"] = ttnn.to_memory_config(tw["out"], args.gdn_out_dsmc_weight_memcfg_bfp4)
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
         # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
@@ -525,7 +727,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_path=c("out.colpar"),
-            dtype=ttnn.bfloat8_b,
+            dtype=_out_dtype,
         )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
@@ -588,6 +790,19 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     return tw
 
 
+
+def _dsmc_decode(x, weight, compute_cfg, progcfg, act_shard, out_memory_config):
+    """QWEN36_BFP4_LAYOUT dsmc decode matmul (M <= 1 tile): x -> its K width shard (unless already in it), the
+    multi-core DRAM-sharded pipeline into L1 width-sharded, then `out_memory_config` (interleaved)."""
+    x_sh = x if x.memory_config() == act_shard else ttnn.to_memory_config(x, act_shard)
+    y = ttnn.linear(x_sh, weight, compute_kernel_config=compute_cfg, program_config=progcfg,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+    if x_sh is not x:
+        ttnn.deallocate(x_sh)
+    out = ttnn.to_memory_config(y, out_memory_config)
+    ttnn.deallocate(y)
+    return out
+
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
@@ -619,6 +834,8 @@ class TPGatedDeltaNet:
         self.cfg = tpc.COMPUTE_HIFI2
         # In-proj decode matmul only (prefill keeps self.cfg = HiFi2)
         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
+        # QWEN36_BFP4_LAYOUT_LOFI: the decode out-proj on a bfloat4_b weight in LoFi (bit-identical to HiFi2 there).
+        self.cfg_out_dec = tpc.COMPUTE_LOFI if tpc.bfp4_layout_lofi(self.tw["out"].dtype) else self.cfg
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         self._fuse_ab = self._dram_sharded
@@ -638,6 +855,10 @@ class TPGatedDeltaNet:
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
+        # QWEN36_PREFILL_GDN_GLUE (prefill glue cuts, see tp_common.prefill_gdn_glue_enabled); with it, the one-hot
+        # [2*Nv, Nv] column selector of b out of the [a | b] block (_beta_select).
+        self._prefill_glue = tpc.prefill_gdn_glue_enabled()
+        self._b_sel = self._build_b_sel() if self._prefill_glue else None
         self.conv_states = None
         self.rec_state = None
         # ---- Batched (multi-user) spec-decode verify buffers, allocated by prepare_spec_verify. ----
@@ -1001,13 +1222,16 @@ class TPGatedDeltaNet:
                 mesh_mapper=rep_map,
             )
 
-    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None, wide_input=False):
+    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None, wide_input=False, snap=None):
         """kda_conv_prefill on this layer's taps and widths. conv_state: the previous chunk's carry
         [1, K-1, C] TILE, or None from scratch. conv_sel: optional persistent one-hot [1, K-1, T] selector of the last
-        real rows (traced masked bucket, from-scratch only). Returns (q, k, v, new_state), see kda_conv_prefill."""
+        real rows (traced masked bucket, from-scratch only). snap (QWEN36_PREFILL_INTRACE_SNAP): the model's snapshot
+        row index tensor; the gathered conv rows land in this layer's _snap_conv_rm. Returns (q, k, v, new_state), see
+        kda_conv_prefill."""
         self._ensure_kda_consts()
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
+        snap_kw = {} if snap is None else dict(snap_rows=snap["conv_idx"], snap_out=self._snap_conv_rm)
         return kda_conv_prefill(
             qkv,
             T,
@@ -1017,7 +1241,46 @@ class TPGatedDeltaNet:
             self._kda_actual_start,
             conv_sel=conv_sel,
             wide_input=wide_input,
+            **snap_kw,
         )
+
+    def alloc_snapshot_buffers(self, slots, conv_rows):
+        """QWEN36_PREFILL_INTRACE_SNAP: this layer's persistent in-replay snapshot buffers (zeros; host writes, so before
+        any trace capture): _snap_rec [slots, Nv_tp, Dk, Dv] fp32 TILE, the chunk op's snapshot_state (slot k = the
+        carried state after the k-th staged chunk), and _snap_conv_rm [1, conv_rows, qkv_dim_tp] bf16 ROW_MAJOR, the
+        conv-input rows the KDA conv gathers (rows 3k..3k+2 = snapshot k's cross-chunk carry). B=1 prefill shapes."""
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        self._snap_rec = ttnn.from_torch(
+            torch.zeros(slots, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._snap_conv_rm = ttnn.from_torch(
+            torch.zeros(1, conv_rows, self.qkv_dim_tp, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def copy_snapshot_to(self, k, rec_dst, carry_dst):
+        """Copy in-replay snapshot k (after the replay that took it) into a prefix-cache slot: the state slice of
+        _snap_rec straight into rec_dst [1, Nv, Dk, Dv] (one slice into the preallocated slot, exact fp32 tiles) and rows
+        3k..3k+2 of _snap_conv_rm, tilized, into carry_dst [1, K-1, C] TILE (the slice + to_layout a chunk end's
+        conv_new_state takes). Eager, enqueued behind the replay."""
+        ttnn.slice(self._snap_rec, [k, 0, 0, 0], [k + 1, self.Nv, self.Dk, self.Dv], output_tensor=rec_dst)
+        n = self.K - 1
+        rows = ttnn.slice(
+            self._snap_conv_rm, [0, n * k, 0], [1, n * k + n, self.qkv_dim_tp], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        t = ttnn.to_layout(rows, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(rows)
+        ttnn.copy(t, carry_dst)
+        ttnn.deallocate(t)
 
     # ------------------------------------------------------------------ #
     # Fused single-user decode: conv history (_conv_hist_rm) + its handoff from prefill.
@@ -1829,11 +2092,8 @@ class TPGatedDeltaNet:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         assert 1 <= B <= self._decode_B == self.B
         # the fused [qkv|z|a|b] decode projection (1D matmul) straight into L1; the op consumes the whole row.
-        qkvzab = tpc.matmul_1d_decode(
+        qkvzab = self._qkvz_decode(
             x,
-            tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
             out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
@@ -1951,14 +2211,37 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
         return tuple(outs)
 
+    def _qkvz_decode(self, x, out_memory_config):
+        """The decode [qkv|z|a|b] projection (M <= 1 tile) into `out_memory_config` (interleaved): the 1D matmul on the
+        interleaved fused weight (QWEN36_BFP4_LAYOUT gdn_in=1d config when it is bfloat4_b), or under
+        QWEN36_BFP4_LAYOUT gdn_in=dsmc the multi-core DRAM-sharded pipeline on its decode twin."""
+        args = self.args
+        if "qkvz_dec" in self.tw:
+            return _dsmc_decode(
+                x, self.tw["qkvz_dec"], self.cfg_in, args.gdn_qkvz_dsmc_progcfg_bfp4, args.gdn_qkvz_dsmc_act_shard_bfp4,
+                out_memory_config,
+            )
+        pc = args.gdn_qkvz_decode_1d_progcfg
+        if self.tw["qkvz"].dtype == ttnn.bfloat4_b and getattr(args, "gdn_qkvz_decode_1d_progcfg_bfp4", None) is not None:
+            pc = args.gdn_qkvz_decode_1d_progcfg_bfp4
+        return tpc.matmul_1d_decode(x, self.tw["qkvz"], pc, self.cfg_in, out_memory_config=out_memory_config)
+
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            if weight is self.tw["out"] and "out_dec" in self.tw:
+                # QWEN36_BFP4_LAYOUT (gdn_out=dsmc): multi-core DRAM-sharded pipeline on the decode twin -> DRAM.
+                return _dsmc_decode(
+                    x, self.tw["out_dec"], self.cfg_out_dec, self.args.gdn_out_dsmc_progcfg_bfp4,
+                    self.args.gdn_out_dsmc_act_shard_bfp4, ttnn.DRAM_MEMORY_CONFIG,
+                )
+            pc = self.args.gdn_out_decode_1d_progcfg
+            if weight.dtype == ttnn.bfloat4_b and getattr(self.args, "gdn_out_decode_1d_progcfg_bfp4", None) is not None:
+                pc = self.args.gdn_out_decode_1d_progcfg_bfp4  # QWEN36_BFP4_LAYOUT (gdn_out=1d)
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
-            return tpc.matmul_1d_decode(
-                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            ck = self.cfg_out_dec if weight is self.tw["out"] else self.cfg
+            return tpc.matmul_1d_decode(x, weight, pc, ck, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if not self._out_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill non-fused arm (single device, or out-sharded): tuned 2D config vs ttnn-auto.
@@ -1985,10 +2268,69 @@ class TPGatedDeltaNet:
             self.args.gdn_value_dim_tp,
         )
 
-    def _project_qkvzab(self, x, S, out_mc=None, wide_qkv=False):
+    def _build_b_sel(self):
+        """[1, 2*Nv, Nv] bf16 one-hot: column j picks row Nv + j, i.e. b_j out of the [a | b] block (host write, at init)."""
+        Nv = self.Nv
+        if 2 * Nv > tpc.TILE_SIZE:
+            return None  # [a | b] spans more than one tile: keep the slice
+        sel = torch.zeros(1, 2 * Nv, Nv, dtype=torch.bfloat16)
+        sel[0, Nv + torch.arange(Nv), torch.arange(Nv)] = 1.0
+        return ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+
+    def _beta_select(self, ab, out_mc):
+        """b = ab[..., Nv:2Nv] by an exact one-hot matmul (QWEN36_PREFILL_GDN_GLUE): HiFi4 + fp32 accumulation, one
+        nonzero term per output element, so every bf16 value comes back unchanged (a -0.0 may come back +0.0; b only feeds
+        sigmoid). Replaces the mid-tile slice's untilize + slice + tilize of the whole [S, 2*Nv] block."""
+        return ttnn.matmul(
+            ab,
+            self._b_sel,
+            compute_kernel_config=exact_select_cfg(),
+            memory_config=out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+
+    def _kda_conv_prefill_tile(self, qkv, T, conv_state, conv_sel=None, snap=None):
+        """QWEN36_PREFILL_GDN_GLUE: _kda_conv_prefill through kda_conv_prefill_tile (the TILE projection read in place).
+        snap: as _kda_conv_prefill, but only with QWEN36_PREFILL_SNAP_TILE (its "conv_idx_tile" rows; the caller checks
+        snap_tile_gather_ok): the snapshot conv rows are gathered from the TILE input into _snap_conv_rm."""
+        self._ensure_kda_consts()
+        history = conv_state if conv_state is not None else self._kda_zero_history
+        kd, vd = self.key_dim_tp, self.value_dim_tp
+        snap_kw = {} if snap is None else dict(snap_rows_tile=snap["conv_idx_tile"], snap_out=self._snap_conv_rm)
+        return kda_conv_prefill_tile(
+            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel, **snap_kw
+        )
+
+    def _prefill_glue_plan(self, T, valid_len, prefill_masks):
+        """QWEN36_PREFILL_GDN_GLUE for one forward_prefill: (conv_tile, keep_qkvzab). conv_tile: the KDA conv reads the
+        TILE projection in place (kda_conv_prefill_tile; KDA conv path, no valid_len, T a multiple of 32 above one
+        tile). keep_qkvzab: rows past the L1 limit (the DRAM-resident big chunk) on the fused qkvzab path without
+        conv_sel: the conv reads the whole qkvzab (columns [0, qkv)) and its q/k/v slice copy is skipped too."""
+        if not getattr(self, "_prefill_glue", False):
+            return False, False
+        conv_tile = bool(self._gdn_kda_conv and valid_len is None and T % tpc.TILE_SIZE == 0 and T > tpc.TILE_SIZE)
+        keep = (
+            conv_tile
+            and self._fuse_ab
+            and self._fuse_agmm
+            and not tpc.prefill_l1_rows_ok(T)
+            and (prefill_masks is None or prefill_masks.get("conv_sel") is None)
+        )
+        return conv_tile, bool(keep)
+
+    def _project_qkvzab(self, x, S, out_mc=None, wide_qkv=False, keep_qkvzab=False):
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
         out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
-        keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
+        keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting).
+        keep_qkvzab (QWEN36_PREFILL_GDN_GLUE, fused prefill path): the first item is the whole qkvzab projection (the KDA
+        conv reads its q/k/v columns in place) instead of a sliced copy of them; the caller frees it."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         if self._fuse_ab:
@@ -2005,11 +2347,8 @@ class TPGatedDeltaNet:
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
-                qkvzab = tpc.matmul_1d_decode(
+                qkvzab = self._qkvz_decode(
                     x,
-                    self.tw["qkvz"],
-                    self.args.gdn_qkvz_decode_1d_progcfg,
-                    self.cfg_in,
                     out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
@@ -2020,9 +2359,10 @@ class TPGatedDeltaNet:
                     out_memory_config=_proj_mc,
                     compute_cfg=self.cfg_in if S <= tpc.TILE_SIZE else self.cfg,
                 )
-            # Note 57 (A): wide_qkv (prefill KDA conv) keeps the whole DRAM qkvzab as `qkv` (conv columns 0..qz-1,
-            # width 4120 != qz); the caller frees it after the conv op. L1 qkvzab: old slice path.
-            _wide = wide_qkv and qkvzab.memory_config().buffer_type == ttnn.BufferType.DRAM
+            # Note 57 (A) (default on): wide_qkv (prefill KDA conv with the GDN glue conv off) keeps the whole DRAM
+            # qkvzab as `qkv` (conv columns 0..qz-1, width 4120 != qz); the caller frees it after the conv op. L1
+            # qkvzab: old slice path. keep_qkvzab (QWEN36_PREFILL_GDN_GLUE): the same hand-over for the TILE conv.
+            _wide = keep_qkvzab or (wide_qkv and qkvzab.memory_config().buffer_type == ttnn.BufferType.DRAM)
             qkv = qkvzab if _wide else ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
             # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
@@ -2035,7 +2375,10 @@ class TPGatedDeltaNet:
             if not _wide:
                 ttnn.deallocate(qkvzab)
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
-            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
+            if getattr(self, "_b_sel", None) is not None and S > tpc.TILE_SIZE and ab.shape[-1] == 2 * Nv:
+                b = self._beta_select(ab, out_mc)  # QWEN36_PREFILL_GDN_GLUE (prefill only)
+            else:
+                b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
             ttnn.deallocate(ab)
             return qkv, z, a, b
         _cfg_in = self.cfg_in if S <= tpc.TILE_SIZE else self.cfg
@@ -2050,7 +2393,14 @@ class TPGatedDeltaNet:
         return qkv, z, a, b
 
     def forward_prefill(
-        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, prefill_masks=None
+        self,
+        x,
+        chunk_size=128,
+        valid_len=None,
+        capture_state=False,
+        return_state=False,
+        prefill_masks=None,
+        snap=None,
     ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
@@ -2065,6 +2415,10 @@ class TPGatedDeltaNet:
         tensors the caller rewrites per request): dict with "bg" [1,T,1] fp32 TILE (1 for t < valid_len; multiplied
         into beta/g), "conv_sel" [1,K-1,T] bf16 TILE one-hot of the last K-1 real conv-input rows (conv_new_state),
         and optionally "qkv" (q/k/v mask, parity only). Requires the KDA conv and a from-scratch (zeroed) carry.
+        snap (QWEN36_PREFILL_INTRACE_SNAP; traced prefill bodies only): {"rec_idx", "conv_idx"}, the model's persistent
+        snapshot index tensors; the chunk op copies the carried state after the staged chunks into _snap_rec and the KDA
+        conv gathers the rows before them into _snap_conv_rm (alloc_snapshot_buffers). Needs the KDA conv and the fused
+        chunk op. None: the unchanged calls.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
@@ -2087,11 +2441,22 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
+        # QWEN36_PREFILL_GDN_GLUE: the KDA conv reads the TILE projection directly (no untilize / re-tilize round
+        # trip); a DRAM-resident qkvzab (the big chunk) is read in place, so its q/k/v slice copy goes too.
+        glue_conv, keep = self._prefill_glue_plan(T, valid_len, prefill_masks)
+        if glue_conv and not snap_tile_gather_ok(snap, T):
+            # (r67 merge guard, prefill-r6 GDN glue x tail-planner in-replay snapshots) the snapshot conv rows are
+            # gathered from the ROW_MAJOR conv input: a snapshot-carrying body keeps the untilize + row-major conv, and
+            # no keep_qkvzab either (that hands the whole qkvzab to the conv). QWEN36_PREFILL_SNAP_TILE lifts this.
+            glue_conv, keep = False, False
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _use_kda = self._gdn_kda_conv and valid_len is None
-        qkv, z, a, b = self._project_qkvzab(
-            x, T, out_mc=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None, wide_qkv=_use_kda
-        )
+        # Note 57 (A) (default on): with the GDN glue conv off, the KDA conv still reads a DRAM-resident qkvzab in place
+        # (kda_conv_prefill wide_input). Not on a snapshot-carrying body: its row gather reads the row-major copy.
+        _wide57 = _use_kda and not glue_conv and snap is None
+        _qkv_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None
+        _proj_kw = {"keep_qkvzab": True} if keep else ({"wide_qkv": True} if _wide57 else {})
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_qkv_mc, **_proj_kw)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -2100,12 +2465,14 @@ class TPGatedDeltaNet:
         if _use_kda:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
-            q, k, v, conv_new_state = self._kda_conv_prefill(
+            _conv_fn = self._kda_conv_prefill_tile if glue_conv else self._kda_conv_prefill
+            q, k, v, conv_new_state = _conv_fn(
                 qkv,
                 T,
                 _cstate,
                 conv_sel=None if prefill_masks is None else prefill_masks["conv_sel"],
-                wide_input=qkv.shape[-1] != self.qkv_dim_tp,
+                **({} if snap is None else {"snap": snap}),
+                **({"wide_input": True} if (not glue_conv and qkv.shape[-1] != self.qkv_dim_tp) else {}),
             )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:
@@ -2117,6 +2484,7 @@ class TPGatedDeltaNet:
                 _qkv_head_dims = None
         else:
             assert prefill_masks is None, "persistent prefill_masks need the KDA conv (QWEN_GDN_CONV=kda, K=4)"
+            assert snap is None, "in-replay snapshots need the KDA conv (QWEN_GDN_CONV=kda, K=4)"
             # The MAC FIR: masked buckets (their one-hot new_state selection) and QWEN_GDN_CONV=fir.
             conv, conv_new_state = _causal_conv1d_fir(
                 qkv,
@@ -2171,6 +2539,9 @@ class TPGatedDeltaNet:
         if prefill_masks is not None:
             assert _use_fused, "persistent prefill_masks need the fused chunk op"
             _extra["masks"] = (prefill_masks["bg"], prefill_masks.get("qkv"))
+        if snap is not None:
+            assert _use_fused, "in-replay snapshots need the fused chunk op"
+            _extra["snapshot"] = (snap["rec_idx"], self._snap_rec)
         o, final_state = _delta_fn(
             q,
             k,
@@ -3293,25 +3664,6 @@ class TPGatedDeltaNet:
             return d
         return 2
 
-    def _spec_num_slices(self, B):
-        """V-slices per (user, value head) of the gdn_spec_step op (its ``num_slices``): QWEN36_GDN_SPEC_NV = "1",
-        "2", or "auto" (default: 2 when B*Nv*2 fits the device grid and Vt = Dv/32 is even, else 1). A forced "2"
-        that does not fit falls back to 1 (never errors). Depends only on B, the model and the env, so it is fixed
-        per bucket before trace capture; the seed and the verify call must see the same value. (With NV = 2 the freed
-        L1 may allow QWEN36_SPEC_STEP_HNEW_DEPTH=4; _spec_hnew_depth is NOT changed here.)"""
-        env = os.environ.get("QWEN36_GDN_SPEC_NV", "auto")
-        if env == "1":
-            return 1
-        g = self.mesh.compute_with_storage_grid_size()
-        grid_cores = int(g.x) * int(g.y)
-        vt = self.Dv // 32
-        if env == "auto":
-            nv = 2
-        else:
-            nv = int(env)
-            assert nv in (1, 2), f"QWEN36_GDN_SPEC_NV must be 1, 2 or auto, got {env}"
-        return nv if (B * self.Nv * nv <= grid_cores and vt % nv == 0) else 1
-
     def _ensure_spec_fused_seed(self):
         """Allocate (once per B) the fused seed's constants: the scratch half of its [B, K, C] window pair and its
         identity ctrl page (parity 0, mi 0, ring block (u, h) = u*Nv + h = rec_state's own block, no holds). EAGER:
@@ -3353,9 +3705,32 @@ class TPGatedDeltaNet:
         _mu = max_users if max_users is not None else getattr(self, "_spec_max_users", 0)
         if _mu:
             extra["max_users"] = int(_mu)
-        _nv = self._spec_num_slices(B)
-        if _nv > 1:
-            extra["num_slices"] = _nv
+        _vb = gdn_spec_step_value_blocks()
+        if _vb > 1 and T > 1:
+            # the T = 1 seed keeps one core per (user, head): with a single token the column split only adds bulk-read
+            # contention and the exchanges (B = 8, device: 81 -> 90 us per layer); every T > 1 verify splits
+            extra["value_blocks"] = _vb
+            _log_spec_step_once(
+                ("value_blocks", _vb),
+                f"[gdn-spec-step] QWEN36_SPEC_STEP_VALUE_BLOCKS={_vb}: state columns split over up to {_vb} cores "
+                "per (user, head) (bit-identical; the op clamps to the grid per (B, T))",
+            )
+        _opts = gdn_spec_step_kernel_opts()
+        if _opts and self._decode_step_fp32_state:  # the restructurings exist for the fast_mode + fp32_state program
+            extra["kernel_opts"] = _opts
+            _log_spec_step_once(
+                ("kernel_opts", _opts),
+                f"[gdn-spec-step] QWEN36_SPEC_STEP_OPT={_opts:#x}: bit-identical kernel restructurings on",
+            )
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_NARROW_GR", "0").strip() == "1"
+            and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS
+        ):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_GR
+            _log_spec_step_once(
+                ("narrow_gr", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR=1: face-row gate reads (bit-identical)",
+            )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,
@@ -3393,11 +3768,8 @@ class TPGatedDeltaNet:
             "the fused GDN spec op needs the fused [qkv|z|a|b] weight and the 1D decode projection "
             f"(fuse_ab={self._fuse_ab}, proj_1d_decode={getattr(self.args, 'proj_1d_decode', False)}, S={S})"
         )
-        qkvzab = tpc.matmul_1d_decode(
+        qkvzab = self._qkvz_decode(
             x,
-            self.tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
             out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         return ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
@@ -4047,6 +4419,14 @@ class TPGatedDeltaNet:
         decode_ar (QWEN36_VERIFY_DAR): all-reduce into the replicated RES40 residual (no zero pad: bucket == R)."""
         tw = self.tw
         mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+        if decode_ar is not None and R == bucket and getattr(self.args, "proj_1d_decode", False) and "out_dec" not in tw:
+            # QWEN36_VERIFY_OUT_RES40 (default off -> None): out-proj written straight into RES40, no reshard.
+            # cfg_out_dec = self.cfg unless QWEN36_BFP4_LAYOUT_LOFI runs a bfloat4_b out-proj in LoFi (== HiFi2 there).
+            # Not over a QWEN36_BFP4_LAYOUT gdn_out=dsmc twin (out_dec; not in the tuned table): that keeps _row_proj.
+            res40 = tpc.res40_out_matmul(gated, tw["out"], self.cfg_out_dec, decode_ar, site="gdn_out")
+            if res40 is not None:
+                ttnn.deallocate(gated)
+                return decode_ar.all_reduce(res40, keep_fp32=True)
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))

@@ -79,23 +79,15 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     const uint32_t M = a.max_users ? a.max_users : B;  // ring/ctrl layout width
     TT_FATAL(M >= B, "{}: max_users ({}) must be >= B ({})", kOp, M, B);
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
-    // num_slices cores per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the
-    // factory
-    TT_FATAL(
-        a.num_slices == 1 || a.num_slices == 2 /* || == 4 once the NV=4 path is validated */,
-        "{}: num_slices must be 1 or 2 (got {})",
-        kOp,
-        a.num_slices);
+    // one core per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the factory
     const auto grid = in.qkvzab.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        B * Nv * a.num_slices <= static_cast<uint32_t>(grid.x * grid.y),
-        "{}: B * num_value_heads * num_slices = {} work items exceed the {}-core compute grid",
+        B * Nv <= static_cast<uint32_t>(grid.x * grid.y),
+        "{}: B * num_value_heads = {} (user, head) items exceed the {}-core compute grid",
         kOp,
-        B * Nv * a.num_slices,
+        B * Nv,
         grid.x * grid.y);
     TT_FATAL(Dk > 0 && Dv > 0 && Dk % TW == 0 && Dv % TW == 0, "{}: key_dim and value_dim must be tile aligned", kOp);
-    TT_FATAL(
-        (Dv / TW) % a.num_slices == 0, "{}: num_slices {} must divide value_dim / 32 = {}", kOp, a.num_slices, Dv / TW);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     TT_FATAL(T >= 1 && B >= 1, "{}: need T >= 1, B >= 1", kOp);
     TT_FATAL(K >= 2 && K <= 4, "{}: conv_kernel must be in [2, 4] (got {})", kOp, K);
@@ -108,6 +100,12 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         T,
         B);
     TT_FATAL(a.hnew_depth == 2 || a.hnew_depth == 4, "{}: hnew_depth must be 2 or 4", kOp);
+    TT_FATAL(a.value_blocks <= 4, "{}: value_blocks must be in [0, 4] (got {})", kOp, a.value_blocks);
+    TT_FATAL(
+        (a.kernel_opts & ~static_cast<uint32_t>(kGdnSpecOptAll)) == 0,
+        "{}: unknown kernel_opts bits {:#x}",
+        kOp,
+        a.kernel_opts);
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     TT_FATAL(
         a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % TW == 0,
@@ -201,7 +199,8 @@ Tensor gdn_spec_step(
     bool fast_mode,
     bool fp32_state,
     uint32_t max_users,
-    uint32_t num_slices) {
+    uint32_t value_blocks,
+    uint32_t kernel_opts) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -223,7 +222,10 @@ Tensor gdn_spec_step(
             .compute_kernel_config = compute_kernel_config,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
-            .num_slices = num_slices,
+            .value_blocks = value_blocks,
+            // the restructurings exist for the fast_mode + fp32_state arithmetic only: other modes keep opts 0 (and so
+            // their original program and hash)
+            .kernel_opts = (fast_mode && fp32_state) ? kernel_opts : 0u,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

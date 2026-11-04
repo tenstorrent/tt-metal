@@ -45,6 +45,7 @@ class Qwen36ModelArgs(ModelArgs):
 
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
+        self._check_gptq_checkpoint(mesh_device)
 
         # Qwen3.5-specific params from HF text config (base sets dim, heads, layers, etc.).
         text_config = self.hf_config.get_text_config()
@@ -265,12 +266,63 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.hidden_dim // tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
+        # QWEN36_BFP4_LAYOUT (down; default off): the decode config a bfloat4_b w2 takes (mlp.py picks by the weight's
+        # dtype, so a BFP8 MTP-layer MLP sharing these args is unchanged). 1d: another grid / K block on the same
+        # weight. dsmc: a DRAM-width-sharded decode twin of w2 (mlp.py load) on the multi-core pipeline.
+        self._bfp4_layout_projections(M, tp)
+        # QWEN36_MLP_GU_FUSED (default off; tp_common): one decode matmul over the pair-interleaved [gate|up] AGMM
+        # weight, [dim, 2*hidden/tp]. 1d: 88 cores -> 2 output tiles on each of 68 (TP=8), in0_block_w as gate/up, no
+        # fused activation (the split-SwiGLU kernel applies SiLU). dsmc: the DRAM-sharded pipeline on a width-sharded
+        # copy (17 tiles per bank at TP=8, no padding).
+        self.mlp_gu_fused = tpc.mlp_gu_fused_mode() if tp > 1 else None
+        if self.mlp_gu_fused is not None:
+            gu_n = 2 * (self.hidden_dim // tp)
+            self.mlp_gu_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+                M,
+                self.dim,
+                gu_n,
+                num_cores=int(os.environ.get("QWEN36_MLP_GU_CORES", "88")),
+                grid_w=self.decode_grid_w,
+                max_in0_block_w=mlp_decode_ibw,
+            )
+            if self.mlp_gu_fused == "dsmc":
+                workers, ibw, pcn = tpc.mlp_gu_dsmc_settings()
+                self.mlp_gu_dsmc_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, gu_n)
+                self.mlp_gu_dsmc_progcfg = tpc.create_dram_sharded_mc_progcfg(self.dim, gu_n, pcn, workers, ibw)
+                # QWEN36_BFP4_LAYOUT (gateup): the config a bfloat4_b w_gu_dec takes (mlp.py picks by dtype).
+                lay = tpc.bfp4_layout("gateup", ttnn.bfloat4_b)
+                if lay is not None and lay[0] == "dsmc":
+                    self.mlp_gu_dsmc_progcfg_bfp4 = tpc.create_dram_sharded_mc_progcfg(self.dim, gu_n, lay[3], lay[1], lay[2])
+                elif lay is not None:  # 1d: the fused matmul on the interleaved AGMM weight instead (no DRAM copy)
+                    self.mlp_gu_decode_1d_progcfg_bfp4 = tpc.create_matmul_1d_decode_progcfg(
+                        M, self.dim, gu_n, num_cores=lay[1], grid_w=self.decode_grid_w, max_in0_block_w=lay[2]
+                    )
 
         # QWEN36_MLP_DECODE_DS (default 1; 0 = old 1D path + old weights): decode/verify MLP on DRAM-sharded
         # pipelined matmuls (device trace, M=32: gate+up 74.5 -> 58.4us, mul+down 33.5 -> 29.0us).
         # gate+up = ONE packed [gate|up] DS matmul fed straight from RES40; mul writes the down input shard.
         # TP=8 only (shapes swept there).
-        self.mlp_decode_ds = os.environ.get("QWEN36_MLP_DECODE_DS", "1") == "1" and tp8 and self.mlp_1d_decode
+        # Default 0 when QWEN36_MLP_GU_FUSED is set or the dense gate/up weights are bfloat4_b (QWEN36_MLP_GATEUP_BFP8=0
+        # or the QWEN36_GPTQ_BFP4 preset): the DS load path returns before the GU_FUSED / BFP4_LAYOUT logic and runs
+        # BFP4 weights at HiFi4, so it would silently replace those paths. An explicit QWEN36_MLP_DECODE_DS wins.
+        from loguru import logger
+
+        _ds_env = os.environ.get("QWEN36_MLP_DECODE_DS")
+        _ds_off_why = []
+        if getattr(self, "mlp_gu_fused", None) is not None:
+            _ds_off_why.append(f"QWEN36_MLP_GU_FUSED={self.mlp_gu_fused}")
+        if not tpc.bfp8_mlp_gateup_enabled():
+            _ds_off_why.append("gate/up weights bfloat4_b")
+        if _ds_env is None:
+            _ds_env = "0" if _ds_off_why else "1"
+            if _ds_off_why and tp8 and self.mlp_1d_decode:
+                logger.info(f"QWEN36_MLP_DECODE_DS defaults to 0 ({', '.join(_ds_off_why)})")
+        elif _ds_env == "1" and _ds_off_why and tp8 and self.mlp_1d_decode:
+            logger.warning(
+                f"QWEN36_MLP_DECODE_DS=1 set explicitly with {', '.join(_ds_off_why)}: the DS decode MLP takes "
+                "precedence (QWEN36_MLP_GU_FUSED / QWEN36_BFP4_LAYOUT down are not used on the DS layers)"
+            )
+        self.mlp_decode_ds = _ds_env == "1" and tp8 and self.mlp_1d_decode
         if self.mlp_decode_ds:
             _grid = lambda n: ttnn.num_cores_to_corerangeset(
                 n, mesh_device.compute_with_storage_grid_size(), row_wise=True
@@ -436,6 +488,57 @@ class Qwen36ModelArgs(ModelArgs):
             return self.model_name
         return super().base_model_name
 
+    def _bfp4_layout_projections(self, M, tp):
+        """QWEN36_BFP4_LAYOUT for down / gdn_in / gdn_out (tp_common.bfp4_layout): sets <name>_decode_1d_progcfg_bfp4 or
+        <name>_dsmc_{progcfg,weight_memcfg,act_shard}_bfp4 for the dense TP model. Nothing is set with the flag off."""
+        import ttnn
+
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        if tp < 2 or getattr(self, "moe_num_experts", 0):
+            return
+        hid = self.hidden_dim // tp
+        targets = (
+            ("down", "mlp_w2", hid, self.dim, ttnn.bfloat4_b),
+            ("gdn_in", "gdn_qkvz", self.dim, self.gdn_qkvzab_dim_tp, ttnn.bfloat4_b if tpc.bfp4_gdn_in_enabled() else ttnn.bfloat8_b),
+            ("gdn_out", "gdn_out", self.gdn_value_dim_tp, self.dim, ttnn.bfloat4_b if tpc.bfp4_gdn_out_enabled() else ttnn.bfloat8_b),
+        )
+        for target, stem, k, n, dtype in targets:
+            lay = tpc.bfp4_layout(target, dtype)
+            if lay is None:
+                continue
+            if lay[0] == "1d":
+                setattr(self, f"{stem}_decode_1d_progcfg_bfp4", tpc.create_matmul_1d_decode_progcfg(
+                    M, k, n, num_cores=lay[1], grid_w=self.decode_grid_w, max_in0_block_w=lay[2]))
+            else:
+                setattr(self, f"{stem}_dsmc_progcfg_bfp4", tpc.create_dram_sharded_mc_progcfg(k, n, lay[3], lay[1], lay[2]))
+                setattr(self, f"{stem}_dsmc_weight_memcfg_bfp4", tpc.create_dram_sharded_mem_config(k, n))
+                setattr(self, f"{stem}_dsmc_act_shard_bfp4", tpc.create_activation_shard_config(k))
+
+    def _check_gptq_checkpoint(self, mesh_device):
+        """GPTQ-BFP4 checkpoint (scripts/gptq_bfp4.py writes utils.gptq_bfp4.MARKER_NAME): remember its marker so
+        weight_cache_path uses a separate cache dir, and under QWEN36_GPTQ_BFP4=1 insist on a marker calibrated for
+        this TP degree (the GDN a/b BFP4 blocks are TP-specific)."""
+        from loguru import logger
+
+        from models.demos.blackhole.qwen36.utils import gptq_bfp4 as gq
+
+        self.gptq_meta = gq.read_marker(self.checkpoint_dir)
+        preset = gq.gptq_preset_enabled()
+        if self.gptq_meta is None:
+            if preset:
+                raise ValueError(
+                    f"{gq.GPTQ_PRESET_ENV}=1 needs a GPTQ checkpoint ({gq.MARKER_NAME} in {self.checkpoint_dir})"
+                )
+            return
+        tp = self.num_devices if mesh_device is not None else None
+        logger.info(
+            f"GPTQ-BFP4 checkpoint: targets {self.gptq_meta.get('targets')}, calibrated for TP={self.gptq_meta.get('tp')}, "
+            f"{gq.GPTQ_PRESET_ENV}={int(preset)}, tensor cache suffix {gq.cache_suffix(self.gptq_meta)}"
+        )
+        if preset and tp is not None and self.gptq_meta.get("tp") != tp:
+            raise ValueError(f"GPTQ checkpoint calibrated for TP={self.gptq_meta.get('tp')}, running TP={tp}")
+
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
         snapshot (often read-only in CI -> caching there silently never persists); falls back to the
@@ -452,6 +555,11 @@ class Qwen36ModelArgs(ModelArgs):
             suffix = "tensor_cache_bf16"
         if self.num_devices > 1:
             suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
+        # GPTQ checkpoints get their own cache dir: as_tensor names cache files by tensor name + dtype only, so under
+        # the same TT_CACHE_PATH they would otherwise load the RTN tensors cached from the original checkpoint.
+        from models.demos.blackhole.qwen36.utils.gptq_bfp4 import cache_suffix
+
+        suffix += cache_suffix(getattr(self, "gptq_meta", None))
         root = getattr(self, "model_cache_path", None) or Path(self.checkpoint_dir)
         return Path(root) / suffix
 

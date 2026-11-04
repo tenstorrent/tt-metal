@@ -103,6 +103,10 @@ struct ChunkGdnParams {
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Mid-scan state snapshots (Fused only; 0 = off, the default, and every program is then unchanged): the number S
+    // of snapshot slots of ChunkGdnInputs::snapshot_state. Slot i receives the carried state after chunk
+    // snapshot_index[i] (see ChunkGdnInputs). Hashed: a snapshot program never serves a plain call or the reverse.
+    uint32_t num_snapshots = 0;
 };
 
 struct ChunkGdnInputs {
@@ -117,6 +121,16 @@ struct ChunkGdnInputs {
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
     Tensor
         initial_state;  // [BH, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh sequence)
+    // Mid-scan snapshots (params.num_snapshots = S > 0, Fused only; both absent otherwise):
+    //   snapshot_index  ROW_MAJOR uint32, one page holding >= S words: word i = the chunk c whose UPDATED state (the
+    //                   state after chunks 0..c, i.e. after tokens [0, (c+1)*chunk_size)) is copied into slot i. Read
+    //                   on device at every launch (a trace replays with whatever the caller staged). The valid words
+    //                   come first in strictly increasing order; a word >= num_chunks (0xFFFFFFFF) ends the list.
+    //   snapshot_state  [S, BH, K, V] fp32 TILE DRAM, written IN PLACE: slot i gets the receivers' packed state of
+    //                   chunk word i (the same fp32 DST bytes the next chunk consumes / final_state would hold), the
+    //                   slots past the list are left untouched.
+    std::optional<Tensor> snapshot_index;
+    std::optional<Tensor> snapshot_state;
 };
 
 // One core per head, all chunks in sequence (chunk_gdn_mono_program_factory.cpp).
@@ -241,6 +255,8 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    const std::optional<Tensor>& snapshot_index = std::nullopt,
+    const std::optional<Tensor>& snapshot_state = std::nullopt);
 
 }  // namespace ttnn::prim

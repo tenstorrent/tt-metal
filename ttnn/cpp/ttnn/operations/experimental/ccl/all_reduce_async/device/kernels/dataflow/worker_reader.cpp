@@ -49,6 +49,25 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
+#ifdef LIVE_ROWS_HALF_TILE
+        // Live-rows packing: only the first half (faces 0/1 = rows 0..15) of each tile, packed back to back, so two
+        // half-tiles fill one cb0 page. The host guarantees num_tiles_to_read_this_core is even.
+        constexpr uint32_t half_page_size = tensor0_page_size / 2;
+        cb0.reserve_back(num_tiles_to_read_this_core / 2);
+        for (uint32_t t = 0; t < num_tiles_to_read_this_core; t++) {
+            noc_obj.async_read(
+                src_ep,
+                cb0,
+                half_page_size,
+                {.noc_x = core_noc_x[core_id],
+                 .noc_y = core_noc_y[core_id],
+                 .addr = tensor_address0 + (shard_tile_id + t) * tensor0_page_size},
+                {.offset_bytes = t * half_page_size});
+        }
+        noc_obj.async_read_barrier();
+
+        cb0.push_back(num_tiles_to_read_this_core / 2);
+#else
         cb0.reserve_back(num_tiles_to_read_this_core);
 
         noc_obj.async_read(
@@ -62,6 +81,7 @@ void kernel_main() {
         noc_obj.async_read_barrier();
 
         cb0.push_back(num_tiles_to_read_this_core);
+#endif
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id = 0;
         core_id++;

@@ -110,6 +110,89 @@ void kernel_main() {
         fabric_connection.open_finish();
     }
 
+#ifdef LIVE_ROWS_HALF_TILE
+    // 1. Live-rows packing: cb0 holds the first halves (faces 0/1 = rows 0..15) of consecutive tiles back to back. Each
+    // fabric packet is one 4-chunk scatter write of 4 half-tiles (4 x page/2 bytes, chunks may straddle output cores);
+    // the host guarantees num_tiles_to_read % 4 == 0, so no packet is ever smaller. Rows 16..31 of the remote slots
+    // keep whatever they held (the reduction's undefined padding rows). The per-core semaphore increments follow all
+    // the data as header-only packets: flush=true makes the receiving router flush its data writes before each one.
+    static_assert(NOC_SCATTER_WRITE_MAX_CHUNKS == 4, "live-rows packing sends 4 half-tiles per scatter packet");
+    constexpr uint32_t half_page_size = tensor0_page_size / 2;
+    constexpr uint32_t halves_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
+    constexpr uint32_t cb_pages_per_packet = halves_per_packet / 2;
+    uint32_t tiles_read = 0;
+    uint32_t shard_tile_id = first_core_tile_start_offset;
+    uint32_t core_id = 0;
+    uint32_t writer_chip_offset = my_chip_id * num_tiles_per_core * tensor0_page_size;
+    const uint16_t chunk_sizes[halves_per_packet - 1] = {half_page_size, half_page_size, half_page_size};
+
+    while (tiles_read < num_tiles_to_read) {
+        cb0.wait_front(cb_pages_per_packet);
+        size_t l1_read_addr = cb0.get_read_ptr();
+
+        uint64_t noc0_dest_noc_addrs[halves_per_packet];
+        for (uint32_t c = 0; c < halves_per_packet; c++) {
+            noc0_dest_noc_addrs[c] = safe_get_noc_addr(
+                core_noc_x[core_id],
+                core_noc_y[core_id],
+                reduction_input_addr + writer_chip_offset + shard_tile_id * tensor0_page_size);
+            noc_async_write(l1_read_addr + c * half_page_size, noc0_dest_noc_addrs[c], half_page_size);
+            shard_tile_id++;
+            if (shard_tile_id >= num_tiles_per_core) {
+                shard_tile_id = 0;
+                core_id++;
+            }
+        }
+
+        if (fabric_connection.has_forward_connection()) {
+            pkt_hdr_forward->to_noc_unicast_scatter_write(
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    noc0_dest_noc_addrs, chunk_sizes, static_cast<uint8_t>(halves_per_packet)),
+                halves_per_packet * half_page_size);
+            perform_payload_send(
+                fabric_connection.get_forward_connection(),
+                l1_read_addr,
+                halves_per_packet * half_page_size,
+                pkt_hdr_forward);
+        }
+        if (fabric_connection.has_backward_connection()) {
+            pkt_hdr_backward->to_noc_unicast_scatter_write(
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    noc0_dest_noc_addrs, chunk_sizes, static_cast<uint8_t>(halves_per_packet)),
+                halves_per_packet * half_page_size);
+            perform_payload_send(
+                fabric_connection.get_backward_connection(),
+                l1_read_addr,
+                halves_per_packet * half_page_size,
+                pkt_hdr_backward);
+        }
+        noc_obj.async_writes_flushed();
+
+        tiles_read += halves_per_packet;
+        cb0.pop_front(cb_pages_per_packet);
+    }
+
+    // Remote semaphore increments, one per output core, after every data packet on the same connections.
+    for (uint32_t i = 0; i < core_id; i++) {
+        const uint64_t sema_noc_addr = safe_get_noc_addr(core_noc_x[i], core_noc_y[i], out_ready_sem_bank_addr);
+        if (fabric_connection.has_forward_connection()) {
+            pkt_hdr_forward->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sema_noc_addr, static_cast<uint32_t>(1)});
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
+        }
+        if (fabric_connection.has_backward_connection()) {
+            pkt_hdr_backward->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sema_noc_addr, static_cast<uint32_t>(1)});
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
+        }
+        // The headers are rewritten next iteration: their L1 reads must have left the core.
+        noc_obj.async_writes_flushed();
+    }
+#else
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
@@ -162,6 +245,7 @@ void kernel_main() {
         }
         cb0.pop_front(num_tiles_to_read_this_core);
     }
+#endif
 
     // 2. local semaphore increment
     // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is the address of a GlobalSemaphore.

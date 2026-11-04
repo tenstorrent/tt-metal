@@ -251,6 +251,20 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(rcv_set, fcb::final_s, kvl);
     add_cb(rcv_set, fcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
     add_cb(rcv_set, fcb::s3, kvl);
+    // (3b) Mid-scan snapshots only (num_snapshots > 0; no CB is added otherwise): the receiver's snapshot slice (one
+    // [K, Vtl] fp32 state, packed by the compute and drained by the scan writer) and the one-page control CB carrying
+    // the snapshot chunk indices from the scan writer to the scan compute. Receiver-only indices (gdn_handoff).
+    const bool snapshots = attrs.num_snapshots > 0;
+    if (snapshots) {
+        add_cb(rcv_set, gdn_handoff::kCbSnap, kvl);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = gdn_handoff::kSnapCtlBytes,
+            .core_ranges = rcv_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(gdn_handoff::kCbSnapCtl),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = gdn_handoff::kSnapCtlBytes}}}});
+    }
 
     // Handshake semaphores, declared on the UNION so each id resolves to the same L1 address on
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
@@ -330,6 +344,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     std::vector<uint32_t> scan_writer_ct = ct_scan;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(scan_writer_ct);
+    // Mid-scan snapshots: the compute takes S as CT arg 4 (after the scan layout); the writer takes S, BH and the
+    // snapshot_state / snapshot_index accessors after its two output accessors. Both get the GDN_SNAPSHOT define.
+    std::vector<uint32_t> scan_compute_ct = ct_scan;
+    KernelDescriptor::Defines snap_defines;
+    if (snapshots) {
+        scan_compute_ct.push_back(attrs.num_snapshots);
+        scan_writer_ct.push_back(attrs.num_snapshots);
+        scan_writer_ct.push_back(BH);
+        TensorAccessorArgs(*in.snapshot_state->buffer()).append_to(scan_writer_ct);
+        TensorAccessorArgs(*in.snapshot_index->buffer()).append_to(scan_writer_ct);
+        snap_defines.push_back({"GDN_SNAPSHOT", "1"});
+    }
 
     // ---- Kernels. Push order FIXED (part of the program-cache identity):
     // prep_reader, prep_compute, fused_writer, fused_receiver_reader, scan_compute, scan_writer.
@@ -400,7 +426,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .kernel_source = kdir + "compute/chunk_gdn_scan.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
-        .compile_time_args = ct_scan,
+        .compile_time_args = scan_compute_ct,
+        .defines = snap_defines,
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
     scan_compute.runtime_args.reserve(R);
@@ -410,6 +437,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = scan_writer_ct,
+        .defines = snap_defines,
         .config = WriterConfigDescriptor{},
     };
     scan_writer.runtime_args.reserve(R);
@@ -501,7 +529,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             receiver_reader.emplace_runtime_args(
                 rc, {h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den});
             scan_compute.emplace_runtime_args(rc, {NC});
-            scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
+            if (snapshots) {
+                scan_writer.emplace_runtime_args(
+                    rc, {h, v, NC, o_buf, fs_buf, in.snapshot_state->buffer(), in.snapshot_index->buffer()});
+            } else {
+                scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
+            }
         }
     }
     receiver_reader.common_runtime_args = producer_table;

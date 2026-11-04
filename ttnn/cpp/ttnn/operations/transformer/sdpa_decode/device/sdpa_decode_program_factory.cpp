@@ -66,6 +66,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // SdpaDecodeParams::spec_multi_pos_tiles.
     const uint32_t spec_multi_pos_tiles = operation_attributes.spec_multi_pos_tiles;
     const bool spec_multi_pos = spec_multi_pos_tiles > 0;
+    // Packed spec mode (SdpaDecodeParams::spec_pack_heads): the group's Tg candidates x
+    // spec_pack_heads q rows share ONE q tile, candidate j on rows [j*S, j*S + heads). The
+    // compute then runs a single row-tile (PNHt = 1 below) and the reader / writer gather and
+    // scatter the rows (kernel defines SPEC_PACK_HEADS / SPEC_PACK_STRIDE, set only here).
+    const uint32_t spec_pack_heads = spec_multi_pos ? operation_attributes.spec_pack_heads : 0;
+    const bool spec_packed = spec_pack_heads > 0;
+    const uint32_t spec_pack_stride = spec_pack_heads + (spec_pack_heads % 2);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
@@ -167,7 +174,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t St = S / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = vDH / TILE_WIDTH;
-    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    // Q row-tiles per batch row. In packed spec mode the compute works on one packed row-tile.
+    const uint32_t PNHt_q = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    const uint32_t PNHt = spec_packed ? 1u : PNHt_q;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     // ========== Grid & Core Configuration ==========
@@ -526,10 +535,23 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
         TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
         TT_FATAL(
-            PNHt == spec_multi_pos_tiles,
+            PNHt_q == spec_multi_pos_tiles,
             "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
             spec_multi_pos_tiles,
-            PNHt);
+            PNHt_q);
+        if (spec_packed) {
+            TT_FATAL(
+                spec_pack_heads <= tt::constants::FACE_HEIGHT &&
+                    spec_multi_pos_tiles * spec_pack_stride <= tt::constants::TILE_HEIGHT,
+                "spec_pack_heads={}: {} candidates x {} rows do not fit one packed q tile",
+                spec_pack_heads,
+                spec_multi_pos_tiles,
+                spec_pack_stride);
+            TT_FATAL(!is_output_sharded, "spec_pack_heads requires an interleaved output");
+            TT_FATAL(
+                q_df == tt::DataFormat::Float16_b && out_df == tt::DataFormat::Float16_b,
+                "spec_pack_heads moves bf16 face rows: Q and the output must be BFLOAT16");
+        }
         TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
         TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
         // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
@@ -732,9 +754,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         log_debug(
             tt::LogOp,
-            "spec_multi_pos: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, tree rounds={}, "
-            "intermed blocks={}, CB total={} B of {} B",
+            "spec_multi_pos: Tg={}, packed heads={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, "
+            "tree rounds={}, intermed blocks={}, CB total={} B of {} B",
             spec_multi_pos_tiles,
+            spec_pack_heads,
             B,
             Sk_chunk_t_cb_size,
             num_cores_per_head,
@@ -936,6 +959,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+
+    if (spec_packed) {
+        // Defines (not compile-time args) so the unpacked kernels build exactly as before.
+        const KernelDescriptor::Defines pack_defines = {
+            {"SPEC_PACK_HEADS", std::to_string(spec_pack_heads)},
+            {"SPEC_PACK_STRIDE", std::to_string(spec_pack_stride)},
+        };
+        reader_desc.defines = pack_defines;
+        writer_desc.defines = pack_defines;
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";

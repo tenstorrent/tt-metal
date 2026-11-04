@@ -44,7 +44,7 @@ from models.demos.blackhole.qwen36.tt.spec_masks import (
     token_allowed,
     unpack_allowed,
 )
-from models.demos.blackhole.qwen36.tt.tp_common import pack_u32_rows, rope_row_index
+from models.demos.blackhole.qwen36.tt.tp_common import pack_u32_rows, rope_row_index, spec_accept_kernel_sampled_enabled
 
 UNION_PAD_WIDTH = 1024  # ttnn.topk multi-core needs width >= 1024 at one tile row, k <= 64
 PAD_VALUE = -1e30
@@ -390,6 +390,9 @@ class FusedSampledDevice(FusedGreedyDevice):
              row 2 overflow word [B] (OVF_TIE 1 / OVF_CERT 2; non-zero = redo on the host). Zero past their length.
     All math is fp32 TILE (token ids and positions < 2^24 are exact); exp is the accurate (non fast) mode.
     Every per-row quantity is kept per ENGINE ROW ([R, .]); the per-user pick is a row-select (j == m) + reshape [B, T] + sum.
+    QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED=1: ``body`` is ONE kernel on the same buffers (spec_fused_kernels.SampledAcceptKernel,
+    bit-exact host model spec_sampled_kernel_math.sampled_accept_twin); the op graph below stays the reference (and the
+    fallback when the buffers do not fit the kernel).
     """
 
     @classmethod
@@ -482,6 +485,10 @@ class FusedSampledDevice(FusedGreedyDevice):
         pad = UNION_PAD_WIDTH - TPM
         self.c_pad_v = cls._dev(mesh, torch.full((32, pad), PAD_VALUE, dtype=torch.bfloat16), bf16, TL) if pad else None
         self.c_pad_i = cls._dev(mesh, z(32, pad), u32, TL) if pad else None
+        if spec_accept_kernel_sampled_enabled():
+            from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_sampled_accept_kernel
+
+            self._kernel = attach_sampled_accept_kernel(self)
         return self
 
     def bind_union(self, vals, ids):
@@ -492,6 +499,8 @@ class FusedSampledDevice(FusedGreedyDevice):
         for name, t, dt in (("union_vals_in", vals, ttnn.bfloat16), ("union_ids_in", ids, ttnn.uint32)):
             got = (tuple(int(d) for d in t.shape), t.dtype)
             assert got == ((1, 1, 32, TPM), dt), f"bound {name}: {got}"
+        if self._kernel is not None:  # the kernel was compiled on the stand-ins: the live union must share their layout
+            self._kernel.check_rebind_union(vals, ids)
         self.union_vals_in, self.union_ids_in = vals, ids
 
     def bind_stats(self, stats):
@@ -557,6 +566,11 @@ class FusedSampledDevice(FusedGreedyDevice):
         """
         import ttnn
 
+        # QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: one program instead of the op graph. The kernel covers the PLAIN body only: the
+        # certificate / mask variant (cert=True, phase 2/3) always records the op graph below.
+        if self._kernel is not None and not cert:
+            self._kernel.run()
+            return
         B, K, T, R, W, nb, M = self.B, self.K, self.T, self.R, self.W, self.nb, self.M
         TPM = self.TP * M
         TL, RM, f32, u32 = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.float32, ttnn.uint32
@@ -923,13 +937,20 @@ def merge_redo(dev_committed, dev_counts, redo_committed, redo_counts, users):
     return committed, counts
 
 
-def audit_boundary_users(ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5, top_p=None):
+def audit_boundary_users(
+    ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5, top_p=None, topp_eps=1e-6, topp_tail=True
+):
     """Users whose device result differs from ``ref`` (fused_sampled_reference) but only by a float32 boundary: an examined draft
     probability within ``eps`` of its uniform (accept test), or the inverse-CDF threshold within ``eps`` (relative to the total)
     of a bucket edge of the corrected / bonus row. Returns {user: reason} for the explained ones; a differing user that is not in
-    it is a real mismatch. ``drafts`` [B, K], ``num_valid`` [B]. With ``top_p`` [B] and a reference built with ``full_norm``
-    (ref.cert_q), a certificate row of the user within ``eps`` of the certificate margin (|q - p| < eps) or of the nucleus
-    cut (|cum - (1 - p / q)| < eps) in an examined column is the explained reason "cert"."""
+    it is a real mismatch. ``drafts`` [B, K], ``num_valid`` [B].
+    With ``top_p`` [B] and a reference built with ``full_norm`` (ref.cert_q), a certificate row of the user within ``eps`` of the
+    certificate margin (|q - p| < eps) or of the nucleus cut (|cum - (1 - p / q)| < eps) in an examined column is the explained
+    reason "cert".
+    ``top_p`` [B] (QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED; None = off, the classes above only): also a top-p tail edge, a kept
+    candidate's reverse cumsum within ``topp_eps`` of 1 - top_p on a row either walk examined (the kernel's float32 rounding
+    differs from torch's, so the kept set of such a row can differ by its edge candidate). ``topp_tail=False`` keeps
+    ``top_p`` for the certificate class only (the spec engine passes the kernel's presence)."""
     committed, counts = torch.as_tensor(committed).to(torch.int64), torch.as_tensor(counts).to(torch.int64)
     rc, rn = ref.committed.to(torch.int64), ref.counts.to(torch.int64)
     uni = torch.as_tensor(uniforms).reshape(B, K + 2).to(torch.float64)
@@ -970,4 +991,13 @@ def audit_boundary_users(ref, uniforms, committed, counts, drafts, num_valid, *,
             thr = float(uni[u, K + 1 if corr else 0]) * float(cdf[-1])
             if bool((((cdf - thr).abs()) < eps * float(cdf[-1])).any()):
                 out[u] = "pick"
+                continue
+        if top_p is not None and topp_tail:
+            omp = 1.0 - float(torch.as_tensor(top_p).reshape(-1)[u])
+            if omp > 0:
+                rows = max(int(counts[u]), int(rn[u]))  # columns 0 .. rows - 1 were examined by one walk or the other
+                cum = ref.cum.reshape(B, T, M)[u, :rows].to(torch.float64)
+                kept = cum[cum > 0]
+                if kept.numel() and bool(((kept - omp).abs() < topp_eps).any()):
+                    out[u] = "topp"
     return out

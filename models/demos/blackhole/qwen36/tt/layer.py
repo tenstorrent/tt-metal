@@ -20,9 +20,24 @@ class Qwen36DecoderLayer:
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
+
+    attn_dtype / mlp_dtype (TP full-attention / dense-MLP only; default None = the flag-driven dtypes): weight dtype
+    overrides, used by the MTP drafter layer under QWEN36_MTP_LAYER_BFP4. bfloat4_b also switches that module's decode
+    matmuls to LoFi, which reads every mantissa bit of a BFP4 weight.
     """
 
-    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None, rope_perm=None):
+    def __init__(
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        layer_num,
+        tensor_cache_path=None,
+        tt_ccl=None,
+        rope_perm=None,
+        attn_dtype=None,
+        mlp_dtype=None,
+    ):
         # rope_perm (QWEN36_ROPE_PERM; TP full-attention layers): permuted q/k channels + full-width RoPE. None = follow the
         # env flag and the head geometry; the MTP drafter passes False (own weights, own 64-wide RoPE).
         self.layer_num = layer_num
@@ -103,8 +118,11 @@ class Qwen36DecoderLayer:
                     args,
                     cache_dir=tp_cache,
                     rope_perm=rope_perm,
+                    attn_dtype=attn_dtype,
                 )
                 self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
+                if attn_dtype == ttnn.bfloat4_b:  # QWEN36_MTP_LAYER_BFP4 (drafter layer): LoFi decode QKV / wo
+                    self.attention.qkv_cfg = self.attention.wo_cfg = tpc.COMPUTE_LOFI
             else:
                 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 
@@ -133,7 +151,9 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            # mlp_dtype (QWEN36_MTP_LAYER_BFP4, drafter layer): explicit gate/up/down dtypes, which also select LoFi.
+            _mlp_kw = {} if mlp_dtype is None else {"down_dtype": mlp_dtype, "gateup_dtype": mlp_dtype}
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl, **_mlp_kw)
 
     def _make_norm(
         self,
@@ -205,6 +225,8 @@ class Qwen36DecoderLayer:
         spec_ctrl=None,
         spec_pos_groups=None,
         spec_pos_masked=None,
+        kv_only=False,
+        gdn_snap=None,
     ):
         # spec_pos_masked (QWEN36_KV_WRITE_MASKED): T masked [rows] position tensors (-1 = skip), see TPAttention._write_kv_fused_masked.
         # spec_pos_groups (QWEN36_VERIFY_ATTN_LEAN): the verify's per-candidate-group KV positions, strided slices of the row
@@ -215,6 +237,15 @@ class Qwen36DecoderLayer:
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
+        # kv_only (QWEN36_MTP_KV_ONLY; the MTP drafter's KV-maintenance forwards): run the attention only as far as its
+        # paged KV write and return None. Only the TP full-attention decode supports it, and the paged TP prefill
+        # (QWEN36_PREFILL_MTP_LEAN: the drafter's prompt warm-up).
+        assert not kv_only or (
+            self.is_full_attention
+            and self.num_devices > 1
+            and not spec_verify_mode
+            and (mode == "decode" or page_table is not None)
+        ), "kv_only needs a TP full-attention decode or paged prefill"
         # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
         # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
         # until capture_verify_trace allocates them.
@@ -263,6 +294,8 @@ class Qwen36DecoderLayer:
             )
         if _dar is not None:
             attn_input = _dar.rms_norm(x, self.attention_norm.norm)
+            if not kv_only:  # kv_only returns before the residual add: nothing may consume an armed residual
+                _dar.arm_residual(x)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the out-proj all_reduce adds x (no-op off)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
@@ -282,6 +315,7 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
+                            **({"kv_only": True} if kv_only else {}),
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
@@ -305,6 +339,7 @@ class Qwen36DecoderLayer:
                         spec_user_page_table=spec_user_page_table,
                         spec_pos_groups=spec_pos_groups,
                         spec_pos_masked=spec_pos_masked,
+                        **({"kv_only": True} if kv_only else {}),
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -338,6 +373,10 @@ class Qwen36DecoderLayer:
                     else:
                         # gdn_masks: persistent device masks of the traced masked-bucket prefill (None: unchanged call).
                         _gm = {"prefill_masks": gdn_masks} if gdn_masks is not None else {}
+                        # gdn_snap: QWEN36_PREFILL_INTRACE_SNAP snapshot index tensors of a traced prefill body (None:
+                        # unchanged call).
+                        if gdn_snap is not None:
+                            _gm["snap"] = gdn_snap
                         attn_output = self.attention.forward_prefill(
                             attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True, **_gm
                         )
@@ -360,20 +399,28 @@ class Qwen36DecoderLayer:
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
         ttnn.deallocate(attn_input)
+        if kv_only:
+            # The KV write is the whole effect; the residual, ffn_norm and MLP only fed an output nobody reads.
+            if _dar is not None:
+                _dar.disarm()  # QWEN36_MTP_KV_ONLY x QWEN36_DECODE_AR_FUSE_RESIDUAL: no armed residual outlives this
+            return None
 
-        h = _dar.add(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
-        ttnn.deallocate(attn_output)
+        h = _dar.add_residual(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
+        if h is not attn_output:  # fused (QWEN36_DECODE_AR_FUSE_RESIDUAL=1): h is the all_reduce output itself
+            ttnn.deallocate(attn_output)
 
         if _dar is not None:
             ff_input = _dar.rms_norm(h, self.ffn_norm.norm)
+            _dar.arm_residual(h)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the down-proj all_reduce adds h (no-op off)
         else:
             ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode, **_dar_kw)
         ttnn.deallocate(ff_input)
 
-        output = _dar.add(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
+        output = _dar.add_residual(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
         ttnn.deallocate(h)
-        ttnn.deallocate(ff_output)
+        if output is not ff_output:
+            ttnn.deallocate(ff_output)
 
         return output

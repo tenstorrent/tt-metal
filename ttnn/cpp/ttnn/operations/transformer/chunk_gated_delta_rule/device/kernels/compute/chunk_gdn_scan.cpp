@@ -65,6 +65,21 @@ void kernel_main() {
 
     WAIT(cb_eye, 1);  // the reader's identity tile (never popped)
 
+#ifdef GDN_SNAPSHOT
+    // Mid-scan snapshots: the scan writer read the S chunk indices (snapshot_index) into the control page. Slot ks gets
+    // the updated state of chunk snap_c[ks]; the valid indices are strictly increasing and a value >= NC ends the list,
+    // so one cursor walks it in lockstep with the writer (which applies the same rule to the same words).
+    constexpr uint32_t S_SNAP = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_snap = gdn_handoff::kCbSnap, cb_snapctl = gdn_handoff::kCbSnapCtl;
+    uint32_t snap_c[S_SNAP];
+    WAIT(cb_snapctl, 1);
+    for (uint32_t i = 0; i < S_SNAP; i++) {
+        snap_c[i] = ckernel::read_tile_value(cb_snapctl, 0, i);
+    }
+    POP(cb_snapctl, 1);
+    uint32_t ks = 0;
+#endif
+
     for (uint32_t c = 0; c < NC; c++) {
         // State uses three single-producer CBs:
         //   cb_S      : reader-produced initial state, consumed only by chunk 0.
@@ -90,7 +105,15 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
-            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+#ifdef GDN_SNAPSHOT
+            if (ks < S_SNAP && snap_c[ks] == c) {
+                scan_step<Ct, Kt, Vt, true>(CBS, cur_S, dst, cb_snap);  // + the copy the writer drains into slot ks
+                ks++;
+            } else
+#endif
+            {
+                scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            }
         }
     }
 }

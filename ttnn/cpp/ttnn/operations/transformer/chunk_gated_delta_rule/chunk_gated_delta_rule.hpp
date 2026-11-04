@@ -66,6 +66,17 @@ namespace ttnn::transformer {
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
  * token<->head permute round-trip on both sides.
+ *
+ * snapshot_index / snapshot_state (optional, together; default absent = every program unchanged): mid-scan state
+ * snapshots for a caller that needs the recurrent state at chunk boundaries inside this call (e.g. a traced prefill
+ * that saves prefix-cache snapshots without splitting the prompt). snapshot_state is [S, B*HV, K, V] fp32 TILE DRAM
+ * (S <= 8 slots), written in place; snapshot_index is a DRAM ROW_MAJOR uint32 tensor whose first page holds S words:
+ * word i = the chunk c (of chunk_size tokens) whose UPDATED state, the state after tokens [0, (c+1)*chunk_size) of
+ * this call, slot i receives. Valid words come first, strictly increasing; a word >= ceil(T/chunk_size)
+ * (0xFFFFFFFF) ends the list and leaves the remaining slots untouched. The words are read on device at every launch,
+ * so a captured trace snapshots wherever the caller staged them. A snapshot is the same fp32 bytes final_state would
+ * hold had the call ended there. Needs the fused program: the auto dispatch takes it whenever a fused geometry fits
+ * (fused == phased bit for bit), an explicit phased or mono program config is refused.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -86,6 +97,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    const std::optional<ttnn::Tensor>& snapshot_index = std::nullopt,
+    const std::optional<ttnn::Tensor>& snapshot_state = std::nullopt);
 
 }  // namespace ttnn::transformer

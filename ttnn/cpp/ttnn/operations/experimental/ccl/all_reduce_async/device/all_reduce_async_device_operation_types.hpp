@@ -35,6 +35,17 @@ struct AllReduceAsyncParams {
     // preserves existing bf16 behavior; opted into per-call (e.g. the Llama LM-head all_reduce, whose
     // ring-order-dependent bf16 sum caused per-row logit non-determinism).
     bool fp32_dest_acc = false;
+    // Live-rows packing: when the input's logical rows fit the top half of its single 32-row tile row (<= 16 rows,
+    // bf16 32x32 tiles), the writer sends only faces 0/1 of each tile, four half-tiles per fabric packet (4-chunk
+    // scatter write). Rows 0..15 of the result are byte-identical to the default path; rows 16..31 are not defined.
+    // Ineligible inputs (more rows, other dtypes/tiles/shardings) silently keep the default full-tile path.
+    bool live_rows_packing = false;
+    // One-shot (reduce-scatter + all-gather) mode, 1D fabric only: the output cores are split into ring_size equal
+    // slices and device d owns slice d. Every device unicasts each peer's slice of its partial straight into that
+    // owner's reduction buffer (its own slot, as today), only the owners reduce (same kernel, same chip-ordered slots,
+    // so the sum is bit-identical to the default mode), and each owner line-multicasts its reduced slice into every
+    // peer's output shards. Each directed link carries about 2.5x fewer packets than the broadcast default.
+    bool one_shot = false;
 
     AllReduceAsyncParams(
         uint32_t num_links,
@@ -48,7 +59,9 @@ struct AllReduceAsyncParams {
         bool use_optimal_ccl_for_llama,
         uint32_t cluster_axis,
         distributed::MeshDevice* mesh_device,
-        bool fp32_dest_acc = false) :
+        bool fp32_dest_acc = false,
+        bool live_rows_packing = false,
+        bool one_shot = false) :
         num_links(num_links),
         ring_size(ring_size),
         dtype(dtype),
@@ -60,12 +73,14 @@ struct AllReduceAsyncParams {
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         cluster_axis(cluster_axis),
         mesh_device(mesh_device),
-        fp32_dest_acc(fp32_dest_acc) {}
+        fp32_dest_acc(fp32_dest_acc),
+        live_rows_packing(live_rows_packing),
+        one_shot(one_shot) {}
 
     // Add attributes method for reflection
     auto attributes() const {
         using ttsl::reflection::Attribute;
-        constexpr std::size_t kNumAttributes = 9;
+        constexpr std::size_t kNumAttributes = 12;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.reserve(kNumAttributes);
 
@@ -79,6 +94,8 @@ struct AllReduceAsyncParams {
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("fp32_dest_acc", fp32_dest_acc);
+        attrs.emplace_back("live_rows_packing", live_rows_packing);
+        attrs.emplace_back("one_shot", one_shot);
         return attrs;
     }
 
@@ -96,7 +113,9 @@ struct AllReduceAsyncParams {
         "use_optimal_ccl_for_llama",
         "cluster_axis",
         "sub_device_id",
-        "fp32_dest_acc");
+        "fp32_dest_acc",
+        "live_rows_packing",
+        "one_shot");
     auto attribute_values() const {
         return std::make_tuple(
             num_links,
@@ -108,13 +127,19 @@ struct AllReduceAsyncParams {
             use_optimal_ccl_for_llama,
             cluster_axis,
             sub_device_id,
-            fp32_dest_acc);
+            fp32_dest_acc,
+            live_rows_packing,
+            one_shot);
     }
 };
 
 struct AllReduceAsyncInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
+    // Optional fused residual: when set, the reduction kernel adds this tensor to the cross-device sum before
+    // packing (output = residual + sum(partials)), replacing a separate eltwise add after the all-reduce.
+    // Same shard spec as the output and same dtype as the input (the reduction CB format); read in place from L1.
+    std::optional<Tensor> residual_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

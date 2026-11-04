@@ -36,9 +36,20 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 SFPU, and the stored state is the full fp32 sum of the state add (not a SrcA-truncated copy).
             fp32_state (bool): default False, needs fast_mode. gdn_decode_step's fp32_state arithmetic: the
                 recurrent-state decay and add run on the SFPU in exact fp32 (no per-token tf32 truncation).
-            num_slices (int): default 1. Splits every (user, value head) over NV in {1, 2} cores by value tile columns;
-                each core keeps Kt x Vt/NV state tiles. Output, ring and window are bit-identical to num_slices=1.
-                Needs B*Nv*NV <= grid cores and Vt % NV == 0.
+            value_blocks (int): default 1. Split each (user, head)'s state columns over up to this many cores (<= 4;
+                the largest divisor of value_dim / 32 whose B * Nv * blocks cores fit the grid is taken). Each core
+                runs the recurrence on its column tiles; the blocks swap their pre-norm output tiles so the gated
+                RMSNorm sees the full row. Bit-identical to value_blocks=1 (out, ring, window).
+            kernel_opts (int): default 0. Bitmask of bit-identical kernel restructurings (fast_mode + fp32_state
+                only; ignored otherwise): 1 = the next token's exact-fp32 state decay is fused into this token's
+                state add (no hn32 buffer / reload); 2 = gate scalars (the writer computes the beta / decay gates,
+                the compute fills its scalar tiles in DST); 4 = early src (the reader hands over the conv inputs
+                before the taps / masks); 8 = hoisted q scale (rsqrt(q stats + eps) * scale once, not per token);
+                16 = q/k share (value_blocks > 1: each block convolves 2*Kt/VB of the q/k chunks and the blocks swap
+                the conv tiles over the NoC); 32 = the conv's SFPU tail on the tile half holding the user's rows;
+                64 = gate split (with 2 and value_blocks > 1: the head's blocks split the gate math); 128 = each value
+                block normalizes / gates only its own output columns. Out, ring and window stay bit-identical to
+                kernel_opts=0.
             With fast_mode=True, fp32_state=True a T = 1 call is bit-identical (out, state, window) to
             gdn_decode_step(..., fast_mode=True, fp32_state=True), and a T-step call equals T chained T = 1 calls.
         )doc",
@@ -71,7 +82,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("fast_mode") = false,
         nb::arg("fp32_state") = false,
         nb::arg("max_users") = 0,
-        nb::arg("num_slices") = 1);
+        nb::arg("value_blocks") = 1,
+        nb::arg("kernel_opts") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_spec_step::detail

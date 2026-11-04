@@ -53,7 +53,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    const std::optional<ttnn::Tensor>& snapshot_index,
+    const std::optional<ttnn::Tensor>& snapshot_state) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -73,7 +75,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         eye,
         tril,
         ones,
-        masks);
+        masks,
+        snapshot_index,
+        snapshot_state);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -525,6 +529,16 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 chunk_size.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
+            snapshot_index, snapshot_state (ttnn.Tensor, optional, together): mid-scan state
+                snapshots. snapshot_state [S, B*HV, K, V] fp32 TILE DRAM (S <= 8 slots) is written in
+                place: slot i receives the state after chunk snapshot_index[i] (the state after tokens
+                [0, (c+1)*chunk_size) of this call; the same fp32 bytes final_state would hold had the
+                call ended there). snapshot_index is a DRAM ROW_MAJOR uint32 tensor whose first page
+                holds the S chunk indices, valid ones first and strictly increasing, then values
+                >= the chunk count (0xFFFFFFFF), whose slots are left untouched. Read on device at every
+                launch (a trace snapshots wherever the indices were staged). Needs the fused program:
+                the default dispatch takes it whenever a fused geometry fits; an explicit phased or
+                mono program_config is refused. Absent (default): every program is unchanged.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -556,7 +570,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("snapshot_index") = nb::none(),
+        nb::arg("snapshot_state") = nb::none());
 
     const auto* prep_doc =
         R"doc(

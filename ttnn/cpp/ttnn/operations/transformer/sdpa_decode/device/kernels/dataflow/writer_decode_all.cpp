@@ -248,7 +248,13 @@ void kernel_main() {
             const uint32_t chunk_start_pos = k_chunk * k_chunk_size_dynamic;
             const uint32_t chunk_last_pos = chunk_start_pos + k_chunk_size_dynamic - 1;
             if (chunk_last_pos > spec_pos_min) {
+#ifdef SPEC_PACK_HEADS
+                // Packed spec mode: one row-tile, a bound per packed row (same predicate, same cadence).
+                generate_mask_spec_packed<cb_mask_in, spec_multi_pos_T, SPEC_PACK_STRIDE>(
+                    Sk_chunk_t_dynamic, chunk_start_pos, spec_pos);
+#else
                 generate_mask_spec_multi_pos<cb_mask_in, PNHt>(Sk_chunk_t_dynamic, chunk_start_pos, spec_pos);
+#endif
             }
         }
     } else if constexpr (is_causal) {
@@ -507,8 +513,20 @@ void kernel_main() {
             // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire
             // tiles to memory
             if (!is_out_sharded) {
+#ifdef SPEC_PACK_HEADS
+                // Packed spec mode: rows [0, SPEC_PACK_HEADS) of each of the group's Tg x vDHt unpacked tiles.
+                static_assert(spec_multi_pos && PNHt == 1, "SPEC_PACK_HEADS needs spec_multi_pos_tiles and PNHt == 1");
+                barrier_count = write_out_spec_packed<
+                    cb_out,
+                    vDHt,
+                    spec_multi_pos_T,
+                    SPEC_PACK_HEADS,
+                    SPEC_PACK_STRIDE,
+                    16>(out_writer, cur_batch * spec_multi_pos_T * vDHt, barrier_count);
+#else
                 barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
                     out_tile_id, out_writer, barrier_count);
+#endif
             }
         }
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {

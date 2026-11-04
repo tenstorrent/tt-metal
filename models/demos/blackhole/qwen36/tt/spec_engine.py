@@ -54,7 +54,7 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from models.demos.blackhole.qwen36.tt import prefill_split
+from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
@@ -105,9 +105,13 @@ from models.demos.blackhole.qwen36.tt.spec_penalties import (
 )
 from models.demos.blackhole.qwen36.tt.spec_shadow import StatsShadow
 from models.demos.blackhole.qwen36.tt.tp_common import (
+    GDN_SNAP_SLOTS,
     engine_spec_buckets,
+    join_logits_one_copy_enabled,
     pack_u32_rows,
+    prefill_host_tolist_enabled,
     prefill_masked_big_enabled,
+    prefill_mtp_lean_enabled,
     rope_row_index,
     spec_bucket_hold,
     spec_buckets_flag,
@@ -125,6 +129,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_fused_audit_every,
     spec_fused_enabled,
     spec_fused_sampled_enabled,
+    spec_dr_outs_prealloc_enabled,
+    spec_dr_readback_tolerant_enabled,
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
@@ -212,6 +218,14 @@ class DraftResult:
 # --------------------------------------------------------------------------------------------- #
 # Pure host helpers (no device needed)
 # --------------------------------------------------------------------------------------------- #
+def _free_maint(*ts):
+    """Deallocate the outputs of an MTP KV-maintenance forward. With QWEN36_MTP_KV_ONLY=1 its hidden is None (the layer
+    stopped after the KV write); everything else is a real tensor."""
+    for t in ts:
+        if t is not None:
+            ttnn.deallocate(t)
+
+
 def anchor_selector(m, B, T):
     """One-hot [1,1,B,B*T] bf16 with a single 1.0 at (u, u*T + m[u]): ``sel @ feed`` gathers each
     user's accepted-prefix row of the verify feed. QWEN36_SPEC_HOSTSET (default 1): one index assignment."""
@@ -568,6 +582,16 @@ def draft_rows_fit(anchor_pos, K, capacity):
     return [int(p) + 1 + K < capacity for p in anchor_pos]
 
 
+def _prompt_ids_fast(prompt_ids):
+    """QWEN36_PREFILL_HOST_TOLIST: (the prompt ids as Python ints, an int32 [1, Tp] row of them) with ONE tolist() and one
+    dtype copy, equal to today's [int(t) for t in ...] and torch.tensor([ids], dtype=torch.int32); (None, None) for a
+    floating / complex / bool input, which keeps the per-token path (int() truncation, bool -> 0/1)."""
+    t = torch.as_tensor(prompt_ids).reshape(-1)
+    if t.is_floating_point() or t.is_complex() or t.dtype == torch.bool:
+        return None, None
+    return t.tolist(), t.to(torch.int32, copy=True).reshape(1, -1)
+
+
 def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_size, scratch_block, buf_blocks):
     """Host inputs of the MTP drafter's KV warm-up over the prompt segment [chunk_start, chunk_start + bucket) of a
     ``bucket``-row prefill (the spec short trace's ``spec_inputs``): the same values _warm_mtp_chunk /
@@ -888,6 +912,38 @@ def chunk_exact_resume_enabled():
     return os.environ.get("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1") == "1"
 
 
+class _SnapRun:
+    """QWEN36_PREFILL_INTRACE_SNAP: the save points of ONE single-segment spec fast prefill and their saves. The replay
+    loops ask inside(cs, rows) for the points strictly inside a replay (staged as in-replay snapshots) and call
+    after(cs, rows, inside) right after it: snapshot k of the replay goes to the prefix cache from the snapshot buffers,
+    a point at the replay's last row from the bound state, in increasing position order (the legacy planner's order,
+    with the same low-priority / end-of-prompt marks)."""
+
+    def __init__(self, model, cache, tokens_row, points):
+        self.model, self.cache, self.tokens = model, cache, tokens_row
+        self.points = sorted(int(p) for p in points)
+        self._set = frozenset(self.points)
+        self.low = frozenset(getattr(points, "low", ()))
+        self.end = frozenset(getattr(points, "end", ()))
+        self.saved = []
+        self.n_inside = 0
+
+    def inside(self, cs, rows):
+        return [p for p in self.points if cs < p < cs + rows]
+
+    def after(self, cs, rows, inside):
+        for k, p in enumerate(inside):
+            self._save(p, self.model.gdn_snap_copy_fn(k))
+            self.n_inside += 1
+        if cs + rows in self._set:
+            self._save(cs + rows, None)
+
+    def _save(self, p, copy_fn):
+        kw = {} if copy_fn is None else {"copy_fn": copy_fn}
+        self.cache.save(self.tokens, p, low_prio=p in self.low, protect=p in self.end, **kw)
+        self.saved.append(p)
+
+
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
@@ -897,6 +953,10 @@ class MTPSpecEngine:
     mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = mask_chain_steps = 0
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
+    # QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py) class defaults: no guard, no full-head drafter traces (set in __init__)
+    _dv_guard = None
+    _dv_full_now = False
+    _dr_traces_full = None
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -1028,6 +1088,14 @@ class MTPSpecEngine:
         )  # "8" = off at any engine width
         self._dr_traces = {}  # bucket b < B -> drafter trace id of b rows (filled when a per-bucket capture exists)
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
+        # QWEN36_DRAFT_VOCAB_TOPK + QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py): the per-row guard, the full-head drafter
+        # traces (bucket -> trace id, B included) and the head of the current step; None / {} / False without a pruned head.
+        from models.demos.blackhole.qwen36.tt.draft_vocab import guard_for
+
+        self._dv_guard = guard_for(self.mtp, self.B)
+        self._dr_traces_full = {}
+        self._dv_full_now = False
+        self.dv_head_steps = {"pruned": 0, "full": 0}  # decode steps per drafter head (fallback on)
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
@@ -1141,29 +1209,55 @@ class MTPSpecEngine:
                 if bs.get(old, 0) > 0:
                     bs[old] -= 1
                     bs[cand] = bs.get(cand, 0) + 1
+                if self._ksp_gate() is not None:  # the split choice follows the new width
+                    if kw.pop("kv_split", None):
+                        self.kv_split_steps["verify"] -= 1
+                    self._ksp_kw(kw)
         if prev_bucket is not None and prev_bucket != self._vb:
             self.bucket_free_switch += 1
 
     def _bucket_kw(self, kw):
-        """Put the step's bucket into the verify kwargs and count the step (flag off: kw unchanged)."""
+        """Put the step's bucket into the verify kwargs and count the step (flag off: kw unchanged). The KV-split context gate
+        (QWEN36_ATTN_KV_SPLIT_MIN_CTX) adds kv_split=True when the step replays the bucket's split verify variant."""
         if self._bucketed():
             kw["bucket"] = self._vb
             bs = self.__dict__.setdefault("bucket_steps", {})
             bs[self._vb] = bs.get(self._vb, 0) + 1
             if self._vb_fell:
                 self.bucket_fallbacks += 1
+        if self._ksp_gate() is not None:
+            self._ksp_kw(kw)
         return kw
 
     def _dr_trace_for(self, b):
-        """Drafter trace id for bucket ``b`` (B, None or no per-bucket capture: the B-row trace)."""
+        """Drafter trace id for bucket ``b`` (B, None or no per-bucket capture: the B-row trace). A step _dv_decide put on
+        the full head (QWEN36_DRAFT_VOCAB_FALLBACK) takes it from the full-head set."""
+        if self._dv_full_now and self._dr_traces_full:
+            return self._dr_traces_full.get(b, self._dr_traces_full[self.B])
         if b is None or b == self.B or not self._dr_traces:
             return self._dr_trace
         return self._dr_traces.get(b, self._dr_trace)
 
-    def _bucket_note_text(self):
-        """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only)."""
-        if not self._bucketed():
+    def _dv_decide(self):
+        """QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of the step about to run, full while any active row is off-vocab
+        (DraftVocabGuard). Sets the MTP switch the eager drafter paths read; _dr_trace_for picks the trace set from it."""
+        full = self._dv_guard.any_off(self._active)
+        self._dv_full_now = full
+        self.mtp._draft_full = full
+        self.dv_head_steps["full" if full else "pruned"] += 1
+
+    def _dv_note_text(self):
+        """Tail of the periodic fused line / the drain line: decode steps per drafter head (QWEN36_DRAFT_VOCAB_FALLBACK)."""
+        if self._dv_guard is None:
             return ""
+        h = self.dv_head_steps
+        return f"; drafter head steps: pruned {h['pruned']}, full {h['full']} (QWEN36_DRAFT_VOCAB_FALLBACK)"
+
+    def _bucket_note_text(self):
+        """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only); the KV-split gate's
+        split step counts when a gate is on."""
+        if not self._bucketed():
+            return self._ksp_note_text()
         bs = self.__dict__.get("bucket_steps", {})
         return (
             "; buckets "
@@ -1171,6 +1265,7 @@ class MTPSpecEngine:
             + f", fallbacks {self.bucket_fallbacks}, row swaps {self.row_swaps}"
             + f", down-shifts hold {self.bucket_downs_hold} free {self.bucket_downs_free}"
             + f", free switches {self.bucket_free_switch}"
+            + self._ksp_note_text()
         )
 
     def _pending_rows(self):
@@ -1223,10 +1318,12 @@ class MTPSpecEngine:
             c.bump(name)
 
     def _note_prefill_done(self):
-        """Every 1000 prefills: one INFO line with the chunk / prefix-cache counters (visible without debug)."""
+        """Every QWEN36_PREFIX_SUMMARY_EVERY (default 1000) prefills: one INFO line with the chunk / prefix-cache counters
+        (visible without debug; includes the true resume metrics of GdnPrefixStateCache.record_resume)."""
         n = self.__dict__.get("_n_prefills", 0) + 1
         self.__dict__["_n_prefills"] = n
-        if n % 1000 == 0:
+        every = max(1, int(os.environ.get("QWEN36_PREFIX_SUMMARY_EVERY", "1000")))
+        if n % every == 0:
             c = self._chunk_cache()
             if c is not None and hasattr(c, "summary"):
                 logger.info(
@@ -1289,13 +1386,140 @@ class MTPSpecEngine:
         copy when ``dev`` already holds this exact table. Every write to a buffer must go through here, since the
         cache is the host copy of what that buffer holds (keyed by the buffer, dropped when it is freed)."""
         if not spec_hostfix_enabled():
-            return self._stage(host, dev, dtype, layout)
+            self._stage(host, dev, dtype, layout)
+            self._stage_split_twin(host, dev)
+            return
         cache = self.__dict__.setdefault("_stage_cache", {})
         hit = cache.get(id(dev))
         if hit is not None and hit[0] is dev and hit[1].shape == host.shape and torch.equal(hit[1], host):
             return
         self._stage(host, dev, dtype, layout)
+        self._stage_split_twin(host, dev)
         cache[id(dev)] = (dev, host.clone())
+
+    # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the per-device own-users twin of _mtp_pt (None = flag off) and the user
+    # count it was built for (the base family's B: an adaptive-K family of another width never stages or reads it)
+    _mtp_pt_own = None
+    _mtp_pt_own_rows = 0
+    # QWEN36_ATTN_KV_SPLIT context gate (KVSplitGate; None = no gate): the split variant widths this engine captured (verify,
+    # drafter), the context of the step being handled (kv_split_gate_ctx; None outside a step) and the split step counters
+    _ksp_vfy_widths = _ksp_dr_widths = ()
+    _ksp_ctx = None
+
+    def _kv_split_draft_plan(self):
+        """The model's KVSplitPlan when the drafter steps can take the KV-pair user split (the MTP attention loaded the
+        pair weights), else None (always with the flag off)."""
+        plan = getattr(self.model, "_kv_split_plan", None)
+        if plan is None or not getattr(self.mtp.attention, "_kv_split_ready", False):
+            return None
+        return plan
+
+    def _stage_split_twin(self, host, dev):
+        """QWEN36_ATTN_KV_SPLIT=user: whenever _mtp_pt is re-staged, re-stage its per-device own-users twin from the same
+        host table (no-op for every other buffer, and with the flag off)."""
+        if self._mtp_pt_own is None or dev is not self._mtp_pt or int(host.shape[0]) != int(self._mtp_pt_own_rows):
+            return
+        from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+        h = ttnn.from_torch(
+            own_page_table_host(host, self.model.num_devices),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+        ttnn.copy_host_to_device_tensor(h, self._mtp_pt_own)
+
+    def _ksp_gate(self):
+        """The model's context gate (QWEN36_ATTN_KV_SPLIT_MIN_CTX) when it is in "gated" mode, else None (flag off, the
+        "always" K1 setting, "never")."""
+        model = getattr(self, "model", None)
+        if getattr(model, "_kv_split_plan", None) is None:
+            return None
+        g = getattr(model, "_kv_split_gate", None)
+        return g if g is not None and g.mode == "gated" else None
+
+    def _ksp_note_ctx(self, start_pos, active):
+        """Per step, next to the bucket choice: the context the split decisions of this step use (kv_split_gate_ctx over the
+        step's start positions: exact in a synchronous step, the runner's positions in deferred serving). No gate: None.
+        """
+        if self._ksp_gate() is None:
+            self._ksp_ctx = None
+            return
+        from models.demos.blackhole.qwen36.tt.kv_split import kv_split_gate_ctx
+
+        self._ksp_ctx = kv_split_gate_ctx(start_pos, active, self.T)
+
+    def _ksp_width(self):
+        """The width whose traces this step replays: its row bucket, or B (buckets off, or the eager seed / join)."""
+        return self._vb if (self._bucketed() and self._vb is not None) else self.B
+
+    def _ksp_on(self, part):
+        """Whether this step replays the split variant of ``part`` ("verify" / "draft"): the gate wants it for the step's
+        width at the step's context, and that width's variant was captured in the live family (the model's _vfy_bk_ksp /
+        the ("ksp", b) entries of _dr_traces; both swap with an adaptive-K family, so a family without variants stays
+        unsplit). Always False without a gate."""
+        g = self._ksp_gate()
+        if g is None or self._ksp_ctx is None:
+            return False
+        b = self._ksp_width()
+        if not g.want(part, b, self._ksp_ctx):
+            return False
+        if part == "verify":
+            return b in (getattr(self.model, "_vfy_bk_ksp", None) or {})
+        return ("ksp", b) in (self._dr_traces or {})
+
+    def _ksp_kw(self, kw):
+        """Put the step's verify split choice into the verify kwargs (only when it is True: no gate leaves kw as it was)."""
+        if self._ksp_on("verify"):
+            kw["kv_split"] = True
+            n = self.__dict__.setdefault("kv_split_steps", {"verify": 0, "draft": 0})
+            n["verify"] += 1
+        else:
+            kw.pop("kv_split", None)
+        return kw
+
+    def _ksp_draft_trace(self):
+        """The drafter trace id of this step (the split variant when _ksp_on("draft"), else _dr_trace_for(_vb))."""
+        if self._ksp_on("draft"):
+            n = self.__dict__.setdefault("kv_split_steps", {"verify": 0, "draft": 0})
+            n["draft"] += 1
+            w = self._ksp_width()
+            if self._dv_full_now and ("ksp", w) in (self._dr_traces_full or {}):  # r9: full-head split variant
+                return self._dr_traces_full[("ksp", w)]
+            return self._dr_traces[("ksp", w)]
+        return self._dr_trace_for(self._vb)
+
+    def kv_split_engaged(self):
+        """True when some step of this engine ran the KV-pair split (QWEN36_ATTN_KV_SPLIT=user): every split trace in the
+        gate's "always" mode, a counted split step in "gated" mode. Then rows of different parity may decode differently
+        from the same prompt (tt/kv_split.py "Slot parity"; kv_split_identity_classes)."""
+        model = getattr(self, "model", None)
+        if getattr(model, "_kv_split_plan", None) is None:
+            return False
+        g = getattr(model, "_kv_split_gate", None)
+        if g is not None and g.mode == "always":
+            return True
+        return sum(self.__dict__.get("kv_split_steps", {}).values()) > 0
+
+    def _ksp_note_text(self):
+        """Tail of the periodic fused line with a gate: split steps per part (empty otherwise)."""
+        if self._ksp_gate() is None:
+            return ""
+        n = self.__dict__.get("kv_split_steps", {"verify": 0, "draft": 0})
+        return f"; kv split steps verify {n['verify']} draft {n['draft']} (ctx {self._ksp_ctx})"
+
+    def _ksp_drafter_widths(self):
+        """The widths ((B,) + _dr_bks) that get a split drafter variant: gated mode, a "draft" threshold, the drafter split
+        available at that width (the twin was built for this engine's B, the plan has (b, 1), the "draft" part is on).
+        """
+        g = self._ksp_gate()
+        plan = self._kv_split_draft_plan()
+        if g is None or plan is None or self._mtp_pt_own is None or int(self._mtp_pt_own_rows) != int(self.B):
+            return ()
+        if "draft" not in plan.parts:
+            return ()
+        return tuple(b for b in g.variant_buckets("draft", (self.B,) + tuple(self._dr_bks)) if plan.has(b, 1))
 
     # class defaults of the join-seed trace state (set per instance in __init__; engines built without it read these)
     _fj_mask = _seed_trace = _seed_trace_bufs = _fj_mask_dims = None
@@ -1310,6 +1534,7 @@ class MTPSpecEngine:
     _hp_bufs = None  # bucket b < B -> persistent anchor hidden [1,1,b,dim/tp] of its drafter body
     _dr_bks = ()  # the buckets < B whose verify + drafter traces this engine builds (descending), see _bucket_plan
     _dr_standins = ()  # warm-pass stand-ins of the shared K ids outputs, freed after the captures
+    _dr_outs_pre = ()  # QWEN36_SPEC_DR_OUTS_PREALLOC: the K shared ids outputs, allocated before any trace capture
     _addr_snap = None
     _vb_fell = False  # the last _bucket_step chose a bucket that has no trace yet and ran at B
     bucket_fallbacks = row_swaps = 0
@@ -1451,8 +1676,7 @@ class MTPSpecEngine:
         _, h_next = self.model.ttnn_mtp_decode_forward(
             hid, toks, slots, pt_tt, need_logits=False, **self._mtp_rd_kw(rows)
         )
-        for t in (*parts, cat, hid, pt_tt, h_next):
-            ttnn.deallocate(t)
+        _free_maint(*parts, cat, hid, pt_tt, h_next)
 
     def _join_warm_warmup(self):
         """QWEN36_SPEC_JOIN_FAST: compile the R-row batched warm (R = 2 .. B) before capture, so a join never compiles a
@@ -1508,8 +1732,7 @@ class MTPSpecEngine:
         _, hn = self.mtp.forward_decode(
             hid, tok, pos, cos, sin, self._mtpw_pt, need_logits=False, alias_kv_write=False, spec_n_users=1
         )
-        for t in (tok, pos, idx, cos, sin, *parts, cat, hid, hn):
-            ttnn.deallocate(t)
+        _free_maint(tok, pos, idx, cos, sin, *parts, cat, hid, hn)
 
     def _capture_mtp_warm_trace(self):
         """QWEN36_SPEC_JOIN_TRACE, inside the guarded scope: capture the MTP join warm once, against the hidden buffers
@@ -1626,6 +1849,21 @@ class MTPSpecEngine:
         self._mtp_pt_rows = [
             self._alloc_host_replicated(pt[u : u + 1].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for u in range(B)
         ]
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the per-device own-users twin of _mtp_pt for the drafter steps'
+        # split SDPA, re-staged with it (_stage_table). None with the flag off.
+        self._mtp_pt_own = None
+        if self._kv_split_draft_plan() is not None and B % 2 == 0:  # the twin needs pairs of users (odd B: no split)
+            from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+            self._mtp_pt_own = ttnn.from_torch(
+                own_page_table_host(pt, self.model.num_devices),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._mtp_pt_own_rows = int(pt.shape[0])
         self._anchor_warmup(self._dim_frac, self._feed_dtype)
 
         cap = width * self.block_size
@@ -1665,12 +1903,12 @@ class MTPSpecEngine:
                 # one prepare call (all persistent inputs allocated and every program warmed before any capture).
                 extra = getattr(model, "masked_big_buckets", None)  # absent on test fakes
                 extra = tuple(extra(pt_prefill)) if extra is not None else ()
-                model.prepare_prefill_traces_short(
-                    self.mesh,
-                    pt_prefill,
-                    buckets=(tuple(model.short_prefill_trace_buckets()) + extra) if extra else None,
-                    spec=True,
-                )
+                if extra:
+                    model.prepare_prefill_traces_short(
+                        self.mesh, pt_prefill, buckets=tuple(model.short_prefill_trace_buckets()) + extra, spec=True
+                    )
+                else:
+                    model.prepare_prefill_traces_short(self.mesh, pt_prefill, spec=True)
             finally:
                 if prev is not None:
                     model._unbind_gdn_prefill_scratch(prev)
@@ -1719,6 +1957,8 @@ class MTPSpecEngine:
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare_decode after capture"
         # a B == 1 prefill trace replay may overwrite buffers allocated after it was recorded
         assert not (B == 1 and self.prefill_recorded), "prepare_decode after record_prefill"
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the pruned programs warm as the pruned head
+            self._dv_full_now = self.mtp._draft_full = False
         t0 = time.perf_counter()
         # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
         _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
@@ -1732,6 +1972,17 @@ class MTPSpecEngine:
             self._dr_bks
         ):  # every verify bucket program is compiled here, before any capture (capture forbids cache misses)
             model.prepare_verify_buckets(self._dr_bks)
+        # QWEN36_ATTN_KV_SPLIT context gate: the split verify variants of the widths with a threshold, warmed after the
+        # buckets and before any capture (no gate: none, nothing allocated)
+        self._ksp_vfy_widths = ()
+        if self._ksp_gate() is not None:
+            self._ksp_vfy_widths = model.ksp_verify_variant_widths((B,) + tuple(self._dr_bks))
+            if self._ksp_vfy_widths:
+                model.prepare_verify_ksp_variants(self._ksp_vfy_widths)
+            logger.info(
+                f"[spec_engine] KV-split context gate {model._kv_split_gate.describe()}: split verify variants "
+                f"{self._ksp_vfy_widths or 'none'}"
+            )
         for dn in self._gdn:
             # The seed's sync_conv_win from the packed conv format (the gdn_decode_step op is the plain decode, e.g.
             # QWEN36_VERIFY_SPEC_STEP=1): compile its unpack / copies before capture_decode forbids cache misses.
@@ -1803,8 +2054,24 @@ class MTPSpecEngine:
         self._join_warm_warmup()
         self._mtp_warm_prepare()
         self._draft_warmup([0] * B, self._hp_buf, [0] * B)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the full-head drafter programs as well
+            with self.mtp.full_draft_head():
+                self._draft_warmup([0] * B, self._hp_buf, [0] * B)
         if self.recorded_drafter:
             self._alloc_drafter_inputs()
+            if spec_dr_outs_prealloc_enabled() and not self._dr_outs_pre:
+                # QWEN36_SPEC_DR_OUTS_PREALLOC: the persistent K ids outputs, born here (before the prefill traces are
+                # captured, and before every decode capture) so no earlier trace's scratch can overlap them
+                self._dr_outs_pre = tuple(
+                    ttnn.zeros(
+                        [1, 1, B, 1],
+                        device=self.mesh,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(self.K)
+                )
             z = ttnn.zeros(
                 [1, 1, B * T, self._dim_frac],
                 device=self.mesh,
@@ -1817,9 +2084,13 @@ class MTPSpecEngine:
             feed = self.model.spec_feed_rows(z)
             if feed is not z:
                 ttnn.deallocate(z)
-            for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
-                ttnn.deallocate(o)
-            if self._dr_bks:  # each drafter bucket body once, handing its ids over to stand-ins of the shared outputs
+            if self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: the B-row body with its in-place ids copy, as captured
+                self._drafter_body(feed, self.B, list(self._dr_outs_pre))
+            else:
+                for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
+                    ttnn.deallocate(o)
+            self._ksp_dr_widths = self._ksp_drafter_widths()  # QWEN36_ATTN_KV_SPLIT gate: split drafter variants
+            if self._dr_bks or self._ksp_dr_widths:  # each bucket / variant body once, ids handed to stand-ins
                 self._dr_standins = tuple(
                     ttnn.zeros(
                         [1, 1, B, 1],
@@ -1832,6 +2103,25 @@ class MTPSpecEngine:
                 )
                 for b in self._dr_bks:
                     self._drafter_body(feed, b, list(self._dr_standins))
+                for b in self._ksp_dr_widths:
+                    self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
+            if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: every full-head body, ids handed over in place
+                if not self._dr_standins:
+                    self._dr_standins = tuple(
+                        ttnn.zeros(
+                            [1, 1, B, 1],
+                            device=self.mesh,
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        for _ in range(self.K)
+                    )
+                with self.mtp.full_draft_head():
+                    for b in (B, *self._dr_bks):
+                        self._drafter_body(feed, b, list(self._dr_standins))
+                    for b in self._ksp_dr_widths:  # r9: the full-head split variants (QWEN36_ATTN_KV_SPLIT)
+                        self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
             if spec_fused_enabled():
@@ -2195,6 +2485,8 @@ class MTPSpecEngine:
         assert self.prepared, "capture_decode before prepare_decode"
         if self.captured:
             return
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the D traces capture the pruned head
+            self._dv_full_now = self.mtp._draft_full = False
         # Verify outputs are read right after a verify replay, before any prefill replay can overwrite them.
         # Cache misses disallowed: a program not compiled by the warm passes fails here, not inside a capture.
         self.mesh.set_program_cache_misses_allowed(False)
@@ -2209,10 +2501,17 @@ class MTPSpecEngine:
                 ):  # V4, V2, V1 right after V8 (each main + logits + topk), before any drafter / accept capture
                     self.model.record_verify_buckets(self._dr_bks)
                     self._check_shared_addrs(snap, "after the verify buckets")
+                # QWEN36_ATTN_KV_SPLIT gate: V8s, V4s, V2s, before any drafter / accept capture too
+                if self._ksp_vfy_widths:
+                    self.model.record_verify_ksp_variants(self._ksp_vfy_widths)
+                    self._check_shared_addrs(snap, "after the split verify variants")
                 if self.recorded_drafter:  # ids outputs are read right after each replay
                     feed = self.model._vfy_rows_out
                     self._dr_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-                    self._dr_outs = self._drafter_body(feed)
+                    if self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: copy into the pre-capture buffers in place
+                        self._dr_outs = self._drafter_body(feed, self.B, list(self._dr_outs_pre))
+                    else:
+                        self._dr_outs = self._drafter_body(feed)
                     ttnn.end_trace_capture(self.mesh, self._dr_trace, cq_id=0)
                     ttnn.synchronize_device(self.mesh)
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
@@ -2226,6 +2525,34 @@ class MTPSpecEngine:
                         ttnn.synchronize_device(self.mesh)
                         logger.info(f"[spec_engine] drafter bucket trace captured (b={b}: {b * self.T} reseed rows)")
                         self._log_trace_memory(f"D{b}")
+                    # QWEN36_ATTN_KV_SPLIT gate: D8s, D4s, ..: no new persistent outputs, they copy into _dr_outs in place
+                    for b in self._ksp_dr_widths:
+                        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                        self._drafter_body(feed, b, self._dr_outs, kv_split=True)
+                        ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                        self._dr_traces[("ksp", b)] = tid
+                        ttnn.synchronize_device(self.mesh)
+                        logger.info(f"[spec_engine] split drafter variant captured (b={b}, QWEN36_ATTN_KV_SPLIT)")
+                        self._log_trace_memory(f"D{b}s")
+                    if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the same bodies over the full head
+                        with self.mtp.full_draft_head():
+                            for b in (self.B, *self._dr_bks):  # into the shared K ids outputs in place
+                                tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                                self._drafter_body(feed, b, self._dr_outs)
+                                ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                                self._dr_traces_full[b] = tid
+                                ttnn.synchronize_device(self.mesh)
+                            for b in self._ksp_dr_widths:  # r9: full-head split variants, same in-place handoff
+                                tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                                self._drafter_body(feed, b, self._dr_outs, kv_split=True)
+                                ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                                self._dr_traces_full[("ksp", b)] = tid
+                                ttnn.synchronize_device(self.mesh)
+                        logger.info(
+                            f"[spec_engine] full-head drafter traces captured for buckets {sorted(self._dr_traces_full)} "
+                            f"(QWEN36_DRAFT_VOCAB_FALLBACK)"
+                        )
+                        self._log_trace_memory("F")
                     self._check_shared_addrs(snap, "after the drafter buckets")
                     for t in self._dr_standins:  # warm-pass stand-ins of the shared K ids, used by no trace
                         ttnn.deallocate(t)
@@ -2408,11 +2735,21 @@ class MTPSpecEngine:
         for tid in (self._dr_traces or {}).values():  # the drafter bucket traces (D4, D2, D1)
             ttnn.release_trace(self.mesh, tid)
         self._dr_traces = {}
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the full-head drafter traces
+            for tid in (self._dr_traces_full or {}).values():
+                ttnn.release_trace(self.mesh, tid)
+            self._dr_traces_full = {}
+            self._dv_full_now = self.mtp._draft_full = False
+            logger.info("[spec_engine] shutdown" + self._dv_note_text())
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
         for t in (*self._dr_outs, *self._dr_bufs, *(self._hp_bufs or {}).values(), *self._dr_standins):
             ttnn.deallocate(t)
+        for t in self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: not yet captured (prepared only): free them here
+            if not any(t is o for o in self._dr_outs):
+                ttnn.deallocate(t)
+        self._dr_outs_pre = ()
         self._dr_outs, self._dr_bufs, self._hp_bufs, self._dr_standins, self._dr_bks = [], [], None, (), ()
         self._addr_snap = None
         for t in (self._mtpw_pack, self._mtpw_pt):
@@ -2441,6 +2778,10 @@ class MTPSpecEngine:
         for t in bufs:
             if t is not None:
                 ttnn.deallocate(t)
+        if self._mtp_pt_own is not None:  # QWEN36_ATTN_KV_SPLIT=user
+            ttnn.deallocate(self._mtp_pt_own)
+            self._mtp_pt_own = None
+            self._mtp_pt_own_rows = 0
         self._fj_sel = self._fj_mask = None
         self._last_hidden, self._last_sel = [], {}
         self._mtp_pt, self._mtp_pt_rows, self._hp_buf, self._anchor_sel, self._eager_sel, self._vfeed = (
@@ -2607,6 +2948,10 @@ class MTPSpecEngine:
         _record_row_delta(self, slot, None)  # the row's M-RoPE delta goes with its request (text rows are 0)
         self._fresh_dirty.discard(slot)
         reset_draft_skip(self, slot)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the row's recent tokens go with its request
+            self._dv_guard.reset(slot)
+            if not self._active:  # drained: one line per idle transition
+                logger.info("[spec_engine] all rows released" + self._dv_note_text())
         # the leaving request may be why other rows' drafts were withheld: offer them again
         self._no_draft.clear()
         self._withheld_streak.clear()
@@ -2635,6 +2980,8 @@ class MTPSpecEngine:
         new_of = {old: new for new, old in enumerate(idx)}
         self.__dict__["_row_vision_map"] = {new_of[u]: v for u, v in _row_vision_of(self).items()}
         self._last_hidden = [self._last_hidden[j] for j in idx]
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: per-row recent tokens move with the rows
+            self._dv_guard.remap(idx)
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
@@ -2713,12 +3060,21 @@ class MTPSpecEngine:
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
-        prompt_list = torch.as_tensor(prompt_ids).reshape(-1).tolist()
+        prompt_row = None
+        if prefill_host_tolist_enabled():
+            # QWEN36_PREFILL_HOST_TOLIST: one tolist() and an int32 copy of the same ids (see _prompt_ids_fast)
+            prompt_list, prompt_row = _prompt_ids_fast(prompt_ids)
+        if prompt_row is None:
+            # flag off (or no fast row): one tolist() of the whole prompt (3247d9311b9 host fix), no int32 row
+            prompt_list = torch.as_tensor(prompt_ids).reshape(-1).tolist()
         Tp = len(prompt_list)
         if final:
             self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
                 () if start_pos is None else (int(start_pos),)
             )
+            if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: a new request starts from its prompt tail
+                self._dv_guard.reset(slot)
+                self._dv_guard.observe(slot, prompt_list[-self._dv_guard.window :])
         else:
             assert vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
             assert Tp % 128 == 0, f"non-final prefill chunk end {Tp} is not a multiple of 128"
@@ -2739,7 +3095,9 @@ class MTPSpecEngine:
         pt_row = model._fit_spec_page_table(page_table_row, self.nb)
         assert pt_row.shape[0] == 1, "prefill takes ONE page-table row"
         self._check_scratch(pt_row)
-        prompt = torch.tensor([prompt_list], dtype=torch.int32)
+        prompt = torch.tensor([prompt_list], dtype=torch.int32) if prompt_row is None else prompt_row
+        # the ids the chunk-resume digests hash: the list (today), or the int32 row's bytes (QWEN36_PREFILL_HOST_TOLIST)
+        digest_ids = prompt_list if prompt_row is None else prompt_row[0]
         captured_row = [False]
         # Prefix cache (B > 1, start_pos given, cache built): (s, (cache, slot) | None, save points) or None.
         # A multimodal request bypasses the prefix cache (mirrors Qwen36Model.prefill_paged_slots): no lookup, no saves.
@@ -2759,7 +3117,7 @@ class MTPSpecEngine:
                 logger.info(
                     f"[spec_engine] chunked prefill: chunk [{start_pos}, {Tp}) is <= 128 tokens: no e-128 snapshot"
                 )
-        exact = self._chunk_exact_resume(prog, prompt_list, start_pos, Tp, pt_row, vision_tokens, exact_mode)
+        exact = self._chunk_exact_resume(prog, digest_ids, start_pos, Tp, pt_row, vision_tokens, exact_mode)
         plan_kw = {}
         if force:
             plan_kw["force_points"] = force
@@ -2829,7 +3187,7 @@ class MTPSpecEngine:
             # Option B: the next chunk resumes at e from the snapshot at e and the row captured into _last_hidden[slot].
             if save_end:
                 assert captured_row[0], f"non-final chunk never delivered the chunk holding slot {Tp - 1}"
-                _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(prompt_list, Tp), self._chunk_pt_sig(pt_row, Tp))
+                _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(digest_ids, Tp), self._chunk_pt_sig(pt_row, Tp))
                 c = self._chunk_cache()
                 if c is not None and hasattr(c, "pin"):
                     c.max_pinned = self.B  # one live chunk per engine row
@@ -2842,7 +3200,7 @@ class MTPSpecEngine:
         if isinstance(logits_dev, torch.Tensor):
             lt = logits_dev
         else:
-            lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+            lt = self._replicated_to_torch(logits_dev)
             ttnn.deallocate(logits_dev)
         self._fresh[slot] = Tp
         self._active.add(slot)
@@ -2892,6 +3250,7 @@ class MTPSpecEngine:
         else:
             s0, src, points = plan
         bounds = list(points) + [Tp]
+        run, seg_kw = None, {}  # QWEN36_PREFILL_INTRACE_SNAP: the single segment's _SnapRun
         # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
@@ -2901,6 +3260,10 @@ class MTPSpecEngine:
                 model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
                 if s0 > 0:
                     src[0].restore(src[1])
+                run, mb_choice = self._snap_run_plan(prompt, pt_row, s0, Tp, points)
+                if run is not None:
+                    bounds = [Tp]  # ONE segment: every save point is a replay end or an in-replay snapshot
+                    seg_kw = dict(snap=run, mb_choice=mb_choice)
             host, saved, a = None, [], s0
             for i, b in enumerate(bounds):
                 final = i == len(bounds) - 1
@@ -2921,14 +3284,22 @@ class MTPSpecEngine:
                     captured_row=captured_row,
                     decline_ok=(i == 0 and s0 == 0),
                     **({} if vision_tokens is None else dict(vision_tokens=vision_tokens)),
+                    **seg_kw,
                 )
                 if host is None:
                     return None  # only the first from-0 segment may decline, before any side effect
                 if not final:
                     # the bound scratch = the state after tokens[:b]
-                    model._prefix_cache.save(prompt[0], b, low_prio=b in getattr(points, "low", ()))
+                    model._prefix_cache.save(
+                        prompt[0],
+                        b,
+                        low_prio=b in getattr(points, "low", ()),
+                        protect=b in getattr(points, "end", ()),
+                    )
                     saved.append(b)
                 a = b
+            if run is not None:
+                saved = list(run.saved)  # in position order, as the per-segment saves above would have been
             if save_end:
                 assert plan is not None
                 model._prefix_cache.save(prompt[0], Tp)  # the bound scratch = the state after tokens[:Tp]
@@ -2956,12 +3327,134 @@ class MTPSpecEngine:
         msg = f"[spec_engine] fast prefill: slot {slot} Tp={Tp} ({path})" + (
             "" if plan is None else f" prefix resume s={s0} segments={len(bounds)}"
         )
+        if run is not None:
+            msg += f" in-replay snapshots={run.n_inside} saves={len(run.saved)}"
+            self.intrace_prefills = getattr(self, "intrace_prefills", 0) + 1
+            self.intrace_snapshots = getattr(self, "intrace_snapshots", 0) + run.n_inside
         if getattr(self, "_fast_prefill_logged", False):
             logger.debug(msg)
         else:
             self._fast_prefill_logged = True
             logger.info(msg)
         return host
+
+    def _snap_run_plan(self, prompt, pt_row, s0, Tp, points):
+        """QWEN36_PREFILL_INTRACE_SNAP: (_SnapRun, masked-big choice) when the prefill [s0, Tp) can run as ONE segment
+        with every save point a replay end or an in-replay snapshot, else (None, None) (flag off, no point to save, or a
+        point would fall in an eager replay / exceed the GDN_SNAP_SLOTS of a replay: the legacy split serves it). The
+        replays are the ones _fast_segment runs for [s0, Tp) (prefill_plan.segment_replays with the same masked-big
+        choice, passed on to it so the decision is made once)."""
+        model = self.model
+        cache = getattr(model, "_prefix_cache", None)
+        active = getattr(model, "gdn_snap_active", None)  # absent on test fakes
+        if cache is None or active is None or not active() or not points:
+            return None, None
+        chunk = model._chunked_chunk_size or 2048
+        n = Tp - s0
+        big = model.big_chunk_rows()
+        choice = self._masked_big_choice(n, s0) if n >= chunk else None
+        mb = None if choice is None or choice[0] == "old" else int(choice[0][1:])
+        try:
+            replays = prefill_plan.segment_replays(s0, Tp, big, mb, chunk)
+            where = prefill_plan.assign_points(replays, points)
+        except (AssertionError, ValueError) as e:
+            logger.debug(f"[spec_engine] in-replay snapshots: legacy split for [{s0}, {Tp}) ({e})")
+            return None, None
+        for rep, (inside, _end) in zip(replays, where):
+            if not inside:
+                continue
+            if len(inside) > GDN_SNAP_SLOTS:
+                return None, None
+            if rep.kind == "tail":
+                if rep.rows < 3 or model._short_trace_for(rep.rows) is None or not model.snap_rows_ok(rep.bucket):
+                    return None, None
+            elif rep.kind == "mbig":
+                if model._short_trace_for(rep.rows, bucket=rep.bucket) is None or not model.snap_rows_ok(rep.bucket):
+                    return None, None
+            elif not model.snap_rows_ok(rep.rows):  # a chunk-trace replay
+                return None, None
+        if any(rep.kind in ("tail", "mbig") for rep in replays):
+            trash = getattr(model, "prefill_trash_block", None)
+            nreal = -(-Tp // int(self.block_size))
+            if trash is not None and bool((torch.as_tensor(pt_row).reshape(-1)[:nreal] == int(trash)).any()):
+                return None, None  # a short trace would decline this request (trash block collision): legacy split
+        # The cheaper of the two plans by the replay cost model: merging small segments can round them up to a bigger
+        # short-trace bucket, and the whole call's tail can be 1-2 rows (an eager masked bucket) where the last segment
+        # of the split plan never is.
+        def _mb(n_, a_):
+            ch = self._masked_big_choice(n_, a_)
+            return None if ch is None or ch[0] == "old" else int(ch[0][1:])
+
+        cost_one = prefill_plan.plan_cost(s0, Tp, points, True, big=big, chunk=chunk, masked_choice=_mb)
+        cost_split = prefill_plan.plan_cost(s0, Tp, points, False, big=big, chunk=chunk, masked_choice=_mb)
+        if cost_one >= cost_split:
+            self.intrace_declined = getattr(self, "intrace_declined", 0) + 1
+            return None, None
+        return _SnapRun(model, cache, prompt[0], points), choice
+
+    _MASKED_BIG_LOG_FIRST = 20  # INFO-log the first N plan decisions
+    _MASKED_BIG_COUNT_EVERY = 64  # then the plan counters every N decisions
+
+    def _masked_big_choice(self, n, a):
+        """QWEN36_PREFILL_MASKED_BIG choice for a segment [a, a + n), n >= 2048, without side effects: after the
+        n // 8192 full big blocks, the remainder r runs by the cheapest plan of prefill_plan.plan_remainder (A[M] +
+        B[M] * depth, depth = absolute start of the remainder) over the captured masked buckets. Returns (plan, costs,
+        r, depth) or None (flag off, no big chunk trace of 8192, no remainder, no masked bucket captured)."""
+        if not prefill_masked_big_enabled():
+            return None
+        model = self.model
+        big = model.big_chunk_rows()
+        if big != 8192:
+            return None
+        n_big = n // big
+        r = n - n_big * big
+        if r <= 0:
+            return None
+        depth = a + n_big * big
+        avail = tuple(bk for bk in prefill_plan.MASKED_BIG_BUCKETS if model._short_trace_for(r, bucket=bk) is not None)
+        if not avail:
+            return None
+        plan, costs = prefill_plan.plan_remainder(r, depth, buckets=avail)
+        return plan, costs, r, depth
+
+    def _masked_big_plan(self, n, a, choice=None):
+        """Bucket (4096 / 8192) the masked-big remainder of segment [a, a + n) replays, or None (the existing 2048 chunk
+        replays + masked tail). ``choice``: _masked_big_choice's result when the caller already made it. Counts every
+        decision in self.masked_big_plans and logs the first 20 at INFO (then the counters every 64)."""
+        if choice is None:
+            choice = self._masked_big_choice(n, a)
+        if choice is None:
+            return None
+        plan, costs, r, depth = choice
+        plans = self.__dict__.setdefault("masked_big_plans", {"old": 0, "m4096": 0, "m8192": 0})
+        plans[plan] = plans.get(plan, 0) + 1
+        total = sum(plans.values())
+        if total <= self._MASKED_BIG_LOG_FIRST:
+            logger.info(
+                f"[spec_engine] masked-big split #{total}: r={r} depth={depth} -> {plan} costs "
+                + " ".join(f"{k}={v:.3f}s" for k, v in costs.items())
+            )
+        elif total % self._MASKED_BIG_COUNT_EVERY == 0:
+            logger.info(f"[spec_engine] masked-big plans after {total} decisions{self._masked_big_note_text()}")
+        return None if plan == "old" else int(plan[1:])
+
+    def _intrace_note_text(self):
+        """Tail of the periodic spec log line (QWEN36_PREFILL_INTRACE_SNAP, once a prefill ran single-segment): the
+        single-segment prefills and the in-replay snapshots they saved."""
+        n = self.__dict__.get("intrace_prefills")
+        if not n:
+            return ""
+        return (
+            f"; in-replay snapshots {self.__dict__.get('intrace_snapshots', 0)} in {n} single-segment prefills"
+            f" (split kept as cheaper: {self.__dict__.get('intrace_declined', 0)})"
+        )
+
+    def _masked_big_note_text(self):
+        """Tail of the periodic spec log line: counts of the remainder plans chosen (flag on, once a decision was made)."""
+        plans = self.__dict__.get("masked_big_plans")
+        if not plans:
+            return ""
+        return "; masked-big plans " + " ".join(f"{k}={v}" for k, v in sorted(plans.items()))
 
     def _fast_segment(
         self,
@@ -2977,6 +3470,8 @@ class MTPSpecEngine:
         captured_row,
         decline_ok,
         vision_tokens=None,
+        snap=None,
+        mb_choice=None,
         _masked_big=True,
     ):
         """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
@@ -2987,17 +3482,21 @@ class MTPSpecEngine:
         ``vision_tokens``: the multimodal prompt's packed vision rows; each replay / chunk splices the rows after the
         image placeholders before its own start (model._vis_row_offset_for over the whole prompt).
 
+        ``snap`` (QWEN36_PREFILL_INTRACE_SNAP, the single-segment plan of _snap_run_plan): every replay below stages
+        the save points inside it as in-replay snapshots and saves them (and a point at its end) right after it.
         QWEN36_PREFILL_MASKED_BIG (text only, n >= 2048): after the n // 8192 full big blocks the remainder runs as ONE
-        masked 4096 / 8192 spec short trace when _masked_big_plan finds it cheaper than 2048 replays + the masked tail.
-        ``_masked_big=False`` (internal) keeps the existing plan, used for the fallback after a declined replay."""
+        masked 4096 / 8192 spec short trace when the cost model finds it cheaper than 2048 replays + the masked tail
+        (``mb_choice``: the caller's _masked_big_choice for this segment). ``_masked_big=False`` (internal) keeps the
+        existing plan, used for the fallback after a declined replay."""
         model = self.model
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
+        snap_kw = {} if snap is None else dict(snap=snap)
         chunk = model._chunked_chunk_size or 2048
         n = b - a
         num_full, tail = n // chunk, n % chunk
         mb = None  # masked big bucket (4096 / 8192) serving the remainder after the full big blocks (flag only)
         if num_full > 0 and _masked_big and vision_tokens is None and prefill_masked_big_enabled():
-            mb = self._masked_big_plan(n, a)
+            mb = self._masked_big_plan(n, a, choice=mb_choice)
         if mb is not None:
             big = model.big_chunk_rows()
             n_big = n // big
@@ -3018,6 +3517,7 @@ class MTPSpecEngine:
                     start=a,
                     reset_gdn=not carry,
                     allow_big=True,
+                    **snap_kw,
                 )
             host = self._replay_spec_short(
                 slot,
@@ -3029,6 +3529,7 @@ class MTPSpecEngine:
                 True if n_big else carry,
                 captured_row,
                 bucket=mb,
+                **snap_kw,
             )
             if host is not None:
                 return host
@@ -3047,6 +3548,7 @@ class MTPSpecEngine:
                 decline_ok if not n_big else False,
                 vision_tokens=vision_tokens,
                 _masked_big=False,
+                **snap_kw,
             )
         if num_full == 0:
             # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
@@ -3061,10 +3563,12 @@ class MTPSpecEngine:
                 carry,
                 captured_row,
                 **self._vis_replay_kw(prompt, a, vision_tokens),
+                **snap_kw,
             )
             if host is None:
                 if decline_ok:
                     return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
+                assert snap is None or not snap.inside(a, n), "in-replay snapshot points in an eager replay"
                 pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
                 logits, hidden = model.prefill_masked_bucket(
                     prompt[:, a:b],
@@ -3089,8 +3593,19 @@ class MTPSpecEngine:
         if a == 0 and tail > 0 and tail_tr is None:
             # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
             # runs inside it (its tail slice is right for start == 0).
+            assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
             logits = model._prefill_traced_chunked_tp(
-                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True, allow_big=True, **vis_kw
+                prompt,
+                pt_rec,
+                b,
+                num_full,
+                chunk,
+                tail,
+                on_chunk=on_chunk,
+                run_tail=True,
+                allow_big=True,
+                **vis_kw,
+                **snap_kw,
             )
             return self._read_replicated_logits(logits)
         model._prefill_traced_chunked_tp(
@@ -3106,12 +3621,21 @@ class MTPSpecEngine:
             reset_gdn=not carry,
             allow_big=True,
             **vis_kw,
+            **snap_kw,
         )
         if tail == 0:
             if (
                 not final
             ):  # on_chunk already saw the last chunk in the replay loop; a mid-prompt segment has no logits use
                 return torch.zeros(0)
+            if prefill_mtp_lean_enabled():
+                # QWEN36_PREFILL_MTP_LEAN: the replay loop above already ran on_chunk on the last chunk (drafter K/V warm +
+                # the slot b-1 feed-row capture), so it is not run again; a non-final vLLM chunk reads no logits.
+                if getattr(self, "_skip_logits_read", False):
+                    return torch.zeros(0)
+                last = getattr(model, "_last_chunk", None)
+                out, rows = last if last is not None else (model._chunked_trace_output, chunk)
+                return self._read_replicated_logits(model._masked_bucket_logits_tp(out, rows, rows))
             # Exact multiple: the last chunk's output gives the logits and the slot b-1 feed row.
             last = getattr(model, "_last_chunk", None)  # (output, rows); fakes leave it unset
             out, rows = last if last is not None else (model._chunked_trace_output, chunk)
@@ -3130,8 +3654,10 @@ class MTPSpecEngine:
                 True,
                 captured_row,
                 **self._vis_replay_kw(prompt, cs, vision_tokens),
+                **snap_kw,
             )
         if host is None:  # no short trace for the tail (< 3 tokens / uncaptured bucket) or a trash-block collision
+            assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
             logits, hidden = model.prefill_masked_bucket(
                 prompt[:, cs:b],
                 pt_rec,
@@ -3144,47 +3670,6 @@ class MTPSpecEngine:
             ttnn.deallocate(hidden)
             host = self._read_replicated_logits(logits)
         return host
-
-    _MASKED_BIG_LOG_FIRST = 20  # INFO-log the first N plan decisions
-    _MASKED_BIG_COUNT_EVERY = 64  # then the plan counters every N decisions
-
-    def _masked_big_plan(self, n, a):
-        """Split choice of QWEN36_PREFILL_MASKED_BIG for a segment [a, a + n), n >= 2048: after the n // 8192 full big
-        blocks the remainder r = n % 8192 runs by the cheapest plan of prefill_split.plan_remainder (cost model
-        A[M] + B[M] * depth, depth = absolute start of the remainder). Returns the masked bucket (4096 / 8192) to replay,
-        or None for the existing plan (2048 chunk replays + masked tail). Counts every decision in
-        self.masked_big_plans and logs the first 20 at INFO (then the counters every 64)."""
-        model = self.model
-        big = model.big_chunk_rows()
-        if big != 8192:
-            return None
-        n_big = n // big
-        r = n - n_big * big
-        if r <= 0:
-            return None
-        depth = a + n_big * big
-        avail = tuple(bk for bk in prefill_split.MASKED_BIG_BUCKETS if model._short_trace_for(r, bucket=bk) is not None)
-        if not avail:
-            return None
-        plan, costs = prefill_split.plan_remainder(r, depth, True, buckets=avail)
-        plans = self.__dict__.setdefault("masked_big_plans", {"old": 0, "m4096": 0, "m8192": 0})
-        plans[plan] = plans.get(plan, 0) + 1
-        total = sum(plans.values())
-        if total <= self._MASKED_BIG_LOG_FIRST:
-            logger.info(
-                f"[spec_engine] masked-big split #{total}: r={r} depth={depth} -> {plan} costs "
-                + " ".join(f"{k}={v:.3f}s" for k, v in costs.items())
-            )
-        elif total % self._MASKED_BIG_COUNT_EVERY == 0:
-            logger.info(f"[spec_engine] masked-big plans after {total} decisions{self._masked_big_note_text()}")
-        return None if plan == "old" else int(plan[1:])
-
-    def _masked_big_note_text(self):
-        """Tail of the periodic spec log line: counts of the remainder plans chosen (flag on, once a decision was made)."""
-        plans = self.__dict__.get("masked_big_plans")
-        if not plans:
-            return ""
-        return "; masked-big plans " + " ".join(f"{k}={v}" for k, v in sorted(plans.items()))
 
     def _vis_replay_kw(self, prompt, start, vision_tokens):
         """Vision kwargs (vision_tokens, vis_row_offset) for model._replay_short_trace / prefill_masked_bucket over the
@@ -3207,10 +3692,13 @@ class MTPSpecEngine:
         vision_tokens=None,
         vis_row_offset=0,
         bucket=None,
+        snap=None,
     ):
         """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
         segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
         Tp-1 is copied into _last_hidden[slot]. Returns host float logits [vocab] or None (no trace / trash collision).
+        ``bucket``: a masked big bucket (QWEN36_PREFILL_MASKED_BIG). ``snap`` (QWEN36_PREFILL_INTRACE_SNAP): the save
+        points inside the replay are snapshotted by it and saved right after it.
         """
         model = self.model
         bkt_kw = {} if bucket is None else dict(bucket=bucket)  # only the masked-big replay passes it
@@ -3221,6 +3709,9 @@ class MTPSpecEngine:
             prompt_list, chunk_start, tr.bucket, pt_row, self.block_size, self._scratch_block, tr.buf_blocks
         )
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens, vis_row_offset=vis_row_offset)
+        inside = snap.inside(chunk_start, L) if snap is not None else []
+        if snap is not None:
+            vis_kw["snap_rows"] = [p - chunk_start for p in inside]
         tr = model._replay_short_trace(
             tokens,
             pt_row,
@@ -3243,7 +3734,10 @@ class MTPSpecEngine:
                     f"{getattr(model, 'prefill_trash_block', None)} is one of the request's real blocks; eager prefill "
                     "for this request"
                 )
+            assert not inside, "in-replay snapshot points in a declined short replay"
             return None
+        if snap is not None:
+            snap.after(chunk_start, L, inside)  # device-side saves, ordered behind the (drained) replay
         assert tr.last_feed.dtype == self._feed_dtype and tr.last_feed.shape[-1] == self._dim_frac, (
             f"feed row {tr.last_feed.dtype} {tuple(tr.last_feed.shape)} != buffer {self._feed_dtype} "
             f"dim/tp={self._dim_frac}"
@@ -3262,9 +3756,17 @@ class MTPSpecEngine:
         if getattr(self, "_skip_logits_read", False):  # non-final prefill chunk: no logits use
             ttnn.deallocate(logits_dev)
             return torch.zeros(0)
-        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        lt = self._replicated_to_torch(logits_dev)
         ttnn.deallocate(logits_dev)
         return lt.reshape(-1)[: self.vocab].float()
+
+    def _replicated_to_torch(self, logits_dev):
+        """Host copy of replicated device logits. Today: every device's copy concatenated on dim 0 (the callers keep the
+        first ``vocab`` values = device 0's copy). QWEN36_JOIN_LOGITS_ONE_COPY: device 0's copy alone (the same values;
+        1/num_devices of the D2H)."""
+        if join_logits_one_copy_enabled():
+            return ttnn.to_torch(ttnn.get_device_tensors(logits_dev)[0])
+        return ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
 
     def _note_resume_fallback(self, prompt_list, start_pos, Tp, plan, final):
         """Count (and log) a prefill with start_pos > 0 that resumes from a GDN snapshot below spec_resume_cap (the
@@ -3276,6 +3778,9 @@ class MTPSpecEngine:
 
         cap = spec_resume_cap(int(start_pos), Tp)
         s = 0 if plan is None else int(plan[0])
+        c = self._chunk_cache()
+        if c is not None and hasattr(c, "record_resume"):
+            c.record_resume(start_pos, cap, s, None if plan is None or plan[1] is None else plan[1][1])
         if s >= cap:
             return
         self.resume_fallbacks = getattr(self, "resume_fallbacks", 0) + 1
@@ -3298,6 +3803,9 @@ class MTPSpecEngine:
 
         import numpy as np
 
+        if isinstance(prompt_list, torch.Tensor):
+            # QWEN36_PREFILL_HOST_TOLIST: the contiguous int32 prompt row: its bytes are np.asarray(ids, int32)'s
+            return hashlib.blake2b(prompt_list.reshape(-1)[:e].contiguous().numpy().tobytes(), digest_size=16).digest()
         return hashlib.blake2b(np.asarray(prompt_list[:e], dtype=np.int32).tobytes(), digest_size=16).digest()
 
     def _chunk_pt_sig(self, pt_row, e):
@@ -3470,6 +3978,8 @@ class MTPSpecEngine:
         act = active.tolist() if spec_hostset_enabled() else active
         rows = [u for u in range(B) if act[u]]
         self._check_finishing_rows(rows)
+        if self._def_ctx is None:  # QWEN36_ATTN_KV_SPLIT gate context (deferred serving set it already)
+            self._ksp_note_ctx(start_pos, active)
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
@@ -3838,6 +4348,8 @@ class MTPSpecEngine:
             raise RuntimeError("a split step is pending: decode_forward_finish(handle, mask) must run first")
         if spec_sampling is not None and spec_mode != "fused_sample":
             raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of this step
+            self._dv_decide()
         if defer_read:
             if spec_sampling is not None and bool(self._cert_rows(spec_sampling).any()):
                 raise ValueError(
@@ -4132,6 +4644,8 @@ class MTPSpecEngine:
                 + self._join_trace_note_text()
                 + self._bucket_note_text()
                 + self._masked_big_note_text()
+                + self._intrace_note_text()
+                + self._dv_note_text()
             )
 
     def _join_trace_note_text(self):
@@ -4312,7 +4826,7 @@ class MTPSpecEngine:
             self._chain_exec(chain)
             handle = model.verify_stage_and_enqueue(*args, **kw, skip_tokens_h2d=True, skip_aux_h2d=True)
         ttnn.execute_trace(self.mesh, self._fa_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         # Every non-blocking D2H read is enqueued BEFORE the single synchronize (a from_device(blocking=False) issued
         # after it is never waited on: its host tensor is unfilled). The reads below it are blocking to_torch.
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
@@ -4760,6 +5274,9 @@ class MTPSpecEngine:
         # ---- which rows chain
         if self._bucketed():
             self._bucket_step(self._active_rows(active))
+        # QWEN36_ATTN_KV_SPLIT gate: the step's context from the RUNNER's start positions (chain rows: its bound), so the
+        # split choice does not depend on whether the pending step was read back yet (kv_split_gate_ctx)
+        self._ksp_note_ctx(start0, active)
         reason = pre
         if cmask is not None and reason is None:
             if bool((active & ~cmask).any()):
@@ -5013,7 +5530,7 @@ class MTPSpecEngine:
             if pen_live:
                 ttnn.execute_trace(self.mesh, self._pen_upd_trace, cq_id=0, blocking=False)
                 self.pen_steps += 1
-            ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+            ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
             self._vfeed = model._vfy_rows_out
             self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
             res_t = read(fa.result_out if kind == "g" else fs.result_out)
@@ -5269,6 +5786,10 @@ class MTPSpecEngine:
         d = self._def_data(h, engine_thread=True)
         committed, counts, p0 = d["committed"], d["counts"], d["p0"]
         c32, n32 = committed.to(torch.int32), counts.to(torch.int32)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the commit, rows still holding the step's request
+            gens = self._row_gens()
+            live = {u for u in range(B) if bool(h.active[u]) and (h.gen is None or h.gen[u] == gens[u])}
+            self._dv_guard.observe_block(committed, counts, rows=live)
         anchor = (p0 + counts - 1).tolist()
         fit = draft_rows_fit(anchor, K, h.cap)
         want = [(not bool(a)) or bool(s) or (not f) for a, s, f in zip(h.active.tolist(), h.skip, fit)]
@@ -5714,7 +6235,7 @@ class MTPSpecEngine:
             if pen_live:
                 ttnn.execute_trace(self.mesh, self._pen_upd_trace, cq_id=0, blocking=False)
                 self.pen_steps += 1
-            ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+            ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
             dr_handles = self._ids_enqueue_reads(self._dr_outs)
             cand_reads = self._cand_enqueue_reads() if need_cands or shadow else None
             ttnn.synchronize_device(self.mesh)  # the only one of the step
@@ -5819,8 +6340,20 @@ class MTPSpecEngine:
         if same:
             return 0
         drafts = torch.as_tensor(tokens).reshape(B, T)[:, 1:]
+        # top_p always goes in for the phase 2 certificate class (active only with a full_norm reference). The top-p
+        # tail-edge class is for QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED only: the kernel's float32 rounding can flip a tail edge.
         explained = audit_boundary_users(
-            ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M, top_p=sampling["top_p"]
+            ref,
+            sampling["uniforms"],
+            committed,
+            counts,
+            drafts,
+            nv,
+            B=B,
+            K=K,
+            M=fs.M,
+            top_p=sampling["top_p"],
+            topp_tail=getattr(fs, "_kernel", None) is not None,
         )
         bad = [
             u
@@ -5983,7 +6516,25 @@ class MTPSpecEngine:
         rows = [[steps[k][u] for k in range(K)] for u in range(B)]
         if declined is not None:
             rows = [[0] * K if bool(dc) else r for r, dc in zip(rows, declined.tolist())]
-        return torch.tensor(rows, dtype=torch.int32)
+        if not spec_dr_readback_tolerant_enabled():
+            return torch.tensor(rows, dtype=torch.int32)
+        # QWEN36_SPEC_DR_READBACK_TOLERANT: built through int64. Rows a bucketed step did not write hold what the buffer last
+        # held; any word outside int32 becomes 0 (the callers zero those declined / padding rows anyway). Written rows
+        # hold token ids and pass unchanged.
+        d = torch.tensor(rows, dtype=torch.int64)
+        bad = (d < -(2**31)) | (d >= 2**31)
+        if bool(bad.any()):
+            n = self.__dict__.get("_dr_readback_oob", 0) + 1
+            self._dr_readback_oob = n
+            if n <= 8 or n % 1000 == 0:
+                rows = sorted({int(u) for u in bad.nonzero()[:, 0].tolist()})
+                logger.warning(
+                    f"[spec_engine] draft readback #{n}: out-of-int32 words in rows {rows} (width {self._ksp_width()}, "
+                    f"steps {[list(map(int, st)) for st in steps]}, "
+                    f"dr_outs at {[hex(int(t.buffer_address())) for t in self._dr_outs]}); zeroed"
+                )
+            d = torch.where(bad, torch.zeros_like(d), d)
+        return d.to(torch.int32)
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
@@ -6005,6 +6556,9 @@ class MTPSpecEngine:
                 num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, None
             )
             return h.draft_result
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the commit the runner reports, in engine rows
+            tok, acc = self._to_rows(committed_tokens, accepted_counts)
+            self._dv_guard.observe_block(tok, acc)
         hit = self._fused_cache_take(num_drafts, committed_tokens, committed_positions, accepted_counts, page_table)
         if (
             self._ch_g is not None
@@ -6242,7 +6796,7 @@ class MTPSpecEngine:
             self._dr_rs_sin,
         ]
 
-    def _drafter_body(self, feed, b=None, dst_outs=None):
+    def _drafter_body(self, feed, b=None, dst_outs=None, kv_split=None):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
         persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
         tensors [1,1,B] uint32 (step k's drafts).
@@ -6251,11 +6805,19 @@ class MTPSpecEngine:
         per step), on the shared B-row inputs (sliced in the trace). Its K ids [1,1,b,1] are handed over IN PLACE (concat of
         the b new rows with the old rows b..B-1, then ttnn.copy: the destination keeps its address) into ``dst_outs`` (the
         shared K [1,1,B,1] outputs of the B-row trace, or stand-ins while warming), and ``dst_outs`` is returned. b = B or
-        None is the B-row body, unchanged."""
+        None is the B-row body, unchanged.
+
+        ``kv_split`` (QWEN36_ATTN_KV_SPLIT=user): True = the split variant of width b (the context gate's second drafter
+        trace; with ``dst_outs`` it hands its ids over like a bucket, at b == B too), False = never split, None = the
+        canonical trace (split only in the gate's "always" mode, as the K1 commit captured every even width).
+
+        Given ``dst_outs`` at b == B (the full-head set of QWEN36_DRAFT_VOCAB_FALLBACK, or a full-width split variant)
+        its ids are copied into ``dst_outs`` in place and ``dst_outs`` is returned."""
         B, mtp = self.B, self.mtp
         b = B if b is None or int(b) == B else int(b)
         bucket = b < B
-        assert not bucket or dst_outs is not None, "a row-bucket drafter body needs the shared K ids outputs"
+        handoff = dst_outs is not None  # a row bucket or a split variant: the K ids go into dst_outs in place
+        assert not bucket or handoff, "a row-bucket drafter body needs the shared K ids outputs"
         d = self._dr_inputs(b)
         owned = list(d["owned"])
         if bucket:
@@ -6268,9 +6830,21 @@ class MTPSpecEngine:
             hp = self._hp_bufs[b]
         else:
             rs_pt, mtp_pt, hp = self._dr_rs_pt, self._mtp_pt, self._hp_buf
+        # QWEN36_MTP_REPL_RESIDUAL: gather the feed ONCE (exact) for the reseed, and take the step-0 anchor rows from the
+        # gathered feed (the same one-hot matmul, so [1,1,b,dim] is the gather of today's anchor rows); the persistent
+        # fractured anchor buffer is then unused here (the eager _draft refills it with _set_anchor before reading it).
+        # A feed wider than one tile of rows (RES40's height) keeps today's anchor copy; its reseed stays fractured.
+        repl = getattr(mtp, "repl_residual", False) and int(feed.shape[-2]) <= ttnn.TILE_SIZE
+        if repl:
+            feed = mtp.replicate_hidden(feed)
+            owned.append(feed)
         Hp = ttnn.matmul(d["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
-        ttnn.copy(Hp, hp)
-        ttnn.deallocate(Hp)
+        if repl:
+            h0 = Hp  # freed after step 0 by the loop below (it is not hp)
+        else:
+            ttnn.copy(Hp, hp)
+            ttnn.deallocate(Hp)
+            h0 = hp
         _, hn = mtp.forward_decode(
             feed,
             d["rs_tok"],
@@ -6282,10 +6856,24 @@ class MTPSpecEngine:
             alias_kv_write=True,
             spec_n_users=b,
         )
-        ttnn.deallocate(hn)
-        h, tok, outs = hp, d["tok0"], []
+        _free_maint(hn)
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the draft steps' SDPA reads this device's own users only, on the
+        # per-device own page table (rows 0..b/2-1 of _mtp_pt_own: the own users of rows 0..b-1) and the own positions of
+        # each step. Flag off (no own twin) / an unsplit width: _ksp_pt stays None and every step is today's, without
+        # touching mtp.attention (an explicit kv_split=True still asserts in _dr_ksp_want when the split is unavailable).
+        _ksp_pt = None
+        if (kv_split or getattr(self, "_mtp_pt_own", None) is not None) and self._dr_ksp_want(b, kv_split):
+            _ksp_pt = self._mtp_pt_own if b == B else ttnn.slice(self._mtp_pt_own, [0, 0], [b // 2, self.nb])
+        h, tok, outs = h0, d["tok0"], []
         for k in range(self.K):
+            _ksp = self.model.kv_split_ctx(b, 1, d["pos"][k], _ksp_pt) if _ksp_pt is not None else None
+            if _ksp is not None:
+                mtp.attention._kv_split_ctx = _ksp
             logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], mtp_pt)
+            if _ksp is not None:
+                mtp.attention._kv_split_ctx = None
+                for _t in _ksp.get("owned", ()):
+                    ttnn.deallocate(_t)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (b, 1))
@@ -6294,9 +6882,11 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        if _ksp_pt is not None and _ksp_pt is not self._mtp_pt_own:  # a bucket's slice (b < B: never full span)
+            ttnn.deallocate(_ksp_pt)
         for t in owned:
             ttnn.deallocate(t)
-        if not bucket:
+        if not handoff:
             return outs
         from models.demos.blackhole.qwen36.tt.spec_bucket import handoff_ids_concat
 
@@ -6304,6 +6894,27 @@ class MTPSpecEngine:
             handoff_ids_concat(idx, dst, b)  # in place (ttnn.copy), never slice_write: dst keeps its address
             ttnn.deallocate(idx)
         return dst_outs
+
+    def _dr_ksp_want(self, b, kv_split=None):
+        """Whether the drafter body of width ``b`` runs the split steps: ``kv_split`` True (a split variant: must be
+        available), False (never), None (the canonical trace: split only in the gate's "always" mode). Available = the
+        MTP attention loaded the pair weights, the plan has (b, 1), the "draft" part is on, and the own twin of _mtp_pt
+        was built for THIS engine width (an adaptive-K family of another width has none)."""
+        if kv_split is False:
+            return False
+        plan = self._kv_split_draft_plan()
+        avail = (
+            self._mtp_pt_own is not None
+            and plan is not None
+            and int(self._mtp_pt_own_rows) == int(self.B)
+            and plan.has(b, 1)
+            and "draft" in plan.parts
+        )
+        if kv_split is None:
+            gate = getattr(self.model, "_kv_split_gate", None)
+            return avail and gate is not None and gate.canonical_split()
+        assert avail, f"QWEN36_ATTN_KV_SPLIT: no split drafter for width {b}"
+        return True
 
     def _dr_seg_lens(self):
         B, K, R = self.B, self.K, self.B * self.T
@@ -6407,7 +7018,7 @@ class MTPSpecEngine:
             stage(pv, self._dr_pos[k], ttnn.int32, rm)
             stage(c, self._dr_cos[k], bf, tile)
             stage(s, self._dr_sin[k], bf, tile)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
 
@@ -6463,7 +7074,7 @@ class MTPSpecEngine:
         table = self._dr_rs_table(real, pt)
         if table is not None:
             self._stage(table, self._dr_rs_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
         self._prestage_next_verify(cpos, m)
@@ -6589,7 +7200,7 @@ class MTPSpecEngine:
             need_logits=False,
             **self._mtp_rd_kw([row]),
         )
-        ttnn.deallocate(h_next)
+        _free_maint(h_next)
 
     def _reseed_mtp(self, committed_tokens, committed_positions, m):
         """Per-slot reseed (B == 1 past EAGER_RESEED_PROMPT_LEN): one 1-row drafter decode per committed slot."""
@@ -6607,7 +7218,7 @@ class MTPSpecEngine:
                     **self._mtp_rd_kw([u]),
                 )
                 ttnn.deallocate(row)
-                ttnn.deallocate(h_next)
+                _free_maint(h_next)
                 self.mtp_extra_steps += 1
 
     def _eager_row(self, feed, r):
@@ -6661,8 +7272,7 @@ class MTPSpecEngine:
         _, h_next = self.mtp.forward_decode(
             feed, tok_tt, pos_tt, cos, sin, pt_tt, need_logits=False, alias_kv_write=True, spec_n_users=B
         )
-        for t in (tok_tt, pos_tt, pt_tt, cos, sin, h_next):
-            ttnn.deallocate(t)
+        _free_maint(tok_tt, pos_tt, pt_tt, cos, sin, h_next)
         self.mtp_extra_steps += 1
 
     def _reseed_warmup(self, rows, dim_frac, dtype):

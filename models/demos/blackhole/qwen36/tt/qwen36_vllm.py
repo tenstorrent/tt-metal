@@ -309,6 +309,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         optimizations=None,
         **kwargs,
     ):
+        from models.demos.blackhole.qwen36.tt.tp_common import join_topp_candidates_enabled
+
+        if join_topp_candidates_enabled():  # QWEN36_JOIN_TOPP_CANDIDATES: plugin host sampler without the full sort
+            from models.demos.blackhole.qwen36.tt.host_topp import install_plugin_topp_candidates
+
+            logger.info(f"QWEN36_JOIN_TOPP_CANDIDATES: plugin sampler hook installed={install_plugin_topp_candidates()}")
         # Weights dir: MODEL_WEIGHTS_DIR → HF_MODEL → hf_config._name_or_path; a hub id resolves to a local snapshot.
         name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
@@ -1048,7 +1054,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
 
             n = int(os.environ.get("QWEN36_CHUNK_STATE_SLOTS", "4"))
-            model._chunk_state_cache = GdnPrefixStateCache(model, num_slots=n, name="chunked-prefill continuation")
+            model._chunk_state_cache = GdnPrefixStateCache(
+                model, num_slots=n, name="chunked-prefill continuation", host_slots=0
+            )
             model._chunk_budget = chunked
             logger.info(
                 f"chunked prefill: continuation store {n} slots, (budget, long_prefill_threshold, align)={chunked}"
