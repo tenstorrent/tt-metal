@@ -79,6 +79,17 @@ def grid_name(grid_thw) -> str:
     return f"h{h}w{w}" if t == 1 else f"t{t}h{h}w{w}"
 
 
+# A check's bound at a grid where its relative L2 error passes MAX_REL_L2. At h4w4 SDPA attends over 16 keys (112 of
+# its one 128-key chunk masked), so each output row averages few bf16 products: on a P150 the attention's relL2 was
+# 0.0135 there (PCC 0.999915), against 0.0048 to 0.0070 from 144 to 2304 patches.
+MAX_REL_L2_AT_GRID = {("attention", "h4w4"): 0.027}
+
+
+def max_rel_l2(check: str, grid_thw) -> float:
+    """The relative L2 bound of check (a key of MAX_REL_L2) at grid_thw: its MAX_REL_L2_AT_GRID bound, if any."""
+    return MAX_REL_L2_AT_GRID.get((check, grid_name(grid_thw)), MAX_REL_L2[check])
+
+
 def rows_to_device(x: torch.Tensor, mesh_device) -> ttnn.Tensor:
     """(L, D) host rows -> (1, 1, L, D) bf16 tile tensor in DRAM, replicated over the mesh (common.to_device)."""
     return common.to_device(x.reshape(1, 1, *x.shape), mesh_device)
