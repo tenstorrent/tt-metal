@@ -717,6 +717,10 @@ def _typecast_golden_function(
     if output_dtype == ttnn.fp8_e4m3:
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
+    if output_dtype == ttnn.bfloat2_b and not _ttnn_is_host:
+        # Device ops pack BFLOAT2_B with a different rule than the host packer a host typecast uses.
+        return golden_to_output_dtype(input_tensor, ttnn.bfloat2_b)
+
     if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b) or ttnn.is_mx_dtype(output_dtype):
         return ttnn.Tensor(tensor=input_tensor, data_type=output_dtype, layout=ttnn.TILE_LAYOUT).to_torch()
 

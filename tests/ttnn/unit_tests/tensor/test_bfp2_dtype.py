@@ -35,6 +35,21 @@ def _require_bfp_arch(device):
         pytest.skip("BFLOAT2_B device operations require Wormhole or Blackhole")
 
 
+# The block maximum 1.0 fixes every element to -1, 0 or +1. The host packer rounds 0.9, 0.75 and 0.6 up to 1; the device
+# rounds to BFP8, truncates to one magnitude bit and keeps only the elements in the maximum's power-of-two range.
+_MIXED_BLOCK = [1.0, 0.9, 0.75, 0.6, 0.5, 0.4, 0.25, 0.0, -0.75, -0.9, -1.0, -0.25, 0.0, 0.0, 0.0, 0.0]
+_MIXED_BLOCK_DEVICE = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+_ZERO_BLOCK = [0.0] * 16
+
+
+def _tile_of_blocks(*blocks):
+    # Each run of 16 row-major elements in a 32x32 tile is one face row, which shares one exponent.
+    x = torch.zeros((32, 32))
+    for index in range(64):
+        x.view(-1, 16)[index] = torch.tensor(blocks[index % len(blocks)])
+    return x
+
+
 def test_bfp2_alias():
     assert ttnn.bfloat2_b == ttnn.DataType.BFLOAT2_B
 
@@ -70,11 +85,44 @@ def test_bfp2_quantizes_general_values():
 
 
 def test_bfp2_golden_to_output_dtype_quantizes():
-    # Comparison mode models a BFLOAT2_B output by packing the golden result through BFLOAT2_B on the host.
-    torch.manual_seed(0)
-    x = torch.randn((64, 64), dtype=torch.float32)
+    # Comparison mode models a BFLOAT2_B output, so the golden must follow the device pack rather than the host one.
+    x = _tile_of_blocks(_MIXED_BLOCK)
 
-    assert torch.equal(golden_to_output_dtype(x, ttnn.bfloat2_b), _round_trip(x))
+    golden = golden_to_output_dtype(x, ttnn.bfloat2_b)
+
+    assert torch.equal(golden, _tile_of_blocks(_MIXED_BLOCK_DEVICE))
+    # Idempotent: values already in BFLOAT2_B survive another golden pass.
+    assert torch.equal(golden_to_output_dtype(golden, ttnn.bfloat2_b), golden)
+    # The host packer keeps the values the device drops, which is what the golden used to model.
+    assert not torch.equal(golden, _round_trip(x))
+    # Exponent-zero inputs store 0, so an all-zero block stays zero.
+    assert torch.equal(golden_to_output_dtype(torch.zeros((32, 32)), ttnn.bfloat2_b), torch.zeros((32, 32)))
+    # A rank-1 tensor is one row of blocks.
+    assert golden_to_output_dtype(torch.tensor(_MIXED_BLOCK), ttnn.bfloat2_b).tolist() == _MIXED_BLOCK_DEVICE
+
+
+def test_bfp2_host_typecast_matches_golden():
+    # A host typecast goes through to_dtype and the host packer, so its golden must too.
+    x = _tile_of_blocks(_MIXED_BLOCK)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    result = ttnn.to_torch(ttnn.typecast(tt_x, ttnn.bfloat2_b))
+    golden = ttnn.get_golden_function(ttnn.typecast)(x, ttnn.bfloat2_b, _ttnn_is_host=True)
+
+    assert torch.equal(result, golden)
+
+
+def test_bfp2_golden_to_output_dtype_matches_device(device):
+    _require_bfp_arch(device)
+    # Comparison mode checks a device result against golden_to_output_dtype, so the golden must store what the device
+    # stores: 0.75 beside 1.0 becomes 0, and the all-zero blocks in between stay 0.
+    x = _tile_of_blocks(_MIXED_BLOCK, _ZERO_BLOCK)
+
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    device_values = ttnn.to_torch(ttnn.typecast(tt_x, ttnn.bfloat2_b)).float()
+
+    assert torch.equal(device_values, _tile_of_blocks(_MIXED_BLOCK_DEVICE, _ZERO_BLOCK))
+    assert torch.equal(golden_to_output_dtype(x, ttnn.bfloat2_b), device_values)
 
 
 def test_bfp2_requires_tile_layout(expect_error):
@@ -218,6 +266,31 @@ def test_bfp2_device_typecast_uint16_matches_golden(device):
     golden = ttnn.get_golden_function(ttnn.typecast)(x, ttnn.uint16, input_dtype=ttnn.bfloat2_b)
 
     assert torch.equal(result.to(torch.int64), golden.to(torch.int64))
+
+
+def test_bfp2_device_typecast_non_ternary_matches_llk_reference(device):
+    _require_bfp_arch(device)
+    # Every other device test feeds exact ternary data, where the host and device packers agree. A value between
+    # the block maximum and half of it is where they part: the host packer rounds it up to one magnitude bit, the
+    # device truncates the BFP8 intermediate and drops it.
+    x = _tile_of_blocks(_MIXED_BLOCK)
+
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.typecast(tt_x, ttnn.bfloat2_b)).float()
+
+    expected = _tile_of_blocks(_MIXED_BLOCK_DEVICE)
+    host_packed = _round_trip(x)
+
+    # Report which model the silicon matches before asserting, so a failure names the packer that won.
+    matches_llk = torch.equal(result, expected)
+    matches_host = torch.equal(result, host_packed)
+    assert matches_llk or matches_host, (
+        "device BFP2 pack matches neither the tt-llk reference nor the host packer; "
+        f"device={result.view(-1)[:16].tolist()} llk={expected.view(-1)[:16].tolist()} "
+        f"host={host_packed.view(-1)[:16].tolist()}"
+    )
+    # The device truncates, so from_torch(x, bfloat2_b) stores different values than a device typecast of the same x.
+    assert matches_llk
 
 
 def test_bfp2_device_typecast_sharded_same_dtype(device):
