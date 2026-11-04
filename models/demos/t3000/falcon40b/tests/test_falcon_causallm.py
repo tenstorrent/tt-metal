@@ -271,6 +271,7 @@ def run_test_FalconCausalLM_inference(
         assert does_pass
 
 
+@pytest.mark.falcon40b_config
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -319,11 +320,6 @@ def test_FalconCausalLM_inference(
     model_config_str,
     mesh_device,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
-        pytest.skip("Decode is only supported for SHARDED memory config!")
-
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = mesh_device.compute_with_storage_grid_size()

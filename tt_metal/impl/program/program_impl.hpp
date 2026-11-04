@@ -18,8 +18,8 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
+#include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -27,8 +27,8 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>          // CoreType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
 #include <bitset>
@@ -51,6 +51,7 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class MeshTensor;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -94,12 +95,16 @@ struct KernelGroup {
     std::vector<uint32_t> kernel_text_offsets;
     dev_msgs::launch_msg_t launch_msg;
     dev_msgs::go_msg_t go_msg;
+    // DFBs on the group's cores. Until the program's offsets are finalized, the launch message's local_cb_mask holds
+    // only the group's CB mask, which sizes the CB config region; finalize_dfb_masks then writes the DFBs there.
+    uint32_t num_local_dfbs{};
 
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
         uint64_t local_cb_mask,
+        uint32_t num_local_dfbs,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
@@ -202,6 +207,18 @@ public:
     bool contains(IDevice* device);
 };
 
+// The device memory a bound TensorParameter occupies, whether or not an allocation backs it.
+struct BoundTensorFootprint {
+    BufferType buffer_type = BufferType::DRAM;
+    DeviceAddr address = 0;
+    DeviceAddr size_per_bank = 0;
+    // MeshBuffer::unique_id() of the tensor's allocation when it was bound. Empty when the tensor does not own its
+    // allocation.
+    std::optional<size_t> buffer_id;
+};
+
+BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
+
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
@@ -263,13 +280,15 @@ public:
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
+    // Call before allocate_circular_buffers, allocate_dataflow_buffers and allocate_scratchpads.
+    // Seals the program's cores in the device's persistent L1 and sets the base address of every registered region.
+    void prepare_ephemeral_allocation(const IDevice* device);
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
-    DeviceAddr reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -369,16 +388,21 @@ public:
     };
 
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
-    // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
-    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core. Dispatch reads the record only when a
-    // program is enqueued, by which point every participant must be bound.
+    // compiles and bound to a live pipe object afterwards: `pipe_identity` / `config_page_addr` /
+    // `num_credit_lanes` stay 0 / 0 / 1 until commit_prefetcher_pipe_slot_bind copies them from the
+    // pipe for this core. The record holds values only, so dispatch never reads the pipe itself;
+    // by the time a program is enqueued every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
         uint32_t entry_size;
         uint8_t relay_dfb_id;
-        // Live pipe this core's slot is bound to (non-owning; the handle must outlive the program).
-        experimental::PrefetcherPipeImpl* pipe = nullptr;
+        // identity() of the pipe this core's slot is bound to, 0 until bound. The pipe may be
+        // destroyed while the program lives on; the sticky-binding checks still know which pipe it was.
+        experimental::PrefetcherPipeIdentity pipe_identity{0};
+        // The bound pipe's num_credit_lanes(). On a sender-only slot it can differ from the slot's.
+        uint32_t num_credit_lanes = 1;
+        bool is_bound() const { return pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
     };
 
     // Program-wide PrefetcherPipe slot (dense [0, num) id space, one per kernel accessor, i.e. per
@@ -392,8 +416,8 @@ public:
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
         // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
-        // num_threads, which a relay DFB's num_producers must equal). 1 on sender-only slots; the
-        // bound pipe's live value is what dispatch packs.
+        // num_threads, which a relay DFB's num_producers must equal). A pipe binding receivers here
+        // must have been carved with this many. 1 on sender-only slots, which take the bound pipe's.
         uint32_t num_credit_lanes = 1;
         std::optional<uint32_t> relay_dfb_host_id;
     };
@@ -442,18 +466,18 @@ public:
     // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
     // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
     // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
-    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry, the sticky
-    //     per-core binding, the credit-lane transition and the relay ring agreement. No mutation.
-    //     `preflight` accumulates what earlier checks in the same batch would commit (lanes armed
-    //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
-    //     each other as well as against committed state.
-    //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
-    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
-    //     Only valid right after a successful check of the same batch.
-    // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
+    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry and credit
+    //     lanes, the sticky per-core binding and the relay ring agreement. No mutation.
+    //     `preflight` accumulates what earlier checks in the same batch would commit (ring address
+    //     per relay slot, pipe per core) so two bindings in one batch are checked against each
+    //     other as well as against committed state.
+    //   commit_prefetcher_pipe_slot_bind points the slot's relay DFB (if any) at the pipe ring and
+    //     fills the per-core records. Only valid right after a successful check of the same batch.
+    // Rebinding the same pipe is a no-op. A different pipe on an already-bound core is rejected
+    // unless it replaces `replaced`, the identity of the pipe the parameter was bound to, whose key
+    // it matches.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
-        std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
         std::unordered_map<uint8_t, DeviceAddr> relay_rings;
         // (slot, core) -> pipe checked earlier in this batch; a second pipe on the same core is a
         // collision (e.g. two pipes carved with the same sender node under one sender accessor).
@@ -463,9 +487,10 @@ public:
         uint8_t prefetcher_pipe_id,
         const CoreRangeSet& cores,
         const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        experimental::PrefetcherPipeIdentity replaced,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
-        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -482,6 +507,26 @@ public:
     // ring when a pipe binds (immediately for pipes already bound). Its device_slot is emitted only
     // on receiver cores and consumed by PrefetcherPipe::bind_relay().
     void register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+
+    // What a program bakes in from the pipe it binds: config page and ring addresses, entry size,
+    // credit lanes and core layout. A pipe whose key matches the bound one's can replace it, e.g. one
+    // re-carved at the same addresses after the bound pipe was destroyed. A DRAM sender's core is not
+    // in it (sender_cores is empty): receivers read the sender's address from their config pages, so
+    // the program does not depend on which DRAM core sends. The program cache key
+    // (PrefetcherPipe::attribute_values) covers every field here, so a cache hit always rebinds.
+    struct PrefetcherPipeBindingKey {
+        experimental::SenderCoreType sender_core_type{};
+        CoreRangeSet sender_cores;
+        CoreRangeSet receiver_cores;
+        uint32_t config_address = 0;
+        uint32_t buffer_address = 0;
+        uint32_t initial_entry_size = 0;
+        uint32_t ring_size = 0;
+        uint32_t num_credit_lanes = 1;
+        bool operator==(const PrefetcherPipeBindingKey&) const = default;
+    };
+    static PrefetcherPipeBindingKey prefetcher_pipe_binding_key(
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
     // several slots (one per accessor group that names it), on the cores where that group's
@@ -500,11 +545,16 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
-        experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
-        // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
-        // pipe's address can be reused by a new pipe, but its identity never is.
+        // identity() of the pipe SetProgramRunArgs bound, 0 until one is. Same-pipe checks compare
+        // this, not the address: a destroyed pipe's address can be reused by a new pipe, but its
+        // identity never is. The bound pipe may be destroyed while the program lives on; a later bind
+        // may replace it only with a pipe of the same bound_pipe_key.
         experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
+        PrefetcherPipeBindingKey bound_pipe_key;
+        bool is_bound() const { return bound_pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
+        // Whether `pipe` may be bound: nothing is bound yet, it is the bound pipe, or it matches the
+        // bound pipe's key.
+        bool accepts(const experimental::PrefetcherPipeImpl& pipe) const;
     };
     void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
     const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
@@ -512,10 +562,11 @@ public:
     // Bind each named parameter to its pipe, on every slot the parameter feeds. All-or-nothing:
     // every pair is validated (pipe geometry against the parameter, then every slot bind) before
     // the first mutation, so a rejected batch leaves the program and the pipes as they were. A
-    // parameter already bound to the same pipe is a no-op; to a different pipe: rejected.
+    // parameter already bound to the same pipe is a no-op; to a pipe with the same binding key, the
+    // new pipe replaces it; to any other pipe: rejected.
     struct PrefetcherPipeParameterBind {
         std::string name;
-        experimental::PrefetcherPipeImpl* pipe;
+        const experimental::PrefetcherPipeImpl* pipe;
     };
     void bind_prefetcher_pipe_parameters(std::span<const PrefetcherPipeParameterBind> binds);
     // The cores a parameter's slot placement binds for `prefetcher_pipe`: the placement's cores
@@ -547,6 +598,14 @@ public:
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
+    // True if any static CB region of this program covers a core claimed through ServiceCoreManager on
+    // any physical device behind `device`. False (and cheap) when nothing is claimed.
+    bool cb_regions_touch_service_cores(const IDevice* device) const;
+    // Records the lockstep fast-path state after a full validation (see simple_l1_validation_cached_).
+    void cache_simple_l1_validation(const IDevice* device);
+    // True if a cached compile_and_allocate on `device` may replace the full CB/DFB validation with the
+    // lockstep L1 frontier check.
+    bool simple_l1_validation_usable(const IDevice* device) const;
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
@@ -608,6 +667,10 @@ public:
     // name is unknown; the caller validates known-ness separately).
     experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
+    // the getter returns nullptr if no tensor has been bound.
+    void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
+    const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
     // bound to `tensor_parameter_name`.
@@ -634,6 +697,16 @@ public:
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
+        // Array arg name -> its slots in the dispatch buffer: [first_slot, first_slot + size).
+        // The arrays follow the scalars in the named section. (Copied from the kernel's ArrayArgLayouts:
+        // first_slot is their word_offset.)
+        struct ArraySlots {
+            size_t first_slot = 0;
+            size_t size = 0;
+        };
+        std::unordered_map<std::string, ArraySlots> runtime_array_arg_slots;
+        std::unordered_map<std::string, ArraySlots> common_runtime_array_arg_slots;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
@@ -676,30 +749,6 @@ private:
     // This way we can cache it agnostic of the device
     std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-    struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
-
-        // Circular buffers are created and allocated at core range granularity
-        CoreRange core_range;
-
-        // Holds vector of addresses where circular buffers are allocated [start, end)
-        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
-        // multiple cores must share the same address To enable this, circular buffer address is the maximum address
-        // amongst all of its target cores This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
-
-        // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the
-        // last L1 region
-        uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
-
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
-
-        // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions.clear(); }
-    };
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
@@ -717,8 +766,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
-    std::vector<CircularBufferAllocator> cb_allocators_;
+    EphemeralAllocationMetadata cb_allocation_metadata_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
 
@@ -744,8 +792,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
-    std::vector<CircularBufferAllocator> dfb_allocators_;
-    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
+    EphemeralAllocationMetadata dfb_allocation_metadata_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.
@@ -761,6 +808,7 @@ private:
         struct RegisteredTensorParameter {
             TensorSpec spec;
             experimental::TensorSpecRelaxations relaxations;
+            std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -789,11 +837,16 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
-    // For lockstep allocation without service-core claims, a single live L1 frontier
-    // check covers every static CB and DFB region validated during layout.
+    // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
+    // region validated during layout. Service-core claims only add checks for CB regions that sit
+    // on a claimed core, so the shortcut also holds while services run, for any program whose CBs
+    // touch no claimed core. That answer depends only on which cores are claimed, so it is cached
+    // against the ServiceCoreManager claims generation and recomputed when the claims change.
     bool simple_l1_validation_cached_{false};
     SubDeviceManagerId simple_l1_validation_manager_id_;
     uint64_t simple_l1_validation_region_end_{0};
+    uint64_t simple_l1_validation_claims_gen_{0};
+    bool simple_l1_validation_touches_service_{false};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

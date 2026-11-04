@@ -244,12 +244,6 @@ class PrefillModel:
         self.attention.validate_request(
             kv_cache, slot_idx=slot_idx, layer_idx=0, actual_start=actual_start, actual_end=actual_end
         )
-        populated_end = kv_cache.populated_end(slot_idx, self.num_layers)
-        if actual_start > populated_end:
-            raise ValueError(
-                f"prefill continuation starts at {actual_start}, beyond populated cache prefix {populated_end}; "
-                "prefill the missing tokens first"
-            )
         topology = ttnn.get_usable_topology(kv_cache.k, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
         if topology != ttnn.Topology.Ring:
             raise RuntimeError(f"prefill requires a live TP ring; TTNN selected {topology}")
