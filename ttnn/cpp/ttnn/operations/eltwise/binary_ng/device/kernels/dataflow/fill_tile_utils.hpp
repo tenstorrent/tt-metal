@@ -344,23 +344,32 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t l1_write_ptr) {
     }
 }
 
-// Reads the very first element of the CB and fills the entire tile with that value.
-// Tile is assumed to be in BFP2 format (Bfp2 or Bfp2_b).
 // BFP2 tile layout (32x32 = 1024 elements, 320 bytes total):
 //   Bytes 0-63:   Exponent section (16 uint32_t words = 64 bytes)
 //                 4 faces x 16 rows/face, one exponent byte per row of 16 elements
 //   Bytes 64-319: Data section (64 uint32_t words = 256 bytes)
 //                 4 faces x 16 words/face, one word per row of 16 elements
 // BFP2 packing: element k of a row is in bits [2k, 2k+1] of the row's word.
+constexpr uint32_t BFP2_DATA_START_WORD = 16;
+constexpr uint32_t BFP2_FACE_DATA_WORDS = 16;
+constexpr uint32_t BFP2_DATA_END_WORD = BFP2_DATA_START_WORD + 4 * BFP2_FACE_DATA_WORDS;
+constexpr uint32_t BFP2_ELEM_MASK = 0x3;
+constexpr uint32_t BFP2_ELEM_REPLICATE = 0x55555555u;  // 1 in each 2-bit slot
+
+// Returns a BFP2 data word with element 0 of `word` copied into all 16 element slots.
+FORCE_INLINE uint32_t bfp2_replicate_elem0(uint32_t word) { return (word & BFP2_ELEM_MASK) * BFP2_ELEM_REPLICATE; }
+
+// Reads the very first element of the CB and fills the entire tile with that value.
+// Tile is assumed to be in BFP2 format (Bfp2 or Bfp2_b).
 FORCE_INLINE void fill_tile_with_first_element_bfp2(uint32_t l1_write_ptr) {
     auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     uint32_t packed_exp = (word_ptr[0] & 0xFF) * 0x01010101u;
-    uint32_t packed_data = (word_ptr[16] & 0x3) * 0x55555555u;
+    uint32_t packed_data = bfp2_replicate_elem0(word_ptr[BFP2_DATA_START_WORD]);
 
-    for (uint32_t i = 0; i < 16; ++i) {
+    for (uint32_t i = 0; i < BFP2_DATA_START_WORD; ++i) {
         word_ptr[i] = packed_exp;
     }
-    for (uint32_t i = 16; i < 80; ++i) {
+    for (uint32_t i = BFP2_DATA_START_WORD; i < BFP2_DATA_END_WORD; ++i) {
         word_ptr[i] = packed_data;
     }
 }
@@ -380,10 +389,12 @@ FORCE_INLINE void fill_tile_with_first_column_bfp2(uint32_t l1_write_ptr) {
         for (uint32_t i = 0; i < 4; ++i) {
             word_ptr[right * 4 + i] = word_ptr[left * 4 + i];
         }
-        for (uint32_t row = 0; row < 16; ++row) {
-            const uint32_t packed = (word_ptr[16 + left * 16 + row] & 0x3) * 0x55555555u;
-            word_ptr[16 + left * 16 + row] = packed;
-            word_ptr[16 + right * 16 + row] = packed;
+        const uint32_t left_data = BFP2_DATA_START_WORD + left * BFP2_FACE_DATA_WORDS;
+        const uint32_t right_data = BFP2_DATA_START_WORD + right * BFP2_FACE_DATA_WORDS;
+        for (uint32_t row = 0; row < BFP2_FACE_DATA_WORDS; ++row) {
+            const uint32_t packed = bfp2_replicate_elem0(word_ptr[left_data + row]);
+            word_ptr[left_data + row] = packed;
+            word_ptr[right_data + row] = packed;
         }
     }
 }
@@ -398,13 +409,14 @@ FORCE_INLINE void fill_tile_with_first_row_bfp2(uint32_t l1_write_ptr) {
 
     const uint32_t packed_exp[2] = {
         static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u, static_cast<uint32_t>(byte_ptr[16]) * 0x01010101u};
-    const uint32_t row0[2] = {word_ptr[16], word_ptr[32]};
+    const uint32_t row0[2] = {word_ptr[BFP2_DATA_START_WORD], word_ptr[BFP2_DATA_START_WORD + BFP2_FACE_DATA_WORDS]};
     for (uint32_t face = 0; face < 4; ++face) {
         for (uint32_t i = 0; i < 4; ++i) {
             word_ptr[face * 4 + i] = packed_exp[face & 1];
         }
-        for (uint32_t row = 0; row < 16; ++row) {
-            word_ptr[16 + face * 16 + row] = row0[face & 1];
+        const uint32_t face_data = BFP2_DATA_START_WORD + face * BFP2_FACE_DATA_WORDS;
+        for (uint32_t row = 0; row < BFP2_FACE_DATA_WORDS; ++row) {
+            word_ptr[face_data + row] = row0[face & 1];
         }
     }
 }
