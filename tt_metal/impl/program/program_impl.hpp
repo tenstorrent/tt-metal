@@ -52,6 +52,7 @@ class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
 class MeshTensor;
+struct DeviceBuildEnv;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -219,6 +220,8 @@ struct BoundTensorFootprint {
 
 BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
+struct KernelBuildJob;
+
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
@@ -277,6 +280,11 @@ public:
     /// objects on disk are reused unless the content hash of a source or header dependency changed (or
     /// TT_METAL_FORCE_JIT_COMPILE is set). A program is compiled once per build key; later calls return early.
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    // Resolves the build inputs of every kernel as compile() would, without building anything, so that an
+    // experimental::CompileSession can build them later without the device. Returns nothing for a program
+    // already compiled for this device's build key, already prepared, or one compile() would not build (mock
+    // Quasar, Emule). A prepared program can no longer be compiled.
+    std::vector<KernelBuildJob> prepare_kernel_builds(IDevice* device);
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
@@ -795,6 +803,8 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
+    // Set by prepare_kernel_builds(); such a program's kernels belong to a CompileSession.
+    bool handed_to_compile_session_ = false;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 
@@ -844,6 +854,11 @@ private:
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
+
+    // Build options and compile hash of one kernel; sets the kernel's full name. Shared by compile() and
+    // prepare_kernel_builds().
+    std::pair<JitBuildOptions, std::size_t> prep_kernel_build(
+        const std::shared_ptr<Kernel>& kernel, const DeviceBuildEnv& build_env);
 
     // Set data format and tile metadata in `build_options` for every circular buffer
     // intersecting `crs`.

@@ -23,6 +23,9 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <internal/graph_function_abort.hpp>
+#include <tt-metalium/experimental/compile_session.hpp>
+
+#include "ttnn/precompile.hpp"
 
 namespace ttnn::graph {
 
@@ -54,6 +57,74 @@ void py_graph_module_types(nb::module_& m) {
 }
 
 void py_graph_module(nb::module_& m) {
+    {
+        using tt::tt_metal::experimental::CompileSession;
+        using tt::tt_metal::experimental::CompileSessionOptions;
+        using tt::tt_metal::experimental::CompileSessionStats;
+
+        nb::class_<CompileSessionStats>(m, "CompileSessionStats")
+            .def_ro("programs_added", &CompileSessionStats::programs_added)
+            .def_ro("programs_deduped", &CompileSessionStats::programs_deduped)
+            .def_ro("kernels_queued", &CompileSessionStats::kernels_queued)
+            .def_ro("kernels_built", &CompileSessionStats::kernels_built)
+            .def_ro("kernels_preempted", &CompileSessionStats::kernels_preempted)
+            .def_ro("kernels_remote", &CompileSessionStats::kernels_remote)
+            .def_ro("kernels_failed", &CompileSessionStats::kernels_failed)
+            .def_ro("kernels_dropped", &CompileSessionStats::kernels_dropped)
+            .def_ro("kernels_pending", &CompileSessionStats::kernels_pending)
+            .def_ro("kernels_running", &CompileSessionStats::kernels_running)
+            .def_ro("busy_seconds", &CompileSessionStats::busy_seconds);
+
+        nb::class_<CompileSession>(m, "CompileSession", R"doc(
+            Builds the kernels of programs collected in a dry run, in the background.
+
+            Between begin_collect() and end_collect() on this thread, ops build their programs but nothing runs:
+            dispatch is blocked and each program's kernels are queued in this session. Worker threads build
+            them into the on-disk kernel cache, through the JIT compile server when remote_endpoints is set.
+            A later normal compile of the same kernel in this process waits for, or takes over, its build.
+
+            Args:
+                workers (int): build threads; 0 uses every core.
+                remote_endpoints (list[str]): JIT compile server endpoints ("host:port").
+                remote_min_kernels (int): use the server only once this many kernels are queued.
+        )doc")
+            .def(
+                "__init__",
+                [](CompileSession* self,
+                   std::size_t workers,
+                   std::vector<std::string> remote_endpoints,
+                   std::size_t remote_min_kernels) {
+                    new (self) CompileSession(CompileSessionOptions{
+                        .workers = workers,
+                        .remote_endpoints = std::move(remote_endpoints),
+                        .remote_min_kernels = remote_min_kernels});
+                },
+                nb::arg("workers") = 0,
+                nb::arg("remote_endpoints") = std::vector<std::string>{},
+                nb::arg("remote_min_kernels") = 10)
+            .def(
+                "begin_collect",
+                [](CompileSession& self, bool real_alloc) { ttnn::precompile::begin_collect(self, real_alloc); },
+                nb::arg("real_alloc") = true,
+                "Start a collect window on this thread.")
+            .def(
+                "end_collect",
+                [](CompileSession& self) { ttnn::precompile::end_collect(self); },
+                "End the collect window.")
+            .def("set_priority", &CompileSession::set_priority, nb::arg("priority"))
+            .def(
+                "wait",
+                &CompileSession::wait,
+                nb::call_guard<nb::gil_scoped_release>(),
+                "Block until nothing is queued or being built.")
+            .def(
+                "close",
+                &CompileSession::close,
+                nb::call_guard<nb::gil_scoped_release>(),
+                "Drop queued kernels not started yet and wait for the ones being built.")
+            .def("stats", &CompileSession::stats);
+    }
+
     // Bind TensorInfo struct for extract_output_info
     nb::class_<ttnn::graph::TensorInfo>(m, "TensorInfo")
         .def_ro("shape", &ttnn::graph::TensorInfo::shape)

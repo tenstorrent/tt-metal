@@ -21,6 +21,8 @@
 #include "tools/profiler/op_profiler_serialize.hpp"  // lightweight; heavy JSON lives in op_profiler_json.cpp
 #include <tt_stl/concepts.hpp>
 #include "ttnn/graph/graph_processor.hpp"
+#include <tt-metalium/experimental/compile_session.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -351,6 +353,18 @@ void create_and_cache_mesh_workload(
         }
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+        // Precompile collect window (ttnn/precompile.hpp): hand the built, uncompiled programs to the compile
+        // session instead of compiling, caching and dispatching them.
+        if (auto* session = tt::tt_metal::experimental::CompileSession::deferring_session()) {
+            // A disabled program cache reports hash 0, which turns deduplication off.
+            const auto hash = static_cast<std::uint64_t>(program_key.hash);
+            std::uint64_t index = 0;
+            for (auto& [range, program] : cached_workload.workload.get_programs()) {
+                session->add(
+                    *mesh_device, program, hash == 0 ? 0 : ttsl::hash::hash_objects_with_default_seed(hash, index++));
+            }
+            return;
+        }
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
         use_workload(cached_workload.workload);
 

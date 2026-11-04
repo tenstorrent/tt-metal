@@ -86,6 +86,8 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#include "impl/program/kernel_build_job.hpp"
+#include "jit_build/jit_build_cache.hpp"
 #include "kernel_compile_utils.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
@@ -247,11 +249,8 @@ namespace {
 
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
-    IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env = MetalContext::instance(extract_context_id(device))
-                          .build_env_manager()
-                          .get_device_build_env(device->build_id())
-                          .build_env;
+    const DeviceBuildEnv& build_env, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
+    const auto& env = build_env.build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
@@ -263,7 +262,8 @@ void generate_kernel_source_files(
 // Returns true if every expected ELF for this kernel is already present locally and still valid, so
 // the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
 // read_binaries() load the cached ELF.
-bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+bool remote_kernel_cached(
+    BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env, const std::shared_ptr<Kernel>& kernel) {
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
                              .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -272,10 +272,9 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
     if (num_binaries <= 0) {
         return false;
     }
-    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            build_env, core_type, proc_class, kernel->get_kernel_processor_type(i));
         if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
             return false;
         }
@@ -286,29 +285,27 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
 // Write the preprocess-and-ship reuse cache for every binary of this kernel, from the .d files the -E
 // step left on disk plus the link inputs. Called only after the remote compile succeeds and the ELFs
 // are on disk, so a failed compile leaves no validatable cache to reuse a stale ELF.
-void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+void finalize_preprocess_reuse_cache(
+    BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env, const std::shared_ptr<Kernel>& kernel) {
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
                              .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
     int num_binaries = kernel->expected_num_binaries();
-    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            build_env, core_type, proc_class, kernel->get_kernel_processor_type(i));
         bs.write_reuse_cache(kernel->get_full_kernel_name());
     }
 }
 
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
-    IDevice* device,
+    BuildEnvManager& build_env_manager,
+    const DeviceBuildEnv& build_env,
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
-    const auto& build_env = build_env_manager.get_device_build_env(device->build_id());
-
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
                              .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -331,7 +328,7 @@ KernelCompileDescriptor build_kernel_descriptor(
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            build_env, core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
@@ -3240,6 +3237,45 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     }
 }
 
+std::pair<JitBuildOptions, std::size_t> detail::ProgramImpl::prep_kernel_build(
+    const std::shared_ptr<Kernel>& kernel, const DeviceBuildEnv& build_env) {
+    JitBuildOptions build_options(build_env.build_env);
+    kernel->set_build_options(build_options);
+    if (this->compiled_.empty()) {
+        this->set_remote_circular_buffer_init(kernel);
+    }
+    this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+    this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+
+    // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
+    // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
+    // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
+    // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+    // a given kernel actually reads, so we err on the side of catching the misconfiguration.
+    if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
+         build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
+        kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+        std::any_of(
+            build_options.hlk_desc.buf_dataformat_arr.begin(),
+            build_options.hlk_desc.buf_dataformat_arr.end(),
+            is_fp8_format)) {
+        TT_FATAL(
+            build_options.fp32_dest_acc_en,
+            "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+            "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+            "an 8-bit float format. Kernel: {}",
+            kernel->name());
+    }
+
+    auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
+
+    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+    kernel->set_full_name(kernel_path_suffix);
+    build_options.set_name(kernel_path_suffix);
+
+    return std::pair{std::move(build_options), kernel_hash};
+}
+
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // Always-on zone: tools/tracy reports "CompileProgram" as a default child call of ops.
     TTZoneScopedDN(PROGRAM, "CompileProgram");
@@ -3260,6 +3296,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->id,
         context_id_.get(),
         device_context_id.get());
+
+    TT_FATAL(
+        !handed_to_compile_session_,
+        "Program {} was handed to an experimental::CompileSession, which builds its kernels; it cannot be compiled or "
+        "enqueued afterwards.",
+        this->get_id());
 
     auto& device_context = MetalContext::instance(device_context_id);
     const auto& cluster = device_context.get_cluster();
@@ -3304,43 +3346,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
 
-    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
-        JitBuildOptions build_options(build_env.build_env);
-        kernel->set_build_options(build_options);
-        if (this->compiled_.empty()) {
-            this->set_remote_circular_buffer_init(kernel);
-        }
-        this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
-        this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
-
-        // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
-        // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
-        // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
-        // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
-        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
-        if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
-             build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
-            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
-            std::any_of(
-                build_options.hlk_desc.buf_dataformat_arr.begin(),
-                build_options.hlk_desc.buf_dataformat_arr.end(),
-                is_fp8_format)) {
-            TT_FATAL(
-                build_options.fp32_dest_acc_en,
-                "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
-                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
-                "an 8-bit float format. Kernel: {}",
-                kernel->name());
-        }
-
-        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
-
-        const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-        kernel->set_full_name(kernel_path_suffix);
-        build_options.set_name(kernel_path_suffix);
-
-        return std::pair{std::move(build_options), kernel_hash};
-    };
+    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) { return prep_kernel_build(kernel, build_env); };
 
     auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
                                     const JitBuildOptions& build_options,
@@ -3387,10 +3393,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
-                if (!remote_kernel_cached(device, kernel)) {
+                if (!remote_kernel_cached(device_context.build_env_manager(), build_env, kernel)) {
                     coordinator.submit(kernel_hash, [&]() {
-                        generate_kernel_source_files(device, build_options, kernel);
-                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                        generate_kernel_source_files(build_env, build_options, kernel);
+                        return build_kernel_descriptor(
+                            device_context.build_env_manager(), build_env, kernel, build_options, kernel_hash);
                     });
                     if (preprocess_and_ship) {
                         preprocessed_kernels.push_back(kernel);
@@ -3407,7 +3414,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
         // so no sidecar is ever written for a missing or stale ELF.
         for (const auto& kernel : preprocessed_kernels) {
-            finalize_preprocess_reuse_cache(device, kernel);
+            finalize_preprocess_reuse_cache(device_context.build_env_manager(), build_env, kernel);
         }
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
@@ -3451,6 +3458,103 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     compiled_.insert(build_env.build_key());
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
+}
+
+std::vector<detail::KernelBuildJob> detail::ProgramImpl::prepare_kernel_builds(IDevice* device) {
+    const ContextId device_context_id = extract_context_id(device);
+    TT_FATAL(
+        context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
+        "Program {} was created for context_id {} but its kernels are being prepared on a device from context_id {}.",
+        this->id,
+        context_id_.get(),
+        device_context_id.get());
+    auto& device_context = MetalContext::instance(device_context_id);
+    const auto& cluster = device_context.get_cluster();
+    BuildEnvManager& build_env_manager = device_context.build_env_manager();
+    auto build_env = build_env_manager.get_device_build_env_ptr(device->build_id());
+
+    std::vector<KernelBuildJob> jobs;
+    if (handed_to_compile_session_ || compiled_.contains(build_env->build_key()) ||
+        cluster.get_target_device_type() == tt::TargetDevice::Emule ||
+        (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
+        return jobs;
+    }
+    TT_FATAL(device->is_initialized(), "Device needs to be initialized before preparing program {}.", this->get_id());
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            validate_kernel_placement(false, kernel, device->build_id());
+        }
+    }
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            // Precompiled kernels and kernel types that need a device to build stay with compile().
+            if (kernel->precompiled_config().has_value() || !kernel->supports_detached_build()) {
+                continue;
+            }
+            // Preparing changes the kernel (build options, full name, reserved defines) the way compile() would,
+            // and the session reads it from another thread, so the program must not be compiled afterwards.
+            handed_to_compile_session_ = true;
+            auto [build_options, kernel_hash] = prep_kernel_build(kernel, *build_env);
+            jobs.push_back(KernelBuildJob{
+                .kernel = kernel,
+                .build_env = build_env,
+                .build_env_manager = &build_env_manager,
+                .build_options = std::move(build_options),
+                .kernel_hash = kernel_hash,
+                .context_id = device_context_id,
+                .build_id = device->build_id()});
+        }
+    }
+    return jobs;
+}
+
+detail::KernelBuildResult detail::run_kernel_build_job(
+    KernelBuildJob& job, const std::vector<std::string>& remote_endpoints) {
+    BuildEnvManager& build_env_manager = *job.build_env_manager;
+    const DeviceBuildEnv& build_env = *job.build_env;
+    const auto& kernel = job.kernel;
+    // The compile server is handed the firmware of the device's current build env, so a job prepared before the
+    // device was reopened with a different configuration builds locally, against the env it was prepared for.
+    const bool remote = !remote_endpoints.empty() &&
+                        build_env_manager.get_device_build_env(job.build_id).build_key() == build_env.build_key();
+    bool built_remotely = false;
+    std::function<void()> build;
+    if (!remote) {
+        build = [&] {
+            try {
+                jit_build_genfiles_descriptors(build_env.build_env, job.build_options);
+                kernel->generate_binaries_detached(build_env_manager, build_env);
+            } catch (std::runtime_error& ex) {
+                TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+            }
+        };
+    } else {
+        build = [&] {
+            if (remote_kernel_cached(build_env_manager, build_env, kernel)) {
+                return;
+            }
+            RemoteCompileCoordinator coordinator(remote_endpoints, job.context_id, job.build_id, build_env.build_key());
+            coordinator.submit(job.kernel_hash, [&]() {
+                generate_kernel_source_files(build_env, job.build_options, kernel);
+                return build_kernel_descriptor(
+                    build_env_manager, build_env, kernel, job.build_options, job.kernel_hash);
+            });
+            coordinator.finish();
+            built_remotely = true;
+            static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+            if (preprocess_and_ship) {
+                finalize_preprocess_reuse_cache(build_env_manager, build_env, kernel);
+            }
+        };
+    }
+    // Never waits: a kernel another thread is building is left to that thread.
+    switch (JitBuildCache::inst().build_once_no_wait(job.kernel_hash, build)) {
+        case JitBuildCache::BuildOnceStatus::BuiltByCaller:
+            return built_remotely ? KernelBuildResult::BuiltRemotely : KernelBuildResult::Built;
+        case JitBuildCache::BuildOnceStatus::AlreadyBuilt: return KernelBuildResult::AlreadyBuilt;
+        case JitBuildCache::BuildOnceStatus::InProgress: return KernelBuildResult::BuildingElsewhere;
+    }
+    TT_THROW("Unexpected build-once status for kernel {}", job.kernel_hash);
 }
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
