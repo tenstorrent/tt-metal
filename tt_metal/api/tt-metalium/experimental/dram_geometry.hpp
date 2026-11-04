@@ -22,8 +22,9 @@ namespace tt::tt_metal::experimental {
 
 // One DRAM tile of a bank, on the device at a given mesh coordinate.
 struct DramBankTile {
-    // {bank, index}: index 0 is the bank's NOC0 worker endpoint, 1 its NOC1 worker endpoint, then the bank's other
-    // tiles.
+    // {bank, index}: index 0 is the bank's NOC0 worker endpoint, followed by its NOC1 worker endpoint only if that is
+    // a distinct tile (on Wormhole one tile serves both NoCs), then the bank's remaining tiles in subchannel order.
+    // Use endpoint_noc_mask, not the index, to find a NoC's endpoint.
     CoreCoord logical_core;
     // NoC address of the tile (translated coordinates).
     CoreCoord virtual_core;
