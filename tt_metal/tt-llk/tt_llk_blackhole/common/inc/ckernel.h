@@ -678,9 +678,13 @@ enum ExecBool : bool
 
 // The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ recorded for as long as no other code on this thread records into it: every
 // recording on the pack thread goes through this function, ckernel::record_replay or one of the raw TTI_REPLAY sites, which clear the flag.
-// Internal linkage: a thread whose code never reads the flag drops the stores.
+// Only the pack thread tracks it; with internal linkage its stores vanish unless the fast block init, the only reader, is compiled in.
 [[maybe_unused]] static bool pack_fast_replay_valid = false;
+#if defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
 #define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false)
+#else
+#define LLK_PACK_REPLAY_WRITTEN() ((void)0)
+#endif
 
 template <lltt::ExecBool Exec>
 [[gnu::always_inline]] inline void record_replay(std::uint32_t start, std::uint32_t len)
