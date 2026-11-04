@@ -109,17 +109,8 @@ def generate_on_tt(
                 temperature=temperature,
                 dummy_weights=False,
             )
-            prompts_per_call = max(1, max_batch_size * mesh.get_num_devices() // n_samples)
-            result: List[List[List[int]]] = []
-            for start in range(0, len(prompts), prompts_per_call):
-                chunk = [list(p) for p in prompts[start : start + prompts_per_call]]
-                print(
-                    f"[eval_gsm8k] {os.path.basename(model_path)}: prompts {start + len(chunk)}/{len(prompts)}",
-                    flush=True,
-                )
-                completions = sampler.generate(chunk).completions
-                result.extend(completions[i * n_samples : (i + 1) * n_samples] for i in range(len(chunk)))
-            return result
+            completions = sampler.generate([list(p) for p in prompts]).completions
+            return [completions[i : i + n_samples] for i in range(0, len(completions), n_samples)]
         finally:
             if sampler is not None:
                 sampler.close()
