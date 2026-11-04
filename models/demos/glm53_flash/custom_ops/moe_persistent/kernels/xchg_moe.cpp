@@ -68,6 +68,18 @@ void kernel_main() {
             rect[r][f] = get_arg_val<uint32_t>(a++);
         }
     }
+    // a multicast rect is walked from its start corner along the NOC's direction: on NOC 1 the far corner is the
+    // start (tt-metal's factories swap the corners for NOC_1); the wrong orientation is a wrap-around multicast that
+    // reaches the grid's edges only (the 2026-11-04 gate84_B4_persist_g11b triage)
+    if (noc_index == 1) {
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            const uint32_t x0 = rect[r][0], y0 = rect[r][1];
+            rect[r][0] = rect[r][2];
+            rect[r][1] = rect[r][3];
+            rect[r][2] = x0;
+            rect[r][3] = y0;
+        }
+    }
     tt::tt_fabric::WorkerToFabricEdmSender senders[MAX_GROUPS];
     for (uint32_t g = 0; g < n_groups; ++g) {
         senders[g] = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
