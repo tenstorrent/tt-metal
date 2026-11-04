@@ -70,9 +70,9 @@ public:
     // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
     // of the call so prefetcher operations serialize against the rest of the
-    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
-    // takes it, but only around its manager-state snapshot — it must release the lock
-    // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
+    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() and
+    // enqueue_cq_signal_and_wait_if_active() hold it across their dispatcher write too, which
+    // goes through a queue method that does not re-lock the (non-recursive) api_mutex_.
     TensorPrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~TensorPrefetcherManager();
 
@@ -106,6 +106,38 @@ public:
     // Drop the requests captured under `trace_id`. Called when the trace is released.
     void release_trace(const MeshTraceId& trace_id);
 
+    struct Request {
+        // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
+        // the header names that sender's target state, and its layout slots that sender's slab
+        // base. STOP / WAIT_CQ carry one
+        // shared page and leave target_sender_indices empty to broadcast to every provisioned
+        // sender.
+        std::vector<std::vector<uint8_t>> sender_pages;
+        std::vector<MeshCoordinate> target_devices;
+        std::vector<uint32_t> target_sender_indices;
+    };
+
+    // Requests recorded into a CommandListBuilder and handed to the CommandLists it builds. Shared and
+    // immutable, so every replay re-queues the same pages. Valid only while the prefetcher run that
+    // serialized them (start() to stop()) is active.
+    struct CapturedRequests {
+        uint64_t run_id = 0;
+        std::vector<std::shared_ptr<const Request>> requests;
+    };
+
+    // Serialize a request as queue() does and append it to `captured` instead of sending it. Same
+    // preconditions as QueueTensorPrefetcherRequest.
+    void capture(
+        CapturedRequests& captured,
+        const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
+        const std::vector<experimental::TensorPrefetcherInput>& tensors);
+
+    // Re-queue `captured` for immediate fan-out, in capture order. No-op if it is empty. TT_FATALs if the
+    // prefetcher run that captured it has stopped. Caller holds the API lock, which keeps a concurrent stop()
+    // from slipping in between the run check and the insert.
+    void replay_captured_nolock(const CapturedRequests& captured);
+
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
     // has the dispatcher write the new value into every DRAM core's signal slot
@@ -116,6 +148,10 @@ public:
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
+    // enqueue_cq_signal_and_wait over the full mesh if a prefetcher is running, checked under the
+    // same lock so a stop() on another thread cannot land in between. Returns false, having done
+    // nothing, if none is running.
+    bool enqueue_cq_signal_and_wait_if_active(MeshCommandQueue& cq);
 
     void stop();
 
@@ -135,17 +171,6 @@ private:
     // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
     // same footprint while allowing 8× more small in-flight requests.
     static constexpr uint32_t kSocketFifoPages = 128;
-
-    struct Request {
-        // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
-        // the header names that sender's target state, and its layout slots that sender's slab
-        // base. STOP / WAIT_CQ carry one
-        // shared page and leave target_sender_indices empty to broadcast to every provisioned
-        // sender.
-        std::vector<std::vector<uint8_t>> sender_pages;
-        std::vector<MeshCoordinate> target_devices;
-        std::vector<uint32_t> target_sender_indices;
-    };
 
     struct MpfeWeights {
         uint32_t free_sender;
@@ -182,7 +207,16 @@ private:
         uint32_t per_recv_capacity_bytes = 0;
     };
 
+    // Validate and serialize one Queue call into shared requests, one per logical page, and record its
+    // drain targets. Caller holds the API lock and has checked active_.
+    std::vector<std::shared_ptr<const Request>> build_requests(
+        const RequestTarget& target,
+        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
+        const std::vector<experimental::TensorPrefetcherInput>& tensors);
     void worker_loop();
+    // The body of enqueue_cq_signal_and_wait. The caller holds the API lock and has checked active_.
+    void enqueue_cq_signal_and_wait_locked(
+        MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
     void record_drain_target(
@@ -215,6 +249,8 @@ private:
     // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
     bool active_ = false;
+    // Incremented by each start(), so requests captured for a CommandList can tell which run they belong to.
+    uint64_t run_id_ = 0;
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;

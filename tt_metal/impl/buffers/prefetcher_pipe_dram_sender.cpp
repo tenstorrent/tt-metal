@@ -69,9 +69,10 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
-        pipes.push_back(create_dram_sender_pipe(
-            space, sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size())));
+        pipes.push_back(space.impl().create_dram_sender_pipe(
+            sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size())));
     }
+    space.impl().order_dram_sender_pages();
     return pipes;
 }
 

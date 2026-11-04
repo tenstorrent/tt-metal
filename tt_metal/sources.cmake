@@ -230,7 +230,6 @@ set(TT_METAL_SOURCES
 )
 
 set(JITAPI_FILES
-    api/tt-metalium/buffer_types.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml
@@ -287,6 +286,8 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler.cpp
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
+    impl/buffers/kernels/tensor_prefetcher.cpp
+    impl/buffers/tensor_prefetcher_request.hpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
