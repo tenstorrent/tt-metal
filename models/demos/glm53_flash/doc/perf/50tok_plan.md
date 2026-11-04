@@ -314,3 +314,8 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   Re-gated as `gate84_B4_persist_g11`, with `gate84_B4_fabar_g11` (same tree, no persistent program, 11 groups) as the
   ids reference in case the group count moves the expert rounding, then `tracy_l4_b4_persist_g11`. The chained
   `tracy_l4_b4_persist` (rc=0) profiled the non-persistent fallback: void.
+- 2026-11-04 05:08 `gate84_B4_persist_g11` failed at construction too: `'ExpertStream' object has no attribute
+  'down_xy'` (the fused op's attributes live on the wrapper's `fused_op`). Fix 9b4aeaf46b5. Re-queued as
+  `gate84_B4_persist_g11b` strictly behind `gate84_B4_fabar_g11` and `gate84_B1_fabar` (one chip waiter at a time);
+  on a pass the same chain runs step 2 (`gate84_B4_persist2`), the 8-user persistent point (`gate84_B1_persist_g11b`)
+  and the two layer profiles.

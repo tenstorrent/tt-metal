@@ -98,3 +98,16 @@ Step 2 (next): the gathered rows multicast straight into the expert cores' L1. E
 256 KB landing zone (the gate|up cores' resident x; a dummy on the down and exchange cores), so one multicast per
 worker chunk to the whole grid rectangle lands x in every gate|up core at the same address, and the gate|up writer
 skips its 256 KB read of the x tensor. The routing matrix (9 tiles) rides the same way into a second zone.
+
+## Status 2026-11-04 05:10 (step 1 gates)
+
+| gate | tree | verdict |
+|---|---|---|
+| gate84_B4_persist | wt_persist @dea92a9fd6d | construction: 8 free cores < 10 (12x10 grid; 12 groups x 8 banks + 16 down = 112 cores) |
+| gate84_B4_persist_g11 | @4bb7e41c2c7 (11 groups: 88 + 16, 16 free) | construction: the persistent op read `down_xy` / groups / semaphores off the `ExpertStream` wrapper; they live on its `fused_op` |
+| gate84_B4_persist_g11b | @9b4aeaf46b5 | queued behind gate84_B4_fabar_g11 (ids reference at 11 groups) and gate84_B1_fabar (8 users, today's path) |
+
+Lessons: the Galaxy chips' compute grid is 12 x 10 (120 cores), so every worker the persistent program adds comes out of
+the 8 cores the fused expert placement leaves at 12 groups -> `persistent_fused_groups` (11 groups when
+`GLM53_MOE_PERSIST=1`). The step-2 tree (wt_persist2 @b986e535e83) carries both fixes and passes the landing offset
+as a runtime arg (one exchange-writer variant per chunk width, not per chunk).
