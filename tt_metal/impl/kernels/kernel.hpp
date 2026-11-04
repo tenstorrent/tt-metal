@@ -178,10 +178,10 @@ struct TensorBindingHandle {
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
-    std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
-    uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
-    uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
-    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    std::string accessor_name;                // user-facing identifier (kernel symbol in `scratch::`)
+    uint32_t size_bytes = 0;                  // per-node size; emitted as the accessor's compile-time size
+    uint32_t addr_crta_word = 0;              // word index of the base-address slot within the kernel's CRTA buffer
+    uint32_t allocated_address = 0;           // L1 base address; filled by allocate_scratchpads (0 until allocated)
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
     // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
@@ -230,6 +230,15 @@ struct ResolvedBufRw {
     ttsl::SmallVector<Access, 8> writes;
     bool opaque = false;  // an un-analyzable (raw) access was seen -> a detector must keep the barrier
 };
+
+// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
+// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
+// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
+// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
+// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
+// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
+// enforced at program finalize. (Metal 2.0 spec validation also checks a KernelSpec's declared args against it.)
+constexpr uint32_t max_runtime_args_tensix = 4096;
 
 class Kernel : public JitBuildSettings {
 public:
@@ -310,7 +319,9 @@ public:
     uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
-    std::string get_profiler_zone_src_id() const override { return this->kernel_src_.profiler_zone_src_id(); }
+    std::string get_observability_event_src_id() const override {
+        return this->kernel_src_.observability_event_src_id();
+    }
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
@@ -370,6 +381,10 @@ public:
     void set_compile_time_vararg_count(uint32_t count) { compile_time_vararg_count_ = count; }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
+    // Metal 2.0: array arguments (set post-construction, before compile: they are part of the kernel
+    // cache key and of kernel_args_generated.h).
+    const KernelArrayArgs& get_array_args() const override { return array_args_; }
+    void set_array_args(KernelArrayArgs array_args) { array_args_ = std::move(array_args); }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     KernelRtaLayout get_rta_layout() const override { return rta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
@@ -490,6 +505,8 @@ protected:
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
+    // Metal 2.0: array arguments (set post-construction, like scratchpads).
+    KernelArrayArgs array_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -697,9 +714,7 @@ public:
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
-        TT_FATAL(
-            config.num_threads_per_cluster == 1,
-            "DispatchEngineKernel requires num_threads_per_cluster=1");
+        TT_FATAL(config.num_threads_per_cluster == 1, "DispatchEngineKernel requires num_threads_per_cluster=1");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
@@ -714,7 +729,8 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(std::function<void(const std::string& define, const std::string& value)> callback) const override;
+    void process_defines(
+        std::function<void(const std::string& define, const std::string& value)> callback) const override;
 
     std::string_view get_compiler_opt_level() const override;
 

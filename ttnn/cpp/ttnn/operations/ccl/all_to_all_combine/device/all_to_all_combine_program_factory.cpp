@@ -313,7 +313,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         for (const auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
             append_fabric_connection_rt_args<ProgramDescriptor>(
-                fabric_node_id, neighbor_fabric_id, link_id, desc, sender_core, writer_runtime_args);
+                *mesh_device, fabric_node_id, neighbor_fabric_id, link_id, desc, sender_core, writer_runtime_args);
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;

@@ -103,11 +103,12 @@ class DecodeLinear:
         self.program_config = decode_1d_progcfg(mesh_device, k, n, max_block_w) if enabled else None
         self.compute_kernel_config = decode_compute_kernel_config(mesh_device) if enabled else None
 
-    def __call__(self, x, memory_config=None, compute_kernel_config=None):
+    def __call__(self, x, memory_config=None, compute_kernel_config=None, prefill=False):
+        """``prefill``: a tile-sized prefill (a 32-token prompt) takes the op default, not the 1D decode config."""
         kwargs = {}
         if memory_config is not None:
             kwargs["memory_config"] = memory_config
-        if self.program_config is not None and is_decode_rows(x):
+        if self.program_config is not None and not prefill and is_decode_rows(x):
             kwargs["program_config"] = self.program_config
             kwargs["compute_kernel_config"] = (
                 compute_kernel_config if compute_kernel_config is not None else self.compute_kernel_config
