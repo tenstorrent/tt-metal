@@ -20,6 +20,7 @@ jobs:
     name: "Check the nightlies and report"
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -31,7 +32,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      - run: pip install pyyaml
+      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pyyaml
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}

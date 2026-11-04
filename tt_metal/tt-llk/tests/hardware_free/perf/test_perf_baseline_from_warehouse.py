@@ -161,6 +161,53 @@ def test_connect_refuses_an_empty_key(monkeypatch):
         bw.connect()
 
 
+def _fake_snowflake(monkeypatch, failures):
+    """A connector whose first ``failures`` connects raise, as a network fault does."""
+    import types
+
+    class OperationalError(Exception):
+        pass
+
+    calls = []
+
+    def connect(**_):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise OperationalError("Connection reset by peer")
+        return "conn"
+
+    connector = types.SimpleNamespace(
+        connect=connect, errors=types.SimpleNamespace(OperationalError=OperationalError)
+    )
+    monkeypatch.setitem(
+        sys.modules, "snowflake", types.SimpleNamespace(connector=connector)
+    )
+    monkeypatch.setitem(sys.modules, "snowflake.connector", connector)
+    rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
+    from cryptography.hazmat.primitives import serialization
+
+    pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    monkeypatch.setenv("SNOWFLAKE_PRIVATE_KEY", pem.decode())
+    return calls, OperationalError
+
+
+def test_connect_retries_a_network_fault(monkeypatch):
+    calls, _ = _fake_snowflake(monkeypatch, failures=2)
+    assert bw.connect(sleep=lambda s: None) == "conn"
+    assert len(calls) == 3
+
+
+def test_connect_fails_after_three_faults(monkeypatch):
+    calls, error = _fake_snowflake(monkeypatch, failures=3)
+    with pytest.raises(error):  # allow-pytest.raises: no expect_error in LLK suite
+        bw.connect(sleep=lambda s: None)
+    assert len(calls) == 3
+
+
 def test_repeated_rows_are_medianed_not_overwritten():
     rows = [
         DENSE_VALUES + (PARAMS, "INIT", "L1_TO_L1", v) for v in (100.0, 900.0, 300.0)

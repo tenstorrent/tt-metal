@@ -114,6 +114,7 @@ jobs:
     needs:
       - llk-perf-tests
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     steps:
       - name: Check perf test results
         uses: re-actors/alls-green@release/v1
@@ -123,6 +124,7 @@ jobs:
   report-status:
     name: "Report status"
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     if: always()
     needs: llk-perf-summary
     steps:

@@ -70,6 +70,7 @@ jobs:
         )
       )
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     outputs:
       sha: ${{ steps.find.outputs.sha }}
     steps:
@@ -183,6 +184,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.placement_run_id != '')
       ) }}
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     outputs:
       arches: ${{ steps.plan.outputs.arches }}
       run: ${{ steps.source.outputs.run }}
@@ -197,7 +199,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      - run: pip install pandas
+      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pandas
       - name: Find the stage-1 run and the commits
         id: source
         env:
@@ -328,6 +330,7 @@ jobs:
       matrix:
         arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
@@ -336,7 +339,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      - run: pip install pandas
+      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pandas
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: llk-perf-gate-report-${{ matrix.arch }}
@@ -372,7 +375,8 @@ jobs:
             --baseline baseline --current current \
             --threshold "$THRESHOLD" --min-cycles 30 \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
-            --arch "$ARCH" --report stage2.md || true
+            --arch "$ARCH" --report stage2.md \
+            || echo "Stage 2 could not build its report (exit $?); see the job log." > stage2.md
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
             NOTE="> ⚠️ A stage-2 measuring job did not succeed (PR head: ${HEAD_RESULT}, branch point: ${BASE_RESULT}). What it did not measure is listed as not re-measured."
             printf '%s\n\n%s\n' "$(head -1 stage2.md)" "$NOTE" > stage2.tmp

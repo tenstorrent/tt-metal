@@ -102,6 +102,7 @@ jobs:
   load-test-matrix:
     if: ${{ inputs.architecture != 'quasar' }}
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
@@ -270,7 +271,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
-      - run: pip install pandas snowflake-connector-python cryptography
+      - run: pip install -c tt_metal/tt-llk/perf/constraints.txt pandas snowflake-connector-python cryptography
       - name: Read the baseline from the warehouse
         env:
           SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
@@ -288,7 +289,7 @@ jobs:
               --arch "$ARCH" --pipeline merge_baseline --speed-of-light "$SPEED_OF_LIGHT" \
               --exclude-workflow-run "$GITHUB_RUN_ID" --commits "$COMMITS" --wait-minutes 0 \
               --out "stage2-baseline/${ARCH}/baseline.csv" --metadata "stage2-baseline/${ARCH}/baseline_metadata.json" \
-              || echo "::warning::No ${ARCH} merge baseline; its legs skip stage 2."
+              || echo "::warning::The ${ARCH} merge baseline read failed; its legs skip stage 2."
           done
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -337,7 +338,8 @@ jobs:
           elif [[ "$RUN_LABEL" =~ P150 ]]; then
             CHIP_ARCH=blackhole
           else
-            CHIP_ARCH=unknown
+            echo "::error::cannot tell the architecture from '$RUN_ON_LABELS'"
+            exit 1
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
