@@ -23,85 +23,12 @@ Shapes are fixed per call: use a constant anchor budget (padded with
 
 from __future__ import annotations
 
-import numpy as np
 import ttnn
 
 import ttml
 from ttml.models.deepseek.autograd_ops import autograd_concat, autograd_slice
 
-TILE = 32
-
-
-def build_dflash_square_mask(
-    document_ids: np.ndarray,
-    anchor_positions: np.ndarray,
-    anchor_valid: np.ndarray,
-    block_size: int,
-    sliding_window: int | None = None,
-    sliding_window_non_causal: bool = False,
-    sliding_window_per_query: bool = False,
-) -> np.ndarray:
-    """Build the bool ``[T + n*B, T + n*B]`` mask for :func:`dflash_square_attention`.
-
-    Args:
-        document_ids: ``[T]`` document index per packed position, ``-1`` for padding.
-        anchor_positions: ``[n]`` anchor positions into the packed sequence.
-        anchor_valid: ``[n]`` bool; padded anchors attend only to themselves.
-        block_size: slots per anchor block.
-        sliding_window, sliding_window_non_causal, sliding_window_per_query: same
-            meaning as in speculators ``create_anchor_block_mask_mod``.
-
-    Returns:
-        ``mask[q, kv] == True`` where query row ``q`` of ``X`` may attend to key ``kv``.
-    """
-    document_ids = np.asarray(document_ids, dtype=np.int64)
-    anchor_positions = np.asarray(anchor_positions, dtype=np.int64)
-    anchor_valid = np.asarray(anchor_valid, dtype=bool)
-    if document_ids.ndim != 1 or anchor_positions.ndim != 1 or anchor_valid.shape != anchor_positions.shape:
-        raise ValueError("document_ids, anchor_positions and anchor_valid must be 1D (anchors of equal length)")
-
-    T = document_ids.size
-    nB = anchor_positions.size * block_size
-    if T % TILE or nB % TILE:
-        raise ValueError(
-            f"context length ({T}) and anchor slots n*B ({nB}) must be multiples of {TILE}; "
-            "pad the anchor budget with anchor_valid=0"
-        )
-    non_causal = sliding_window is None or sliding_window_non_causal
-
-    S = T + nB
-    mask = np.eye(S, dtype=bool)
-
-    slot = np.arange(nB)
-    slot_offset = slot % block_size  # [nB]
-    slot_anchor = np.repeat(anchor_positions, block_size)  # [nB]
-    slot_valid = np.repeat(anchor_valid, block_size)  # [nB]
-
-    # Context keys: same document, before the anchor, inside the window.
-    ctx_pos = np.arange(T)[None, :]  # [1, T]
-    q_anchor = slot_anchor[:, None]  # [nB, 1]
-    q_doc = document_ids[slot_anchor][:, None]
-    ctx_allowed = (q_doc == document_ids[None, :]) & (q_doc != -1) & (ctx_pos < q_anchor)
-    if sliding_window is not None:
-        if sliding_window_per_query:
-            query_position = q_anchor + slot_offset[:, None]
-            ctx_allowed &= ctx_pos >= query_position - sliding_window + 1
-        else:
-            ctx_allowed &= ctx_pos >= q_anchor - sliding_window
-
-    # Block keys: own block only (causal within the block unless non-causal).
-    q_slot = slot[:, None]
-    kv_slot = slot[None, :]
-    blk_allowed = (q_slot // block_size) == (kv_slot // block_size)
-    if not non_causal:
-        blk_allowed &= kv_slot <= q_slot
-    if sliding_window_per_query and sliding_window is not None:
-        blk_allowed &= kv_slot >= q_slot - sliding_window + 1
-
-    rows = T + slot[slot_valid]
-    mask[rows, :T] = ctx_allowed[slot_valid]
-    mask[rows, T:] = blk_allowed[slot_valid]
-    return mask
+from .host import TILE, build_dflash_square_mask  # noqa: F401  (re-exported, D1a API)
 
 
 def dflash_square_attention(
