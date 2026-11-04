@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -14,6 +15,17 @@
 
 namespace ckernel {
 namespace sfpu {
+
+/** @brief Where (select) math policy, shared by Dest and SrcS: cond != 0 ? true_val : false_val. */
+struct WhereMath {
+    using value_type = sfpi::vFloat;
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat cond, sfpi::vFloat true_val, sfpi::vFloat false_val) {
+        sfpi::vFloat result = false_val;
+        v_if(cond != 0) { result = true_val; }
+        v_endif;
+        return result;
+    }
+};
 
 /** @brief output = condition != 0 ? true_input : false_input. */
 template <int ITERATIONS, typename Condition, typename TrueInput, typename FalseInput, typename Output>
@@ -26,17 +38,7 @@ sfpi_inline void calculate_where_operands(
             std::is_same_v<typename FalseInput::value_type, sfpi::vFloat> &&
             std::is_same_v<typename Output::value_type, sfpi::vFloat>,
         "WHERE requires floating-point operands");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat cond = condition.load(d);
-        sfpi::vFloat true_val = true_input.load(d);
-        sfpi::vFloat result = false_input.load(d);
-
-        v_if(cond != 0) { result = true_val; }
-        v_endif;
-
-        output.store(d, result);
-    }
+    calculate_ternary_operands<WhereMath, ITERATIONS>(condition, true_input, false_input, output);
 }
 
 /**
@@ -94,6 +96,13 @@ inline void calculate_where(
         sfpi::dst_reg++;
     }
 }
+
+/** @brief SrcS where op type; Sfpi only. Experimental, see llk_sfpu_srcs_ternary_impl. */
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using WhereSrcs = SrcsTernary<WhereMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+
+// dispatch_sfpu_srcs_op relies on naming a float op for I32 without instantiating it; keep that true.
+static_assert(!srcs_op_supports<WhereSrcs, sfpi::DataLayout::I32>, "float SrcS ops must stay nameable for I32");
 
 }  // namespace sfpu
 }  // namespace ckernel

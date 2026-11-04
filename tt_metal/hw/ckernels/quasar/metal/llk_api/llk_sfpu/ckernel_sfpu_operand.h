@@ -115,4 +115,33 @@ sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& i
     }
 }
 
+/**
+ * @brief output[d] = MATH::apply(input0[d], input1[d], input2[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ *
+ * All three inputs are loaded, in operand order, before the store: the output may alias one of the inputs
+ * (SrcS ternary ops read input2 from the slice they write).
+ *
+ * @tparam MATH: Math policy with a static apply().
+ */
+template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Input2, typename Output>
+sfpi_inline void calculate_ternary_operands(
+    const Input0& input0, const Input1& input1, const Input2& input2, const Output& output) {
+    static_assert(ITERATIONS > 0, "A ternary SFPU op requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<
+            decltype(MATH::apply(
+                std::declval<typename Input0::value_type>(),
+                std::declval<typename Input1::value_type>(),
+                std::declval<typename Input2::value_type>())),
+            typename Output::value_type>,
+        "MATH::apply must map the input operands' value types to the output operand's value type");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        const typename Input0::value_type in0 = input0.load(d);
+        const typename Input1::value_type in1 = input1.load(d);
+        const typename Input2::value_type in2 = input2.load(d);
+        output.store(d, MATH::apply(in0, in1, in2));
+    }
+}
+
 }  // namespace ckernel::sfpu
