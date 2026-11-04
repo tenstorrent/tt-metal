@@ -9,10 +9,12 @@ deterministic stub embeddings instead and no chip is used. Only load imports ttn
 media runs without it.
 """
 
+import gc
 import hashlib
 import math
 import os
 import threading
+import traceback
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,7 +22,14 @@ import torch
 from torchvision.transforms.v2 import functional as tvF
 
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE
-from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, MAX_PIXELS, MAX_RATIO, MIN_PIXELS, PATCH_SIZE
+from models.demos.minimax_m3.tt.vision.preprocess import (
+    FACTOR,
+    MAX_PIXELS,
+    MAX_RATIO,
+    MIN_PIXELS,
+    PATCH_SIZE,
+    check_size,
+)
 from models.demos.minimax_m3.vision import format as media_format
 
 # The resize's geometry is the vision encoder's (tt/vision/preprocess.py and image_input.py, which need no ttnn
@@ -66,21 +75,34 @@ def smart_resize(height: int, width: int) -> tuple[int, int]:
 
 
 def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
-    """options["warmup"] (default WARMUP_SIZES) as (height, width) pairs of resized images: sides multiples of 28,
-    4 to 576 tokens. Raises ValueError otherwise, before load imports ttnn."""
-    sizes = []
-    for size in options.get("warmup", WARMUP_SIZES):
-        if not (
-            isinstance(size, (list, tuple))
-            and len(size) == 2
-            and all(isinstance(side, int) and side > 0 and side % FACTOR == 0 for side in size)
-        ):
-            raise ValueError(f"warmup sizes must be [height, width] in multiples of {FACTOR} pixels, got {size!r}")
-        height, width = size
-        if not MIN_PIXELS <= height * width <= MAX_PIXELS:
-            raise ValueError(f"warmup size {list(size)} makes {height * width // FACTOR**2} tokens, not 4 to 576")
-        sizes.append((height, width))
-    return sizes
+    """options["warmup"] (default WARMUP_SIZES): a list of [height, width] sizes of resized images, each one that the
+    encoder takes (check_size). Raises ValueError otherwise, before load imports ttnn."""
+    sizes = options.get("warmup", WARMUP_SIZES)
+    if not isinstance(sizes, (list, tuple)):
+        raise ValueError(f"warmup must be a list of [height, width] sizes, got {sizes!r}")
+    checked = []
+    for size in sizes:
+        if not (isinstance(size, (list, tuple)) and len(size) == 2 and all(type(s) is int and s > 0 for s in size)):
+            raise ValueError(f"warmup sizes must be [height, width] in pixels, got {size!r}")
+        try:
+            check_size(*size)
+        except ValueError as error:
+            raise ValueError(f"warmup size {list(size)}: {error}") from None
+        checked.append(tuple(size))
+    return checked
+
+
+def _clear_frames(error: BaseException) -> None:
+    """Clear the locals of the frames that error's traceback keeps, and those of the exceptions it chains: the frames
+    of a failed load hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
+    pending, seen = [error], set()
+    while pending:
+        error = pending.pop()
+        if error is None or id(error) in seen:
+            continue
+        seen.add(id(error))
+        traceback.clear_frames(error.__traceback__)
+        pending += [error.__cause__, error.__context__]
 
 
 def _stub_rows(item: M3Image, hidden: int) -> np.ndarray:
@@ -104,7 +126,7 @@ class MiniMaxM3Media:
         self._stub = False
         self._encoder = None
         # One encoder on one chip, which is not thread safe, and read_embeddings releases the GIL while it waits for the
-        # chip: one image's forward and read at a time.
+        # chip: load, each encode call and close run one at a time.
         self._lock = threading.Lock()
 
     def prepare(self, kind: str, media: np.ndarray) -> M3Image:
@@ -129,52 +151,76 @@ class MiniMaxM3Media:
         opens (with device_params) and closes. The encoder raises ValueError for a mesh of more chips before it reads
         a weight. Then load encodes one blank image of each warm-up size (options["warmup"], default WARMUP_SIZES) to
         compile the chip's programs. Raises ValueError for a weights_path that is not a directory, a bad warm-up size
-        or a mesh_device of None (load opens no chip) before it imports ttnn."""
+        or a mesh_device of None (load opens no chip) before it imports ttnn. If building the encoder or a warm-up
+        fails, load frees what it put on the chip and raises the error. encode and close wait for a load in progress."""
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"MiniMax-M3 does not accept {kind}")
-        if self._stub or self._encoder is not None:
-            raise RuntimeError("load after load: close first")
-        if options.get("stub_embeddings"):
-            self._stub = True
-            return
-        if not weights_path or not os.path.isdir(weights_path):
-            raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
-        warmup = _warmup_sizes(options)
-        if mesh_device is None:
-            raise ValueError("mesh_device is None: load runs the encoder on the chip that the caller opened")
-        import ttnn
-        from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder
+        with self._lock:
+            if self._stub or self._encoder is not None:
+                raise RuntimeError("load after load: close first")
+            if options.get("stub_embeddings"):
+                self._stub = True
+                return
+            if not weights_path or not os.path.isdir(weights_path):
+                raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
+            warmup = _warmup_sizes(options)
+            if mesh_device is None:
+                raise ValueError("mesh_device is None: load runs the encoder on the chip that the caller opened")
+            import ttnn
+            from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder
 
-        encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
-        for height, width in warmup:
-            ttnn.deallocate(encoder.forward(np.zeros((height, width, 3), dtype=np.uint8)))
-        self._encoder = encoder
+            try:
+                encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
+                for height, width in warmup:
+                    ttnn.deallocate(encoder.forward(np.zeros((height, width, 3), dtype=np.uint8)))
+            except BaseException as error:
+                encoder = None
+                _clear_frames(error)  # the failed call's frames hold the encoder's device tensors
+                gc.collect()  # and so may reference cycles: all are freed before load raises
+                raise
+            self._encoder = encoder
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
-        assert self._stub or self._encoder is not None, "encode before load"
-        # TODO: replace the stub embeddings with the vision encoder.
+        """Write each item's stored value into its slot in out: the item's vision tokens, bf16 [n_tokens, hidden].
+
+        Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. The slots of
+        a call that raises hold no defined value: the caller must not use them. Raises RuntimeError before load or
+        after close; waits for a load or another encode in progress.
+        """
         for item, buf in zip(items, out, strict=True):
-            media_format.Header("image").write(buf)
-            rows = media_format.embeddings(buf, self.hidden)
-            if self._stub:
-                rows[:] = _stub_rows(item, self.hidden)
-            else:
-                self._encode_into(item, rows)
+            size = self.stored_nbytes(item)
+            if len(buf) != size:
+                raise ValueError(f"a slot of {len(buf)} B for an image of {item.n_tokens} tokens, which needs {size} B")
+        with self._lock:
+            if not (self._stub or self._encoder is not None):
+                raise RuntimeError("encode before load, or after close")
+            # TODO: replace the stub embeddings with the vision encoder.
+            for item, buf in zip(items, out):
+                media_format.Header("image").write(buf)
+                rows = media_format.embeddings(buf, self.hidden)
+                if self._stub:
+                    rows[:] = _stub_rows(item, self.hidden)
+                else:
+                    self._encode_into(item, rows)
 
     def _encode_into(self, item: M3Image, rows: np.ndarray) -> None:
-        """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value)."""
+        """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value). The
+        caller holds the lock."""
         import ttnn
         from models.demos.minimax_m3.vision.encoder import read_embeddings
 
-        with self._lock:
-            tokens = self._encoder.forward(item.pixels)
-            try:
-                read_embeddings(tokens, rows)
-            finally:
-                ttnn.deallocate(tokens)
+        tokens = self._encoder.forward(item.pixels)
+        try:
+            read_embeddings(tokens, rows)
+        finally:
+            ttnn.deallocate(tokens)
 
     def close(self) -> None:
-        """Free the encoder and its device tensors. The chip is the caller's: close leaves it open."""
+        """Free the encoder and its device tensors. The chip is the caller's: close leaves it open. Waits for a load or
+        an encode in progress, and a load waits for it."""
         with self._lock:
+            loaded = self._encoder is not None
             self._stub = False
             self._encoder = None
+            if loaded:
+                gc.collect()  # the encoder's device tensors that only reference cycles still hold

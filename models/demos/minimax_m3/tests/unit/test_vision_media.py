@@ -7,6 +7,7 @@ import os
 import pickle
 import subprocess
 import sys
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -151,17 +152,106 @@ def test_encode_writes_every_item_of_a_call():
         assert np.array_equal(media_format.embeddings(value, 64), _stub_rows(item, 64))
 
 
+def test_encode_checks_its_slots_and_state_first(expect_error):
+    """encode raises ValueError for a slot that is not its item's stored size before it writes into any slot, and
+    RuntimeError before load and after close."""
+    media = MiniMaxM3Media(CONFIG)
+    item = media.prepare("image", rgb(100, 60))
+    good = memoryview(bytearray(b"\x01" * media.stored_nbytes(item)))
+    with expect_error(RuntimeError, "encode before load"):
+        media.encode([item], [good])
+    media.load(None, "", "image", {"stub_embeddings": True})
+    row = media_format.stored_nbytes(1, 64)
+    for size in (media.stored_nbytes(item) + row, media.stored_nbytes(item) - row):  # one row more, one row less
+        with expect_error(ValueError, "needs"):
+            media.encode([item, item], [good, memoryview(bytearray(size))])
+        assert bytes(good) == b"\x01" * len(good), "encode wrote into a slot before it checked them all"
+    media.close()
+    with expect_error(RuntimeError, "after close"):
+        media.encode([item], [good])
+
+
+@pytest.mark.parametrize("chained", [False, True], ids=["raised", "chained"])
+def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect_error, chained):
+    """If building the encoder fails, load frees the device tensors that the failed call's frames hold (the exception's
+    traceback keeps those frames, and so does the traceback of an exception it chains) before it raises: they are
+    freed while the caller still holds the error, and the caller's chip is not closed."""
+    ttnn = pytest.importorskip("ttnn")
+    from models.demos.minimax_m3.vision import encoder as encoder_module
+
+    class DeviceTensor:  # stands in for a tensor on the chip
+        pass
+
+    tensors, closed = [], []
+
+    def build():
+        tensor = DeviceTensor()  # held only by this frame
+        tensors.append(weakref.ref(tensor))
+        raise RuntimeError("out of device memory")
+
+    def from_weights_path(mesh_device, weights_path, config):
+        if not chained:
+            build()
+        try:
+            build()
+        except RuntimeError as error:  # only the chained exception's traceback keeps build's frame
+            raise RuntimeError("out of device memory, while building the encoder") from error
+
+    monkeypatch.setattr(ttnn, "close_mesh_device", closed.append)
+    monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
+    with expect_error(RuntimeError, "out of device memory") as failed:
+        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup": []})
+    assert failed.value is not None
+    assert tensors[0]() is None, "load raised with the failed call's tensors alive"
+    assert closed == [], f"load closed the caller's chip: {closed}"
+
+
+def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
+    """If a warm-up fails after the encoder is built, load frees the encoder and its device tensors before it raises:
+    they are freed while the caller still holds the error, and the caller's chip is not closed."""
+    ttnn = pytest.importorskip("ttnn")
+    from models.demos.minimax_m3.vision import encoder as encoder_module
+
+    class DeviceTensor:  # stands in for a tensor on the chip
+        pass
+
+    held, closed = [], []  # held: weak references to the encoder and its weights
+
+    class Encoder:
+        def __init__(self):
+            self.weights = DeviceTensor()
+            held.append(weakref.ref(self.weights))
+
+        def forward(self, pixels):  # this frame holds the encoder, its self
+            raise RuntimeError("out of device memory, in the warm-up")
+
+    def from_weights_path(mesh_device, weights_path, config):
+        encoder = Encoder()
+        held.append(weakref.ref(encoder))
+        return encoder
+
+    monkeypatch.setattr(ttnn, "close_mesh_device", closed.append)
+    monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
+    with expect_error(RuntimeError, "in the warm-up") as failed:
+        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup": [[224, 224]]})
+    assert failed.value is not None
+    assert all(ref() is None for ref in held), "load raised with the encoder of the failed warm-up alive"
+    assert closed == [], f"load closed the caller's chip: {closed}"
+
+
 @pytest.mark.parametrize(
     "warmup, message",
     [
         ([[100, 100]], "multiples of 28"),
-        ([5], "multiples of 28"),
-        ([[28, 28]], "makes 1 tokens"),
-        ([[700, 700]], "makes 625"),
+        ([5], r"\[height, width\] in pixels"),
+        ([[28, 28]], r"got 1 \(1 down"),
+        ([[700, 700]], "got 625"),
+        ([[28, 16128]], "aspect ratio must be at most 339"),  # 576 tokens, but 576:1
+        (None, "must be a list"),
     ],
 )
 def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup, message):
-    """A warm-up size whose sides are not multiples of 28, or that is not 4 to 576 tokens, raises ValueError before
+    """A warmup that is not a list of sizes, or a warm-up size that no resized image has, raises ValueError before
     load imports ttnn or builds the encoder."""
     with expect_error(ValueError, message):
         MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {"warmup": warmup})
