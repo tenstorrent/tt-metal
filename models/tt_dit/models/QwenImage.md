@@ -12,26 +12,32 @@ The model consists of a Qwen2.5-VL text encoder together with its tokenizer, a s
 
 ## Performance
 
-Performance is measured for image size of 1024x1024px with 50 inference steps and classifier-free
-guidance, using the prompt from the Qwen-Image-2512 model card: 142 tokens, which the pipeline pads
-to its 256-token sequence length bucket.
+Total time per image, with classifier-free guidance, at each model card's step count. Each time is
+the mean of 3 runs. Text-to-image and [inpainting](#inpainting) run Qwen-Image with the prompt from
+the Qwen-Image-2512 model card (142 tokens, which the pipeline pads to its 256-token sequence length
+bucket). [Editing](#image-editing) runs Edit-2511.
 
-| System              | Encoding | Denoising (50 steps) | VAE   | Total |
-| ------------------- | -------- | -------------------- | ----- | ----- |
-| T3K (2x4)           | 0.41s    | 66.4s                | 0.12s | 67.0s |
-| BH QuietBox 2 (2x2) | 0.11s    | 27.5s                | 0.12s | 27.8s |
-| BH LoudBox (2x4)    | 0.10s    | 20.2s                | 0.08s | 20.5s |
-| BH Galaxy (4x8)     | 0.07s    | 8.2s                 | 0.04s | 8.3s  |
+| Case                           | Steps | T3K (2x4) | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
+| ------------------------------ | ----- | --------- | ------------------- | ---------------- | --------------- |
+| 1024x1024                      | 50    | 67.0s     | 26.1s               | 19.0s            | 8.0s            |
+| 1344x1344                      | 50    | -         | 46.2s               | 30.4s            | 10.9s           |
+| 1664x928                       | 50    | -         | 39.7s               | 27.1s            | 10.0s           |
+| inpaint 1024x1024              | 50    | -         | 26.6s               | 19.1s            | 8.1s            |
+| edit 1024x1024, 1 input image  | 40    | -         | 57.3s               | 37.4s            | 12.9s           |
+| edit 1024x1024, 2 input images | 40    | -         | 91.1s               | 56.9s            | 20.2s           |
+| edit 1024x1024, 3 input images | 40    | -         | 129.6s              | 78.2s            | 26.1s           |
 
-Total time per image at 50 steps for larger [resolutions](#resolutions) and for
-[inpainting](#inpainting):
+Almost all of the time is the transformer's denoising steps. The stages of 1024x1024 text-to-image:
 
-| Case              | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
-| ----------------- | ------------------- | ---------------- | --------------- |
-| 1344x1344         | 49.9s               | 33.3s            | 11.3s           |
-| 1664x928          | 43.9s               | 29.4s            | 10.5s           |
-| inpaint 1024x1024 | 28.5s               | 20.7s            | 8.6s            |
+| System              | Encoding | Denoising | VAE   | Total |
+| ------------------- | -------- | --------- | ----- | ----- |
+| T3K (2x4)           | 0.41s    | 66.4s     | 0.12s | 67.0s |
+| BH QuietBox 2 (2x2) | 0.10s    | 25.9s     | 0.11s | 26.1s |
+| BH LoudBox (2x4)    | 0.10s    | 18.8s     | 0.08s | 19.0s |
+| BH Galaxy (4x8)     | 0.10s    | 7.8s      | 0.05s | 8.0s  |
 
+T3K only runs 1024x1024 text-to-image. The aspect ratio of an edit hardly matters, since every edit
+resolution has about the same number of pixels, and Edit and Edit-2509 take as long as Edit-2511.
 The parallelism of each system is listed under [Scalability](#scalability).
 
 ## Resolutions
