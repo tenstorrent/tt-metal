@@ -128,68 +128,77 @@ void kernel_main() {
     const uint32_t sems_per_group = get_arg_val<uint32_t>(ARG_NEXT + 2);
     constexpr uint32_t ARG_XY = ARG_NEXT + 3;
 #endif
-    for (uint32_t i = 0; i < n; ++i) {
-        EX_ZONE("GU_W_EXPERT");
-        const uint32_t owner = i % groups;
-        const uint32_t slot = (i / groups) & 1;
-        const bool mine = owner == group;
-        const uint32_t e = active[i];
-        if (mine) {
-            // D_e: zeros, then the token weights on the diagonal (row t = token t)
-            cb_reserve_back(cb_d, 1);
-            const uint32_t d_l1 = get_write_ptr(cb_d);
-            volatile tt_l1_ptr uint32_t* d32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d_l1);
-            for (uint32_t j = 0; j < tile_page / 4; ++j) {
-                d32[j] = 0;
+    // experts in waves of 2G (see compute_gate_up_splitk.cpp): the wave's partials to their owners first, then the
+    // two experts this core owns; receive slot (i / G) % 4 (four slots: a sender may be a wave ahead of an owner)
+    constexpr uint32_t WAVE = 2 * groups;
+    constexpr uint32_t NSLOT = 4;
+    for (uint32_t w0 = 0; w0 < n; w0 += WAVE) {
+        const uint32_t w1 = (w0 + WAVE < n) ? w0 + WAVE : n;
+        for (uint32_t i = w0; i < w1; ++i) {
+            EX_ZONE("GU_W_PART");
+            const uint32_t owner = i % groups;
+            const uint32_t slot = (i / groups) % NSLOT;
+            const uint32_t e = active[i];
+            if (owner == group) {
+                // D_e: zeros, then the token weights on the diagonal (row t = token t)
+                cb_reserve_back(cb_d, 1);
+                const uint32_t d_l1 = get_write_ptr(cb_d);
+                volatile tt_l1_ptr uint32_t* d32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d_l1);
+                for (uint32_t j = 0; j < tile_page / 4; ++j) {
+                    d32[j] = 0;
+                }
+                volatile tt_l1_ptr uint16_t* d16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(d_l1);
+                for (uint32_t t = 0; t < M; ++t) {
+                    d16[tile_elem(t, t)] = routing[fold_elem(t, e, col_off)];
+                }
+                cb_push_back(cb_d, 1);
             }
-            volatile tt_l1_ptr uint16_t* d16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(d_l1);
-            for (uint32_t t = 0; t < M; ++t) {
-                d16[tile_elem(t, t)] = routing[fold_elem(t, e, col_off)];
+            // this core's partial tiles -> the owner's receive slot, then its arrival count
+            cb_wait_front(cb_part, 2);
+            const uint32_t oxy = get_arg_val<uint32_t>(ARG_XY_SK + owner);
+            const uint64_t dst =
+                get_noc_addr(oxy >> 16, oxy & 0xFFFFu, recv_base + (slot * groups + group) * PART_BYTES);
+            noc_async_write(get_read_ptr(cb_part), dst, PART_BYTES);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(oxy >> 16, oxy & 0xFFFFu, get_semaphore(SEM0 + slot)), 1);
+            cb_pop_front(cb_part, 2);
+        }
+        for (uint32_t i = w0 + group; i < w1; i += groups) {
+            EX_ZONE("GU_W_OWNER");
+            const uint32_t slot = (i / groups) % NSLOT;
+            const uint32_t e = active[i];
+            // the owner: the G partials have landed when the slot's count reaches G
+            cb_reserve_back(cb_recv, 2 * groups);
+            {
+                EX_ZONE("GU_W_ARRIVE");
+                volatile tt_l1_ptr uint32_t* sem =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM0 + slot));
+                noc_semaphore_wait_min(sem, groups);
+                noc_semaphore_set(sem, 0);
             }
-            cb_push_back(cb_d, 1);
-        }
-        // this core's partial tiles -> the owner's receive slot, then its arrival count
-        cb_wait_front(cb_part, 2);
-        const uint32_t oxy = get_arg_val<uint32_t>(ARG_XY_SK + owner);
-        const uint64_t dst = get_noc_addr(oxy >> 16, oxy & 0xFFFFu, recv_base + (slot * groups + group) * PART_BYTES);
-        noc_async_write(get_read_ptr(cb_part), dst, PART_BYTES);
-        noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(oxy >> 16, oxy & 0xFFFFu, get_semaphore(SEM0 + slot)), 1);
-        cb_pop_front(cb_part, 2);
-        if (!mine) {
-            continue;
-        }
-        // the owner: the G partials have landed when the slot's count reaches G
-        cb_reserve_back(cb_recv, 2 * groups);
-        {
-            EX_ZONE("GU_W_ARRIVE");
-            volatile tt_l1_ptr uint32_t* sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM0 + slot));
-            noc_semaphore_wait_min(sem, groups);
-            noc_semaphore_set(sem, 0);
-        }
-        cb_push_back(cb_recv, 2 * groups);
-        // the output tile -> act[e, col], then the down cores' arrival count (slot k = i / G of group i % G)
-        cb_wait_front(cb_out, 1);
+            cb_push_back(cb_recv, 2 * groups);
+            // the output tile -> act[e, col], then the down cores' arrival count (slot k = i / G of group i % G)
+            cb_wait_front(cb_out, 1);
 #ifdef REGIONS_SRC
-        const uint32_t col = regions_act_col(bank_id, 0, i_tiles);
+            const uint32_t col = regions_act_col(bank_id, 0, i_tiles);
 #else
-        const uint32_t col = bank_id;
+            const uint32_t col = bank_id;
 #endif
-        noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(e * i_tiles + col), tile_page);
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+            noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(e * i_tiles + col), tile_page);
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, 1);
 #ifdef FUSED_SIGNAL
-        {
-            const uint32_t k_mine = i / groups;
-            const uint32_t sem_addr = get_semaphore(sem_base + group * sems_per_group + k_mine / 7);
-            const uint32_t incr = 1u << (4 * (k_mine % 7));
-            for (uint32_t d = 0; d < n_down; ++d) {
-                const uint32_t xy = get_arg_val<uint32_t>(ARG_XY + d);
-                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_addr), incr);
+            {
+                const uint32_t k_mine = i / groups;
+                const uint32_t sem_addr = get_semaphore(sem_base + group * sems_per_group + k_mine / 7);
+                const uint32_t incr = 1u << (4 * (k_mine % 7));
+                for (uint32_t d = 0; d < n_down; ++d) {
+                    const uint32_t xy = get_arg_val<uint32_t>(ARG_XY + d);
+                    noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_addr), incr);
+                }
             }
-        }
 #endif
+        }
     }
     noc_async_full_barrier();
 }
