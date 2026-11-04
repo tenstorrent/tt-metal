@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Column-parallel LoRA gradients on a ``[1, 2]`` tensor-parallel mesh.
+"""Tensor-parallel LoRA gradients on a ``[1, 2]`` mesh.
 
 ``LoraColumnParallelLinear`` keeps ``lora_A`` replicated and ``lora_B`` sharded on its output rows. The grad that
 reaches ``lora_A`` on device ``d`` only carries the output columns of ``d``'s ``lora_B`` shard, so without a sum
 across TP each copy is updated with a different partial grad and the copies drift apart after the first step.
-These tests compare every grad against a numpy reference and check the copies stay identical over optimizer steps.
+``LoraRowParallelLinear`` shards ``lora_A`` and keeps ``lora_B`` replicated; its ``all_reduce`` on ``h`` makes
+``lora_B``'s grad identical on every device without a sum. These tests compare every grad against a numpy reference
+and check that the column-parallel ``lora_A`` copies stay identical over optimizer steps.
 """
 
 from __future__ import annotations
@@ -17,110 +19,131 @@ import pytest
 
 import ttml
 import ttnn
-from ttml.modules import ColumnParallelLinear, LoraConfig
-from ttml.modules.lora import LoraColumnParallelLinear
+from ttml.modules import ColumnParallelLinear, LoraConfig, RowParallelLinear
+from ttml.modules.lora import LoraColumnParallelLinear, LoraRowParallelLinear
+from tp_block import assert_identical_across_devices, device_slices, make_adamw, train_step
 
 pytestmark = pytest.mark.requires_device
 
-DIM = 64  # 32 output rows per device after the 2-way split
+DIM = 64  # 32 rows / cols per device after the 2-way split
 SEQ = 32
 RANK = 32
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
-
-
-def _device_slices(value) -> list:
-    """Each device's slice of a ttnn tensor as a float32 numpy array, in mesh order, stacked on dim 0 so no
-    topology label is trusted."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-    stacked = ttnn.to_torch(value, mesh_composer=composer).float().numpy()
-    return np.split(stacked, device.get_num_devices(), axis=0)
-
-
-def _assert_identical_across_devices(value, what: str) -> np.ndarray:
-    slices = _device_slices(value)
-    for dev, other in enumerate(slices[1:], start=1):
-        assert np.array_equal(slices[0], other), f"{what}: device {dev} differs from device 0"
-    return slices[0]
 
 
 def _assert_close(got: np.ndarray, ref: np.ndarray, what: str) -> None:
     np.testing.assert_allclose(got, ref, rtol=5e-2, atol=2e-2 * np.abs(ref).max(), err_msg=what)
 
 
-def _set_sharded(param, array: np.ndarray, tdim: int) -> None:
-    mapper = ttml.mesh().axis_mapper("tp", tdim=tdim)
-    param.tensor.set_value(
-        ttml.autograd.Tensor.from_numpy(array, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper).get_value()
-    )
+def _tensor(array: np.ndarray, shard_dim: int | None = None) -> ttml.autograd.Tensor:
+    """``array`` on the mesh, sharded on ``shard_dim`` across tp, or replicated."""
+    if shard_dim is None:
+        return ttml.autograd.Tensor.from_numpy(array, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    mapper = ttml.mesh().axis_mapper("tp", tdim=shard_dim)
+    return ttml.autograd.Tensor.from_numpy(array, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
-def _lora_layer(gather_output: bool) -> LoraColumnParallelLinear:
+def _lora_config() -> LoraConfig:
+    """``alpha = 2 * rank`` so the scaling is 2: a missing scaling, or one applied twice, fails the reference."""
+    return LoraConfig(rank=RANK, alpha=2.0 * RANK)
+
+
+def _column_layer(gather_output: bool) -> LoraColumnParallelLinear:
     """A column-parallel LoRA layer with a non-zero ``lora_B`` (its zero init would make ``lora_A``'s grad zero)."""
-    rng = np.random.default_rng(0)
     base = ColumnParallelLinear(DIM, DIM, has_bias=False, gather_output=gather_output)
-    layer = LoraColumnParallelLinear(base, LoraConfig(rank=RANK, alpha=float(RANK)))
-    _set_sharded(layer.lora_B, rng.uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32), tdim=2)
+    layer = LoraColumnParallelLinear(base, _lora_config())
+    B = np.random.default_rng(0).uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32)
+    layer.lora_B.tensor.set_value(_tensor(B, shard_dim=2).get_value())
     return layer
 
 
-def _full_weight(param) -> np.ndarray:
-    """Rows sharded on dim 2, concatenated back on the host."""
-    return np.concatenate(_device_slices(param.tensor.get_value(NATIVE)), axis=2)[0, 0]
+def _gathered(value: ttnn.Tensor, dim: int) -> np.ndarray:
+    """The per-device slices concatenated on ``dim`` on the host, as a 2D array."""
+    return np.concatenate(device_slices(value), axis=dim)[0, 0]
+
+
+def _replicated(value: ttnn.Tensor, what: str) -> np.ndarray:
+    return assert_identical_across_devices(value, what)[0, 0]
+
+
+def _weighted_mean(out: ttml.autograd.Tensor, shard_dim: int | None) -> tuple[ttml.autograd.Tensor, np.ndarray]:
+    """``mean(out * G)`` for a fixed random ``G`` laid out like ``out``, and ``G`` as a 2D array of the full output.
+
+    The weighting makes the upstream grad differ per output column, so the reference depends on which device holds
+    which rows of ``lora_B`` / ``W`` and on the gather order."""
+    G = _tensor(np.random.default_rng(3).standard_normal((1, 1, SEQ, DIM)).astype(np.float32), shard_dim)
+    G_full = _replicated(G.get_value(NATIVE), "G") if shard_dim is None else _gathered(G.get_value(NATIVE), 3)
+    return ttml.ops.unary.mean(out * G), G_full
 
 
 @pytest.mark.parametrize("gather_output", [True, False], ids=["gathered", "sharded_output"])
 def test_column_parallel_grads_match_reference(tp_mesh, gather_output):
-    layer = _lora_layer(gather_output)
-    x_np = np.random.default_rng(1).standard_normal((1, 1, SEQ, DIM)).astype(np.float32)
-    x = ttml.autograd.Tensor.from_numpy(x_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    layer = _column_layer(gather_output)
+    x = _tensor(np.random.default_rng(1).standard_normal((1, 1, SEQ, DIM)).astype(np.float32))
     x.set_requires_grad(True)
 
-    loss = ttml.ops.unary.mean(layer(x))
+    loss, G = _weighted_mean(layer(x), shard_dim=None if gather_output else 3)
     loss.backward(False)
 
     # Reference in float32 from the bf16 values actually on device. A gathered output is replicated, so its mean
     # spans every column; a sharded output's mean only spans the local columns, and backward starts from 1 on each
     # device, so the loss being differentiated is the sum of the per-device means.
-    x_ref = _device_slices(x.get_value(NATIVE))[0][0, 0]
-    W = _full_weight(layer.weight)
-    A = _assert_identical_across_devices(layer.lora_A.tensor.get_value(NATIVE), "lora_A")[0, 0]
-    B = _full_weight(layer.lora_B)
-    out_per_mean = DIM if gather_output else DIM // tp_mesh.shape[1]
-    dY = np.full((SEQ, DIM), 1.0 / (SEQ * out_per_mean), dtype=np.float32)
+    x_ref = _replicated(x.get_value(NATIVE), "input")
+    W = _gathered(layer.weight.tensor.get_value(NATIVE), 2)
+    A = _replicated(layer.lora_A.tensor.get_value(NATIVE), "lora_A")
+    B = _gathered(layer.lora_B.tensor.get_value(NATIVE), 2)
+    out_per_mean = DIM if gather_output else DIM // tp_mesh.axis_size("tp")
+    dY = G / (SEQ * out_per_mean)
     h = x_ref @ A.T
     dh = layer.scaling * dY @ B
     ref_dA = dh.T @ x_ref
     ref_dB = layer.scaling * dY.T @ h
     ref_dx = dY @ W + dh @ A
 
-    dA = _assert_identical_across_devices(layer.lora_A.tensor.get_grad(), "lora_A grad")[0, 0]
-    _assert_close(dA, ref_dA, "lora_A grad")
-    dB = np.concatenate(_device_slices(layer.lora_B.tensor.get_grad()), axis=2)[0, 0]
-    _assert_close(dB, ref_dB, "lora_B grad")
-    dx = _assert_identical_across_devices(x.get_grad(), "input grad")[0, 0]
-    _assert_close(dx, ref_dx, "input grad")
+    _assert_close(_replicated(layer.lora_A.tensor.get_grad(), "lora_A grad"), ref_dA, "lora_A grad")
+    _assert_close(_gathered(layer.lora_B.tensor.get_grad(), 2), ref_dB, "lora_B grad")
+    _assert_close(_replicated(x.get_grad(), "input grad"), ref_dx, "input grad")
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_row_parallel_grads_match_reference(tp_mesh):
+    base = RowParallelLinear(DIM, DIM, has_bias=False, input_is_parallel=True)
+    layer = LoraRowParallelLinear(base, _lora_config())
+    B = np.random.default_rng(0).uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32)
+    layer.lora_B.tensor.set_value(_tensor(B).get_value())
+    x = _tensor(np.random.default_rng(1).standard_normal((1, 1, SEQ, DIM)).astype(np.float32), shard_dim=3)
+    x.set_requires_grad(True)
+
+    # The output is all-reduced, so it is replicated and its mean spans every column.
+    loss, G = _weighted_mean(layer(x), shard_dim=None)
+    loss.backward(False)
+
+    x_ref = _gathered(x.get_value(NATIVE), 3)
+    W = _gathered(layer.weight.tensor.get_value(NATIVE), 3)
+    A = _gathered(layer.lora_A.tensor.get_value(NATIVE), 3)
+    B = _replicated(layer.lora_B.tensor.get_value(NATIVE), "lora_B")
+    dY = G / (SEQ * DIM)
+    h = x_ref @ A.T
+    dh = layer.scaling * dY @ B
+    ref_dA = dh.T @ x_ref
+    ref_dB = layer.scaling * dY.T @ h
+    ref_dx = dY @ W + dh @ A
+
+    _assert_close(_gathered(layer.lora_A.tensor.get_grad(), 3), ref_dA, "lora_A grad")
+    _assert_close(_replicated(layer.lora_B.tensor.get_grad(), "lora_B grad"), ref_dB, "lora_B grad")
+    _assert_close(_gathered(x.get_grad(), 3), ref_dx, "input grad")
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 def test_column_parallel_lora_A_stays_replicated_over_steps(tp_mesh):
-    layer = _lora_layer(gather_output=False)
-    params = layer.parameters()
-    cfg = ttml.optimizers.AdamWConfig.make(lr=1e-2, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-    opt = ttml.optimizers.AdamW(params, cfg)
-    A_init = _device_slices(layer.lora_A.tensor.get_value(NATIVE))[0]
-    rng = np.random.default_rng(2)
+    layer = _column_layer(gather_output=False)
+    opt = make_adamw(layer.parameters())
+    A_init = _replicated(layer.lora_A.tensor.get_value(NATIVE), "lora_A before training")
 
     for step in range(3):
-        x = ttml.autograd.Tensor.from_numpy(
-            rng.standard_normal((1, 1, SEQ, DIM)).astype(np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-        )
-        opt.zero_grad()
-        loss = ttml.ops.unary.mean(layer(x))
-        loss.backward(False)
-        opt.step()
-        ttml.autograd.AutoContext.get_instance().reset_graph()
-        A = _assert_identical_across_devices(layer.lora_A.tensor.get_value(NATIVE), f"lora_A after step {step + 1}")
+        train_step(layer, opt, DIM)
+        A = _replicated(layer.lora_A.tensor.get_value(NATIVE), f"lora_A after step {step + 1}")
 
     assert not np.array_equal(A, A_init), "lora_A should have been updated"

@@ -137,6 +137,14 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
 
+    def tp_summed_lora_A(self):
+        """``lora_A`` with its grad summed across TP: identity forward, all_reduce backward.
+
+        Each device's grad of the replicated ``lora_A`` only carries its own ``lora_B`` shard's output columns, so
+        without the sum every copy is updated with a different partial grad and the copies drift apart.
+        """
+        return ttml.ops.distributed.broadcast(self.lora_A.tensor, self.cluster_axis)
+
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
@@ -151,11 +159,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        # Each device's grad of the replicated lora_A only carries its own
-        # lora_B shard's output columns; broadcast (identity forward, all_reduce
-        # backward) sums it across TP so every copy gets the full grad.
-        lora_A = ttml.ops.distributed.broadcast(self.lora_A.tensor, self.cluster_axis)
-        h = ttml.ops.linear.linear(lora_input, lora_A, None)
+        h = ttml.ops.linear.linear(lora_input, self.tp_summed_lora_A(), None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
             lora_update = ttml.ops.distributed.all_gather(
