@@ -3,7 +3,8 @@
 """Bonsai's Gated DeltaNet projections in their own ternary values for one-token decode.
 
 in_proj: qkv (10240) and z (6144) in one ternary decode linear (512 output tile columns over 130 cores) whose writer
-splits them into two tensors; a and b (48 each, BF16 in the GGUF, not ternary) stay dense. out_proj: ternary on the
+splits them into two tensors; a and b (48 each, BF16 in the GGUF, not ternary) stay dense, in their exact bf16
+values (exact_ab; qwen36 keeps them as bfloat8_b). out_proj: ternary on the
 rotated activation. The GGUF orders the v heads grouped by key head ("gdn_v_grouped"), HF by value head: the qkv v
 rows and the z rows are reordered on the host, as Alejandro's converter does. out_proj needs no reorder: the
 converter kept ssm_out as is (its column-reorder candidate scored lower against the base model; conversion report)."""
@@ -60,6 +61,40 @@ def out_chunk_src(gguf) -> np.ndarray:
     return chunks[:, 0] // 32
 
 
+def exact_ab(gguf, layer_num) -> torch.Tensor:
+    """[5120, 96] bf16: [a | b] = ssm_alpha, ssm_beta in their GGUF bf16 values, v heads in HF order (the HF in_proj_a /
+    in_proj_b are exactly gguf[v_to_hf]; neither is Hadamard-folded)."""
+    nv, nk, _, _ = gdn_dims(gguf)
+    p = v_to_hf(nv, nk, 1)
+    parts = []
+    for name in ("ssm_alpha", "ssm_beta"):
+        dims, tt, raw = gguf.tensors[f"blk.{layer_num}.{name}.weight"]
+        assert tt == 30 and f"blk.{layer_num}.{name}.weight" not in gguf.folded, (name, tt)
+        w = torch.from_numpy(np.asarray(raw).view(np.int16).copy()).view(torch.bfloat16)
+        parts.append(w.reshape(int(dims[1]), int(dims[0]))[p].T)
+    return torch.cat(parts, dim=1).contiguous()
+
+
+def ab_prefill_config(T):
+    """a / b projection at T tokens: rows over an 8 x 8 grid, the weights multicast (bf16, HiFi4: T = 2048 142 ->
+    100 us vs the default config)."""
+    mt = -(-T // 32)
+    pm = -(-mt // 64)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=pm,
+        out_block_w=3,
+        per_core_M=pm,
+        per_core_N=3,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+
 class TernaryGDN:
     def __init__(
         self, device, packed, rot_in: DecodeRotation, rot_out: DecodeRotation, ab_w, step=None, prefill_rotations=None
@@ -72,7 +107,7 @@ class TernaryGDN:
         self.rot_in, self.rot_out = rot_in, rot_out
         self.step = step  # GDNStep (tt/gdn_step): conv + gates + state update + gated norm in one op
         # a and b (48 each, dense) in one 5120 x 96 matmul: the default config ran each on 2 cores at 113 us;
-        # 3 cores with in0_block_w=8 take 21 us (tests/test_ab_bench.py).
+        # 3 cores with in0_block_w=40 take 16 us (in0_block_w=8: 21 us).
         self.ab_w = ab_w
         self.na = ab_w.shape[-1] // 2
         # a and b are bf16 weights (not ternary): HiFi4 uses all of their mantissa
@@ -89,7 +124,7 @@ class TernaryGDN:
             self.prot_in, self.prot_out = prefill_rotations[self.qkvz.K], prefill_rotations[self.out.K]
         self.ab_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(ab_w.shape[-1] // 32, 1),
-            in0_block_w=8,
+            in0_block_w=40,
             out_subblock_h=1,
             out_subblock_w=1,
             out_block_h=1,
@@ -190,6 +225,13 @@ def swap_in_ternary_gdn(model, gguf, cache_dir=None, prefill_rotations=None) -> 
         for t in (w.mega_fused_weight, w.o_proj_weight, w.qkv_proj_weight, w.g_proj_weight):
             if t is not None:
                 ttnn.deallocate(t)
+        # a / b in their exact bf16 values (the dense path's copy is bfloat8_b)
+        ab = ttnn.from_torch(
+            exact_ab(gguf, layer.layer_num), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        ttnn.deallocate(w.ab_proj_weight)
+        w.ab_proj_weight = ab
         gdn.ternary = TernaryGDN(
             device, packed, rot_in, rot_out, w.ab_proj_weight, step=make_gdn_step(gdn, nk, hk),
             prefill_rotations=prefill_rotations,

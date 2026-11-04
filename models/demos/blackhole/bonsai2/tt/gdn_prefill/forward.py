@@ -410,7 +410,9 @@ def gdn_chunk_forward(gdn, x, linear_shim):
             xr = tern.prot_in(x)
         mega = tern.pre_qkvz(xr)  # [1, T, qkv | z]
         ttnn.deallocate(xr)
-        ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc)
+        from models.demos.blackhole.bonsai2.tt.ternary.gdn import ab_prefill_config
+
+        ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc, program_config=ab_prefill_config(T))
         na = tern.na
         gates = getattr(gdn, "_bonsai_gates", None)
         if gates is not None and B == 1:
