@@ -137,3 +137,18 @@ def test_failed_encode_leaves_no_valid_header(monkeypatch, expect_error):
         media.encode([item], [value])
     with expect_error(ValueError, "no embeddings"):
         media_format.read_header(value)
+
+
+@pytest.mark.parametrize(
+    "warmup, message",
+    [
+        ([[100, 100]], "multiples of 28"),
+        ([5], "multiples of 28"),
+        ([[28, 28]], "makes 1 tokens"),
+        ([[700, 700]], "makes 625"),
+    ],
+)
+def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup, message):
+    """A warm-up size that no resized image has raises ValueError before load imports ttnn or opens a chip."""
+    with expect_error(ValueError, message):
+        MiniMaxM3Media(CONFIG).load(str(tmp_path), {"warmup": warmup})

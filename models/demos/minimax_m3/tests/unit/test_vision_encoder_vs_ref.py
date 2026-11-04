@@ -14,9 +14,10 @@ checkpoint):
     bit for bit and match the reference, nothing else in the buffer may change, and the images after the warm-up must
     add no program to the cache.
   - test_vision_media_load_and_encode: the service's media module (vision/media.py) with the encoder: load() from a
-    checkpoint directory that the test writes from the 2-layer reference, on the test's chip; prepare() of an RGBA
-    image that resizes to 224x224; encode() into a stored value. The value's header is the image's, and its embeddings
-    are bit for bit what the encoder's own forward gives for the prepared pixels with the same weights.
+    checkpoint directory that the test writes from the 2-layer reference, on the test's chip, with a 224x224 warm-up;
+    prepare() of an RGBA image that resizes to 224x224; encode() into a stored value, which compiles no new program.
+    The value's header is the image's, and its embeddings are bit for bit what the encoder's own forward gives for the
+    prepared pixels with the same weights.
   - test_vision_media_opens_its_own_chip: the service's path, load without a mesh_device: the module opens and closes
     a 1x1 mesh of the first visible chip with ttnn's default device params, and its value matches the reference.
 The host tests of the encoder, which need no chip, are in test_vision_encoder_api.py.
@@ -179,12 +180,15 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
     assert vision_config(hf_config) == reference.config
     write_checkpoint(tmp_path, reference, hf_config)
     media = MiniMaxM3Media(hf_config)
-    media.load(str(tmp_path), {}, mesh_device=mesh_device)
+    media.load(str(tmp_path), {"warmup": [[224, 224]]}, mesh_device=mesh_device)
     try:
+        cache_entries = mesh_device.num_program_cache_entries()
+        assert cache_entries > 0, "load's warm-up compiled no program"
         item = media.prepare("image", _opaque_rgba(230, 230))
         assert item.pixels.shape == (224, 224, 3), item.pixels.shape
         value = memoryview(bytearray(media.value_size(item)))
         media.encode([item], [value])
+        assert mesh_device.num_program_cache_entries() == cache_entries, "encode compiled a program the warm-up had not"
     finally:
         media.close()
 
@@ -211,7 +215,7 @@ def test_vision_media_opens_its_own_chip(vision_reference, tmp_path):
     hf_config = MiniMaxM3VLConfig(vision_config={"num_hidden_layers": NUM_LAYERS}).to_dict()
     write_checkpoint(tmp_path, reference, hf_config)
     media = MiniMaxM3Media(hf_config)
-    media.load(str(tmp_path), {})
+    media.load(str(tmp_path), {"warmup": []})
     try:
         item = media.prepare("image", _opaque_rgba(230, 230))
         value = memoryview(bytearray(media.value_size(item)))

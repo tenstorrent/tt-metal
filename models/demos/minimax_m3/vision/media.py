@@ -29,6 +29,11 @@ MAX_PIXELS = 576 * FACTOR * FACTOR
 MAX_RATIO = 200
 IMAGE_START = 200029  # "]<]start of image[>[" in the MiniMax-M3 tokenizer
 IMAGE_END = 200030  # "]<]end of image[>["
+# Resized images, (height, width) in pixels, that load runs once so that the chip's programs for their patch counts
+# are compiled before the first request: 576 tokens (672 x 672, and 16:9 photos resized to 896 x 504) and 540 tokens
+# (4:3 photos resized to 756 x 560). The programs depend on the patch count only; an image of another count compiles
+# them on its first encode, 15 to 42 s with an empty kernel cache. model_options.warmup replaces this list.
+WARMUP_SIZES = ((672, 672), (560, 756))
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,24 @@ def smart_resize(height: int, width: int) -> tuple[int, int]:
         h = math.ceil(height * beta / FACTOR) * FACTOR
         w = math.ceil(width * beta / FACTOR) * FACTOR
     return h, w
+
+
+def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
+    """options["warmup"] (default WARMUP_SIZES) as (height, width) pairs of resized images: sides multiples of 28,
+    4 to 576 tokens. Raises ValueError otherwise, before load opens a chip."""
+    sizes = []
+    for size in options.get("warmup", WARMUP_SIZES):
+        if not (
+            isinstance(size, (list, tuple))
+            and len(size) == 2
+            and all(isinstance(side, int) and side > 0 and side % FACTOR == 0 for side in size)
+        ):
+            raise ValueError(f"warmup sizes must be [height, width] in multiples of {FACTOR} pixels, got {size!r}")
+        height, width = size
+        if not MIN_PIXELS <= height * width <= MAX_PIXELS:
+            raise ValueError(f"warmup size {list(size)} makes {height * width // FACTOR**2} tokens, not 4 to 576")
+        sizes.append((height, width))
+    return sizes
 
 
 def _stub_rows(item: M3Image, hidden: int) -> np.ndarray:
@@ -103,8 +126,9 @@ class MiniMaxM3Media:
         """Get ready to encode: stub embeddings with options["stub_embeddings"], else the TT vision encoder with the
         vision weights of the MiniMax-M3 checkpoint in weights_path. The encoder runs on mesh_device, a mesh of one
         chip, or without one on a 1x1 mesh of the first visible chip that load opens and close closes (the service
-        picks the chip, for example with TT_VISIBLE_DEVICES). Raises ValueError for a weights_path that is not a
-        directory before it opens a chip."""
+        picks the chip, for example with TT_VISIBLE_DEVICES). Then it encodes one blank image of each warm-up size
+        (options["warmup"], default WARMUP_SIZES) to compile the chip's programs. Raises ValueError for a weights_path
+        that is not a directory or a bad warm-up size before it opens a chip."""
         if self._stub or self._encoder is not None:
             raise RuntimeError("load after load: close first")
         if options.get("stub_embeddings"):
@@ -112,19 +136,25 @@ class MiniMaxM3Media:
             return
         if not weights_path or not os.path.isdir(weights_path):
             raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
+        warmup = _warmup_sizes(options)
         import ttnn
         from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder
 
         own_mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1)) if mesh_device is None else None
+        encoder = None
         try:
-            self._encoder = TtMiniMaxM3VisionEncoder.from_weights_path(
+            encoder = TtMiniMaxM3VisionEncoder.from_weights_path(
                 own_mesh_device if mesh_device is None else mesh_device, weights_path, self.hf_config
             )
+            for height, width in warmup:
+                ttnn.deallocate(encoder.forward(np.zeros((height, width, 3), dtype=np.uint8)))
         except BaseException:
+            encoder = None
             if own_mesh_device is not None:
+                gc.collect()  # the encoder's device tensors go before their chip closes
                 ttnn.close_mesh_device(own_mesh_device)
             raise
-        self._own_mesh_device = own_mesh_device
+        self._encoder, self._own_mesh_device = encoder, own_mesh_device
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
         assert self._stub or self._encoder is not None, "encode before load"
