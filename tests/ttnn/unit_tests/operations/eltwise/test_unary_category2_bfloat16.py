@@ -5,7 +5,12 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
+    assert_with_pcc,
+    generate_all_bfloat16_bitpatterns,
+)
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_ftz_band,
     generate_bfloat16_bits,
@@ -149,7 +154,14 @@ def test_hardswish(device):
 
     # (2) near-zero output FTZ: |x/2| < smallest normal, i.e. |x| < 2*SNB.
     near_zero_ftz = (input_tensor.abs().float() < 2 * SMALLEST_NORMAL_BF16) & ~golden_overflow
-    assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
+        # flushes to 0; it is checked as the BF16 pack stores it.
+        expected = golden[near_zero_ftz]
+        tiny = torch.finfo(torch.bfloat16).tiny
+        assert_equal(torch.where(expected.abs() < tiny, torch.zeros_like(expected), expected), result[near_zero_ftz])
+    else:
+        assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
 
     remaining = ~golden_overflow & ~near_zero_ftz
     assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)

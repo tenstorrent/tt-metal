@@ -332,3 +332,7 @@
 #ifdef SFPU_OP_CLAMPED_SILU_GLU_INCLUDE
 #include "api/compute/clamped_silu_glu.h"
 #endif
+
+#ifdef SFPU_OP_HARDSWISH_INCLUDE
+#include "api/compute/eltwise_unary/hardswish.h"
+#endif
