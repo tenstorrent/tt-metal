@@ -881,6 +881,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
     // Set before initialize: the submesh's command queues read the allocator config while they are built.
     submesh_impl->shares_parent_allocator_ = share_allocator;
+    if (share_allocator) {
+        MeshDeviceImpl* root = this;
+        while (root->parent_mesh_) {
+            root = &root->parent_mesh_->impl();
+        }
+        root->has_shared_allocator_submesh_ = true;
+    }
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
 
     TT_FATAL(
@@ -1329,7 +1336,10 @@ void MeshDeviceImpl::validate_no_overlapping_cq_owner() const {
     while (root->parent_mesh_) {
         root = &root->parent_mesh_->impl();
     }
-    const std::unordered_set<const IDevice*> own_devices(local_devices_.begin(), local_devices_.end());
+    if (!root->has_shared_allocator_submesh_) {
+        return;
+    }
+    const std::unordered_set<const Device*> own_devices(local_devices_.begin(), local_devices_.end());
     std::function<void(const MeshDeviceImpl&)> check = [&](const MeshDeviceImpl& mesh) {
         // Only switches that involve a shared-allocator submesh are checked, so meshes created without
         // share_allocator keep their previous behavior.

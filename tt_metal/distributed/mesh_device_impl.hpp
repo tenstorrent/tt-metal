@@ -188,6 +188,9 @@ private:
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
     // Set on a submesh created with share_allocator: its buffers are placed by the parent's allocator.
     bool shares_parent_allocator_ = false;
+    // Set on the root mesh once any submesh below it shares an allocator. Families without one skip
+    // validate_no_overlapping_cq_owner, so their meshes behave as before.
+    std::atomic<bool> has_shared_allocator_submesh_ = false;
 
     ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
@@ -534,8 +537,10 @@ public:
 
     // Throws if a mesh of this family (parent, submesh or sibling) that shares a device with this mesh has a
     // command queue in use, since this mesh would then dispatch over that mesh's state. Checked only when one of
-    // the two meshes is a shared-allocator submesh. Called when a command queue of this mesh goes from idle to in
-    // use. Assumes overlapping meshes are not driven from two threads.
+    // the two meshes is a shared-allocator submesh, and returns at once in a family without one. Called when a
+    // command queue of this mesh goes from idle to in use. It reads the other meshes of the family without their
+    // locks, so it assumes overlapping meshes are not driven from two threads, and that meshes of the family are
+    // not created or closed while another thread enqueues on one of them.
     void validate_no_overlapping_cq_owner() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
