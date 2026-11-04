@@ -30,7 +30,7 @@ constexpr uint32_t XRD_BATCH = 2, DW_BATCH = 2;
 constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFREE = 10, HFREE = 11, HSFREE = 12,
                    GATH1 = 14, GATH2 = 15;
 // the gate/up cores' grant counter: the receiver counts the landing slots it frees, the weight reads
-// (se_gu_read.hpp) fill granted slots only (id 1 is otherwise unused on them)
+// (gate_up_weight_read.hpp) fill granted slots only (id 1 is otherwise unused on them)
 constexpr uint32_t GRANT = 1;
 constexpr const char* KDIR = "ttnn/cpp/ttnn/operations/experimental/moe_block/flat_routed_expert/device/kernels/";
 
@@ -119,7 +119,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
-    // (se5_xfwd.cpp) on NOC0 with 3 pieces in flight, the receiver (se5_recv.cpp, BRISC) on NOC1.
+    // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
     const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
     constexpr uint32_t X_FWD_DEPTH = 3;
@@ -272,7 +272,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         return d;
     };
 
-    // row-major y (cfg.y_row_major): the down compute pack-untilizes, the writers send row segments (se_yrm.hpp)
+    // row-major y (cfg.y_row_major): the down compute pack-untilizes, the writers send row segments (y_row_major.hpp)
     const bool yrm = cfg.y_row_major;
     // the row-major out CB (bf16 row tiles of PCD pages) takes what the down cores' arena holds after the out region's
     // start (the plan sizes the arena for the largest role; the plan's 2 KB margin is kept), at most 2 MT (a virtual
@@ -317,36 +317,42 @@ FlatProgramHandles add_flat_routed_expert_program(
             p.H,
             p.H / t.x.logical_shape()[-1],
             seg_bytes);
-        Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}});
+        Defines x_reader_def = with(dyn_def, {{"SE_SBT", sbt}});
         if (indexed) {
-            xrd_def["XRD_INDEXED"] = "1";
+            x_reader_def["XRD_INDEXED"] = "1";
         }
         TT_FATAL(kRmChunks % XRD_BATCH == 0, "flat_routed_expert: XRD_BATCH must divide the row-major chunks");
         // x reads on NOC1, the relays' sends on NOC0 (one RISC per NoC on a relay: dedicated-NoC mode)
-        const std::vector<CoreCoord> xrel_h(p.relays.begin() + NR, p.relays.end());
-        const std::vector<uint32_t> xrd_ct = {
+        const std::vector<CoreCoord> x_helper_cells(p.relays.begin() + NR, p.relays.end());
+        const std::vector<uint32_t> x_reader_ct = {
             0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, XRD_BATCH, idx_arg, p.H / t.x.logical_shape()[-1]};
         // (the helpers read / tilize all of x; the primaries only multicast it)
-        const auto kxr_h = dm("se11_xrd.cpp", xrel_h, DataMovementProcessor::RISCV_0, NOC::NOC_1, xrd_ct, xrd_def);
-        cp("se11_tz.cpp", xrel_h, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
-        const Defines xmc_def = with(dyn_def, {{"SE_SBT", sbt}, {"XMC_CHAIN_PIECES", std::to_string(x_pieces)}});
+        const auto k_x_reader =
+            dm("x_injector_reader.cpp",
+               x_helper_cells,
+               DataMovementProcessor::RISCV_0,
+               NOC::NOC_1,
+               x_reader_ct,
+               x_reader_def);
+        cp("x_injector_tilize_compute.cpp", x_helper_cells, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
+        const Defines x_injector_def = with(dyn_def, {{"SE_SBT", sbt}, {"XMC_CHAIN_PIECES", std::to_string(x_pieces)}});
         // one kernel per primary, its credits to the helpers on its own semaphore (5 / 6 there)
-        std::vector<KernelHandle> kxms;
+        std::vector<KernelHandle> k_x_injectors;
         for (uint32_t q = 0; q < NR; ++q) {
-            kxms.push_back(
-                dm("se11_xmc.cpp",
+            k_x_injectors.push_back(
+                dm("x_injector_writer.cpp",
                    {p.relays[q]},
                    DataMovementProcessor::RISCV_1,
                    NOC::NOC_0,
                    {1, MT, kBf8Tile, p.x_slots, XARR, kKBlk, E, p.nsb},
-                   with(xmc_def, {{"XMC_CREDIT_SEM", std::to_string(5 + q)}})));
+                   with(x_injector_def, {{"XMC_CREDIT_SEM", std::to_string(5 + q)}})));
         }
         // one kernel per helper k: its arrivals are semaphore {4, 7}[k] on both primaries, its credits come back on 5
         // (primary 0) and 6 (primary 1)
-        std::vector<KernelHandle> khl;
+        std::vector<KernelHandle> k_x_helpers;
         for (uint32_t k = 0; k < NR; ++k) {
-            khl.push_back(
-                dm("se13_xhelp.cpp",
+            k_x_helpers.push_back(
+                dm("x_injector_helper_writer.cpp",
                    {p.relays[NR + k]},
                    DataMovementProcessor::RISCV_1,
                    NOC::NOC_0,
@@ -363,11 +369,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                 if (indexed) {
                     xr.a(FlatAddr::TokenIndex);
                 }
-                add_rt(kxr_h, rl, xr);
+                add_rt(k_x_reader, rl, xr);
             }
             if (idx < NR) {
                 // the snake head and its freed word, helper 0's xy, the landing rings, their slots, helper 1's xy
-                // (rectangle 0's first - helper k's ring k), then the se_dyn.hpp args
+                // (rectangle 0's first - helper k's ring k), then the expert_schedule.hpp args
                 Args xm;
                 xm.a(FlatAddr::Arena, p.x_off)
                     .lit(pk(p.gu[x_head[k]]))
@@ -377,7 +383,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(p.land_slots)
                     .lit(pk(p.relays[NR + 1]));
                 xm.cat(dyn);
-                add_rt(kxms[idx], rl, xm);
+                add_rt(k_x_injectors[idx], rl, xm);
             } else {
                 Args hl;
                 hl.lit(pk(p.relays[0]))  // (primary 0 first, ring k on both primaries)
@@ -386,9 +392,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(1)
                     .lit(0)
                     .cat(dyn);
-                hl.lit(NR).lit(k);        // (se13_xhelp.cpp SE_X2: every NR-th super-block from k)
+                hl.lit(NR).lit(k);        // (x_injector_helper_writer.cpp SE_X2: every NR-th super-block from k)
                 hl.lit(pk(p.relays[1]));  // (the second primary)
-                add_rt(khl[k], rl, hl);
+                add_rt(k_x_helpers[k], rl, hl);
             }
         }
     }
@@ -401,11 +407,11 @@ FlatProgramHandles add_flat_routed_expert_program(
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton). The receivers count their grants
         // locally; the x forwarder (NCRISC) on NOC0 reads their consumed count / end marker in semaphores 2 / 3 (free
         // on gate/up cores), one successor, X_FWD_DEPTH pieces in flight
-        Defines recv_def = with(
+        Defines gu_reader_def = with(
             dyn_def,
             {{"SE_X_FWD_NC_CONS", "2"}, {"SE_X_FWD_NC_END", "3"}, {"SE_X_FWD_DEPTH", std::to_string(X_FWD_DEPTH)}});
-        // gate/up weights read by the gate/up cores (se_gu_read.hpp): the receiver's grant counter (GRANT) and its
-        // landed-blocks count (DATA), semaphore 0 the loads-list mailbox to the NCRISC reader
+        // gate/up weights read by the gate/up cores (gate_up_weight_read.hpp): the receiver's grant counter (GRANT) and
+        // its landed-blocks count (DATA), semaphore 0 the loads-list mailbox to the NCRISC reader
         const Defines gu_def = {
             {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
             {"SE_GU_PER_E", std::to_string(p.nk_gu)},
@@ -415,22 +421,23 @@ FlatProgramHandles add_flat_routed_expert_program(
             {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
             {"SE_GU_DATA_SEM", std::to_string(DATA)},
             {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
-        recv_def.insert(gu_def.begin(), gu_def.end());
+        gu_reader_def.insert(gu_def.begin(), gu_def.end());
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
-            recv_def["SE_HG_NU"] = std::to_string(p.nu);
-            recv_def["SE_HPC"] = std::to_string(p.hpc);
+            gu_reader_def["SE_HG_NU"] = std::to_string(p.nu);
+            gu_reader_def["SE_HPC"] = std::to_string(p.hpc);
         }
-        const std::vector<uint32_t> recv_ct = {0,         x_blk,    1,     p.slot, p.nk_gu,  p.ring_g, 3,
-                                               MT,        kBf8Tile, ngu,   DATA,   GO,       p.hbuf,   XARR,
-                                               p.x_slots, NP,       GATH1, GATH2,  x_pieces, E};
+        const std::vector<uint32_t> gu_reader_ct = {0,         x_blk,    1,     p.slot, p.nk_gu,  p.ring_g, 3,
+                                                    MT,        kBf8Tile, ngu,   DATA,   GO,       p.hbuf,   XARR,
+                                                    p.x_slots, NP,       GATH1, GATH2,  x_pieces, E};
         TT_FATAL(
             x_bytes % x_pieces == 0 && (x_bytes / x_pieces) % 16 == 0,
             "flat_routed_expert: x pieces {} of a {} B x block must be 16 B aligned",
             x_pieces,
             x_bytes);
-        const KernelHandle kr = dm("se5_recv.cpp", p.gu, DataMovementProcessor::RISCV_0, NOC::NOC_1, recv_ct, recv_def);
-        const KernelHandle kxf =
-            dm("se5_xfwd.cpp",
+        const KernelHandle kr = dm(
+            "gate_up_core_reader.cpp", p.gu, DataMovementProcessor::RISCV_0, NOC::NOC_1, gu_reader_ct, gu_reader_def);
+        const KernelHandle k_x_forwarder =
+            dm("gate_up_x_forwarder.cpp",
                p.gu,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
@@ -458,7 +465,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             cdef["SE_HPC"] = std::to_string(p.hpc);
         }
         const auto kc =
-            cp("se3_compute.cpp", p.gu, {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g}, cdef, true, p.gu_full_sync);
+            cp("gate_up_compute.cpp", p.gu, {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g}, cdef, true, p.gu_full_sync);
         for (uint32_t r = 0; r < n_rd; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
                 const uint32_t ci = p.gu_at(r, j);
@@ -467,8 +474,8 @@ FlatProgramHandles add_flat_routed_expert_program(
                 Args a;
                 // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
                 a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.h_off).lits(head_xy).cat(dyn);
-                // the gate/up weight reads (se_gu_read.hpp, on this core's NCRISC): weights, bank, this core's first
-                // block (slot region + block j), chunk bytes, landing ring (the arena's start)
+                // the gate/up weight reads (gate_up_weight_read.hpp, on this core's NCRISC): weights, bank, this core's
+                // first block (slot region + block j), chunk bytes, landing ring (the arena's start)
                 Args gw;
                 gw.a(FlatAddr::GateUp)
                     .lit(r % banks)
@@ -485,7 +492,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(pk(p.relays[p.rect_of(gc)]))
                     .a(FlatAddr::Words, 0);
                 f.cat(gw);
-                add_rt(kxf, gc, f);
+                add_rt(k_x_forwarder, gc, f);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{(cg_ * p.nu) & 1u});
             }
         }
@@ -503,9 +510,9 @@ FlatProgramHandles add_flat_routed_expert_program(
         for (uint32_t d : ds) {
             cores.push_back(p.down[d]);
         }
-        // row-major y written from the NCRISC on its NOC (se6_dw.cpp) instead of the BRISC, whose NOC carries the h
-        // chain: bfp8 x + bf16 h at M 512 / 2048 / 5120 -9 / -9 / -11%, bfp8 / bfp8 -4 / -1 / -0%; +1% (~0.4 us) at
-        // M <= 64. The h chain / y writes (BRISC) on NOC1, the down-weight reads (NCRISC) on NOC0.
+        // row-major y written from the NCRISC on its NOC (down_weight_reader.cpp) instead of the BRISC, whose NOC
+        // carries the h chain: bfp8 x + bf16 h at M 512 / 2048 / 5120 -9 / -9 / -11%, bfp8 / bfp8 -4 / -1 / -0%; +1%
+        // (~0.4 us) at M <= 64. The h chain / y writes (BRISC) on NOC1, the down-weight reads (NCRISC) on NOC0.
         const bool y_nc = yrm;
         const Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
         auto plus = [](Defines a, const Defines& b) {
@@ -513,7 +520,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             return a;
         };
         const auto kr =
-            dm("se6_drecv.cpp",
+            dm("down_core_writer.cpp",
                cores,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
@@ -521,7 +528,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 GATH, DONE,      GO,       p.hbuf,   MT, pw,  Ht, GATH, GATH1, GATH2, E},
                plus(yrm_def(dyn_def, pw), ync));
         const auto kw =
-            dm("se6_dw.cpp",
+            dm("down_weight_reader.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
@@ -532,7 +539,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                        Defines{{"SE_DW_ROT", std::to_string(banks)}}),
                    Defines{{"SE_DW_RING", std::to_string(ring)}}));
         const auto kc =
-            cp("se6_dcompute.cpp",
+            cp("down_compute.cpp",
                cores,
                {MT, It, kd, pw, E, S, slot, ring},
                dn_def(yrm_def(dyn_def)),
@@ -685,7 +692,7 @@ void override_flat_routed_expert_addresses(
 FlatRoutedExpertConfig with_combine_overlap(FlatRoutedExpertConfig cfg, const FlatRoutedExpertPlan& plan, bool y_l1) {
     cfg.y_row_major = true;
     cfg.y_bf16 = false;
-    // (the writers report local experts in slot order, with cumulative counts: se_cmb_done.hpp)
+    // (the writers report local experts in slot order, with cumulative counts: combine_done.hpp)
     cfg.cmb_rt = 48 + static_cast<uint32_t>(plan.gu.size()) + 2 * cfg.experts_per_chip;
     cfg.y_l1 = y_l1;
     return cfg;

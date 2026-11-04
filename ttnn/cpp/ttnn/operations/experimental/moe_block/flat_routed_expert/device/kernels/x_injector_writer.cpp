@@ -2,22 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// End-to-end flat expert: x relay primary (NCRISC). Its source is the helpers' tilized super-blocks (MT row tiles x
-// SE_SBT K tiles, row tile major) in its landing rings (x read once by the helper relays: super-block b from helper
-// b % kXnh, se13_xhelp.cpp): each of a super-block's x blocks ([MT x KBLK] tiles, row tile major in the gate/up
-// cores' x ring) goes out as MT unicast pieces into the rectangle's snake head, once the whole super-block's ring
-// slots are free there (the head's freed word); the gate/up cores forward it along the snake (se5_recv.cpp /
-// se5_xfwd.cpp). The head's XARR moves by a batch's pieces once its writes are acknowledged.
-// CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 X_SLOTS, 4 XARR_SEM, 5 KBLK, 6 NUM_E, 7 NSB
-// RT: 0 x ring address, 1 snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
-//     address, 5 landing slots, 6 helper 1 xy, 7.. the se_dyn.hpp args
+// Flat expert x injector writer (an x primary relay's NCRISC). Its source is the helpers' tilized super-blocks (MT row
+// tiles x SE_SBT K tiles, row tile major) in its landing rings (x read once by the helper relays: super-block b from
+// helper b % kXnh, x_injector_helper_writer.cpp): each of a super-block's x blocks ([MT x KBLK] tiles, row tile major
+// in the gate/up cores' x ring) goes out as MT unicast pieces into the rectangle's snake head, once the whole
+// super-block's ring slots are free there (the head's freed word); the gate/up cores forward it along the snake
+// (gate_up_core_reader.cpp / gate_up_x_forwarder.cpp). The head's XARR moves by a batch's pieces once its writes are
+// acknowledged. CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 X_SLOTS, 4 XARR_SEM, 5 KBLK, 6 NUM_E, 7 NSB RT: 0 x ring address, 1
+// snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
+//     address, 5 landing slots, 6 helper 1 xy, 7.. the expert_schedule.hpp args
 #include <stdint.h>
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
 #endif
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 
 void kernel_main() {
     constexpr uint32_t mt = get_compile_time_arg_val(1);
@@ -39,8 +39,8 @@ void kernel_main() {
     *freed = 0;
     const uint32_t land = get_arg_val<uint32_t>(4), land_slots = get_arg_val<uint32_t>(5);
     const uint32_t helper_xy[kXnh] = {get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(6)};
-    // Dynamic counts: the super-blocks follow from the active experts' sub-blocks (RT 7.. are the se_dyn.hpp args,
-    // CB 7's upper half this RISC's scratch)
+    // Dynamic counts: the super-blocks follow from the active experts' sub-blocks (RT 7.. are the expert_schedule.hpp
+    // args, CB 7's upper half this RISC's scratch)
     constexpr uint32_t dyn0 = 7;
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, dyn0, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
@@ -64,9 +64,9 @@ void kernel_main() {
         }
     };
     for (uint32_t b = 0; b < num_sb; ++b) {
-        // Super-block b was read and tilized by helper h = b % kXnh (se13_xhelp.cpp) into landing ring h here (ring h
-        // follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem XMC_CREDIT_SEM on the helper
-        // counts freed slots.
+        // Super-block b was read and tilized by helper h = b % kXnh (x_injector_helper_writer.cpp) into landing ring h
+        // here (ring h follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem XMC_CREDIT_SEM on
+        // the helper counts freed slots.
         const uint32_t hh = b % kXnh, hb = b / kXnh;
         constexpr uint32_t help_sem[kXnh] = {4, 7};
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
@@ -85,7 +85,7 @@ void kernel_main() {
             invalidate_l1_cache();
         }
         // the batch's pieces into the snake head (unicast, under the batch's transaction id); the head forwards them
-        // along the snake, se5_recv.cpp
+        // along the snake, gate_up_core_reader.cpp
         chain_retire(XMC_CHAIN_DEPTH - 1);  // (room for this batch's id)
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;

@@ -16,7 +16,7 @@
 //    The caller may lay its own buffers in the same arena on its own cells (e.g. a persistent arena the caller owns).
 //  * Combine overlap (config.cmb_rt > 0, see with_combine_overlap): every y writer (y_writers, in program order) has 4
 //    report args at config.cmb_rt (collector x, y, counts address, unused) and, with config.y_l1, kFlatYL1Args
-//    L1 hand-off args after them (se_yrm.hpp SE_Y_L1); set_flat_combine_report fills them. Each writer then adds 1
+//    L1 hand-off args after them (y_row_major.hpp SE_Y_L1); set_flat_combine_report fills them. Each writer then adds 1
 //    to counts[e] on the collector once local expert e's rows have landed (cumulative across calls, slot order, no
 //    go handshake), so the collector waits for calls x writers.
 //  * Hash: everything the fragment depends on is in the config (hash it), the plan (a function of the mesh device and
@@ -73,7 +73,7 @@ struct FlatProgramHandles {
     std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> y_writers;
 };
 
-// The y writers' L1 hand-off args after the 4 report args (se_yrm.hpp SE_Y_L1).
+// The y writers' L1 hand-off args after the 4 report args (y_row_major.hpp SE_Y_L1).
 constexpr uint32_t kFlatYL1Args = 8 + 5 * 32;
 
 // Adds the flat routed expert's kernels, circular buffers and semaphores to `program`, the program of one chip of
@@ -107,8 +107,8 @@ void set_flat_combine_report(
     const FlatRoutedExpertConfig& config,
     const FlatCombineReport& report);
 
-// The defines that decide the dynamic schedule (se_dyn.hpp: sub-block rows, expert capacity, gate/up ring regions,
-// pinning): every kernel of the program is built with them, so every core builds the same schedule.
+// The defines that decide the dynamic schedule (expert_schedule.hpp: sub-block rows, expert capacity, gate/up ring
+// regions, pinning): every kernel of the program is built with them, so every core builds the same schedule.
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& config, const FlatRoutedExpertPlan& plan);
 

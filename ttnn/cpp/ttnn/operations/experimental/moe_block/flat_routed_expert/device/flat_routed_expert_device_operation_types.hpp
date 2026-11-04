@@ -44,7 +44,7 @@ struct FlatRoutedExpertParams {
     uint32_t num_global_experts = 0;  // NG: the counts / regions rows' length
     uint32_t max_tokens = 0;          // m: tokens per expert the program is built for (dispatch capacity)
     bool weights_bf8 = false;         // weight tiles bfp8 (else bfp4)
-    uint32_t activation = 0;   // se3_compute.cpp SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU, 4 GELU-tanh
+    uint32_t activation = 0;   // gate_up_compute.cpp SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU, 4 GELU-tanh
     uint32_t pin = 1;          // SE_PIN_MIN (0: no pinning)
     bool y_row_major = false;  // y as row-major bf16 [rows, H] (else bfp8 tiles); no effect on the plan
     // down projection accumulated in fp32 DEST in a full-sync DST (else bf16 DEST, whose ties-away rounding over

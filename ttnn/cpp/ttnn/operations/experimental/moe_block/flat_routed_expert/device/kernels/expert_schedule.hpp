@@ -13,7 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_meta.hpp"
+#include "schedule_meta.hpp"
 
 // bytes of scratch per table (counts + the local experts' global ids, regions); a RISC owns 2 * SE_DYN_HALF of CB 7
 // (BRISC the low, NCRISC the high half)
@@ -278,7 +278,7 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
 
 inline uint32_t se_dyn_rps(const SeDyn& d) { return d.rps; }
 
-// Hands the schedule to this core's compute kernel: one page of CB META_CB in the se_meta.hpp layout (read there
+// Hands the schedule to this core's compute kernel: one page of CB META_CB in the schedule_meta.hpp layout (read there
 // with read_tile_value). EMPTY publishes no entries (the core has no compute work this launch).
 inline void se_dyn_publish(const SeDyn& d, uint32_t meta_cb, bool empty = false) {
 #ifndef SE_META_BYTES

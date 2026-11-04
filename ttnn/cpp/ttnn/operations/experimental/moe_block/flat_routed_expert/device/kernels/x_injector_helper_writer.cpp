@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// End-to-end flat expert: x relay helper forwarder (NCRISC). The helper core reads and tilizes every other
-// super-block of its rectangle (se11_xrd.cpp / se11_tz.cpp, stride 2 offset 1) so the rectangle's one multicaster (its
-// primary relay, se11_xmc.cpp with XMC_HELPER) does not have to read all of x from DRAM itself: each tilized
-// super-block goes into slot b % LAND_SLOTS of the primary's landing ring once the primary freed it (CREDIT_SEM here
-// counts freed slots), then the primary's DATA_SEM is bumped after the write is acknowledged.
-// CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 LAND_SLOTS, 4 DATA_SEM (on the primary), 5 CREDIT_SEM (here), 6 NUM_E, 7 NSB
+// Flat expert x injector helper writer (an x helper relay's NCRISC). The helper core reads and tilizes every other
+// super-block of its rectangle (x_injector_reader.cpp / x_injector_tilize_compute.cpp, stride 2 offset 1) so the
+// rectangle's one multicaster (its primary relay, x_injector_writer.cpp with XMC_HELPER) does not have to read all of x
+// from DRAM itself: each tilized super-block goes into slot b % LAND_SLOTS of the primary's landing ring once the
+// primary freed it (CREDIT_SEM here counts freed slots), then the primary's DATA_SEM is bumped after the write is
+// acknowledged. CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 LAND_SLOTS, 4 DATA_SEM (on the primary), 5 CREDIT_SEM (here), 6
+// NUM_E, 7 NSB
 //     (SE_DYN)
-// RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. se_dyn.hpp args (SE_DYN)
+// RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. expert_schedule.hpp args (SE_DYN)
 #include <stdint.h>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
 #endif
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 
 void kernel_main() {
     constexpr uint32_t sb_cb = get_compile_time_arg_val(0);
@@ -26,8 +27,8 @@ void kernel_main() {
     constexpr uint32_t credit_sem = get_compile_time_arg_val(5);
     constexpr uint32_t sb_tiles = mt * SE_SBT, sb_bytes = sb_tiles * tb;
     const uint32_t pxy = get_arg_val<uint32_t>(0), land = get_arg_val<uint32_t>(1);
-    // Dynamic counts: the odd super-blocks of the active experts' stream (CT 6 NUM_E, 7 NSB; RT 3.. se_dyn.hpp args,
-    // CB 7's upper half this RISC's scratch)
+    // Dynamic counts: the odd super-blocks of the active experts' stream (CT 6 NUM_E, 7 NSB; RT 3.. expert_schedule.hpp
+    // args, CB 7's upper half this RISC's scratch)
     SeDyn dyn;
     // RT 3 / 4: the primary's round (1 + helpers) and this helper's place in it (its super-blocks b % round == place)
     se_dyn_load<get_compile_time_arg_val(6)>(dyn, 5, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);

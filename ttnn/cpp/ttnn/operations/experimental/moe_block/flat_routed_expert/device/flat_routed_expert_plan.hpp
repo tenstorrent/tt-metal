@@ -44,7 +44,7 @@ struct FlatRoutedExpertPlan {
     bool gu_rp = false;
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
     // half-width gate / up tiles (16-column units): a unit's weight tile holds [gate | up] of 16 columns (the
-    // activation runs face-wise, se_glu_faces.hpp)
+    // activation runs face-wise, glu_faces.hpp)
     bool hg = false;
     // 16-column units (hg; np is then 0): a core's gate/up block is nu weight tiles a row ([gate | up] of units cg nu
     // ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last one half its own when cg nu / (cg + 1) nu

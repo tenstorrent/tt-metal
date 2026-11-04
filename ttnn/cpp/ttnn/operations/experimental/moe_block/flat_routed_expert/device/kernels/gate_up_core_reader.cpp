@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Gate/up receiver data movement (BRISC, NOC1) on a gate/up core. A non-blocking event loop that
+// Gate/up core reader (BRISC, NOC1): a gate/up core's receiver loop. A non-blocking event loop that
 //   * runs the in1 (weight) ring: grants each free landing slot (this core's grant counter) to the weight reads
-//     (se_gu_read.hpp: this core's NCRISC on NOC0) and publishes blocks as their DATA count moves; the ring holds the
-//     weight slices of the schedule's loads, compute frees blocks after their last use,
+//     (gate_up_weight_read.hpp: this core's NCRISC on NOC0) and publishes blocks as their DATA count moves; the ring
+//     holds the weight slices of the schedule's loads, compute frees blocks after their last use,
 //   * publishes x blocks to compute as their pieces arrive (XARR, incremented by the predecessor or the relay after
 //     each piece's write is acknowledged) and posts the consumed count (SE_X_FWD_NC_CONS) for the NCRISC forwarder
-//     (se5_xfwd.cpp), which forwards x and reports freed slots upstream,
+//     (gate_up_x_forwarder.cpp), which forwards x and reports freed slots upstream,
 //   * sends its h slice of each virtual expert v ([MT x NP] tiles, h K-tiles CG * NP + p) into the h_all of every down
 //     chain head with a GATH increment there, once go >= v (counted by the down
 //     cores' coordinator).
@@ -17,11 +17,11 @@
 //     expert), 5 W_SLOTS, 6 H_LOCAL_CB, 7 MT, 8 H_TILE_BYTES, 9 NCC, 10 DATA_SEM, 11 GO_SEM, 12 HBUF, 13 XARR_SEM,
 //     14 X_SLOTS, 15 NP, 16-17 GATH ids of h buffers 1, 2, 18 X_PIECES (XARR counts pieces), 19 NUM_E
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
-//     h_all address, 5.. NH head xy, then the se_dyn.hpp args
+//     h_all address, 5.. NH head xy, then the expert_schedule.hpp args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
-#include "se_gu_read.hpp"
+#include "expert_schedule.hpp"
+#include "gate_up_weight_read.hpp"
 #define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
@@ -51,8 +51,8 @@ void kernel_main() {
     constexpr uint32_t h_all_tiles = ncc * hg_nu * mt / 2;
     static_assert((ncc * hg_nu) % 2 == 0);
 #else
-    constexpr uint32_t hpc = np;                                // h tiles a row
-    constexpr uint32_t h_all_tiles = ncc * np * mt;             // h: NCC cores x NP K-tiles, MT rows
+    constexpr uint32_t hpc = np;                     // h tiles a row
+    constexpr uint32_t h_all_tiles = ncc * np * mt;  // h: NCC cores x NP K-tiles, MT rows
 #endif
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
     static_assert(hbuf >= 1 && hbuf <= 3);
@@ -65,11 +65,11 @@ void kernel_main() {
     constexpr uint32_t heads0 = 5;
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
     // the landing slots granted so far (RT 0: the semaphore counting them, zero at launch): the weight reads
-    // (se_gu_read.hpp) read into granted slots only
+    // (gate_up_weight_read.hpp) read into granted slots only
     volatile tt_l1_ptr uint32_t* granted_word = sem(credit_sem_id);
     auto grant = [&](uint32_t n) { *granted_word = *granted_word + n; };
-    // Dynamic counts: the active experts' weights and sub-blocks only; RT 5 + NH.. are the se_dyn.hpp args, CB 7 this
-    // RISC's scratch; the compute gets them in CB 6.
+    // Dynamic counts: the active experts' weights and sub-blocks only; RT 5 + NH.. are the expert_schedule.hpp args, CB
+    // 7 this RISC's scratch; the compute gets them in CB 6.
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, heads0 + nh, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
@@ -79,8 +79,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* go_sem = sem(go_sem_id);
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
 
-    // the gate/up weights read by this core's NCRISC (se_gu_read.hpp): the loads list handed to it in its half of
-    // CB 7, then its mailbox word set
+    // the gate/up weights read by this core's NCRISC (gate_up_weight_read.hpp): the loads list handed to it in its half
+    // of CB 7, then its mailbox word set
     {
         volatile tt_l1_ptr uint32_t* mb =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);

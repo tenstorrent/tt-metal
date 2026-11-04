@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Spatially pipelined expert: a down core's data movement (BRISC, NOC0), a non-blocking event loop that
+// Down core writer (BRISC, NOC0): a down core's h receiver and y writer, a non-blocking event loop that
 //   * receives h of every virtual expert: a chain head gathers it directly (every gate/up core writes its slice here,
 //     GATH counts the slices), other cores get it from their chain predecessor in H_PIECES pieces (HARR counts
 //     pieces); each piece is forwarded to the successor as soon as it is here and the successor has freed its h_all
@@ -25,10 +25,10 @@
 //     let fast down cores stand in for a slow one); the coordinator zeroes them again at the end.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
-#include "se_cmb_done.hpp"
+#include "expert_schedule.hpp"
+#include "combine_done.hpp"
 #ifdef SE_Y_RM
-#include "se_yrm.hpp"
+#include "y_row_major.hpp"
 #endif
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
@@ -77,8 +77,8 @@ void kernel_main() {
     const InterleavedAddrGenFast<true> y = {
         .bank_base_address = get_arg_val<uint32_t>(6), .page_size = out_page, .data_format = y_fmt};
     const uint32_t e2e_args = 10 + n_gu;
-    // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10 + N_GU.. are the se_dyn.hpp args (CT 22
-    // NUM_E), CB 7 this RISC's scratch; the compute gets them in CB 6. Output rows come from the experts' regions.
+    // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10 + N_GU.. are the expert_schedule.hpp args (CT
+    // 22 NUM_E), CB 7 this RISC's scratch; the compute gets them in CB 6. Output rows come from the experts' regions.
     constexpr uint32_t num_e_dyn = get_compile_time_arg_val(22);
     SeDyn dyn;
     se_dyn_load<num_e_dyn>(dyn, 10 + n_gu, get_write_ptr(tt::CBIndex::c_7), mt * 32);
@@ -155,7 +155,7 @@ void kernel_main() {
         }
         constexpr bool x_ready = true;
 #ifdef SE_Y_RM
-        out_done = num_v;  // (the y writes are se6_dw.cpp's)
+        out_done = num_v;  // (the y writes are down_weight_reader.cpp's)
 #else
         if (!y_pending && out_done < num_v && x_ready && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);

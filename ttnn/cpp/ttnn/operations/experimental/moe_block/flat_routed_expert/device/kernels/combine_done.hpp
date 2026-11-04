@@ -15,7 +15,7 @@
 #ifdef SE_CMB_DONE_RT
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 
 struct SeCmbDone {
     uint16_t left[SE_MAX_E];  // blocks this core still writes, per local expert (step = local expert)

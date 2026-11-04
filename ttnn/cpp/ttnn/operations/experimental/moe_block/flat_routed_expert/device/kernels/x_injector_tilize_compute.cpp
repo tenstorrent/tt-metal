@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// End-to-end flat expert: x relay tilizer (TRISC). Each super-block (MT row tiles x SE_SBT K tiles of one virtual
-// expert) arrives as MT row-major chunks of 32 rows x 32 tiles (se11_xrd.cpp) and leaves as MT x 32 bfp8 tiles, row
-// tile major, for the relay's multicaster (se11_xmc.cpp). CT: 0 RM_CB, 1 SB_CB, 2 MT; RT: 0 super-blocks in total
+// Flat expert x injector tilizer (an x helper relay's TRISC). Each super-block (MT row tiles x SE_SBT K tiles of one
+// virtual expert) arrives as MT row-major chunks of 32 rows x 32 tiles (x_injector_reader.cpp) and leaves as MT x 32
+// bfp8 tiles, row tile major, for the relay's multicaster (x_injector_writer.cpp). CT: 0 RM_CB, 1 SB_CB, 2 MT; RT: 0
+// super-blocks in total
 #include <cstdint>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -16,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t sb_cb = get_compile_time_arg_val(1);
     constexpr uint32_t mt = get_compile_time_arg_val(2);
-    cb_wait_front(tt::CBIndex::c_6, 1);  // this relay's super-block count (from se11_xrd.cpp)
+    cb_wait_front(tt::CBIndex::c_6, 1);  // this relay's super-block count (from x_injector_reader.cpp)
     const uint32_t num_sb = read_tile_value(tt::CBIndex::c_6, 0, 0);
     cb_pop_front(tt::CBIndex::c_6, 1);
     compute_kernel_hw_startup(rm_cb, sb_cb);

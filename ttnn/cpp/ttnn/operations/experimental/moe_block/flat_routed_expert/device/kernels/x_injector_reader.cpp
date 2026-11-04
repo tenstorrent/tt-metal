@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// End-to-end flat expert: x relay reader (BRISC). Extracts every expert's tokens from the row-major bf16 dispatch
-// buffer (one row per page, interleaved) and stages them for tilizing: for each virtual expert (a sub-block of MT row
-// tiles of expert e), each super-block of 32 K tiles (1024 columns) and each row tile m, one chunk of 32 rows x 2 KB
-// goes into the row-major CB (32 pages of 2 KB = 32 rows of 1024 bf16). Rows at or past the expert's token count are
-// not read (their tiles are padding: their outputs are never written back).
-// CT: 0 RM_CB, 1 X_PAGE_BYTES (the token row's bytes / PPR), 2 NUM_EXPERTS, 3 MT, 4 NSB (super-blocks per row),
+// Flat expert x injector reader (an x helper relay's BRISC). Extracts every expert's tokens from the row-major bf16
+// dispatch buffer (one row per page, interleaved) and stages them for tilizing: for each virtual expert (a sub-block of
+// MT row tiles of expert e), each super-block of 32 K tiles (1024 columns) and each row tile m, one chunk of 32 rows x
+// 2 KB goes into the row-major CB (32 pages of 2 KB = 32 rows of 1024 bf16). Rows at or past the expert's token count
+// are not read (their tiles are padding: their outputs are never written back). CT: 0 RM_CB, 1 X_PAGE_BYTES (the token
+// row's bytes / PPR), 2 NUM_EXPERTS, 3 MT, 4 NSB (super-blocks per row),
 //     5 MAX_SUB (sub-blocks per expert at most), 6 BATCH (chunks per read barrier), 7 see XRD_INDEXED, 8 PPR (pages
 //     per token row)
 // XRD_INDEXED (CT 7: the runtime-arg index of the token index address): flat row r (region space) reads x row
@@ -21,7 +21,7 @@
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
 #endif
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 
 void kernel_main() {
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
@@ -58,8 +58,8 @@ void kernel_main() {
     };
     uint32_t stride = get_arg_val<uint32_t>(1), soff = get_arg_val<uint32_t>(2);
     uint32_t g = 0;  // super-block index in stream order
-    // Dynamic counts: the active experts' regions (RT 3.. are the se_dyn.hpp args, CB 7 this RISC's scratch); the
-    // tilizer gets this relay's super-block count in CB 6.
+    // Dynamic counts: the active experts' regions (RT 3.. are the expert_schedule.hpp args, CB 7 this RISC's scratch);
+    // the tilizer gets this relay's super-block count in CB 6.
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     {

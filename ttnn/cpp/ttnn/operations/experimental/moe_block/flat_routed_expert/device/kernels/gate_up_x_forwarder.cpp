@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// x snake forwarder (NCRISC) on a gate/up core: x travels the gate/up cores by unicast (no multicast: the NOC0 wedge
-// of a multicast into the gate/up rectangle beside the weight and DRAM traffic). The receiver
-// (se5_recv.cpp, BRISC, SE_X_FWD_NC) only consumes x; this kernel forwards each piece as soon as it has arrived (XARR
-// here, in pieces) into the successor's x ring, once the successor has freed the block's slot (SFREE here), then bumps
-// the successor's XARR after the write is acknowledged; and reports min(consumed (XCONS, published by se5_recv),
-// forwarded) blocks upstream - the predecessor's SFREE, or on a chain head the relay's word. It ends once se5_recv has
-// published its last count (XEND = blocks + 1) and every block is forwarded and reported. CT: 0 X_SLOTS, 1 X_BYTES, 2
-// X_PIECES, 3 XARR_SEM, 4 SFREE_SEM, 5 XCONS_SEM, 6 XEND_SEM, 7 DEPTH (pieces in flight) RT: 0 x ring address, 1
-// predecessor xy (0: chain head), 2 sem id of this core's free word on the predecessor,
+// Gate/up x forwarder (NCRISC) on a gate/up core, also its weight reads (gate_up_weight_read.hpp): x travels the
+// gate/up cores by unicast (no multicast: the NOC0 wedge of a multicast into the gate/up rectangle beside the weight
+// and DRAM traffic). The receiver (gate_up_core_reader.cpp, BRISC, SE_X_FWD_NC) only consumes x; this kernel forwards
+// each piece as soon as it has arrived (XARR here, in pieces) into the successor's x ring, once the successor has freed
+// the block's slot (SFREE here), then bumps the successor's XARR after the write is acknowledged; and reports
+// min(consumed (XCONS, published by gate_up_core_reader), forwarded) blocks upstream - the predecessor's SFREE, or on a
+// chain head the relay's word. It ends once gate_up_core_reader has published its last count (XEND = blocks + 1) and
+// every block is forwarded and reported. CT: 0 X_SLOTS, 1 X_BYTES, 2 X_PIECES, 3 XARR_SEM, 4 SFREE_SEM, 5 XCONS_SEM, 6
+// XEND_SEM, 7 DEPTH (pieces in flight) RT: 0 x ring address, 1 predecessor xy (0: chain head), 2 sem id of this core's
+// free word on the predecessor,
 //     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
-//     se_gu_read.hpp args
+//     gate_up_weight_read.hpp args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_gu_read.hpp"
+#include "gate_up_weight_read.hpp"
 
 void kernel_main() {
     constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
@@ -37,8 +38,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
     volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
     uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
-    // gate/up weights read from here (se_gu_read.hpp, RT 6..), into the landing slots the receiver (BRISC) grants;
-    // the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
+    // gate/up weights read from here (gate_up_weight_read.hpp, RT 6..), into the landing slots the receiver (BRISC)
+    // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
     SeGuRead gr;
     bool g_done = true;
     {

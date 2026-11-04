@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Layout of the dynamic-counts meta page (CB 6) a data-movement kernel hands its compute kernel (se_dyn.hpp,
+// Layout of the dynamic-counts meta page (CB 6) a data-movement kernel hands its compute kernel (expert_schedule.hpp,
 // se_dyn_publish), in uint32 words:
 //   [0] n_act (schedule entries), [1] num_v (sub-blocks over all entries), [SE_META_SUBS + a] entry a's sub-blocks,
 //   [SE_META_GU + a] entry a's gate/up weight use: load index (bits 0-7),

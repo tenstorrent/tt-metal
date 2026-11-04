@@ -25,8 +25,8 @@ words) is re-applied on a cache hit by `override_runtime_arguments`; plans are c
 
 ## Gate/up weight reads
 
-Every gate/up core reads its own weight blocks from its weight slot's bank (`se_gu_read.hpp`): the receiver loop
-(`se5_recv.cpp`) grants free landing slots by count, the reads fill granted slots in order and publish a landed-blocks
+Every gate/up core reads its own weight blocks from its weight slot's bank (`gate_up_weight_read.hpp`): the receiver loop
+(`gate_up_core_reader.cpp`) grants free landing slots by count, the reads fill granted slots in order and publish a landed-blocks
 count the receiver and the compute consume, two reads in flight. Slot r lives in bank r % banks (two slots a bank).
 The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cells fewest NOC0
 hops from the bank's optimal reader core (`get_optimal_dram_bank_to_logical_worker_assignment`; hops from
@@ -37,11 +37,11 @@ nearest first.
 
 | Role | Cores | Kernels |
 |---|---|---|
-| x relays: 2 primaries + 2 helpers | next to the DRAM reader columns | `se11_xrd.cpp`, `se11_tz.cpp`, `se13_xhelp.cpp`, `se11_xmc.cpp` |
-| gate/up | two full rectangles (64 cores, 48 on DSv4.1-Flash) | `se5_recv.cpp`, `se5_xfwd.cpp` (+ `se_gu_read.hpp`), `se3_compute.cpp` (+ `se_glu_faces.hpp`) |
-| down | <= 32 cores, chains of 7 (4 with units) | `se6_drecv.cpp`, `se6_dw.cpp`, `se6_dcompute.cpp` (+ `se_yrm.hpp`, `se_cmb_done.hpp`) |
+| x relays: 2 primaries + 2 helpers | next to the DRAM reader columns | `x_injector_reader.cpp`, `x_injector_tilize_compute.cpp`, `x_injector_helper_writer.cpp`, `x_injector_writer.cpp` |
+| gate/up | two full rectangles (64 cores, 48 on DSv4.1-Flash) | `gate_up_core_reader.cpp`, `gate_up_x_forwarder.cpp` (+ `gate_up_weight_read.hpp`), `gate_up_compute.cpp` (+ `glu_faces.hpp`) |
+| down | <= 32 cores, chains of 7 (4 with units) | `down_core_writer.cpp`, `down_weight_reader.cpp`, `down_compute.cpp` (+ `y_row_major.hpp`, `combine_done.hpp`) |
 
-`se_dyn.hpp` builds the per-call schedule (active experts, sub-blocks, pinning of a dominant expert) identically on
+`expert_schedule.hpp` builds the per-call schedule (active experts, sub-blocks, pinning of a dominant expert) identically on
 every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 
 ## The plan (fixed)

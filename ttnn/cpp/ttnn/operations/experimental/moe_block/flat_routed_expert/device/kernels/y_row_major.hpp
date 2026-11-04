@@ -12,7 +12,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 
 template <uint32_t out_cb, uint32_t pcd, uint32_t mt, uint32_t ht>
 struct SeYRmWriter {
@@ -45,8 +45,8 @@ struct SeYRmWriter {
     // The column-0 writer also writes each row's 32-byte trailer (header word, gate weight, arrival flags); a table
     // row is (destination | gate weight bf16 << 16, header word). Args at SE_Y_L1:
     // nd, slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), writer index,
-    // the combine's zero gate (gate noc x | y << 16, its words' address, the bytes of this core's words to zero; 0: off),
-    // then per destination: noc x, noc y, slot base, slots, landed counter array address.
+    // the combine's zero gate (gate noc x | y << 16, its words' address, the bytes of this core's words to zero; 0:
+    // off), then per destination: noc x, noc y, slot base, slots, landed counter array address.
     static constexpr uint32_t L1_MAXD = 32;
     uint32_t nd = 0, islot = 0, words = 0, widx = 0, tab_tile = 0xFFFFFFFF, tab_base = 0;
     uint32_t dx[L1_MAXD], dy[L1_MAXD], dbase[L1_MAXD], dq[L1_MAXD], dland[L1_MAXD];

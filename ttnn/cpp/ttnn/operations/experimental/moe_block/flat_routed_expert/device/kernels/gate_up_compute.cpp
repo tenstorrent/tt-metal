@@ -5,11 +5,11 @@
 // Flat expert gate/up compute (TRISC): each gate/up core owns NP gate/up pairs of all MT row tiles of a sub-block:
 //   DST[m * 2NP + {gate_p, up_p}] += x [MT x KBLK per K-block, streamed] @ in1 gu block [KBLK x 2NP] over all NK_GU
 //   K-blocks; h_p = act(gate_p, up_p) on the PACK thread's SFPU, packed to H_LOCAL as [NP x MT] (K-tile-major).
-// The down projection runs on the down cores (se6_dcompute.cpp). The schedule (CB 6, se_meta.hpp) names each entry's
-// weight load and ring region; a load's blocks are popped right after its last use.
+// The down projection runs on the down cores (down_compute.cpp). The schedule (CB 6, schedule_meta.hpp) names each
+// entry's weight load and ring region; a load's blocks are popped right after its last use.
 //
 // CT: 0 KBLK, 1 MT, 2 NK_GU, 3 SLOT_TILES, 4 NP, 5 RING_SLOTS (in1 ring capacity in blocks; 0: one load)
-#include "se_meta.hpp"
+#include "schedule_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -26,8 +26,8 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
-#ifdef SE_HG  // (half-width gate / up tiles: the face-wise GLU, se_glu_faces.hpp)
-#include "se_glu_faces.hpp"
+#ifdef SE_HG  // (half-width gate / up tiles: the face-wise GLU, glu_faces.hpp)
+#include "glu_faces.hpp"
 #endif
 #if SE_ACT == 1
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
@@ -73,7 +73,7 @@ static_assert(gu_dst_tiles <= SE_DST_TILES);
 
 uint32_t cur_ct = gw, cur_rt = mt;  // the matmul's current block shape
 
-// Dynamic schedule (se_dyn.hpp): load l's block b is stream block l * NK_GU + b and sits in ring slot
+// Dynamic schedule (expert_schedule.hpp): load l's block b is stream block l * NK_GU + b and sits in ring slot
 // region(l) * NK_GU + b; blocks are popped by count right after their last use (a pinned load retires after later
 // loads), and the receiver grants slots by count, so the read pointer is just popped % ring.
 uint32_t d_popped = 0;
@@ -311,8 +311,8 @@ void kernel_main() {
 #endif
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 #endif
-    // Dynamic counts: CB 6 holds the schedule (se_meta.hpp layout, from se5_recv.cpp): per entry its sub-blocks and
-    // its gate/up load (stream place), that load's ring region and whether this is the load's last use.
+    // Dynamic counts: CB 6 holds the schedule (schedule_meta.hpp layout, from gate_up_core_reader.cpp): per entry its
+    // sub-blocks and its gate/up load (stream place), that load's ring region and whether this is the load's last use.
     cb_wait_front(tt::CBIndex::c_6, 1);
     const uint32_t n_act = read_tile_value(tt::CBIndex::c_6, 0, 0);
     for (uint32_t a = 0; a < n_act; ++a) {

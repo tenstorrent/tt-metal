@@ -2,22 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Spatially pipelined expert: a down core's weight reader (NCRISC, NOC1). Streams this core's down weight slice of
+// Down weight reader (NCRISC, NOC1). Streams this core's down weight slice of
 // every expert ([KBLK_D x PCD] blocks, a contiguous region of one DRAM bank, one read per block) into its in1 ring,
 // which holds two experts so the next expert loads while the current one is still in use. Up to BATCH blocks per read
 // barrier.
 //
 // CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 NUM_E
-// RT: 0 weight bank base address, 1 bank id, 2 byte offset of this core's region in the bank, 3.. se_dyn.hpp args
+// RT: 0 weight bank base address, 1 bank id, 2 byte offset of this core's region in the bank, 3.. expert_schedule.hpp
+// args
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "se_dyn.hpp"
+#include "expert_schedule.hpp"
 #ifdef SE_Y_NC
 // Row-major y written from here (NOC0) instead of the down core's BRISC (NOC1, the h chain's network): the weight
-// reads' waits poll the y writer (CT 6 Y_MT: row tiles per virtual expert, 7 PCD, 8 HT; RT after the se_dyn.hpp
-// args: y address, first y tile column)
-#include "se_yrm.hpp"
-#include "se_cmb_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
+// reads' waits poll the y writer (CT 6 Y_MT: row tiles per virtual expert, 7 PCD, 8 HT; RT after the
+// expert_schedule.hpp args: y address, first y tile column)
+#include "y_row_major.hpp"
+#include "combine_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
 #endif
 
 void kernel_main() {
@@ -35,13 +36,14 @@ void kernel_main() {
         return get_noc_addr_from_bank_id<true>(
             (rot_bank + k) % SE_DW_ROT, rot_addr + (k / SE_DW_ROT) * slot * tile_bytes);
     };
-    // only the active experts' blocks (CT 5 NUM_E: BLOCKS / NUM_E per expert; RT 3.. se_dyn.hpp args, CB 7 scratch)
+    // only the active experts' blocks (CT 5 NUM_E: BLOCKS / NUM_E per expert; RT 3.. expert_schedule.hpp args, CB 7
+    // scratch)
     constexpr uint32_t num_e = get_compile_time_arg_val(5);
     constexpr uint32_t per_e = blocks / num_e;
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
 #ifdef SE_DN_REG
-    // Pinned schedule (se_dyn.hpp): one read per gate/up load, into that load's ring region (the ring holds
+    // Pinned schedule (expert_schedule.hpp): one read per gate/up load, into that load's ring region (the ring holds
     // SE_GU_NREG experts); the compute pops by count after each block's last use.
     const uint32_t total = dyn.n_load * per_e;
     const uint32_t ring_base = get_write_ptr(cb);  // nothing pushed yet

@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Spatially pipelined expert: down projection on its own cores (TRISC). Per virtual expert v (a 128-row sub-block of
+// Down compute (TRISC): the down projection on the down cores. Per virtual expert v (a 128-row sub-block of
 // expert e = v / S): y[rows, PCD columns] = h_all(v) @ Wd[:, columns], accumulated in DST over all KT_D K-tiles, one
 // row tile at a time (PCD <= 8 accumulators). h_all holds h K-tile-major: [KT_D][MT rows], so a
 // gate/up core's slice (its NP K-tiles, all MTG rows) is one contiguous run.
-// The expert's down weights stay resident in the in1 ring (RING blocks of [KBLK_D x PCD], filled by se6_dw.cpp) for
-// its S sub-blocks and are popped after the last one.
+// The expert's down weights stay resident in the in1 ring (RING blocks of [KBLK_D x PCD], filled by
+// down_weight_reader.cpp) for its S sub-blocks and are popped after the last one.
 //
 // CT: 0 MT, 1 KT_D, 2 KBLK_D, 3 PCD, 4 NUM_EXPERTS, 5 S, 6 SLOT_TILES, 7 RING
-#include "se_meta.hpp"
+#include "schedule_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -64,8 +64,8 @@ static_assert(pcd % cpw == 0);
 uint32_t popped = 0;
 
 #ifdef SE_DN_REG
-// Pinned schedule (se_dyn.hpp): load l's block j is stream block l * NBLK + j in ring slot region(l) * NBLK + j,
-// popped by count after its last use (as se3_compute.cpp's gate/up ring).
+// Pinned schedule (expert_schedule.hpp): load l's block j is stream block l * NBLK + j in ring slot region(l) * NBLK +
+// j, popped by count after its last use (as gate_up_compute.cpp's gate/up ring).
 FORCE_INLINE uint32_t wblock_dyn(uint32_t p, uint32_t phys) {
     if (p + 1 > popped) {
         cb_wait_front(in1_cb, (p + 1 - popped) * slot);
