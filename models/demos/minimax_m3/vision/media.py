@@ -27,6 +27,11 @@ from models.demos.minimax_m3.vision import format as media_format
 # either), so prepare gives only images that the encoder's check_pixels takes.
 IMAGE_START = 200029  # "]<]start of image[>[" in the MiniMax-M3 tokenizer
 IMAGE_END = 200030  # "]<]end of image[>["
+# Resized images, (height, width) in pixels, that load runs once so that the chip's programs for their patch counts
+# are compiled before the first request: 576 tokens (672 x 672, and 16:9 photos resized to 896 x 504) and 540 tokens
+# (4:3 photos resized to 756 x 560). The programs depend on the patch count only; an image of another count compiles
+# them on its first encode, 15 to 42 s with an empty kernel cache. model_options.warmup replaces this list.
+WARMUP_SIZES = ((672, 672), (560, 756))
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,24 @@ def smart_resize(height: int, width: int) -> tuple[int, int]:
         h = math.ceil(height * beta / FACTOR) * FACTOR
         w = math.ceil(width * beta / FACTOR) * FACTOR
     return h, w
+
+
+def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
+    """options["warmup"] (default WARMUP_SIZES) as (height, width) pairs of resized images: sides multiples of 28,
+    4 to 576 tokens. Raises ValueError otherwise, before load imports ttnn."""
+    sizes = []
+    for size in options.get("warmup", WARMUP_SIZES):
+        if not (
+            isinstance(size, (list, tuple))
+            and len(size) == 2
+            and all(isinstance(side, int) and side > 0 and side % FACTOR == 0 for side in size)
+        ):
+            raise ValueError(f"warmup sizes must be [height, width] in multiples of {FACTOR} pixels, got {size!r}")
+        height, width = size
+        if not MIN_PIXELS <= height * width <= MAX_PIXELS:
+            raise ValueError(f"warmup size {list(size)} makes {height * width // FACTOR**2} tokens, not 4 to 576")
+        sizes.append((height, width))
+    return sizes
 
 
 def _stub_rows(item: M3Image, hidden: int) -> np.ndarray:
@@ -104,8 +127,9 @@ class MiniMaxM3Media:
         """Get ready to encode: stub embeddings with options["stub_embeddings"], else the TT vision encoder with the
         vision weights of the MiniMax-M3 checkpoint in weights_path, on mesh_device, a mesh of one chip that the caller
         opens (with device_params) and closes. The encoder raises ValueError for a mesh of more chips before it reads
-        a weight. Raises ValueError for a weights_path that is not a directory, and for a mesh_device of None (load
-        opens no chip), before it imports ttnn."""
+        a weight. Then load encodes one blank image of each warm-up size (options["warmup"], default WARMUP_SIZES) to
+        compile the chip's programs. Raises ValueError for a weights_path that is not a directory, a bad warm-up size
+        or a mesh_device of None (load opens no chip) before it imports ttnn."""
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"MiniMax-M3 does not accept {kind}")
         if self._stub or self._encoder is not None:
@@ -115,11 +139,16 @@ class MiniMaxM3Media:
             return
         if not weights_path or not os.path.isdir(weights_path):
             raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
+        warmup = _warmup_sizes(options)
         if mesh_device is None:
             raise ValueError("mesh_device is None: load runs the encoder on the chip that the caller opened")
+        import ttnn
         from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder
 
-        self._encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
+        encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
+        for height, width in warmup:
+            ttnn.deallocate(encoder.forward(np.zeros((height, width, 3), dtype=np.uint8)))
+        self._encoder = encoder
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
         assert self._stub or self._encoder is not None, "encode before load"

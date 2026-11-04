@@ -7,8 +7,9 @@ test_vision_encoder_vs_ref checks forward's output on noise images of the CI gri
 pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
 encode() do: one warm-up image, then two images read into their slots of one shared buffer.
 test_vision_media_load_and_encode runs the media module's load(), prepare() and encode() on a chip opened with the
-module's device_params, as the service opens it. The reference has seeded random weights. Only the media test
-writes them to a small checkpoint. The encoder's host tests are in test_vision_encoder_api.py.
+module's device_params, as the service opens it. Its load() warms up one size, so encode() compiles nothing. The
+reference has seeded random weights. Only the media test writes them to a small checkpoint. The encoder's host
+tests are in test_vision_encoder_api.py.
 """
 from __future__ import annotations
 
@@ -150,9 +151,10 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
 def test_vision_media_load_and_encode(mesh_device, device_params, vision_reference, tmp_path):
     """The media module runs the encoder as the service calls it, on a chip opened with the media module's
     device_params as the service opens it: load() from a checkpoint directory (on that chip, which close() leaves
-    open), prepare() of an RGB image that resizes to 224x224 (h16w16), encode() into a stored value. The value holds
-    the image's n_tokens rows, bit for bit the encoder's own forward of the prepared pixels with the weights
-    load_vision_state_dict reads, at PCC >= 0.9998 against the reference."""
+    open) with a 224x224 warm-up, which compiles programs; prepare() of an RGB image that resizes to 224x224 (h16w16);
+    encode() into a stored value, which compiles none. The value holds the image's n_tokens rows, bit for bit the
+    encoder's own forward of the prepared pixels with the weights load_vision_state_dict reads, at PCC >= 0.9998
+    against the reference."""
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)
@@ -161,12 +163,15 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
     write_checkpoint(tmp_path, reference.weights, hf_config)
     media = MiniMaxM3Media(hf_config)
     assert media.device_params == MEDIA_DEVICE_PARAMS, "the test's chip is not opened as the service opens it"
-    media.load(mesh_device, str(tmp_path), "image", {})
+    media.load(mesh_device, str(tmp_path), "image", {"warmup": [[224, 224]]})
     try:
+        cache_entries = mesh_device.num_program_cache_entries()
+        assert cache_entries > 0, "load's warm-up compiled no program"
         item = media.prepare("image", _noise_pixels(230, 230))
         assert item.pixels.shape == (224, 224, 3), item.pixels.shape
         value = memoryview(bytearray(media.stored_nbytes(item)))
         media.encode([item], [value])
+        assert mesh_device.num_program_cache_entries() == cache_entries, "encode compiled a program the warm-up had not"
     finally:
         media.close()
 

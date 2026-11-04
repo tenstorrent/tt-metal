@@ -149,3 +149,19 @@ def test_encode_writes_every_item_of_a_call():
         media.encode([item], [alone])
         assert bytes(value) == bytes(alone)
         assert np.array_equal(media_format.embeddings(value, 64), _stub_rows(item, 64))
+
+
+@pytest.mark.parametrize(
+    "warmup, message",
+    [
+        ([[100, 100]], "multiples of 28"),
+        ([5], "multiples of 28"),
+        ([[28, 28]], "makes 1 tokens"),
+        ([[700, 700]], "makes 625"),
+    ],
+)
+def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup, message):
+    """A warm-up size whose sides are not multiples of 28, or that is not 4 to 576 tokens, raises ValueError before
+    load imports ttnn or builds the encoder."""
+    with expect_error(ValueError, message):
+        MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {"warmup": warmup})
