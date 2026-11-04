@@ -84,21 +84,22 @@ def dense_moe_decode_layout_supported(
     grid=(11, 10),
     dram_banks=8,
     system_devices=4,
+    p300_boards=False,
 ):
     """Host-only form of dense_moe_decode_supported: the validated envelope of the batched decode MoE (gpt-oss-20b on
-    Blackhole, one 32-token tile per device, TP over one mesh row, no expert parallelism).
+    Blackhole, one 32-token tile per device, TP over one mesh row, no expert parallelism; p300_boards: the system is one
+    P300 board or two, ttnn.cluster.get_cluster_type() P300 or P300_X2).
 
-    Two meshes are validated: 1x4 at TP=4 (a QuietBox 2), and 1x2 at TP=2 (the two chips of one P300 board), which is
-    also each half of a QuietBox 2 run data parallel (one model per board, a 1x2 submesh of the 1x4 mesh). The 1x2
-    all-reduces run between the two chips of a board, so the half needs no ring through the other board. A 1x4 slice
-    of a larger system is excluded: its devices do not close a ring."""
+    Two meshes are validated: 1x4 at TP=4 (a QuietBox 2), and 1x2 at TP=2 on P300 boards: one P300 board, or one half
+    of a QuietBox 2 run data parallel (one model per board, a 1x2 submesh of the 1x4 mesh). The 1x2 all-reduces then
+    run between the two chips of a board, so the half needs no ring through the other board. A 1x4 slice of a larger
+    system is excluded: its devices do not close a ring. A 1x2 mesh of P150 cards (two P150s, or half of a 4xP150
+    system) is not validated and keeps the original MoE."""
     shape = tuple(mesh_shape)
     whole_system = system_devices == shape[0] * shape[1]
     return (
         is_blackhole
-        and (
-            (shape == (1, 4) and tp == 4 and whole_system) or (shape == (1, 2) and tp == 2 and system_devices in (2, 4))
-        )
+        and ((shape == (1, 4) and tp == 4 and whole_system) or (shape == (1, 2) and tp == 2 and p300_boards))
         and ep == 1
         and num_experts == 32
         and not use_throughput_experts
@@ -113,6 +114,7 @@ def dense_moe_decode_supported(mesh_device, mesh_config, hf_config, use_throughp
     if mesh_config is None:
         return False
     grid = mesh_device.compute_with_storage_grid_size()
+    p300_boards = ttnn.cluster.get_cluster_type() in (ttnn.cluster.ClusterType.P300, ttnn.cluster.ClusterType.P300_X2)
     return dense_moe_decode_layout_supported(
         ttnn.device.is_blackhole(mesh_device),
         tuple(mesh_device.shape),
@@ -124,6 +126,7 @@ def dense_moe_decode_supported(mesh_device, mesh_config, hf_config, use_throughp
         (grid.x, grid.y),
         mesh_device.dram_grid_size().x,
         ttnn.get_num_devices(),
+        p300_boards,
     )
 
 

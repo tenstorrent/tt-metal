@@ -8,15 +8,18 @@ validated envelope (gpt-oss-20b, Blackhole 1x4, TP=4, one token per device) and 
 the original decode path. No device is needed.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+import ttnn
 from models.demos.gpt_oss.tt.fused_decode.config import (
     DENSE_MOE_TOKENS,
     FUSED_DECODE_DRAM_BANKS,
     FUSED_DECODE_MIN_GRID,
     dense_moe_decode_layout_supported,
+    dense_moe_decode_supported,
     fused_decode_layout_supported,
     fused_decode_supported,
 )
@@ -106,23 +109,68 @@ def test_one_token_takes_fused_decode_not_dense_moe():
     assert not dense_moe_decode_layout_supported(**SUPPORTED)
 
 
-# One P300 board at TP=2: a 1x2 system of its own, or one data-parallel half (a 1x2 submesh) of a QuietBox 2.
-BOARD = {**BATCHED, "mesh_shape": (1, 2), "tp": 2}
+# One P300 board at TP=2: a 1x2 system of its own (cluster type P300), or one data-parallel half (a 1x2 submesh) of a
+# QuietBox 2 (P300_X2).
+BOARD = {**BATCHED, "mesh_shape": (1, 2), "tp": 2, "p300_boards": True}
 
 
 @pytest.mark.parametrize("system_devices", [2, 4], ids=["p300_board", "quietbox2_data_parallel_half"])
 def test_batched_envelope_takes_one_p300_board(system_devices):
-    assert dense_moe_decode_layout_supported(**{**BOARD, "system_devices": system_devices})
-    assert not fused_decode_layout_supported(**{**BOARD, "system_devices": system_devices})
+    board = {**BOARD, "system_devices": system_devices}
+    assert dense_moe_decode_layout_supported(**board)
+    board.pop("p300_boards")
+    assert not fused_decode_layout_supported(**board)
 
 
 @pytest.mark.parametrize(
     "change",
-    [{"tp": 1}, {"system_devices": 8}, {"tokens": 1}, {"is_blackhole": False}],
-    ids=["tp_1", "slice_of_8_device_system", "batch_1", "wormhole"],
+    [
+        {"tp": 1},
+        {"p300_boards": False, "system_devices": 2},
+        {"p300_boards": False, "system_devices": 4},
+        {"p300_boards": False, "system_devices": 8},
+        {"num_experts": 128},
+        {"use_throughput_experts": True},
+        {"tokens": 1},
+        {"is_blackhole": False},
+    ],
+    ids=[
+        "tp_1",
+        "two_p150_cards",
+        "half_of_4xp150_system",
+        "submesh_of_8xp150_loudbox",
+        "gpt_oss_120b_experts",
+        "throughput_experts",
+        "batch_1",
+        "wormhole",
+    ],
 )
 def test_outside_board_envelope_keeps_original_moe(change):
     assert not dense_moe_decode_layout_supported(**{**BOARD, **change})
+
+
+def test_p300_boards_do_not_widen_the_1x4_envelope():
+    # The 1x4 mesh still has to be the whole system: a 1x4 submesh of a larger system keeps the original MoE.
+    assert not dense_moe_decode_layout_supported(**{**BATCHED, "p300_boards": True, "system_devices": 8})
+
+
+@pytest.mark.parametrize(
+    "cluster_type, system_devices, supported",
+    [("P300", 2, True), ("P300_X2", 4, True), ("P150_X2", 2, False), ("P150_X4", 4, False)],
+    ids=["p300_board", "quietbox2_data_parallel_half", "two_p150_cards", "half_of_4xp150_system"],
+)
+def test_1x2_mesh_reads_the_cluster_type(monkeypatch, cluster_type, system_devices, supported):
+    # dense_moe_decode_supported takes p300_boards from ttnn.cluster.get_cluster_type() (no device is opened here).
+    monkeypatch.setattr(ttnn.device, "is_blackhole", lambda mesh_device: True)
+    monkeypatch.setattr(ttnn, "get_num_devices", lambda: system_devices)
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: getattr(ttnn.cluster.ClusterType, cluster_type))
+    mesh_device = MagicMock()
+    mesh_device.shape = (1, 2)
+    mesh_device.compute_with_storage_grid_size.return_value = SimpleNamespace(x=11, y=10)
+    mesh_device.dram_grid_size.return_value = SimpleNamespace(x=FUSED_DECODE_DRAM_BANKS)
+    mesh_config = SimpleNamespace(decode=SimpleNamespace(tp=2, ep=1))
+    hf_config = SimpleNamespace(num_local_experts=32)
+    assert dense_moe_decode_supported(mesh_device, mesh_config, hf_config, False, DENSE_MOE_TOKENS) is supported
 
 
 @pytest.mark.parametrize(
