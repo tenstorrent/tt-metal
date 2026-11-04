@@ -368,3 +368,31 @@ def test_qk_norm_rope(device, H):
         f"QKR H={H} rel {rel:.5f} time {_time(device, lambda: op(xt, tt(cos.reshape(1, T, R)), tt(sin.reshape(1, T, R)))):.3f} ms"
     )
     assert rel < 0.01, rel
+
+
+def test_tprefill2_residual(device):
+    """residual= adds a tensor to the output in the output stage."""
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear import reference
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+
+    T, K, N = 2048, 17408, 5120
+    t, s = _weights(K, N, seed=3)
+    lin = TernaryPrefillLinear2.from_host(device, t, s)
+    x = torch.randn(T, K).bfloat16()
+    h = (torch.randn(T, N) * 4).bfloat16()
+    tt = lambda v, k: ttnn.from_torch(
+        v.reshape(1, 1, T, k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    y = ttnn.to_torch(lin(tt(x, K), residual=tt(h, N))).float().reshape(T, N)
+    ref = reference(x, t, s) + h.float()
+    rel = ((y - ref).norm() / ref.norm()).item()
+    yr = reference(x, t, s)
+    r2 = lambda a, b: ((a - b).norm() / b.norm()).item()
+    print(
+        f"RESID rel {rel:.5f} | y-h vs y_ref {r2(y - h.float(), yr):.5f} | y vs h {r2(y, h.float()):.5f} | y vs y_ref {r2(y, yr):.5f}"
+    )
+    e = (y - ref).reshape(T // 32, 32, N // 32, 32).norm(dim=(1, 3)) / ref.reshape(T // 32, 32, N // 32, 32).norm(
+        dim=(1, 3)
+    )
+    print("bad tiles", (e > 0.05).sum().item(), "of", e.numel(), "first", (e > 0.05).nonzero()[:8].tolist())
+    assert rel < 0.02, rel

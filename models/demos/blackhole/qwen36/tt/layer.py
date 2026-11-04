@@ -467,6 +467,11 @@ class Qwen36DecoderLayer:
         else:
             ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
+        if pre_ff is not None and getattr(getattr(self.feed_forward, "ternary", None), "pre_down", None) is not None:
+            # Bonsai: the down projection adds the residual in its output stage: the layer output in one op
+            output = self.feed_forward.ternary.forward_prefill(ff_input, residual=h)
+            ttnn.deallocate(h)
+            return output
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         if pre_ff is None:  # else the ternary MLP took ff_input as its rotated input and freed it
             ttnn.deallocate(ff_input)

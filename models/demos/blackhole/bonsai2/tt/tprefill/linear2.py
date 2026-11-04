@@ -65,10 +65,11 @@ class TernaryPrefillLinear2:
         glu = getattr(lin, "glu", False)
         return cls.from_records(lin.w.device(), lin.w, rec_host, lin.ppr, lin.K, lin.N, glu=glu)
 
-    def __call__(self, x, split=None):
+    def __call__(self, x, split=None, residual=None):
         """x: [..., T, K] bf16 TILE (T a multiple of 32) -> [..., T, N (or N / 2 with glu)] bf16 TILE.
         split = (na, ha, hb) (tile columns): two outputs instead, columns < na and the rest, each head-major
-        [1, heads, T, h * 32] when its head size h (ha / hb) > 0, else token-major [..., T, columns]."""
+        [1, heads, T, h * 32] when its head size h (ha / hb) > 0, else token-major [..., T, columns].
+        residual: a tensor of the output's shape added to it (out = residual + x W'^T, one bf16 rounding)."""
         device, K, N, glu = self.device, self.K, self.N, self.glu
         lead, T = list(x.shape)[:-2], list(x.shape)[-2]
         assert list(x.shape)[-1] == K and T % TILE == 0, (x.shape, K)
@@ -77,6 +78,7 @@ class TernaryPrefillLinear2:
         kpc = self.J  # kbs per DEST pass and per x' multicast chunk
         na, ha, hb = split if split is not None else (Nt_out, 0, 0)
         assert not (glu and split), "GLU outputs are not split"
+        assert residual is None or not (glu or split), "a residual goes with a plain output"
 
         def part(cols, h):
             shape = [1, cols // h, T, h * TILE] if h else lead + [T, cols * TILE]
@@ -141,6 +143,7 @@ class TernaryPrefillLinear2:
         x_cbs = [cb(0, ttnn.bfloat16, 2048, pages)]
         dm = [("GLU_PAIRS", "1")] if glu else []
         dbg = [(d, "1") for d in os.environ.get("BONSAI_T2_DEFINES", "").split(",") if d]
+        rdef = [("RESIDUAL", "1")] if residual is not None else []
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -159,8 +162,9 @@ class TernaryPrefillLinear2:
                     + ttnn.TensorAccessorArgs(self.rec).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(self.sbc).get_compile_time_args()
                     + ttnn.TensorAccessorArgs(out).get_compile_time_args()
-                    + ttnn.TensorAccessorArgs(out_b).get_compile_time_args(),
-                    defines=dm + dbg,
+                    + ttnn.TensorAccessorArgs(out_b).get_compile_time_args()
+                    + ttnn.TensorAccessorArgs(residual if residual is not None else out).get_compile_time_args(),
+                    defines=dm + dbg + rdef,
                     runtime_args=wr,
                     common_runtime_args=[
                         self.rec.buffer_address(),
@@ -174,6 +178,7 @@ class TernaryPrefillLinear2:
                         ha,
                         hb,
                         Mt,
+                        (residual if residual is not None else out).buffer_address(),
                     ],
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
@@ -181,7 +186,7 @@ class TernaryPrefillLinear2:
                     kernel_source=KERNELS + "t2_compute.cpp",
                     core_ranges=crs,
                     compile_time_args=[NBLK, kpc],
-                    defines=dm + dbg,
+                    defines=dm + dbg + rdef,
                     runtime_args=cp,
                     common_runtime_args=[KB],
                     config=ttnn.ComputeConfigDescriptor(
@@ -198,9 +203,13 @@ class TernaryPrefillLinear2:
                 cb(3, ttnn.float32, 2048, 2 * NBLK),
                 cb(24, ttnn.float32, 4096, m_max * NBLK),
                 cb(16, ttnn.bfloat16, 2048, 4),
+                cb(4, ttnn.bfloat16, 2048, 4),
             ],
         )
         if split is None:
-            return ttnn.generic_op([x, self.rec, self.sbc, out], program)
+            # generic_op returns the last tensor of the list: the output goes last
+            return ttnn.generic_op(
+                [x, self.rec, self.sbc] + ([residual] if residual is not None else []) + [out], program
+            )
         ttnn.generic_op([x, self.rec, self.sbc, out, out_b], program)
         return out, out_b

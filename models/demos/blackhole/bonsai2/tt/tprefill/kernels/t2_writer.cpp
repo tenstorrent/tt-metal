@@ -20,6 +20,7 @@ void kernel_main() {
     const uint32_t NA = get_common_arg_val<uint32_t>(7);
     const uint32_t HA = get_common_arg_val<uint32_t>(8), HB = get_common_arg_val<uint32_t>(9);
     const uint32_t Mt = get_common_arg_val<uint32_t>(10);
+    const uint32_t res_addr = get_common_arg_val<uint32_t>(11);  // RESIDUAL: added to the outputs (same layout)
     const uint32_t n_first = get_arg_val<uint32_t>(0), n_count = get_arg_val<uint32_t>(1);
     const uint32_t m_first = get_arg_val<uint32_t>(2), m_count = get_arg_val<uint32_t>(3);
     // weight multicast down the core column: the column's first core reads each group's weights and ratio tiles and
@@ -36,9 +37,11 @@ void kernel_main() {
     constexpr auto s_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     constexpr auto ob_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto r_args = TensorAccessorArgs<ob_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_w = tt::CBIndex::c_1;
     constexpr uint32_t cb_s = tt::CBIndex::c_3;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_res = tt::CBIndex::c_4;
     constexpr uint32_t GROUP = 2048 + 32 * 4 * 256;
 #ifdef GLU_PAIRS
     constexpr uint32_t OUT_DIV = 2;  // one output tile per (gate, up) column pair
@@ -53,6 +56,7 @@ void kernel_main() {
     const uint32_t obytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(o_args, out_addr, obytes);
     const auto outb = TensorAccessor(ob_args, ob_addr, obytes);
+    const auto res = TensorAccessor(r_args, res_addr, obytes);
     const uint32_t NB = Nt_out - NA;
     auto dest = [&](uint32_t row, uint32_t n) -> uint64_t {
         if (n < NA) {
@@ -114,13 +118,26 @@ void kernel_main() {
             cb_push_back(cb_s, NBLK);
         }
         noc_async_atomic_barrier();
-        for (uint32_t r = 0; r < m_count; ++r) {
-            for (uint32_t c = 0; c < nb / OUT_DIV; ++c) {
-                cb_wait_front(cb_out, 1);
-                noc_async_write(get_read_ptr(cb_out), dest(m_first + r, (n_first + c0) / OUT_DIV + c), obytes);
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, 1);
-            }
+        // RESIDUAL: the block's residual tiles into c_4, [row][column] (the compute adds them to the accumulators)
+        const uint32_t nout = m_count * (nb / OUT_DIV);
+#ifdef RESIDUAL
+        for (uint32_t k = 0; k < nout; ++k) {
+            const uint32_t r = k / (nb / OUT_DIV), c = k % (nb / OUT_DIV);
+            cb_reserve_back(cb_res, 1);
+            noc_async_read(
+                res.get_noc_addr((m_first + r) * Nt_out + (n_first + c0) / OUT_DIV + c), get_write_ptr(cb_res), obytes);
+            noc_async_read_barrier();
+            cb_push_back(cb_res, 1);
+        }
+#endif
+        // outputs [row][column]
+        for (uint32_t k = 0; k < nout; ++k) {
+            const uint32_t r = k / (nb / OUT_DIV), c = k % (nb / OUT_DIV);
+            cb_wait_front(cb_out, 1);
+            noc_async_write(get_read_ptr(cb_out), dest(m_first + r, (n_first + c0) / OUT_DIV + c), obytes);
+            noc_async_writes_flushed();  // the slot is free once the tile has left L1 (no round trip per tile)
+            cb_pop_front(cb_out, 1);
         }
     }
+    noc_async_write_barrier();
 }

@@ -22,6 +22,7 @@ constexpr uint32_t cb_w = tt::CBIndex::c_1;
 constexpr uint32_t cb_s = tt::CBIndex::c_3;  // broadcast-scale tiles (fp16 in a CB declared Float32)
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 constexpr uint32_t cb_acc = tt::CBIndex::c_24;  // fp32 accumulators
+constexpr uint32_t cb_res = tt::CBIndex::c_4;   // RESIDUAL: tiles added to the outputs
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -221,6 +222,25 @@ void kernel_main() {
             cb_pop_front(cb_w, KPC * WSLOT);
             cb_pop_front(cb_s, NBLK);
         }
+#ifdef RESIDUAL
+        // the residual tiles go into the fp32 accumulators by packer L1 accumulation (out = y + residual, one bf16
+        // rounding at the output)
+        reconfig_data_format_srca(cb_res);
+        copy_init(cb_res);
+        pack_reconfig_l1_acc(1);
+        for (uint32_t r = 0; r < m; ++r) {
+            for (uint32_t c = 0; c < nb; ++c) {
+                cb_wait_front(cb_res, 1);
+                tile_regs_acquire();
+                copy_tile(cb_res, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_acc, r * NBLK + c);
+                tile_regs_release();
+                cb_pop_front(cb_res, 1);
+            }
+        }
+#endif
         pack_reconfig_l1_acc(0);
         cb_push_back(cb_acc, ACC);
         // fp32 accumulators -> bf16 outputs, [row][column]

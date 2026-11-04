@@ -59,9 +59,9 @@ class TernaryMLP:
             self.prot_in, self.prot_hidden = prefill_rotations[self.gate.K], prefill_rotations[self.down.K]
         self._gu_host = None
 
-    def forward_prefill(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, residual=None) -> ttnn.Tensor:
         """x [..., T, dim] bf16 TILE, T a multiple of 32 -> the same shape: down(up * silu(gate)) in the exact ternary
-        weights."""
+        weights (+ residual, added in the down projection's output stage)."""
         xr = prerot.take(x)  # the layer's fused add + norm + rotation (tprefill/norm_rot.py), else rotate here
         if xr is None:
             xr = self.prot_in(x)
@@ -69,7 +69,7 @@ class TernaryMLP:
         ttnn.deallocate(xr)
         hr = self.prot_hidden(h)
         ttnn.deallocate(h)
-        y = self.pre_down(hr)
+        y = self.pre_down(hr, residual=residual) if residual is not None else self.pre_down(hr)
         ttnn.deallocate(hr)
         return y
 
