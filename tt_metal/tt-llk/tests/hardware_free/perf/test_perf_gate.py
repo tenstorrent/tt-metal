@@ -328,7 +328,9 @@ def test_replay_with_a_short_baseline_fails(tmp_path):
     gate.main(argv + ["--out-dir", str(tmp_path)])
     v = json.loads((tmp_path / "verdict-blackhole.json").read_text())
     assert v["status"] == "no-compare" and v["fails"]
-    assert v["reason"].startswith("The baseline holds 2 of the 6 test modules")
+    assert v["reason"].startswith(
+        "The baseline holds points of 2 of the 6 test modules"
+    )
 
 
 def test_replay_names_the_points_that_stopped_running(tmp_path):
@@ -504,3 +506,30 @@ def test_stage2_decides_whether_a_blocking_regression_fails(block, stage2, fails
 def test_the_merge_gate_blocks_on_blackhole_only():
     assert gate.policy("merge", "blackhole")["block"]
     assert not gate.policy("merge", "wormhole")["block"]
+
+
+def test_stage2_counts_only_on_an_arch_whose_policy_runs_it(tmp_path):
+    data = yaml.safe_load(gate.POLICY.read_text())
+    data["gates"]["merge"]["arches"]["blackhole"]["stage2"] = False
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump(data))
+    argv = [
+        "--policy",
+        str(policy),
+        "compare",
+        "--gate",
+        "merge",
+        "--arch",
+        "blackhole",
+    ]
+    argv += [
+        "--current",
+        str(REPLAY / "current"),
+        "--baseline",
+        str(REPLAY / "baseline"),
+    ]
+    argv += ["--baseline-meta", str(REPLAY / "baseline_metadata.json")]
+    argv += ["--stage2", f"{REPLAY}/stage2/**/stage2.json", "--out-dir", str(tmp_path)]
+    gate.main(argv)
+    v = json.loads((tmp_path / "verdict-blackhole.json").read_text())
+    assert v["status"] == "pass" and v["stage2"] is None
