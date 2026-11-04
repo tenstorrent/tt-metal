@@ -48,6 +48,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const m2::KernelSpecName writer_kernel{"writer"};
     const m2::KernelSpecName compute_kernel{"compute"};
     const m2::DFBSpecName seed_dfb{"seed"};
+    const m2::SemaphoreSpecName seed_landed{"seed_landed"};
     const m2::DFBSpecName tail_dfb{"tail"};
     const m2::DFBSpecName terms_dfb{"terms"};
     const m2::DFBSpecName diff_dfb{"diff"};
@@ -113,6 +114,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(ctl_dfb, "ctl"),
                 m2::ProducerOf(ctl_writer_dfb, "ctl_writer"),
             },
+        .semaphore_bindings = {m2::SemaphoreBinding{seed_landed, "seed_landed"}},
         .tensor_bindings =
             {
                 m2::TensorBinding{final_a_name, "final_a"},
@@ -124,12 +126,14 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
             },
         .compile_time_args =
             {{"kt", kt},
+             {"seed_receivers", cores_per_head - 1},
              {"core_chunks", per_core},
              {"final_stride", cores_per_head},
              {"streamed", static_cast<uint32_t>(streamed)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row", "seed_sender"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    reader.advanced_options.num_runtime_varargs = cores_per_head - 1;
     m2::KernelSpec writer{
         .unique_id = writer_kernel,
         .source =
@@ -184,20 +188,33 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         const uint32_t part = index % cores_per_head;
         const uint32_t first = part * per_core;
         const auto& core = attrs.cores[index];
-        // The first final-state tile row this core forms (kt: none).
+        // The first final-state tile row this core forms (kt: none), then whether it sends the head's seeds.
         m2::AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
             core,
             {{"head", head},
              {"first_chunk", first},
              {"last_chunk", first + per_core},
-             {"final_row", part < kt ? part : kt}});
+             {"final_row", part < kt ? part : kt},
+             {"seed_sender", static_cast<uint32_t>(part == 0)}});
+        // The seed receivers' NoC x | y << 16, on the head's first core.
+        std::vector<uint32_t> receivers(cores_per_head - 1, 0);
+        if (part == 0) {
+            for (uint32_t other = 1; other < cores_per_head; ++other) {
+                const auto noc = device.worker_core_from_logical_core(attrs.cores[index + other]);
+                receivers[other - 1] = static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
+            }
+        }
+        if (!receivers.empty()) {
+            reader_run.advanced_options.runtime_varargs[m2::NodeCoord(core)] = std::move(receivers);
+        }
         m2::AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"head", head}, {"first_chunk", first}});
     }
 
     m2::ProgramSpec spec{
         .name = "entry_correction",
         .dataflow_buffers = std::move(dfbs),
+        .semaphores = {m2::SemaphoreSpec{.unique_id = seed_landed, .target_nodes = cores}},
         .tensor_parameters =
             {
                 m2::TensorParameter{.unique_id = terms_name, .spec = terms.tensor_spec()},
