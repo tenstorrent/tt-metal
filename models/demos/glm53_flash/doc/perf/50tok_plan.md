@@ -249,3 +249,10 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   served smoke (`served_fabric_1m`, all three knobs, 1 M profile: first token vs HF, 4 concurrent greedy x 2, bench
   128/128 at 32 users) and the isolating gates (combine only / all-reduce only) run on the fixed kernels, then the
   full gate again (`gate84_B4_fabar_r2`).
+* 00:51 **per-layer profile with the fabric knobs** (`tracy_l4_b4_fab`, chip (0,0), KDA+MoE layer 4, 4 users per row,
+  dst Sinkhorn default): **22 programs, 776 us** (the tip: 33, 934). mHC 2 x 52.6 + 2 x 18.7 = 143; attention qkv 66.8,
+  small projections 13.8 + 9.5, KDA decode 72.9, out 27.2, fabric all-reduce 42.2 (composite 50); router 30; fabric
+  gather 56 (40 in isolation: the collective absorbs the chips' skew), experts 215 (202 at the tip), fabric combine 38,
+  shared 33, add 3, fabric all-reduce 24 (composite 39). The 37.7 ms step follows (34 x 0.776 + 11 DSA layers). What
+  is left per KDA layer: experts ~50 us over the bfp8 floor, KDA decode ~28 over, mHC ~100 over a merged target,
+  the four exchanges ~160 (skew-bound), router + shared 66 in 8 programs.
