@@ -37,23 +37,27 @@ void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
             Returns a tensor with the same data and number of elements as `input_tensor`, but with the given shape.
 
-            One dimension of `shape` may be `-1`; its size is inferred from the other dimensions. A second
-            overload takes both a logical and a padded shape: ``ttnn.reshape(input_tensor, logical_shape, padded_shape)``.
+            If `shape` is a list or tuple, one dimension may be `-1`; its size is inferred from the other dimensions.
+            A second overload takes both a logical and a padded shape: ``ttnn.reshape(input_tensor, logical_shape, padded_shape)``.
 
-            The reshape is a zero-cost view, with no data movement, when both of these hold:
+            The reshape is a zero-cost view, with no data movement, when all of these hold:
                 * the last dimension does not change
-                * for TILE layout, the second-to-last dimension does not change, or it has no padding
+                * ``memory_config``, if given, matches the input in being sharded or interleaved and in DRAM or L1 placement
+                * for TILE layout, the second-to-last dimension does not change, or it is a multiple of 32 in both the input and the new shape
+
+            A view keeps the input's memory configuration. ND sharded tensors are staged through DRAM instead, unless
+            only the logical shape changes.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                shape (ttnn.Shape or List[int]): the new shape. One dimension may be `-1`.
+                shape (ttnn.Shape or List[int]): the new shape. As a list or tuple, one dimension may be `-1`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which matches the input tensor's memory configuration. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).
-                pad_value (float or int, optional): Value to fill the output tensor's tile padding with. Defaults to `None`, which fills with 0.
-                reshape_tile_mode (ttnn.TileReshapeMapMode, optional): Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Defaults to `CACHE`. This keyword is named ``reshape_tile_mode`` on all overloads; the small-vector (tuple/list) shape overload previously used the name ``recreate_mapping_tensor`` for the same option, so update callers to ``reshape_tile_mode``.
+                pad_value (float or int, optional): Value to fill the output tensor's tile padding with when the reshape moves data. Defaults to `None`, which leaves the padding unspecified, except for ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs, whose padding is filled with 0. For ``FLOAT32`` tensors, pass a float: an int is taken as the float's bit pattern.
+                reshape_tile_mode (ttnn.TileReshapeMapMode, optional): Currently has no effect: ``RECREATE`` behaves like ``CACHE``. Defaults to `CACHE`. This keyword is named ``reshape_tile_mode`` on all overloads; the small-vector (tuple/list) shape overload previously used the name ``recreate_mapping_tensor`` for the same option, so update callers to ``reshape_tile_mode``.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Defaults to `None`, which uses all the cores in the device.
-                skip_padding_fill (bool, optional): If `False`, ``pad_value`` is applied to tile padding lanes. If `True`, ``pad_value`` is ignored and tile padding is left as-is. Defaults to `False`. This option is silently ignored for block-float (``BFLOAT8_B``, ``BFLOAT4_B``) outputs, because the block-float typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
+                skip_padding_fill (bool, optional): If `True`, ``pad_value`` is ignored and tile padding is left as-is. Defaults to `False`, which applies ``pad_value`` when one is given. This option is silently ignored for block-float (``BFLOAT8_B``, ``BFLOAT4_B``) outputs, because the block-float typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
 
             Returns:
                 ttnn.Tensor: the output tensor with the new shape.
@@ -73,12 +77,12 @@ void bind_reshape_view_operation(nb::module_& mod) {
                    * - UINT16
                      - TILE, ROW_MAJOR
 
-                ``UINT16`` input is supported only on the codegen path: input and output interleaved in DRAM or L1, TILE
-                tiles padded only in the last two dims (ROW_MAJOR input unpadded), and only when one of its programs fits
-                L1; otherwise the call fails. ``reshape_tile_mode`` is ignored on that path.
+                ``UINT16`` reshapes that move data run only on the codegen path: input and output interleaved in DRAM or
+                L1, TILE tiles padded only in the last two dims (ROW_MAJOR input unpadded), no explicit ``pad_value`` on
+                a padded TILE output, and only when one of its programs fits L1; otherwise the call fails.
 
-                ``BFLOAT8_B`` and ``BFLOAT4_B`` inputs are reshaped through a ``BFLOAT16`` typecast and do not support
-                ``sub_core_grids``.
+                ``BFLOAT8_B`` and ``BFLOAT4_B`` reshapes that move data go through a ``BFLOAT16`` typecast and do not
+                support ``sub_core_grids``.
 
             Memory Support:
                 - Interleaved: DRAM and L1
