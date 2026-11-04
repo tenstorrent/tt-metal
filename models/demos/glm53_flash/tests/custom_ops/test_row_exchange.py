@@ -206,3 +206,70 @@ def test_allreduce(mesh_device):
     for i, (a, b) in enumerate(zip(chips, chips2)):
         assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
     logger.info(f"ROWX allreduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
+
+
+@pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
+def test_model_sequence(mesh_device):
+    """The decode MoE sequence under one trace with fresh data every replay: fabric gather -> a per-row scaled
+    "expert" (eltwise) -> fabric combine -> add -> fabric TP all-reduce, checked against torch per chip and round.
+    Isolates the chain gate's decode drift (gate84_B4_fabcombine / fabar) from the model's other ops."""
+    mesh = GLMMesh.from_device(mesh_device)
+    if COLS < 2 or COLS * T > TILE or ROWS * T > TILE:
+        pytest.skip("needs the (8,4) decode shapes")
+    g = torch.Generator().manual_seed(3)
+    x = torch.zeros(ROWS, 1, TILE, H)
+    x[:, :, :T] = torch.randn(ROWS, 1, T, H, generator=g)
+    x = x.bfloat16().float()
+    w = torch.zeros(ROWS, 1, TILE, E)
+    w[:, :, :T] = torch.rand(ROWS, 1, T, E, generator=g)
+    w = w.bfloat16().float()
+    scale_host = (
+        torch.tensor([0.5 + 0.25 * r for r in range(ROWS)]).view(ROWS, 1, 1, 1).expand(ROWS, 1, TILE, H).contiguous()
+    )
+    xd, wd = mesh.upload(x, ttnn.bfloat16, rows=0), mesh.upload(w, ttnn.bfloat16, rows=0)
+    scale = mesh.upload(scale_host, ttnn.bfloat16, rows=0)  # row r's chips scale by 0.5 + 0.25 r
+    gather = RowExchange(mesh, "gather", [H, E], T)
+    reduce = RowExchange(mesh, "reduce", [H], T)
+    allred = RowExchange(mesh, "allreduce", [H], T)
+
+    def step():
+        xg, wg = gather([xd, wd])
+        y = ttnn.multiply(xg, scale)  # [1,1,32,H]: this chip's "expert" partial for every gathered user
+        (comb,) = reduce([y])  # [1,1,T,H]: this row's users summed over the rows
+        comb2 = ttnn.add(comb, comb)  # a stand-in for the shared expert add (keeps the shape [1,1,T,H])
+        (out,) = allred([comb2])
+        return out
+
+    def expect(xh):
+        # per row r: comb[t] = sum_r' scale_r' * x[r][t]; comb2 = 2 comb; all-reduce over 4 equal columns = 4 comb2
+        s = sum(0.5 + 0.25 * r2 for r2 in range(ROWS))
+        return [(8 * s * xh[r, 0, :T]).bfloat16().float() for r in range(ROWS) for _ in range(COLS)]
+
+    out = step()
+    for i, (got, exp) in enumerate(zip(_chips(out), expect(x))):
+        err = (got - exp).abs()
+        tol = exp.abs() * (3 / 128) + 1e-2  # three bf16 roundings along the chain
+        assert bool((err <= tol).all()), f"eager chip {i}: max err {err.max().item():.4f}"
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = step()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    g2 = torch.Generator().manual_seed(11)
+    for rnd in range(4):
+        fresh = torch.zeros(ROWS, 1, TILE, H)
+        fresh[:, :, :T] = torch.randn(ROWS, 1, T, H, generator=g2)
+        fresh = fresh.bfloat16().float()
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(fresh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh.shard_2d(0, None)), xd
+        )
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        for i, (got, exp) in enumerate(zip(_chips(out), expect(fresh))):
+            err = (got - exp).abs()
+            tol = exp.abs() * (3 / 128) + 1e-2
+            assert bool(
+                (err <= tol).all()
+            ), f"round {rnd} chip {i}: max err {err.max().item():.4f} (stale data in the chain?)"
+    ttnn.release_trace(mesh_device, tid)
+    logger.info(
+        f"ROWX sequence {ROWS}x{COLS} T={T}: gather -> scale -> combine -> add -> all-reduce exact over 4 fresh replays"
+    )

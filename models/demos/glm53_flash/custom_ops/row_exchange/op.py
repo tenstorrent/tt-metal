@@ -305,6 +305,12 @@ class RowExchange:
         assert len(inputs) == len(self.widths), (len(inputs), self.widths)
         for t, w in zip(inputs, self.widths):
             assert tuple(t.padded_shape)[-2:] == (TILE, w), (tuple(t.padded_shape), w)
+            assert t.dtype == ttnn.bfloat16 and t.layout == ttnn.TILE_LAYOUT and not t.is_sharded(), (
+                t.dtype,
+                t.layout,
+                t.memory_config(),
+                "the exchange moves bf16 tiles of interleaved tensors",
+            )
         if outputs is None:
             outputs = self.allocate_outputs(memory_config or ttnn.DRAM_MEMORY_CONFIG)
         mpd = ttnn.MeshProgramDescriptor()
