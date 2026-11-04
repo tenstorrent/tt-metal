@@ -461,8 +461,10 @@ class ttKDA:
         # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights: FP32 logits plus the FP32 offset, one rounding
         # to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py. The gate is allocated before the logits so that
         # the freed logits leave their L1 next to the circular buffers rather than below the gate.
+        # Indexed, not iterated: iterating a ttnn.Shape ends in an exception.
+        projected_shape = projected.shape
         gate = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([*list(projected.shape)[:-1], weights.decay_output_projection.shape[-1]]),
+            ttnn.Shape([projected_shape[0], projected_shape[1], weights.decay_output_projection.shape[-1]]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             self.device,
@@ -477,17 +479,13 @@ class ttKDA:
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        # The add reads the offset row for every output tile; a per-call L1 copy (a few KiB per core) spares those reads
-        # their DRAM round trip without holding L1 between calls.
-        offset = ttnn.to_memory_config(weights.decay_bias_flat, ttnn.L1_MEMORY_CONFIG)
         ttnn.add(
             logits,
-            offset,
+            weights.decay_bias_flat,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
             memory_config=self.decay_memory_config,
             output_tensor=gate,
         )
-        ttnn.deallocate(offset)
         ttnn.deallocate(logits)
         return gate
 
