@@ -181,11 +181,20 @@ enum RouterCt : uint32_t {
     RT_CT_K,
     RT_CT_COUNT,
 };
-// Common runtime args (router_addr.hpp) - the same on all three kernels:
+// Common runtime args (router_addr.hpp) - the same on all three kernels; a padded chunk (RT_VALID, NCRISC and BRISC
+// only) appends its scalars and the chip's place in main's rotated layout:
 enum RouterCommonArg : uint32_t {
     RT_CRTA_ARENA_BASE = 0,  // RouterStream.base (the router cores' arena range)
     RT_CRTA_ENG_SEM = 1,     // RouterStream.arr[1] (the engine-done semaphore; 0 without RT_ENG_ON)
     RT_CRTA_COUNT,
+    RT_CRTA_START = 2,       // RT_VALID: actual_start's address (one uint32, DRAM)
+    RT_CRTA_END = 3,         // actual_end's address
+    RT_CRTA_SP_ROW = 4,      // my SP row r
+    RT_CRTA_SP_ROWS = 5,     // SP rows R
+    RT_CRTA_ROW_TOKENS = 6,  // tokens an SP row (S C)
+    RT_CRTA_FIRST = 7,       // my first token in the row (p S)
+    RT_CRTA_S = 8,           // S
+    RT_CRTA_VALID_COUNT,
 };
 // Defines:
 //   NCRISC and compute (`eng`): RT_ENG_ON (on_engine; RT_ENG = common arg 1), RT_MSYNC_OFF (off["msync"], `u`;
@@ -197,6 +206,7 @@ enum RouterCommonArg : uint32_t {
 //     (ring_table(C / R, wrap) comma lists), RW_CHIPS_INIT (e // EPC for e < E, comma list);
 //   BRISC: RT_FOLD; RT_ROUTE, RT_CT0 (len(ct + acc(out) + ra accessors)), RT_PAGE (the
 //     route tensor's aligned page size), RT_RW;
+//   NCRISC and BRISC, a padded chunk (fused_head's actual_start / actual_end): RT_VALID (common args 2..8);
 //   NCRISC and BRISC with the routing exchange (router_stream._ra_src): RA_PLAN, the routing defines (above) and
 //     ra::plan's RAP_* (RoutingStream.kernel_subs: RAP_S, RAP_K, RAP_EPC, RAP_R, RAP_C, RAP_ME, RAP_A, RAP_L,
 //     RAP_P (nps[coord]), RAP_TPP 32, RAP_M, RAP_HBP, RAP_BB, RAP_BBP, RAP_PCAP, RAP_NPORT, RAP_ROWS_CAP,

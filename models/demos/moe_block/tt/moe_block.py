@@ -11,8 +11,9 @@ allocation and free."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -84,6 +85,7 @@ class MoEBlock:
             None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
         )
         self.one_arena = None
+        self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
         # (the head planner's DRAM fallback - a shape whose resident layouts do not fit the head's L1: x gathered over
         # TP into DRAM ahead of the head, which reloads it a row chunk at a time; the plan the op runs, same l1_free)
         fit = mb.plan_fused_head(resources, dtypes, accumulators, l1_free)
@@ -110,9 +112,60 @@ class MoEBlock:
         )
         return fits
 
-    def __call__(self, x: ttnn.Tensor, weights: MoEBlockWeights) -> ttnn.Tensor:
-        """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's)."""
+    def chunk_scalars(self, actual_start: int, actual_end: int) -> tuple:
+        """The block's persistent pair of one-word device tensors (replicated, uint32, DRAM - main's metadata scalars'
+        form) holding a padded chunk's actual_start / actual_end, rewritten with these values (host writes: not inside a
+        trace capture - a traced caller copies its own metadata scalars, or passes them as they are)."""
+        chunk = self.resources.config.chunk_tokens
+        assert (
+            actual_start <= actual_end <= actual_start + chunk
+        ), f"MoEBlock: chunk [{actual_start}, {actual_end}) holds more than {chunk} tokens or is reversed"
+        word = lambda v: torch.tensor([[[[v]]]], dtype=torch.int64)  # noqa: E731
+        if self.chunk_words is None:
+            self.chunk_words = tuple(
+                ttnn.from_torch(
+                    word(v),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                for v in (actual_start, actual_end)
+            )
+        else:
+            for v, t in zip((actual_start, actual_end), self.chunk_words):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(word(v), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), t
+                )
+        return self.chunk_words
+
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        weights: MoEBlockWeights,
+        actual_start: Union[int, ttnn.Tensor, None] = None,
+        actual_end: Union[int, ttnn.Tensor, None] = None,
+        metadata: Optional[tuple] = None,
+    ) -> ttnn.Tensor:
+        """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's).
+
+        A padded chunk: actual_start / actual_end, main's chunked-prefill metadata scalars (the chunk's first real
+        token's absolute position, one past its last) - one-element uint32 device tensors in DRAM, replicated, read on
+        device every call (a trace replays with their values of the moment), or ints (host-written words, eager only);
+        or metadata = main's (slot_id, actual_start, actual_end) tensors as they are. The chunk is in main's KV-pad-aware
+        rotated layout over the SP rows (moe_padding_config; chunk-aligned start: the natural order, the first
+        end - start tokens real). Padding tokens are not routed, dispatched, computed by the routed experts or combined;
+        their rows of the output are the shared expert's only (the dense parts still compute them; discard them).
+        None: every row is real."""
         mb = self.mb
+        if metadata is not None:
+            assert actual_start is None and actual_end is None, "MoEBlock: metadata or actual_start / actual_end"
+            actual_start, actual_end = metadata[1], metadata[2]
+        assert (actual_start is None) == (actual_end is None), "MoEBlock: a padded chunk takes actual_start and _end"
+        if isinstance(actual_start, int) or isinstance(actual_end, int):
+            assert isinstance(actual_start, int) and isinstance(actual_end, int), "MoEBlock: two ints or two tensors"
+            actual_start, actual_end = self.chunk_scalars(actual_start, actual_end)
         if self.exchange_spec is None:  # (the first call, before any arena: one arena or two)
             self.one_arena = self._one_arena_fits()
         # (the DRAM fallback's x_full [1, 1, rows, H]: this mesh row's x gathered over the TP axis)
@@ -130,6 +183,8 @@ class MoEBlock:
             x_full=x_full,
             l1_free=self.l1_free,
             arena=arena,
+            actual_start=actual_start,
+            actual_end=actual_end,
         )
         if x_full is not None:
             ttnn.deallocate(x_full)

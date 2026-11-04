@@ -2488,6 +2488,16 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         comp.unpack_to_dest_mode[i] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     const Args common = {base, h.on_engine ? rt_arr1 : Arg(0u)};
+    // a padded chunk (router_addr.hpp RT_VALID): the planners and the route words' writer read actual_start /
+    // actual_end (common [2], [3]) and bound this chip's tokens by its SP row's real rows (main's rotated layout: [4]
+    // the SP row r, [5] SP rows, [6] tokens a row) less the row's tokens before mine ([7] p S, my owned block p), [8]
+    // S; absent, the programs are the unpadded ones
+    const bool padded = bufs[SRC_START] != nullptr;
+    Args common_v = common;
+    if (padded) {
+        add(common_v,
+            Args{S(SRC_START), S(SRC_END), Arg(coord.first), Arg(h.R), Arg(h.S * h.C), Arg(p * h.S), Arg(h.S)});
+    }
     auto eng_defs = [&](KernelDescriptor& k) {
         if (h.on_engine) {
             define(k, "RT_ENG_ON");
@@ -2522,7 +2532,10 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         planner_defines(nk, n_ra0);
         nk.compile_time_args = n_ct;
         mine(n_rt, nk);
-        set_common(nk, common);
+        if (padded) {
+            define(nk, "RT_VALID");
+        }
+        set_common(nk, common_v);
         auto ck = kernel("compute/router_compute.cpp", hcrs, comp);
         eng_defs(ck);
         if (h.cfg.sqrtsoftplus) {
@@ -2558,7 +2571,10 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         append_accessor(bk.compile_time_args, bufs[SRC_ROUTE]);
         planner_defines(bk, b_ra0);
         mine(b_rt, bk);
-        set_common(bk, common);
+        if (padded) {
+            define(bk, "RT_VALID");
+        }
+        set_common(bk, common_v);
         push(ks, nk);
         push(ks, ck);
         push(ks, bk);

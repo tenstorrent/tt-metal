@@ -23,6 +23,13 @@ constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9;
 void kernel_main() {
     const uint32_t nh = get_arg_val<uint32_t>(0), h0 = 1;
     const uint32_t hold = get_read_ptr(HOLD);
+#if defined(RT_ROUTE) && defined(RT_VALID)
+    // (a padded chunk's actual_start / actual_end, for the route words: into the route words' L1 (256 B) - the compute
+    // writes them only after word 80, by when they are read - early, read once the rows are written, long after)
+    const uint32_t vl1 = rt_valid_slot(get_arg_val<uint32_t>(h0 + 6 * nh + 6));
+    rt_valid_issue(vl1);
+    uint32_t sv = 0;  // (my real tokens, read below)
+#endif
     for (uint32_t j = 0; j < nh; ++j) {
         DeviceZoneScopedN("SE-RHAND");
         cb_wait_front(FINC, j + 1);
@@ -69,6 +76,11 @@ void kernel_main() {
             *wd = 0;  // (re-arm)
         }
 #ifdef RT_ROUTE
+#ifdef RT_VALID
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        sv = rt_valid_local(vl1);  // (my real tokens: the route words of the rest are zeroed below)
+#endif
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 80) = 1;  // (every share of the rows written)
 #endif
     }
@@ -100,6 +112,17 @@ void kernel_main() {
         }
         *rd = 0;  // (re-arm)
         const uint32_t rl1 = get_arg_val<uint32_t>(t0 + 6), tok0 = get_arg_val<uint32_t>(t0 + 8);
+#ifdef RT_VALID
+        {  // (padding tokens - t >= sv - get no route: not dispatched)
+            invalidate_l1_cache();
+            volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rl1);
+            for (uint32_t c = sv > tok0 ? sv - tok0 : 0; c < 32; ++c) {
+                for (uint32_t i = 0; i < RT_RW; ++i) {
+                    o[RT_RW * c + i] = 0;
+                }
+            }
+        }
+#endif
         const auto rg = TensorAccessor(TensorAccessorArgs<RT_CT0>(), get_arg_val<uint32_t>(t0 + 7), RT_PAGE);
         noc_async_write(rl1, rg.get_noc_addr(0) + tok0 * 4 * RT_RW, 32 * 4 * RT_RW);
         noc_async_write_barrier();

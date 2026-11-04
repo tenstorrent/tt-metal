@@ -104,6 +104,7 @@ struct FusedHeadSetup {
     std::vector<uint32_t> words;  // the persistent words' addresses, head_words' order
     FusedHeadInputs inputs;       // the persistent tensors (a call sets x and the weights)
     std::shared_ptr<HeadPatchStore> patches;
+    std::shared_ptr<HeadPatchStore> patches_padded;  // the padded chunk's programs (actual_start / end): their args
     mutable std::optional<Tensor> arena;  // the default arena (made on first use)
 };
 const FusedHeadSetup& setup_fused_head(
@@ -115,7 +116,12 @@ const FusedHeadSetup& setup_fused_head(
 // ttnn.experimental.moe_block.fused_head: x [1, 1, rows, H / TP] a chip (bf16 TILE, DRAM) -> the head's outputs.
 // x_full: the DRAM fallback's gathered x [1, 1, rows, H] (its layout only). arena: an L1 tensor over the head's arena
 // cores (head_arena_cores, a shard of at least arena_bytes each) the head runs in - e.g. one the block shares between
-// its ops; default one the resources keep.
+// its ops; default one the resources keep. actual_start / actual_end: a padded chunk - main's chunked-prefill metadata
+// scalars (the chunk's first real token's absolute position, one past its last; one uint32 each in DRAM, replicated),
+// read on device each call (traceable: replays take the values of the moment). The chunk is in main's KV-pad-aware
+// rotated layout over the SP rows (moe_padding_config): a row's real rows are a prefix, TP chip p owns its rows
+// p S ..; padding tokens get no routes, so the dispatch, the routed experts and the combine never see them (their
+// combined rows are zero). Absent: every row is real (the programs are the unpadded ones).
 FusedHeadOutputs fused_head(
     const Tensor& x,
     const FusedHeadWeights& weights,
@@ -124,6 +130,8 @@ FusedHeadOutputs fused_head(
     uint32_t accumulators,
     const std::optional<Tensor>& x_full = std::nullopt,
     std::optional<int64_t> l1_free = std::nullopt,
-    const std::optional<Tensor>& arena = std::nullopt);
+    const std::optional<Tensor>& arena = std::nullopt,
+    const std::optional<Tensor>& actual_start = std::nullopt,
+    const std::optional<Tensor>& actual_end = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

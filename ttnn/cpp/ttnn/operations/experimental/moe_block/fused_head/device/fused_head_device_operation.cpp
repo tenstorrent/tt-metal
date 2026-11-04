@@ -53,7 +53,8 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.l1_free,
         args.x.tensor_spec(),
         args.w.tensor_spec(),
-        args.w_router.tensor_spec());
+        args.w_router.tensor_spec(),
+        args.actual_start.has_value());
 }
 
 FusedHeadDeviceOperation::program_factory_t FusedHeadDeviceOperation::select_program_factory(
@@ -94,6 +95,19 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
           &args.table,
           &args.plan}) {
         check_dram(*t, "an argument");
+    }
+    TT_FATAL(
+        args.actual_start.has_value() == args.actual_end.has_value(),
+        "fused_head: a padded chunk takes both actual_start and actual_end");
+    for (const auto* v : {&args.actual_start, &args.actual_end}) {
+        if (*v) {
+            check_dram(**v, "actual_start / actual_end");
+            TT_FATAL(
+                (*v)->dtype() == DataType::UINT32 && (*v)->logical_volume() == 1 && !(*v)->is_sharded(),
+                "fused_head: actual_start / actual_end are one uint32 each (DRAM interleaved), got {} of {} elements",
+                (*v)->dtype(),
+                (*v)->logical_volume());
+        }
     }
     TT_FATAL(
         args.y.logical_shape()[-2] == s.y_rows && args.y.logical_shape()[-1] == s.y_cols,
@@ -141,6 +155,8 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_TABLE, &a.table);
     set(SRC_PLAN, &a.plan);
     set(SRC_ARENA, &attrs.arena);
+    set(SRC_START, a.actual_start ? &*a.actual_start : nullptr);
+    set(SRC_END, a.actual_end ? &*a.actual_end : nullptr);
     for (size_t i = 0; i < attrs.words.size(); ++i) {
         b.addresses[SRC_WORD0 + i] = attrs.words[i];
     }

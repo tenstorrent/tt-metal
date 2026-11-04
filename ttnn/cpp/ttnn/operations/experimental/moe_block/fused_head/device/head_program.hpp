@@ -100,6 +100,8 @@ enum HeadSrc : uint16_t {
     SRC_TABLE,
     SRC_PLAN,
     SRC_ARENA,  // the arena (L1)
+    SRC_START,  // a padded chunk's actual_start (main's chunk metadata scalar: one uint32, DRAM; absent: all real)
+    SRC_END,    // its actual_end
     SRC_WORD0,  // the persistent words, in head_words order
 };
 

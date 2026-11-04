@@ -157,6 +157,12 @@ void bind_fused_head(nb::module_& mod) {
             l1_free: the free L1 a core the head may take (default: measured at the block's first head).
             arena: an L1 tensor over the head's arena cores the head runs in (default one the resources keep, which
                 holds that L1 for good: a block shares one arena between its ops).
+            actual_start, actual_end: a padded chunk - main's chunked-prefill metadata scalars as they are (the
+                chunk's first real token's absolute position, one past its last), one-element uint32 tensors in DRAM,
+                replicated, read on device every call (a trace replays with their values of the moment). The chunk is
+                in main's KV-pad-aware rotated layout over the SP rows (moe_padding_config): an SP row's real rows are
+                a prefix, TP chip p owns the row's tokens p S ... Padding tokens get no routes: not dispatched, not
+                computed by the routed experts, not combined (their combined rows are zero). None: every row is real.
 
         Returns:
             FusedHeadOutputs: se, rows, xbuf, route and the combine plan (counts, regions, token_index, table,
@@ -174,7 +180,9 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("accumulators"),
         nb::arg("x_full") = nb::none(),
         nb::arg("l1_free") = nb::none(),
-        nb::arg("arena") = nb::none());
+        nb::arg("arena") = nb::none(),
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("actual_end") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

@@ -17,6 +17,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/fill.h"
 
 constexpr uint32_t DH = 4;  // fp32 tiles per DEST half
 
@@ -82,6 +83,25 @@ void kernel_main() {
     copy_init(cb_acc);
     for (uint32_t t = 0; t < n_tok; ++t) {
         cb_reserve_back(cb_out, NT);
+        if (!seen[t]) {  // (no rows - a padding token: zeros, not the CB's stale L1)
+            fill_tile_init();
+            for (uint32_t j0 = 0; j0 < NT; j0 += DH) {
+                const uint32_t nj = NT - j0 < DH ? NT - j0 : DH;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < nj; ++j) {
+                    fill_tile(j, 0.0f);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < nj; ++j) {
+                    pack_tile(j, cb_out);
+                }
+                tile_regs_release();
+            }
+            cb_push_back(cb_out, NT);
+            copy_init(cb_acc);
+            continue;
+        }
         for (uint32_t j0 = 0; j0 < NT; j0 += DH) {
             const uint32_t nj = NT - j0 < DH ? NT - j0 : DH;
             tile_regs_acquire();

@@ -95,6 +95,12 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     for (uint32_t pg = 0; pg < NPG; ++pg) {
         noc_async_read(rt.get_noc_addr(pg), B + O_RT + pg * PSZ, PB);
     }
+#ifdef RT_VALID
+    // (a padded chunk's actual_start / actual_end, into O_WANT: local scratch of step 4 - nothing writes it before)
+    const uint32_t vl1 = rt_valid_slot(B + O_WANT);
+    static_assert(O_PIN - O_WANT >= 128, "the scalars' slots: 64 B aligned in O_WANT, 128 B");
+    rt_valid_issue(vl1);
+#endif
     volatile tt_l1_ptr uint32_t* calls = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(calls_addr);
     const uint32_t par = calls[0] & 1;
     calls[0] = calls[0] + 1;
@@ -105,13 +111,18 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
+#ifdef RT_VALID
+    const uint32_t SV = rt_valid_local(vl1);  // (my real tokens: 0 .. SV - 1; the rest are padding, unplanned)
+#else
+    constexpr uint32_t SV = S;
+#endif
     // (1) my home tokens (t % A owned by me): my entries per global expert
     auto row = [&](uint32_t t) __attribute__((always_inline)) {
         return reinterpret_cast<const uint32_t*>(B + O_RT + (t / TPP) * PSZ + (t % TPP) * ROWB);
     };
     uint32_t n_my = 0;
     for (uint32_t aa = q; aa < A; aa += M) {
-        for (uint32_t t = aa; t < S; t += A) {
+        for (uint32_t t = aa; t < SV; t += A) {
             const uint32_t* r2 = row(t);
             for (uint32_t kk = 0; kk < K / 2; ++kk) {
                 const uint32_t v = r2[kk];
@@ -182,7 +193,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
         }
         uint32_t* sw = reinterpret_cast<uint32_t*>(B + O_STG);
         for (uint32_t aa = q; aa < A; aa += M) {
-            for (uint32_t t = aa; t < S; t += A) {
+            for (uint32_t t = aa; t < SV; t += A) {
                 const uint32_t* r2 = row(t);
                 for (uint32_t kk = 0; kk < K / 2; ++kk) {  // (token | expert << 11 | weight's 15 low bits << 17)
                     const uint32_t v = r2[kk], w = r2[K / 2 + kk], g0 = v & 0xFFFF, g1 = v >> 16;
@@ -238,7 +249,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
             for (uint32_t s = 0; s < N; ++s) {
                 want[s] = 0;
             }
-            for (uint32_t t = aa; t < S; t += A) {
+            for (uint32_t t = aa; t < SV; t += A) {
                 const uint32_t* r2 = row(t);
                 for (uint32_t kk = 0; kk < K / 2; ++kk) {
                     const uint32_t v = r2[kk], s0 = (v & 0xFFFF) / EPC, s1 = (v >> 16) / EPC;

@@ -42,6 +42,21 @@ Design notes:
   e.g. FABRIC_2D 8x4 or a 4x4 tray half) every row says hello Y+ except the far end, so the near end gets none (a
   wait for one would hang there) and the row before the far end two. A ring or 2 rows: one each.
 
+## Padded chunks
+
+`fused_head(..., actual_start=s, actual_end=e)`: main's chunked-prefill metadata scalars as they are (one-element uint32
+DRAM tensors, replicated: the chunk's first real token's absolute position, one past its last). The chunk is in main's
+KV-pad-aware rotated layout over the SP rows (`deepseek_prefill/moe_padding_config`): an SP row's real rows are a
+prefix of its rows, their count main's closed form (boundary slab / row / offset, two runs on the boundary row); TP chip
+`p` owns the row's tokens `p S ..`, so its real tokens are that count less `p S`, clamped to `[0, S]`. With `s` chunk
+aligned it is the natural order: the first `e - s` tokens real. The router kernels read both on device every call
+(`RT_VALID`, common args 2..8), so a trace replays with the values of the moment. A chip's padding tokens get no
+routes: the planner (`ra::plan`) counts, stages and plans only the real ones (counts, regions, token index, table, plan
+hold no padding row) and the route words of the rest are zero (no dispatch). The combine's accumulators write zeros for
+a token with no rows. The shared expert still computes every row (its padding rows are discarded downstream). Without
+the scalars the programs are the unpadded ones; the padded programs keep their own address patches
+(`FusedHeadSetup.patches_padded`).
+
 ## Host plan
 
 The planner returns a `HeadFit`: `ok`, the planned layouts (best first, each with its arena bytes, region sizes,

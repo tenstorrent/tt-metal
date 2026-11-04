@@ -61,6 +61,10 @@ struct FusedHeadInputs {
     Tensor slots{};                                    // the routing exchange's slots
     Tensor fslots{};                                   // its forwarding slots
     Tensor counts{}, regions{}, token_index{}, table{}, plan{};  // the combine plan the routing planner writes
+    // A padded chunk: main's chunked-prefill metadata scalars actual_start / actual_end (one uint32 each in DRAM,
+    // replicated), read on device each call; the chunk in main's rotated layout over the SP rows. Padding tokens are
+    // not routed (no route words, not planned). Absent: every row is real.
+    std::optional<Tensor> actual_start, actual_end;
 };
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

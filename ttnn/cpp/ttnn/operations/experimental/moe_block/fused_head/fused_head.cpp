@@ -254,6 +254,7 @@ const FusedHeadSetup& setup_fused_head(
         }
         setup.inputs = persistent_inputs(resources, *setup.model);
         setup.patches = std::make_shared<HeadPatchStore>();
+        setup.patches_padded = std::make_shared<HeadPatchStore>();
         return setup;
     });
 }
@@ -290,7 +291,9 @@ FusedHeadOutputs fused_head(
     uint32_t accumulators,
     const std::optional<Tensor>& x_full,
     std::optional<int64_t> l1_free,
-    const std::optional<Tensor>& arena) {
+    const std::optional<Tensor>& arena,
+    const std::optional<Tensor>& actual_start,
+    const std::optional<Tensor>& actual_end) {
     using namespace fused_head_entry_detail;
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
     FusedHeadParams params{
@@ -299,8 +302,10 @@ FusedHeadOutputs fused_head(
         .model = setup.model,
         .words = setup.words,
         .arena = arena ? *arena : default_arena(resources, setup),
-        .patches = setup.patches};
+        .patches = actual_start ? setup.patches_padded : setup.patches};
     auto in = call_inputs(setup, x, weights, x_full);
+    in.actual_start = actual_start;
+    in.actual_end = actual_end;
     FusedHeadOutputs out{
         .se = in.y,
         .rows = in.rows,
