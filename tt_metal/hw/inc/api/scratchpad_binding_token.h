@@ -113,3 +113,29 @@ constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
 constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
     return token.llk_metadata_.num_faces_c_dim;
 }
+
+// Returns the tile height in elements.
+constexpr uint32_t get_tile_r_dim(const ScratchpadBindingToken& token) {
+    return get_face_r_dim(token) * get_num_faces_r_dim(token);
+}
+
+// Returns the tile width in elements.
+constexpr uint32_t get_tile_c_dim(const ScratchpadBindingToken& token) {
+    return get_face_c_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns the number of elements in a tile.
+constexpr uint32_t get_tile_hw(const ScratchpadBindingToken& token) {
+    return get_tile_r_dim(token) * get_tile_c_dim(token);
+}
+
+// Returns the total number of faces in a tile.
+constexpr uint32_t get_tile_num_faces(const ScratchpadBindingToken& token) {
+    return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
+}
+
+// Returns whether the tile height is less than 32 elements.
+constexpr bool get_partial_face(const ScratchpadBindingToken& token) { return get_tile_r_dim(token) < 32; }
+
+// Returns whether the tile width is less than 32 elements.
+constexpr bool get_narrow_tile(const ScratchpadBindingToken& token) { return get_tile_c_dim(token) < 32; }

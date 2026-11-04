@@ -26,15 +26,19 @@ struct GeometryCase {
     uint32_t faces;
     bool partial;
     bool narrow;
+    bool per_node = false;
 };
 
-ProgramSpec MakeNonPublicGeometryProgramSpec(const std::optional<Tile>& tile, const std::string& kernel_source) {
+ProgramSpec MakeNonPublicGeometryProgramSpec(const GeometryCase& geometry, const std::string& kernel_source) {
     ProgramSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec();
+    const std::optional<Tile>& tile = geometry.tile;
     spec.dataflow_buffers[0].tile_format_metadata = tile;
     const Tile effective_tile = tile.value_or(Tile{});
     const auto shape = effective_tile.get_tile_shape();
     spec.tensor_parameters = {
-        test_helpers::MakeShardedTensorParameter("local", Shape{shape[0], shape[1]}, shape, 1, Layout::TILE, tile)};
+        geometry.per_node ? test_helpers::MakePerNodeTensorParameter("local", 1)
+                          : test_helpers::MakeShardedTensorParameter(
+                                "local", Shape{shape[0], shape[1]}, shape, 1, Layout::TILE, tile)};
     for (KernelSpec& kernel : spec.kernels) {
         const ScratchpadSpecName pad_name{"pad_" + kernel.unique_id.get()};
         spec.scratchpads.push_back(ScratchpadSpec{
@@ -67,7 +71,7 @@ void kernel_main() {{
 }}
 )",
         geometry.rows);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -83,7 +87,7 @@ void kernel_main() {{
 }}
 )",
         geometry.columns);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -99,7 +103,7 @@ void kernel_main() {{
 }}
 )",
         geometry.rows * geometry.columns);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -115,7 +119,7 @@ void kernel_main() {{
 }}
 )",
         geometry.faces);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -131,7 +135,7 @@ void kernel_main() {{
 }}
 )",
         geometry.partial);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -147,7 +151,7 @@ void kernel_main() {{
 }}
 )",
         geometry.narrow);
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry.tile, source);
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -161,7 +165,8 @@ INSTANTIATE_TEST_SUITE_P(
         GeometryCase{"Narrow", Tile({32, 16}), 32, 16, 2, false, true},
         GeometryCase{"SingleFace", Tile({16, 16}), 16, 16, 1, true, true},
         GeometryCase{"ShortFaces", Tile({16, 32}, {8, 16}), 16, 32, 4, true, false},
-        GeometryCase{"TinyFaces", Tile({2, 32}, {1, 16}), 2, 32, 4, true, false}),
+        GeometryCase{"TinyFaces", Tile({2, 32}, {1, 16}), 2, 32, 4, true, false},
+        GeometryCase{"PerNode", std::nullopt, 32, 32, 4, false, false, true}),
     [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
 
 }  // namespace
