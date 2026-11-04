@@ -242,7 +242,7 @@ class GemmaAttentionTTNN:
 
         Args:
             hidden_states: TTNN tensor (batch, seq_len, hidden_dim)
-            cos, sin: Unused (kept for API compatibility, native RoPE uses self.cos_meta/sin_meta)
+            cos, sin: Device RoPE tables for this call's positions; None uses positions 0..seq_len-1
             attention_mask: Attention mask
             position_ids: Position indices
             past_key_value: Cached KV
@@ -568,7 +568,7 @@ class GemmaBlockTTNN:
 
         Args:
             hidden_states: TTNN input tensor
-            cos, sin: Unused (kept for API compatibility, passed through to attention)
+            cos, sin: Passed to attention (None uses positions 0..seq_len-1)
             attention_mask: Attention mask
             position_ids: Position indices
             past_key_value: Cached KV
