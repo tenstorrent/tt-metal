@@ -18,7 +18,11 @@
 constexpr uint32_t cb_x = tt::CBIndex::c_0;
 constexpr uint32_t cb_w0 = tt::CBIndex::c_1;  // even records (NCRISC)
 constexpr uint32_t cb_s = tt::CBIndex::c_2;
+#ifdef ONE_WCB
+constexpr uint32_t cb_w1 = tt::CBIndex::c_1;  // prefetcher stream: every record from the one GCB-backed CB
+#else
 constexpr uint32_t cb_w1 = tt::CBIndex::c_6;  // odd records (BRISC)
+#endif
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 constexpr auto LAYOUT = CustomMmDestLayout::Default;
 #ifndef SFPU_ITER

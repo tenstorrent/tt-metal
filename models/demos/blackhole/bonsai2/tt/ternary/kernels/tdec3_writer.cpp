@@ -44,13 +44,17 @@ void kernel_main() {
 
     // No weight reads until this core's x' and scales have landed (NCRISC pushes c_2 after both): with every core's
     // stream in flight (~8 MB queued at the banks) the small reads waited 17 us behind them.
-#ifdef INLINE_SCALES
+#if defined(GCB_STREAM)
+    // the weight prefetcher delivers every record (tt/prefetch/kernels/tgcb_reader.cpp); this RISC only writes
+#elif defined(INLINE_SCALES)
     cb_wait_front(tt::CBIndex::c_0, 1);  // x' landed (NCRISC pushes c_0 first)
 #else
     cb_wait_front(tt::CBIndex::c_2, num_nt * S_PER_NT);
 #endif
     const auto w = TensorAccessor(w_args, w_addr, 4096);
-#ifdef PAGE_SPLIT
+#if defined(GCB_STREAM)
+    (void)w;
+#elif defined(PAGE_SPLIT)
     stream_pages<ppr, NB>(tt::CBIndex::c_6, w, first_nt, num_nt, 1);
 #else
     stream_records<ppr, NB>(tt::CBIndex::c_6, w, first_nt, num_nt, 1);
