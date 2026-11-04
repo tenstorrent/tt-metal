@@ -416,14 +416,18 @@ class DSLinear:
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=bw,
-            per_core_M=1,
-            per_core_N=nt // cores,
-            fused_activation=None,
-            num_workers_per_dram_bank=readers,
-            dram_reader_placement=getattr(_PLACEMENT, cfg.ds_placement),
-        )
+        try:  # the fork's DRAM-streaming matmul config (reader count / placement kwargs); the megakernel phases
+            # read this linear's weight / geometry only, so on tenstorrent/tt-metal the eager program is left unset
+            self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=bw,
+                per_core_M=1,
+                per_core_N=nt // cores,
+                fused_activation=None,
+                num_workers_per_dram_bank=readers,
+                dram_reader_placement=getattr(_PLACEMENT, cfg.ds_placement),
+            )
+        except (TypeError, AttributeError):
+            self.program = None
         self.role, self.k, self.n, self.n_pad = role, k, n, n_pad
         self.cores, self.block_w, self.readers = cores, bw, readers
         self.ckc, self.dtype = ckc, dtype
