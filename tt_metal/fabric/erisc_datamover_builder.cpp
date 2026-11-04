@@ -1182,9 +1182,22 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
     // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them. A lone receiver
     // channel without bubble flow control takes 16, one per completion group of its slots.
-    named_args["NUM_TRANSACTION_IDS"] = (!final_enable_deadlock_avoidance && num_receiver_channels == 1)
-                                            ? 16
-                                            : (final_enable_deadlock_avoidance ? 8 : 4);
+    const uint32_t num_transaction_ids = (!final_enable_deadlock_avoidance && num_receiver_channels == 1)
+                                             ? 16
+                                             : (final_enable_deadlock_avoidance ? 8 : 4);
+    // The ranges come from the NoC's 16 transaction IDs. A router with deadlock avoidance (a ring or torus axis) and
+    // three receiver channels (VC0, VC1 and VC2) would need 24.
+    constexpr uint32_t noc_transaction_ids = 16;
+    TT_FATAL(
+        num_receiver_channels * num_transaction_ids <= noc_transaction_ids,
+        "VC1 + VC2 on ring/torus routers is not supported yet: router at fabric node {}, Ethernet channel {} has {} "
+        "receiver channels of {} NoC transaction IDs each ({} available)",
+        this->local_fabric_node_id,
+        this->my_eth_channel,
+        num_receiver_channels,
+        num_transaction_ids,
+        noc_transaction_ids);
+    named_args["NUM_TRANSACTION_IDS"] = num_transaction_ids;
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
