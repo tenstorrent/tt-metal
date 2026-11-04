@@ -37,10 +37,11 @@ from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import resolve_weights_dir
 
 # The first release serves fixed square sizes, all warmed up at startup, and at most one reference image,
-# center-cropped and resized to the output size.
+# center-cropped and resized to 1 MP as in BFL's multi-reference sizing.
 SIZES = (1024, 2048, 4096)
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
+REFERENCE_SIZE = 1024
 
 
 @dataclass(frozen=True)
@@ -194,7 +195,7 @@ class Flux3KleinPipeline:
         for model in self._transformers:
             for size in sizes:
                 for references in range(MAX_REFERENCES + 1):
-                    image = Image.new("RGB", (size, size))
+                    image = Image.new("RGB", (REFERENCE_SIZE, REFERENCE_SIZE))
                     self.generate(
                         Flux3KleinRequest(
                             "warmup", model=model, width=size, height=size, seed=0, images=(image,) * references
@@ -227,7 +228,7 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
-            reference = prepare_reference(reference, size)
+            reference = prepare_reference(reference, REFERENCE_SIZE)
             h, w = latent_shape(*reference.size)
             image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0

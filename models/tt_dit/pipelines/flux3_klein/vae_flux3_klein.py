@@ -50,8 +50,7 @@ def register_conv_slices(mesh_shape: tuple[int, int], height: int, width: int, h
     h, w = height, width
     for level, partitioned in zip(CONV_SLICES_PER_LEVEL, PARTITIONED_DECODER_CONVS_PER_LEVEL):
         for (cin, cout), slices in level.items():
-            # the table is sized for inputs up to 2048 wide; ttnn picks the count (0) for wider ones
-            table.setdefault((h, w, cin, cout), 0 if width > 2048 else min(slices, max(1, -(-w // 32))))
+            table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
         if h_factor > 1:
             # per-device input rows: the H shard plus one halo row on each side
             for cin, cout in partitioned:
