@@ -77,9 +77,10 @@ void bind_reshape_view_operation(nb::module_& mod) {
                    * - UINT16
                      - TILE, ROW_MAJOR
 
-                ``UINT16`` reshapes that move data run only on the codegen path: input and output interleaved in DRAM or
-                L1, TILE tiles padded only in the last two dims (ROW_MAJOR input unpadded), no explicit ``pad_value`` on
-                a padded TILE output, and only when one of its programs fits L1; otherwise the call fails.
+                ``UINT16`` reshapes that move data run only on the codegen path, which is available on Wormhole B0 and
+                Blackhole: input and output interleaved in DRAM or L1, TILE tiles padded only in the last two dims
+                (ROW_MAJOR input unpadded), no explicit ``pad_value`` on a padded TILE output, and only when one of its
+                programs fits L1; otherwise the call fails.
 
                 ``BFLOAT8_B`` and ``BFLOAT4_B`` reshapes that move data go through a ``BFLOAT16`` typecast and do not
                 support ``sub_core_grids``.
