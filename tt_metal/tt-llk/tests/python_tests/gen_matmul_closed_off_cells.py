@@ -23,6 +23,9 @@ SHORT = {
     "Float16": "F16",
     "Bfp8": "B8x",
     "Bfp2_b": "B2",
+    "Int8": "I8",
+    "UInt8": "U8",
+    "Int32": "I32",
 }
 
 
@@ -66,6 +69,52 @@ def cells():
         else:
             per_tile.append(k)
     return per_tile, main
+
+
+def reinit_cells():
+    """Cells that keep their keyed form under init before every call (csv column reinit = keyed); every other cell re-inits on main's form."""
+    keyed = set()
+    for r in csv.DictReader(open(HERE / "matmul_closed_off_rows.csv")):
+        if r.get("reinit") != "keyed":
+            continue
+        keyed.add(
+            (
+                r["fidelity"],
+                r["in_a"],
+                r["in_b"],
+                r["out"],
+                int(r["rt"]),
+                int(r["ct"]),
+                int(r["kt"]),
+                int(r["throttle"]),
+                r["l1"] == "True",
+                r.get("sync") == "Full",
+                r["acc"] == "True",
+                int(r["nb"]),
+            )
+        )
+    return sorted(keyed)
+
+
+def reinit_block():
+    return "".join(
+        '    ("%s", %s, %s, "%s", "%s", "%s", %d, %d, %d, %d, %s, %d),\n'
+        % (
+            k[0],
+            "False" if k[9] else "True",
+            k[10],
+            SHORT[k[1]],
+            SHORT[k[2]],
+            SHORT[k[3]],
+            k[4],
+            k[5],
+            k[6],
+            k[7],
+            k[8],
+            k[11],
+        )
+        for k in reinit_cells()
+    )
 
 
 def blocks():
@@ -144,6 +193,7 @@ def main():
         (HEADER, "grid_main", cpp_main, "//"),
         (SWEEP, "closed_off", py_pt, "#"),
         (PROD, "grid_main", py_main, "#"),
+        (PROD, "reinit_keyed", reinit_block(), "#"),
     ):
         text, diff = patch(path, tag, body, comment)
         changed |= diff
@@ -151,7 +201,7 @@ def main():
             path.write_text(text)
     n_pt, n_main = body_counts()
     print(
-        f"{n_pt} per-tile cells, {n_main} main-form cells;",
+        f"{n_pt} per-tile cells, {n_main} main-form cells, {len(reinit_cells())} re-init keyed cells;",
         "tables differ" if changed else "tables match",
     )
     return 1 if (changed and "--write" not in sys.argv) else 0
