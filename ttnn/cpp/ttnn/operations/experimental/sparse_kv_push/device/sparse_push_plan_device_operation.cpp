@@ -212,7 +212,6 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
             .id = i, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
 
-    // Shared by the data movement and compute kernels.
     std::vector<uint32_t> ct = {
         attrs.num_devices,
         attrs.stripe_chunk,
@@ -225,8 +224,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         bucket_cap,
         range_blocks,
         topk,
+        0u,  // role: 0 = driver (BRISC), 1 = helper (NCRISC)
     };
-    std::vector<uint32_t> compute_ct = ct;
+    constexpr uint32_t kCtRole = 11;
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(compact_buf).append_to(ct);
@@ -241,8 +241,6 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         std::move(ct),
         tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    auto compute = plan_kernel(
-        "sparse_push_plan_compute.cpp", all_cores, std::move(compute_ct), tt::tt_metal::ComputeConfigDescriptor{});
 
     // Common runtime args: every core's NoC (x, y), core 0 first, then the multicast rectangle of all of them.
     std::vector<uint32_t> common;
@@ -273,20 +271,15 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
             rt.push_back(start_buf);
         }
         kernel.emplace_runtime_args(core_list[i], rt);
-        tt::tt_metal::KernelDescriptor::RTArgList crt;
-        crt.push_back(i);
-        crt.push_back(index_count);
-        compute.emplace_runtime_args(core_list[i], crt);
     }
     kernel.common_runtime_args = {common.begin(), common.end()};
     // Same kernel on NCRISC as worker 1.
     tt::tt_metal::KernelDescriptor helper = kernel;
-    helper.defines.emplace_back("PLAN_HELPER", "1");
+    helper.compile_time_args[kCtRole] = 1;
     helper.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default};
     desc.kernels.push_back(std::move(kernel));
     desc.kernels.push_back(std::move(helper));
-    desc.kernels.push_back(std::move(compute));
     return desc;
 }
 

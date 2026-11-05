@@ -7,9 +7,10 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "api/dataflow/dataflow_api.h"
 #include "sparse_push_constants.hpp"
 
-// The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); every worker runs its 1/5 share.
+// The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); BRISC and NCRISC each run half.
 namespace sparse_push_plan {
 
 constexpr uint32_t kSentinel = 0xFFFFFFFFu;
@@ -35,20 +36,17 @@ enum Progress : uint32_t {
 
 inline void fence() { asm volatile("fence" ::: "memory"); }
 
+// The core's two workers hand each other L1 data through local semaphores.
 inline void wait_at_least(uint32_t sem_addr, uint32_t v) {
-    auto* p = reinterpret_cast<volatile uint32_t*>(sem_addr);
-    do {
-        fence();  // drop the cached line (Blackhole's small write-through L1 cache)
-    } while (*p < v);
-    fence();
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
 }
 
 inline void post(uint32_t sem_addr, uint32_t v) {
-    fence();
-    *reinterpret_cast<volatile uint32_t*>(sem_addr) = v;
+    fence();  // the worker's L1 writes land before the semaphore says they did
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
 }
 
-// Barrier of the core's five workers: report `progress`, then wait until every worker has reported it.
+// Barrier of the core's two workers: report `progress`, then wait until every worker has reported it.
 template <typename DoneSem>
 inline void sync_workers(DoneSem&& done_sem, uint32_t worker, uint32_t progress) {
     post(done_sem(worker), progress);
@@ -93,7 +91,7 @@ inline void bucket(
     }
 }
 
-// Sets the bits of every row the five workers handed this worker, and flags their chunks dirty (one byte per chunk,
+// Sets the bits of every row the two workers handed this worker, and flags their chunks dirty (one byte per chunk,
 // so concurrent writers need no atomics). Returns the largest row + 1 (0 = none).
 inline uint32_t scatter(
     const uint32_t* buckets,
@@ -193,8 +191,8 @@ inline void list_copies(
 }
 
 // As a reducer: ORs the received copies of each of this core's chunks into its bitmap. Split by word rather than by
-// chunk, so a chunk every core touched is not left to one worker. Unrolled for 16-word chunks over five workers: it
-// reads each copy's list entry once, where a per-word loop re-walks the list (measured ~20% slower plan).
+// chunk, so a chunk every core touched is not left to one worker. Unrolled for 16-word chunks over two workers (worker
+// w takes words w, w + 2, ..., w + 14): it reads each copy's list entry once, where a per-word loop re-walks the list.
 template <uint32_t cores>
 inline void or_copies(
     const uint32_t* scratch,
@@ -204,29 +202,23 @@ inline void or_copies(
     uint32_t core_idx,
     uint32_t* bitmap,
     uint32_t worker) {
-    static_assert(
-        kChunkWords == 16 && kWorkers == 5, "worker 0 takes words 0, 5, 10, 15; worker w words w, w + 5, w + 10");
-    const bool has_fourth_word = worker == 0;
+    static_assert(kChunkWords == 16 && kWorkers == 2, "worker w takes words w, w + 2, ..., w + 14");
     for (uint32_t my_chunk = 0; my_chunk < my_chunks; ++my_chunk) {
         const uint32_t count = copies[my_chunk];
         const uint16_t* list = lists + my_chunk * cores;
         const uint32_t* first_word = scratch + my_chunk * cores * kChunkWords + worker;
-        uint32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+        uint32_t acc[kChunkWords / kWorkers] = {};
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t* copy = first_word + list[i] * kChunkWords;
-            acc0 |= copy[0];
-            acc1 |= copy[kWorkers];
-            acc2 |= copy[2 * kWorkers];
-            if (has_fourth_word) {
-                acc3 |= copy[3 * kWorkers];
+#pragma GCC unroll 8
+            for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
+                acc[k] |= copy[k * kWorkers];
             }
         }
         uint32_t* dst = bitmap + (core_idx + my_chunk * cores) * kChunkWords + worker;
-        dst[0] = acc0;
-        dst[kWorkers] = acc1;
-        dst[2 * kWorkers] = acc2;
-        if (has_fourth_word) {
-            dst[3 * kWorkers] = acc3;
+#pragma GCC unroll 8
+        for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
+            dst[k * kWorkers] = acc[k];
         }
     }
 }
