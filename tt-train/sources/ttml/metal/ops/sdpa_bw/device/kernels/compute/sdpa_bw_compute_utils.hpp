@@ -196,6 +196,79 @@ void compute_u_scalar_row(
     cb_push_back(cb_u_scalar_row, onetile);
 }
 
+// Gated-attention backward epilogue inputs (forward: Y = O * sigmoid(G), where O = P @ V).
+// Given upstream dY, the gated forward output Y and the gate G, produces per tile:
+//   s  = sigmoid(G)
+//   dO = dY * s                      -> cb_gated_grad_output_local (operand for dP = dO @ V^T)
+//                                    -> cb_gated_grad_output       (DRAM handoff to the KV kernel)
+//   dG = dY * Y * (1 - s)            -> cb_grad_gate
+// dG uses the identity dY*O*s*(1-s) == dY*Y*(1-s), so the ungated O is never needed.
+// The (1 - s) factor is formed as dY - dY*s to avoid a constant-one tile.
+// u = rowsum(dO * O) == rowsum(dY * Y), so the caller keeps computing u from raw dY and Y.
+//
+// All three outputs are BF16 so the Q kernel's own dP matmul and the KV kernel (reading the
+// DRAM copy) consume bit-identical dO. The same DST register is packed twice (local + DRAM
+// copy) because a CB has a single consumer and compute and writer both need dO.
+//
+// Does NOT pop cb_grad_output / cb_attn_output / cb_gate — the caller owns them.
+// Leaves the PACK format configured for BF16; callers whose next pack is FP32 must reconfigure.
+void compute_gated_grad_output_and_grad_gate(
+    const uint32_t cb_grad_output,
+    const uint32_t cb_attn_output,
+    const uint32_t cb_gate,
+    /* output dO (compute-local) */ const uint32_t cb_gated_grad_output_local,
+    /* output dO (to writer) */ const uint32_t cb_gated_grad_output,
+    /* output dG (to writer) */ const uint32_t cb_grad_gate,
+    const uint32_t tiles_per_row) {
+    cb_wait_front(cb_gate, tiles_per_row);
+
+    cb_reserve_back(cb_gated_grad_output_local, tiles_per_row);
+    cb_reserve_back(cb_gated_grad_output, tiles_per_row);
+    cb_reserve_back(cb_grad_gate, tiles_per_row);
+
+    constexpr uint32_t sig_reg = 0;         // sigmoid(G)
+    constexpr uint32_t gated_reg = 1U;      // dY, then dY * s
+    constexpr uint32_t grad_gate_reg = 2U;  // Y, then Y * dY * (1 - s)
+    constexpr uint32_t tmp_reg = 3U;        // dY, then dY * (1 - s)
+
+    // Previous PACK target was the FP32 u_scaler; all three outputs here are BF16.
+    pack_reconfig_data_format(cb_gated_grad_output_local);
+
+    // G, dY and Y share format and tile shape, so one unpack config serves all three copies.
+    reconfig_data_format(cb_gate, cb_gate);
+    copy_init(cb_gate);
+    sigmoid_tile_init();
+    mul_binary_tile_init();
+    sub_binary_tile_init();
+
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        tile_regs_acquire();
+
+        copy_tile(cb_gate, tile_idx, sig_reg);
+        sigmoid_tile(sig_reg);
+
+        copy_tile(cb_grad_output, tile_idx, gated_reg);      // dY in gated_reg
+        copy_tile(cb_grad_output, tile_idx, tmp_reg);        // dY in tmp_reg
+        copy_tile(cb_attn_output, tile_idx, grad_gate_reg);  // Y in grad_gate_reg
+
+        mul_binary_tile(gated_reg, sig_reg, gated_reg);          // dO = dY * s
+        sub_binary_tile(tmp_reg, gated_reg, tmp_reg);            // dY * (1 - s) = dY - dO
+        mul_binary_tile(grad_gate_reg, tmp_reg, grad_gate_reg);  // dG = Y * dY * (1 - s) = Y * (dY - dO)
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(gated_reg, cb_gated_grad_output_local);
+        pack_tile(gated_reg, cb_gated_grad_output);
+        pack_tile(grad_gate_reg, cb_grad_gate);
+        tile_regs_release();
+    }
+
+    cb_push_back(cb_gated_grad_output_local, tiles_per_row);
+    cb_push_back(cb_gated_grad_output, tiles_per_row);
+    cb_push_back(cb_grad_gate, tiles_per_row);
+}
+
 // Computes gradient w.r.t. attention weights: dP = dO @ V^T
 // This is the first step in the backward chain from output gradient to score gradient.
 // Input: dO (grad_output) and V (value), Output: dP (grad_attn_weights)

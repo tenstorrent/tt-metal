@@ -60,6 +60,10 @@ inline void _init_reciprocal_() {
     }
 }
 
+// The stock reciprocal kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void reciprocal_bf16_tile_init() {}
+
 /**
  * @brief Compute the reciprocal (1/x) in-place over a Dest tile.
  *
@@ -76,10 +80,6 @@ inline void _init_reciprocal_() {
  * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
  *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
  */
-// The stock reciprocal kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void reciprocal_bf16_tile_init() {}
-
 template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_reciprocal() {
     constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;

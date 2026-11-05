@@ -4,11 +4,8 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
+// The rows read their seed from the programmable constants stock's reciprocal init loads.
 struct ReciprocalBf16Config {
-    static constexpr uint32_t kMagic = 0x7f800000u;
-    static constexpr uint32_t kC0Bits = 0x3ea57ebbu;
-    static constexpr uint32_t kC1Bits = 0x3fba2e90u;
-    static constexpr uint32_t kC2Bits = 0x4007c1f2u;
     static constexpr uint32_t kBodySlots = 26u;
 };
 }  // namespace ckernel::sfpu
@@ -29,8 +26,10 @@ inline bool bf16_dest_reciprocal() {
     return false;
 #endif
 }
+// Each call records replay slots 0-15, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 8>
-inline void calculate_reciprocal_bf16() {
+__attribute__((noinline)) inline void calculate_reciprocal_bf16() {
     ckernel::sfpu::bf16::reciprocal::calculate_newton_reciprocal<ckernel::sfpu::ReciprocalBf16Config, ITERATIONS>();
 }
 inline void init_reciprocal_bf16() {

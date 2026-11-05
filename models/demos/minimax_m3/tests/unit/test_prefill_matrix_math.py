@@ -3,7 +3,7 @@
 
 """Host-only checks for the prefill-matrix producer's measurement arithmetic
 (models/demos/minimax_m3/scripts/prefill_matrix/matrix_math.py, stdlib only): the steady-state window that excludes
-pipeline fill/drain, the per-request TTFT-under-load statistics and the timing-CSV reader. No ttnn, no device."""
+pipeline fill/drain, the per-request TTFT-under-load statistics and the layer-ack chunk ledger. No ttnn, no device."""
 
 import importlib.util
 import os
@@ -118,14 +118,38 @@ def test_ttft_stats_p90_is_nearest_rank():
     assert st["ttft_under_load_ms_median"] == pytest.approx(5500.0)
 
 
-def test_read_rank_csv_accepts_only_complete_lines(tmp_path):
-    assert mp.read_rank_csv(str(tmp_path), 15) == {}  # no file yet
-    f = tmp_path / "rank15.csv"
-    f.write_text("15,0,1000.0,50.0\n15,1,1000.1\nheader,junk\n15,2,1000.2,60.0\n15,3,1000.3,61")
-    rows = mp.read_rank_csv(str(tmp_path), 15)
-    assert rows == {0: (1000.0, 50.0), 2: (1000.2, 60.0)}  # short/junk rows skipped; torn last line ignored
-    f.write_text(f.read_text() + ".5\n")
-    assert mp.read_rank_csv(str(tmp_path), 15)[3] == (1000.3, 61.5)
+def test_ack_ledger_completes_a_chunk_once_every_layer_acked():
+    led = mp.AckLedger(chunk_layers=4)
+    led.push(0, (0, 0, 5120))
+    led.ack((0, 0, 5120), 0, 2, 1.0)
+    assert 0 not in led.ends
+    led.ack((0, 0, 5120), 2, 4, 1.5)
+    assert led.first[0] == 1.0 and led.ends[0] == 1.5
+    assert led.wait(0, timeout_s=0.1) == 1.5
+
+
+def test_ack_ledger_assigns_repeated_keys_in_push_order():
+    """The same positions pushed twice in flight: each rank's span goes to the oldest copy that lacks it."""
+    key = (0, 5120, 10240)
+    led = mp.AckLedger(chunk_layers=2)
+    led.push(0, key)
+    led.push(1, key)
+    led.ack(key, 0, 1, 1.0)
+    led.ack(key, 0, 1, 2.0)
+    led.ack(key, 1, 2, 3.0)
+    assert led.ends == {0: 3.0}
+    led.ack(key, 1, 2, 4.0)
+    assert led.ends == {0: 3.0, 1: 4.0}
+    assert led.first == {0: 1.0, 1: 2.0}
+
+
+def test_ack_ledger_counts_strays_and_times_out(expect_error):
+    led = mp.AckLedger(chunk_layers=1)
+    led.ack((3, 0, 5120), 0, 1, 1.0)
+    assert led.stray == 1 and not led.ends
+    led.push(0, (0, 0, 5120))
+    with expect_error(TimeoutError, "not fully acked"):
+        led.wait(0, timeout_s=0.01)
 
 
 def test_percentile_labels_exact_for_new_and_nearest_within_tolerance_for_cached():
