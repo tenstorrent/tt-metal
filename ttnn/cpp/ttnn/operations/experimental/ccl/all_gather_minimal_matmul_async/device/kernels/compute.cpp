@@ -412,10 +412,8 @@ void kernel_main() {
     const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, in0_parallel_axis_cores);
-    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
-    const uint32_t M_start_tile = in0_idx * M_tiles_per_core;
-    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
+    [[maybe_unused]] const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, in0_idx, M_block_tiles);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(1);

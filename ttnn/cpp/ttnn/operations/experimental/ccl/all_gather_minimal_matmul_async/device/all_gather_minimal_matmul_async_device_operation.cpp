@@ -25,10 +25,6 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Keeps this op's row-free hash from colliding with another op's: a custom hash drops the
-// framework's canonical-key guard.
-constexpr uint64_t kAgmmProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runtime-M v1
-
 using operations::common::folded_rows;
 
 // Every operand the kernels address must be an allocated buffer on the activation's device. Checked on misses and
@@ -150,23 +146,24 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const uint32_t N = weight_tensor.padded_shape()[-1];
     const auto rows_free = [](const std::optional<Tensor>& tensor) -> ttsl::hash::hash_t {
         if (tensor.has_value() && tensor->is_sharded()) {
-            return ttsl::hash::hash_objects_with_default_seed(kAgmmProgramHashSalt, tensor->tensor_spec());
+            return ttsl::hash::hash_objects_with_default_seed(true, tensor->tensor_spec());
         }
-        return ttnn::operations::common::hash_spec_without_rows(tensor, kAgmmProgramHashSalt);
+        return ttnn::operations::common::hash_spec_without_rows(tensor);
     };
     const bool output_sharded = attributes.output_mem_config.value_or(act_tensor.memory_config()).is_sharded();
     const bool fp32_dest_acc_en =
         std::get<2>(get_compute_kernel_config_args(act_tensor.device()->arch(), attributes.compute_kernel_config));
-    // Without a config the block sizes come from the shape, so fold the ones the factory would pick.
-    const auto block_sizes = attributes.config.has_value()
-                                 ? std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>{}
-                                 : default_block_sizes(M, K, N, fp32_dest_acc_en);
+    // An explicit config is in `attributes`; without one the factory picks the block sizes from the shape, so
+    // fold the ones it would pick.
+    using BlockSizes = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>;
+    const std::optional<BlockSizes> default_blocks =
+        attributes.config.has_value() ? std::nullopt
+                                      : std::optional<BlockSizes>(default_block_sizes(M, K, N, fp32_dest_acc_en));
     return ttsl::hash::hash_objects_with_default_seed(
-        kAgmmProgramHashSalt,
         attributes,
         resolve_transpose_core_grid(attributes, M, N),
-        block_sizes,
-        output_sharded ? ttsl::hash::hash_objects_with_default_seed(kAgmmProgramHashSalt, act_tensor.tensor_spec())
+        default_blocks,
+        output_sharded ? ttsl::hash::hash_objects_with_default_seed(true, act_tensor.tensor_spec())
                        : rows_free(act_tensor),
         weight_tensor.tensor_spec(),
         tensor_args.bias_tensor,

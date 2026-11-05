@@ -21,7 +21,6 @@ using ttnn::ccl::Topology;
 #endif
 
 void kernel_main() {
-    // The row count M_tiles is a common runtime arg; everything here is row-invariant.
     constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t N_tiles = get_compile_time_arg_val(2);
@@ -49,7 +48,6 @@ void kernel_main() {
     constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(20);
 
 #ifdef FSDP_FUSED
-    // FSDP CT args follow target's base args (K_block_tail_tiles=19, in0_parallel_axis_cores=20).
     constexpr uint32_t fsdp_ring_size = get_compile_time_arg_val(21);
     constexpr uint32_t fsdp_ring_index = get_compile_time_arg_val(22);
     constexpr uint32_t fsdp_num_targets_forward = get_compile_time_arg_val(23);
@@ -184,12 +182,8 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
-    // Same uniform M split as the in0 and compute kernels (see dm_in0_sender.cpp).
-    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, in0_parallel_axis_cores);
-    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
-    const uint32_t padded_M_tiles = M_tiles_per_core * in0_parallel_axis_cores;
-    const uint32_t M_start_tile = in0_idx * M_tiles_per_core;
-    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
+    const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, in0_idx, M_block_tiles);
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);

@@ -1427,8 +1427,8 @@ ADDCMUL_LAYER = dict(
 )
 @pytest.mark.parametrize(
     "batch, M, broadcast_gate",
-    [(2, 3072, True), (2, 3072, False), (None, 3000, True)],
-    ids=["batched_broadcast_gate", "batched_full_gate", "unaligned_rows"],
+    [(2, 3072, True), (2, 3072, False), (None, 3000, True), (None, 32, False)],
+    ids=["batched_broadcast_gate", "batched_full_gate", "unaligned_rows", "short_full_gate"],
 )
 def test_linear_addcmul_folded_rows(
     mesh_device,
@@ -1444,9 +1444,10 @@ def test_linear_addcmul_folded_rows(
     M,
     broadcast_gate,
 ):
-    """Fused addcmul with the activation's upper dims folded into its rows ([2, 1, M, K]) and with M not a
-    multiple of 32: the first call misses, the other row counts must hit its program, and every result matches
-    torch.addcmul on the logical rows."""
+    """Fused addcmul with the activation's upper dims folded into its rows ([2, 1, M, K]), with M not a
+    multiple of 32, and with a full gate of one tile row (which must not be broadcast from its row 0): the first
+    call misses, the other row counts must hit its program, and every result matches torch.addcmul on the logical
+    rows."""
     submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     results = []
 
@@ -1468,7 +1469,7 @@ def test_linear_addcmul_folded_rows(
             )
         )
 
-    assert_program_cache_flat(submesh, run, [M, M + 32, M - 32])
+    assert_program_cache_flat(submesh, run, [M, M + 32, max(M - 32, 32)])
     for check_result in results:
         for device_result in check_result[0][0]:
             assert device_result["pcc"] > 0.999_500, device_result
