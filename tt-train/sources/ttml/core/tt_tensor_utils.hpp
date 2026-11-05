@@ -19,6 +19,11 @@ void print_tensor_stats(const ttnn::Tensor& tensor, const std::string& name);
 ttnn::Tensor zeros_like(const ttnn::Tensor& tensor);
 ttnn::Tensor ones_like(const ttnn::Tensor& tensor);
 
+// The tensor itself when it is fp32, else its fp32 typecast. An exact fp32 sum casts both operands with it: ttnn adds
+// two fp32 tensors on the SFPU, which gives the IEEE fp32 sum, while an add with a bf16 operand runs on the FPU, which
+// reads the fp32 one with 10 fraction bits and drops the rest.
+ttnn::Tensor as_fp32(const ttnn::Tensor& tensor);
+
 ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config);
 ttnn::Tensor full(

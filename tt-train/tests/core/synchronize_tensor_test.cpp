@@ -378,6 +378,35 @@ TEST_F(AverageGradientsTest, Fp32ReduceGivesTheFp32MeanRoundedOnce) {
     EXPECT_LT(share_equal(bf16_mean, expected), 0.9);
 }
 
+// An fp32 first gradient keeps the whole sum in fp32, whatever reduce_dtype says: each later bf16 gradient is cast to
+// fp32 before it is added, so the mean is the host's fp32 sum divided by kWorkers, not a sum the FPU read with 10
+// fraction bits.
+TEST_F(AverageGradientsTest, AnFp32FirstGradientKeepsTheSumInFp32) {
+    const auto values = make_worker_gradients(/*seed=*/10U);
+    const size_t size = values.size() / kWorkers;
+    // The first gradient with fp32 bits below bf16's last one.
+    xt::xarray<float> first = xt::view(values, xt::range(0U, 1U), xt::all(), xt::all(), xt::all());
+    for (size_t i = 0; i < size; ++i) {
+        first.flat(i) *= 1.0F + 0x1p-12F;
+    }
+    auto gradients = upload_each(values);
+    gradients.front() = core::from_xtensor<float, ttnn::DataType::FLOAT32>(first, &autograd::ctx().get_device());
+    xt::xarray<float> expected = first;
+    for (size_t i = 0; i < size; ++i) {
+        float sum = first.flat(i);
+        for (uint32_t worker = 1; worker < kWorkers; ++worker) {
+            sum += values.flat(worker * size + i);
+        }
+        expected.flat(i) = sum * (1.0F / static_cast<float>(kWorkers));
+    }
+
+    for (const auto reduce_dtype : {std::optional<ttnn::DataType>{}, std::optional{ttnn::DataType::FLOAT32}}) {
+        const auto mean = average(gradients, reduce_dtype);
+        EXPECT_EQ(mean.dtype(), ttnn::DataType::FLOAT32);
+        EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor<float>(mean)), 0U);
+    }
+}
+
 // Unset or BFLOAT16 runs the ops the aggregator always ran: bf16 adds in order, then the multiply.
 TEST_F(AverageGradientsTest, UnsetAndBf16ReduceRunTheBf16Ops) {
     const auto gradients = upload_each(make_worker_gradients(/*seed=*/8U));
