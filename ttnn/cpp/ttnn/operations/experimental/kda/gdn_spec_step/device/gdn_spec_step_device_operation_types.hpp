@@ -110,7 +110,8 @@ struct GdnSpecStepInputs {
     Tensor weight;     // [Dv] bf16 gated-norm weight
     // optional: [>= B, T] ROW_MAJOR (u)int32. Entry (u, t) is the first ring page of the state after token t of user u
     // (value head h at + h*KV, KV = Dk*Dv/1024 fp32 tiles), so the per-token states can go to arbitrary pages of a
-    // pool. Absent: ring block (t*M*Nv + u*Nv + h). The initial state is still read through the ctrl page's blocks.
+    // pool. Absent: ring block (t*M*Nv + u*Nv + h). With it, the ctrl page's initial word of (u, h) is the first fp32
+    // ring page of that head's initial state (any page) instead of a block index.
     std::optional<Tensor> ring_page_idx;
 };
 

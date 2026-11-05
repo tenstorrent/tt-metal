@@ -320,6 +320,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         .runtime_arg_schema = {.runtime_arg_names = {"u", "h", "b_idx", "s"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    if (ring_paged) {
+        reader.compiler_options.defines.emplace("GDN_RING_PAGE_IDX", "1");  // ctrl initial words are pages
+    }
     if (FAST) {
         reader.compiler_options.defines.emplace("GDN_FAST", "1");
     }

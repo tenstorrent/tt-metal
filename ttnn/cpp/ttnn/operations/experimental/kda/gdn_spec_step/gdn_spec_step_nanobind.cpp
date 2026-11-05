@@ -55,7 +55,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 ``u`` (value head ``h`` at ``+ h*KV``, KV = Dk*Dv/1024, tile order as in ``[Dk, Dv]``), in place of
                 ring block ``t*M*Nv + u*Nv + h``. ``ring`` may then be any FLOAT32 tiled page pool (for example a
                 view of vLLM-owned spec blocks) of at least max_users*Nv blocks (a held head reads block
-                u*Nv + h as a placeholder); the initial state is still read from the ctrl page's ring blocks.
+                u*Nv + h as a placeholder). In this mode the ctrl word ``1 + M + u*Nv + h`` is the first FLOAT32
+                page of that head's initial state (any page, no block alignment), not a ring block index.
                 Pages written for different (user, token) pairs must not overlap; a (user, head)'s writes may
                 overlap its own initial block. Read on device on every call, so a captured trace follows new pages
                 when only the contents change. Default None.
