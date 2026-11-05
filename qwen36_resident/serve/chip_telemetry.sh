@@ -16,7 +16,12 @@ C=$(ls -d /sys/class/tenstorrent/tenstorrent!*)
 while true; do
   line=$(date +%s.%N | cut -c1-14)
   for d in $C; do line+=",$(cat $d/tt_aiclk)"; done
-  for h in $H; do line+=",$(( $(cat $h/temp1_input) / 1000 )),$(( $(cat $h/power1_input) / 1000000 )),$(( $(cat $h/curr1_input) / 1000 ))"; done
+  # a hwmon read can fail while a chip resets ("No data available"): an empty field, not a bash arithmetic error that
+  # drops the whole sample
+  for h in $H; do
+    t=$(cat $h/temp1_input 2> /dev/null) p=$(cat $h/power1_input 2> /dev/null) c=$(cat $h/curr1_input 2> /dev/null)
+    line+=",${t:+$((t / 1000))},${p:+$((p / 1000000))},${c:+$((c / 1000))}"
+  done
   echo "$line" >> $OUT
   sleep $PERIOD
 done
