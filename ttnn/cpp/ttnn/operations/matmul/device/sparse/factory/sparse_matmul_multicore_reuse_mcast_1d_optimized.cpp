@@ -393,6 +393,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const DFBSpecName INTERM0_DFB{"intermed0"};
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
+    const DFBSpecName BATCH_VALID_DFB{"batch_valid"};
 
     const ScratchpadSpecName SPARSITY_SCRATCH{"sparsity"};
     const ScratchpadSpecName IN1_SPARSITY_SCRATCH{"in1_sparsity"};
@@ -495,6 +496,19 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .tile_format_metadata = bias_tile,
         });
     }
+    if (get_batch_from_reader) {
+        // One entry per batch from the in0 reader on each node (the in0 sender or an in0 receiver) to the
+        // compute kernel on that node: a 16-bit flag, nonzero when the batch is valid, so that compute
+        // skips the same batches as the readers. Compute reads the flag with read_tile_value and never
+        // unpacks it; RawUInt16 is a format every arch supports. Two entries let a reader post the next
+        // batch's flag while compute works on the current batch.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BATCH_VALID_DFB,
+            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::RawUInt16,
+        });
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Scratchpads
@@ -523,6 +537,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in0_receiver_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
 
     mm_kernel_defines["FUSE_ACTIVATION"] = "0";
@@ -561,6 +576,14 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     mm_kernel_in0_sender_writer_defines["SPARSITY"] = "1";
     mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
 
+    // dfb::batch_valid is bound only with get_batch_from_reader. A buffer that is not bound has no dfb::
+    // token, so a define hides the references to it in the three kernels that use it.
+    if (get_batch_from_reader) {
+        mm_kernel_in0_sender_writer_defines["BATCH_VALID_DFB"] = "1";
+        mm_kernel_in0_receiver_defines["BATCH_VALID_DFB"] = "1";
+        mm_kernel_defines["BATCH_VALID_DFB"] = "1";
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -591,6 +614,16 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const bool has_in0_receiver_kernel = in0_mcast_receivers.num_cores() > 0;
 
     Group<KernelSpec> kernels;
+
+    // With get_batch_from_reader, the in0 kernel on each node (the sender or a receiver) produces the
+    // batch_valid entries and the compute kernel on that node consumes them.
+    const auto batch_valid_binding = [&](DFBEndpointType endpoint_type) {
+        return DFBBinding{
+            .dfb_spec_name = BATCH_VALID_DFB,
+            .accessor_name = "batch_valid",
+            .endpoint_type = endpoint_type,
+        };
+    };
 
     // ---- in0 sender ------------------------------------------------------
     kernels.push_back(KernelSpec{
@@ -665,6 +698,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             },
         .hw_config = in0_hw_config,
     });
+    if (get_batch_from_reader) {
+        kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+    }
 
     // ---- in0 receiver ----------------------------------------------------
     if (has_in0_receiver_kernel) {
@@ -672,6 +708,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .unique_id = IN0_RECEIVER,
             .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                       "reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_receiver_defines),
+                },
             .dfb_bindings =
                 {
                     DFBBinding{
@@ -691,6 +731,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 },
             .hw_config = in0_hw_config,
         });
+        if (get_batch_from_reader) {
+            kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+        }
     }
 
     // ---- in1 sender / output writer --------------------------------------
@@ -930,6 +973,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             compute.compile_time_args.insert({"bias_ntiles", in1_per_core_w});
             // Broadcast row 0 of each group's bias over its M rows.
             compute.compile_time_args.insert({"row_broadcast_bias", 1u});
+        }
+        if (get_batch_from_reader) {
+            compute.dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::CONSUMER));
         }
         kernels.push_back(std::move(compute));
     }

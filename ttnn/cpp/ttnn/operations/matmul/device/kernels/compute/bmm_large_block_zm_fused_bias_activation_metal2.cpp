@@ -263,6 +263,16 @@ void kernel_main() {
     DataflowBuffer out_dfb(out_dfb_id);
     auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
 
+    // With get_batch_from_reader, the in0 reader on this node sends one entry per batch through
+    // dfb::batch_valid: nonzero when the batch is valid. The buffer is bound only in that mode, so a
+    // define gates the token, for the same reason as IN0_TRANSPOSE_TILE above.
+#ifdef BATCH_VALID_DFB
+    static_assert(get_batch_from_reader, "BATCH_VALID_DFB requires get_batch_from_reader");
+    DataflowBuffer batch_valid_dfb(dfb::batch_valid);
+#else
+    static_assert(!get_batch_from_reader, "get_batch_from_reader requires the batch_valid dataflow buffer");
+#endif
+
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
     constexpr auto bias_ntiles = get_arg(args::bias_ntiles);
@@ -322,27 +332,20 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifdef BATCH_VALID_DFB
+            batch_valid_dfb.wait_front(1);
+            const bool is_batch_valid = batch_valid_dfb.read_tile_value<uint16_t>(0, 0) != 0;
 #ifdef ARCH_QUASAR
-            // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so the
-            // reader-driven batch-skip (is_batch_valid) handoff is not wired here. Batch sparsity is therefore
-            // unsupported on Quasar until that DM->TRISC handoff exists: reject it at compile time so a Quasar
-            // build with get_batch_from_reader=true fails loudly instead of deadlocking compute on input tiles
-            // the reader never pushes (its own !ARCH_QUASAR guard skips them) or consuming stale DFB contents.
-            // Mirrors the experimental Quasar bmm kernel.
-            static_assert(
-                !get_batch_from_reader,
-                "get_batch_from_reader (batch sparsity) is unsupported on Quasar until the DM->TRISC "
-                "is_batch_valid mailbox handoff is implemented; do not enable it on Quasar.");
-            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
-#else
-            bool is_batch_valid = false;
-            UNPACK(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
-            MATH(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
-            PACK(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
+            // TEN-4746 (#48552): read_tile_value is a plain SRAM load, not an UNPACR, so on Quasar this
+            // wait_front->pop_front pair is bare. dummy_unpack issues an UNPACR_NOP that reads nothing and
+            // orders the POP after the WAIT. WH/BH have no such requirement.
+            dummy_unpack(batch_valid_dfb.get_id());
 #endif
+            batch_valid_dfb.pop_front(1);
             if (!is_batch_valid) {
                 continue;
             }
+#endif
         }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
