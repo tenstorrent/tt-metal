@@ -47,12 +47,15 @@ class FakeClient:
         self.master_up = True
         self.lookups = 0
         self.registered = {}
+        self.registrable = 1 << 40  # bytes register_buffer accepts in one buffer
 
     def put(self, key, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
-        """Stores under the store key; a bytes media key is written as its UTF-8 text, as the encoder does."""
-        self.objects[key.decode() if isinstance(key, bytes) else key] = (segment, data, status, replicas)
+        """Stores under the store key; a bytes media key is written under its lowercase hex, as the encoder does."""
+        self.objects[key.hex() if isinstance(key, bytes) else key] = (segment, data, status, replicas)
 
     def register_buffer(self, ptr, size):
+        if size > self.registrable:
+            return -1
         self.registered[ptr] = size
         return 0
 
@@ -90,7 +93,7 @@ class FakeClient:
 
 
 def _key(i: int) -> bytes:
-    return f"media-{i}".encode()
+    return hashlib.sha256(f"media-{i}".encode()).digest()
 
 
 @pytest.fixture
@@ -105,29 +108,26 @@ def setup():
     return client, reader, local, remote
 
 
-def test_key_must_be_utf8_bytes(setup, expect_error):
-    client, reader, local, _ = setup
+def test_media_keys_are_read_under_their_hex(setup, expect_error):
+    """By default the caller passes the encoder's raw 32-byte media key, and the reader looks up its lowercase hex, the
+    key the encoder wrote under."""
+    client, reader, local, remote = setup
+    assert reader.key_transform == "hex" and _key(1).hex() in client.objects  # setup's put, as the encoder writes
+    assert bytes(reader.fetch(_key(1))) == local.tobytes() and reader.size(_key(2)) == remote.nbytes
+    with expect_error(ValueError, "unknown media key transform"):
+        MooncakeEmbeddingReader(client, ME, key_transform="base64")
+
+
+def test_untransformed_keys_are_read_as_they_are(setup, expect_error):
+    """With MEDIA_STORE_KEY_TRANSFORM=none a media key is its own store key, which Mooncake needs to be valid UTF-8."""
+    client, _, local, _ = setup
+    reader = MooncakeEmbeddingReader(client, ME, key_transform="none")
     client.put("media-\u00e9", ME, local)  # non-ASCII text is valid UTF-8, so the batched lookup returns it
     assert bytes(reader.fetch("media-\u00e9".encode())) == local.tobytes()
+    with expect_error(Missing, "media-\u00e9-absent"):
+        reader.fetch("media-\u00e9-absent".encode())
     with expect_error(ValueError, "is not valid UTF-8"):
-        reader.fetch(hashlib.sha256(b"image").digest())  # binary keys need MEDIA_STORE_KEY_ENCODING=hex
-
-
-def test_bytes_keys_are_read_under_their_hex(setup, expect_error):
-    """With MEDIA_STORE_KEY_ENCODING=hex the caller passes the encoder's raw 32-byte media key, and the reader looks
-    up its lowercase hex, the key the encoder wrote under."""
-    client, _, local, remote = setup
-    reader = MooncakeEmbeddingReader(client, ME, key_encoding="hex")
-    here, there, absent = (hashlib.sha256(bytes([i])).digest() for i in range(3))
-    client.put(here.hex(), ME, local)
-    client.put(there.hex(), OTHER, remote)
-    got = reader.fetch_batch([FetchRequest(here, 0, 16), FetchRequest(there, 8, 16), FetchRequest(here)])
-    assert [bytes(v) for v in got] == [local[:16].tobytes(), remote[8:24].tobytes(), local.tobytes()]
-    assert reader.size(there) == remote.nbytes
-    with expect_error(Missing, absent.hex()):
-        reader.fetch(absent)
-    with expect_error(ValueError, "unknown media key encoding"):
-        MooncakeEmbeddingReader(client, ME, key_encoding="base64")
+        reader.fetch(_key(1))  # a raw digest needs the default hex transform
 
 
 def test_local_value_is_read_in_place_with_one_lookup(setup):
@@ -175,7 +175,7 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
 
 def test_one_missing_key_fails_the_batch(setup, expect_error):
     _, reader, _, _ = setup
-    with expect_error(Missing, _key(9).decode()):
+    with expect_error(Missing, _key(9).hex()):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(9)), FetchRequest(_key(2))])
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"]) == (1, 0)
@@ -201,12 +201,25 @@ def test_read_buffer_starts_empty_and_grows_on_demand(setup):
     assert grown >= big.nbytes and list(client.registered.values()) == [grown]  # the old buffer was unregistered
 
 
+def test_failed_buffer_registration_is_unavailable(setup, expect_error):
+    """A read buffer Mooncake refuses to register (e.g. over `ulimit -l` with RDMA) fails the read, and the next read
+    that fits registers one."""
+    client, reader, local, remote = setup
+    client.registrable = remote.nbytes - 1
+    with expect_error(StoreUnavailable, "registering a"):
+        reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
+    assert not client.registered and reader.stats.snapshot()["errors"] == 1
+    assert bytes(reader.fetch(_key(1))) == local.tobytes()  # in place: needs no buffer
+    (rows,) = reader.fetch_batch([FetchRequest(_key(2), 0, 4096)])
+    assert bytes(rows) == remote[:4096].tobytes() and list(client.registered.values()) == [4096]
+
+
 def test_missing_key(setup, expect_error):
     _, reader, _, _ = setup
     for read in (reader.fetch, reader.size):
-        with expect_error(Missing, _key(9).decode()):
+        with expect_error(Missing, _key(9).hex()):
             read(_key(9))
-    with expect_error(KeyError, _key(9).decode()):  # Missing is a KeyError, not a store failure
+    with expect_error(KeyError, _key(9).hex()):  # Missing is a KeyError, not a store failure
         reader.fetch(_key(9))
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"], s["errors"]) == (2, 0, 0)  # size() is a lookup, not a fetch

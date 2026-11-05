@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configuration of the prefill runner's media embedding store, from PREFILL_MEDIA_STORE_* and MEDIA_STORE_KEY_ENCODING.
-Kept apart from the reader so a runner can check whether the store is on without importing Mooncake."""
+"""Configuration of the prefill runner's media embedding store, from PREFILL_MEDIA_STORE_* and
+MEDIA_STORE_KEY_TRANSFORM. Kept apart from the reader so a runner can check whether the store is on without importing
+Mooncake."""
 
 import os
 import re
@@ -12,21 +13,21 @@ from typing import Mapping, Optional
 ENV_PREFIX = "PREFILL_MEDIA_STORE_"
 _DEFAULT_SEGMENT_BYTES = "1G"
 
-KEY_ENCODING_ENV = "MEDIA_STORE_KEY_ENCODING"
-"""How a media key becomes its Mooncake key. The encoder service, which writes each value, and the prefill runner, which
-reads it, each convert keys this way themselves, so both must see the same value:
+KEY_TRANSFORM_ENV = "MEDIA_STORE_KEY_TRANSFORM"
+"""How a media key becomes its store key. The encoder service, which writes each value, and the prefill runner, which
+reads it, each transform keys this way themselves, so both must see the same value:
 
-- unset or empty: the media key's bytes are valid UTF-8, and that text is its store key;
-- ``hex``: the media key is any bytes (e.g. a 32-byte SHA-256) and its store key is their lowercase hex."""
-KEY_ENCODINGS = ("", "hex")
+- unset, empty or ``hex`` (the default): the store key is the media key's lowercase hex;
+- ``none``: the store key is the media key itself."""
+KEY_TRANSFORMS = ("hex", "none")
 
 
-def key_encoding_from_env(environ: Mapping[str, str] = os.environ) -> str:
-    """MEDIA_STORE_KEY_ENCODING: '' (unset) or 'hex'."""
-    encoding = environ.get(KEY_ENCODING_ENV, "").strip()
-    if encoding not in KEY_ENCODINGS:
-        raise ValueError(f"{KEY_ENCODING_ENV}={encoding!r}: want 'hex' or unset")
-    return encoding
+def key_transform_from_env(environ: Mapping[str, str] = os.environ) -> str:
+    """MEDIA_STORE_KEY_TRANSFORM: 'hex' (the default, when unset) or 'none'."""
+    transform = environ.get(KEY_TRANSFORM_ENV, "").strip() or "hex"
+    if transform not in KEY_TRANSFORMS:
+        raise ValueError(f"{KEY_TRANSFORM_ENV}={transform!r}: want 'hex' (the default) or 'none'")
+    return transform
 
 
 def parse_bytes(text: str) -> int:
@@ -52,8 +53,8 @@ class MediaEmbeddingStoreConfig:
     protocol: str = "rdma"
     device: str = ""
     """RDMA device(s), e.g. 'rocep201s0f0'; empty lets Mooncake pick."""
-    key_encoding: str = ""
-    """How media keys become store keys (KEY_ENCODING_ENV), from MEDIA_STORE_KEY_ENCODING."""
+    key_transform: str = "hex"
+    """How media keys become store keys (KEY_TRANSFORM_ENV), from MEDIA_STORE_KEY_TRANSFORM."""
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Optional["MediaEmbeddingStoreConfig"]:
@@ -65,7 +66,7 @@ class MediaEmbeddingStoreConfig:
         PREFILL_MEDIA_STORE_METADATA  metadata server, e.g. http://<master host>:<port>/metadata (required)
         PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
         PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
-        MEDIA_STORE_KEY_ENCODING      'hex' for binary media keys (default: UTF-8 keys); shared with the encoder
+        MEDIA_STORE_KEY_TRANSFORM     'hex' (default) or 'none'; shared with the encoder
         """
 
         def get(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -87,5 +88,5 @@ class MediaEmbeddingStoreConfig:
             metadata=get("METADATA"),
             protocol=get("PROTOCOL", "rdma"),
             device=get("DEVICE", ""),
-            key_encoding=key_encoding_from_env(environ),
+            key_transform=key_transform_from_env(environ),
         )
