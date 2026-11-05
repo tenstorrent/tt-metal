@@ -10,7 +10,7 @@ experimental/llk_{math,unpack}_dest_srca_mm.h, through sources/gguf_decode_mm_te
     dequantization (gguf-py) value for value;
   - test_gguf_decode_mm: the same weights decoded in DEST and multiplied with bf16 in0 rows;
   - test_dest_srca_mm: the matmul alone, on Float32 in1 tiles unpacked to DEST.
-The matmul golden truncates in1 to TF32 (MOVD2A) and multiplies each fidelity phase's operand bits as the FPU does.
+The matmul golden is the FPU's arithmetic (tt-isa-documentation MatrixUnitArithmetic.md), so the results are bit-exact.
 """
 
 import math
@@ -28,13 +28,11 @@ from helpers.gguf_records import (
     records,
     tiles_kn,
 )
-from helpers.golden_generators import FidelityMasking
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, GGUF_DECODE_MM, MATH_FIDELITY
-from helpers.utils import passed_test
 
 pytestmark = blackhole_only
 
@@ -147,42 +145,84 @@ def _table_image(fmt) -> bytes:
     return level_table(fmt).tobytes() if fmt.codebook else bytes(16)
 
 
-def _tf32_matmul_golden(
+def _src_fields(x: torch.Tensor):
+    """Sign, exponent and top 10 mantissa bits of float32 values: the Src datum (TF32 by truncation)."""
+    bits = x.contiguous().view(torch.int32).numpy().astype(np.int64) & 0xFFFFFFFF
+    return bits >> 31, (bits >> 23) & 0xFF, (bits >> 13) & 0x3FF
+
+
+def _round_shift(x, n):
+    """x / 2^n to nearest, ties towards +infinity."""
+    return (x + np.where(n > 0, 1 << np.maximum(n - 1, 0), 0)) >> n
+
+
+def _mvmul_golden(
     in0: torch.Tensor, in1: torch.Tensor, fidelity: MathFidelity
 ) -> torch.Tensor:
-    """in0 [M, K] @ in1 [K, N] as the FPU computes it from SrcB = in0 and SrcA = in1 truncated to TF32: the sum over
-    the fidelity phases of the products of each phase's mantissa bits, accumulated in fp64.
-    """
-    masking = FidelityMasking()
-    result = torch.zeros(in0.shape[0], in1.shape[1], dtype=torch.float64)
-    for phase in range(FIDELITY_PHASES[fidelity]):
-        srca, srcb = masking._apply_fidelity_masking(
-            DataFormat.Float32, in1, in0, phase
-        )
-        result += srcb.to(torch.float64) @ srca.to(torch.float64)
-    return result
+    """in0 [M, K] (bf16 values, SrcB) @ in1 [K, N] (Float32 in DEST, moved to SrcA as TF32), bit for bit as the FPU
+    computes it into a 32-bit DEST: tt-isa-documentation's MatrixUnitArithmetic.md, finite values. Per in1 tile, per
+    fidelity phase, per 16-deep K half, one MVMUL: each lane of 8 products sums them in fixed point with 10 fractional
+    bits of its largest exponent; the two lane sums and the DEST value are aligned to their common exponent, added,
+    and rounded to Float32 in DEST."""
+    sa, ea, ma = _src_fields(in1)
+    sb, eb, mb = _src_fields(in0)
+    shape = (in0.shape[0], in1.shape[1])
+    d_sign, d_exp, d_man = (np.zeros(shape, np.int64) for _ in range(3))
+    for k_tile in range(0, in0.shape[1], TILE):
+        for phase in range(FIDELITY_PHASES[fidelity]):
+            for half in (k_tile, k_tile + 16):
+                lanes = []
+                for lane in (half, half + 8):
+                    k = slice(lane, lane + 8)
+                    zero = (ea[k][None] == 0) | (eb[:, k][:, :, None] == 0)
+                    exp_sum = np.where(zero, 0, ea[k][None] + eb[:, k][:, :, None])
+                    top = exp_sum.max(axis=1)
+                    a = (ma[k] >> 1) & 0x1F if phase & 1 else 0x10 | ma[k] >> 6
+                    b = (mb[:, k] & 0xF) << 3 if phase & 2 else 0x40 | mb[:, k] >> 4
+                    shift = np.minimum(top[:, None] - exp_sum, 16)
+                    aligned = (((a[None] * b[:, :, None]) << 1 >> shift) + 1) >> 1
+                    aligned = np.where(zero | (shift >= 16), 0, aligned)
+                    negative = sa[k][None] != sb[:, k][:, :, None]
+                    exp = top - 127 - 5 * (phase & 1) - 7 * (phase >> 1)
+                    total = np.where(negative, -aligned, aligned).sum(axis=1)
+                    lanes.append(
+                        (np.where(exp > 0, exp, 0), np.where(exp > 0, total, 0))
+                    )
+                exp = np.maximum(np.maximum(lanes[0][0], lanes[1][0]), d_exp)
+                acc = sum(
+                    _round_shift(s << 13, np.minimum(exp - e, 31)) for e, s in lanes
+                )
+                dest = _round_shift(
+                    np.where(d_exp > 0, 0x800000 | d_man, 0),
+                    np.minimum(exp - d_exp, 31),
+                )
+                acc = acc + np.where(d_sign == 1, -dest, dest)
+                mag = np.abs(acc)
+                msb = np.frexp(mag.astype(np.float64))[1] - 1
+                rounded = ((mag << np.maximum(28 - msb, 0) >> 4) + 1) >> 1
+                carry = rounded >> 24
+                result_exp = exp + msb - 23 + carry
+                live = (exp > 0) & (mag > 0) & (result_exp > 0)
+                d_sign = np.where(live, acc < 0, 0)
+                d_exp = np.where(live, result_exp, 0)
+                d_man = np.where(live, (rounded >> carry) & 0x7FFFFF, 0)
+    bits = (d_sign << 31) | (d_exp << 23) | d_man
+    return torch.from_numpy(bits.astype(np.uint32).view(np.float32))
 
 
 def _assert_matmul(
     device: torch.Tensor, in0: torch.Tensor, in1: torch.Tensor, fidelity: MathFidelity
 ):
-    """device: the output tiles [nt][32][32]; in0 [rows, K]; in1 [K, N]."""
+    """device: the output tiles [nt][32][32]; in0 [rows, K]; in1 [K, N]. Bit-exact."""
     rows = in0.shape[0]
     nt = in1.shape[1] // TILE
-    golden = torch.zeros(TILE, nt * TILE, dtype=torch.float64)
-    golden[:rows] = _tf32_matmul_golden(in0, in1, fidelity)
-    result = device.permute(1, 0, 2).reshape(TILE, nt * TILE).to(torch.float64)
-    # FPU accumulation error only: the golden models the operands bit for bit.
-    magnitude = torch.zeros_like(golden)
-    magnitude[:rows] = in0.abs().to(torch.float64) @ in1.abs().to(torch.float64)
-    atol = 2.0**-16 * magnitude.max().item()
-    worst = (result - golden).abs().argmax().item()
-    row, col = divmod(worst, golden.shape[1])
-    assert passed_test(
-        golden, result, DataFormat.Float32, custom_atol=atol, custom_rtol=2.0**-16
-    ), (
-        f"largest difference at row {row}, column {col}: device {result[row, col].item()}, golden {golden[row, col].item()}"
-        f" (atol {atol})"
+    golden = torch.zeros(TILE, nt * TILE)
+    golden[:rows] = _mvmul_golden(in0, in1, fidelity)
+    result = device.permute(1, 0, 2).reshape(TILE, nt * TILE)
+    wrong = torch.nonzero(result != golden)
+    assert not len(wrong), (
+        f"{len(wrong)} values differ, first at {wrong[:4].tolist()}: device {result[result != golden][:4].tolist()},"
+        f" golden {golden[result != golden][:4].tolist()}"
     )
 
 
