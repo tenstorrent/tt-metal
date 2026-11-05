@@ -601,16 +601,25 @@ def _installed_version(pkg: str) -> str:
         return "?"
 
 
-def _latest_version(pkg: str, timeout: float = 4.0) -> str:
-    """Newest release of ``pkg`` on PyPI, so the fix can name a concrete target
-    instead of a bare ``--upgrade``. Best-effort: any failure (offline, private
-    index, unknown name) returns "" and the caller degrades to ``--upgrade``."""
+def _pypi_json(pkg: str, timeout: float = 4.0) -> dict:
+    """``pkg``'s PyPI JSON document (``info`` + every release's files). Best-effort:
+    any failure (offline, private index, unknown name) returns {}."""
     try:
         import json as _json
         import urllib.request as _ur
 
         with _ur.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=timeout) as r:
-            return str(_json.load(r)["info"]["version"])
+            return _json.load(r)
+    except Exception:
+        return {}
+
+
+def _latest_version(pkg: str, timeout: float = 4.0) -> str:
+    """Newest release of ``pkg`` on PyPI, so the fix can name a concrete target
+    instead of a bare ``--upgrade``. Best-effort: any failure (offline, private
+    index, unknown name) returns "" and the caller degrades to ``--upgrade``."""
+    try:
+        return str(_pypi_json(pkg, timeout=timeout)["info"]["version"])
     except Exception:
         return ""
 

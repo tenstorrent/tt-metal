@@ -107,3 +107,18 @@ def test_cache_roundtrip_is_keyed_by_ttnn_version(tmp_path):
     assert ttlang._cache_get(tmp_path, "0.65.1") == "1.0.1"
     assert ttlang._cache_get(tmp_path, "0.99.0") is None
     assert ttlang._cache_get(tmp_path, None) is None
+
+
+def test_main_reports_and_exits_nonzero_when_unavailable(monkeypatch, capsys):
+    monkeypatch.setattr(ttlang, "ensure_ttl", lambda cache_dir=None: {"available": False, "tried": ["1.0.1"]})
+    assert ttlang.main() == 1
+    out = capsys.readouterr().out
+    assert "could not be installed" in out and "1.0.1" in out
+
+
+def test_main_exits_zero_when_available(monkeypatch, capsys):
+    monkeypatch.setattr(
+        ttlang, "ensure_ttl", lambda cache_dir=None: {"available": True, "version": "1.0.1", "action": "installed"}
+    )
+    assert ttlang.main() == 0
+    assert "tt-lang available" in capsys.readouterr().out

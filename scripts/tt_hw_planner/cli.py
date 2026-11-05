@@ -230,17 +230,17 @@ def _active_transformers_pin() -> str:
     return os.environ.get("TT_HW_PLANNER_TRANSFORMERS_PIN") or _TRANSFORMERS_PIN
 
 
-def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
+def _upgrade_transformers_from_upstream(spec: Optional[str] = None) -> Tuple[bool, str]:
     import subprocess
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "-U",
-        _active_transformers_pin(),
-    ]
+    args = ["install", "-U", spec or _active_transformers_pin()]
+    try:
+        # The env's OWN installer: `python -m pip` fails in a pip-less uv venv (what create_venv.sh builds).
+        from models.experimental.perf_automation.agent.pkgtools import pip_cmd
+
+        cmd = pip_cmd(args)
+    except Exception:  # noqa: BLE001 -- agent package not importable: the previous behavior
+        cmd = [sys.executable, "-m", "pip", *args]
     print(f"  Running: {' '.join(cmd)}")
     print("  (this typically takes 20-40s — PyPI wheel, no source build)")
     try:
@@ -260,6 +260,35 @@ def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
 
 
 _ENV_FIX_ATTEMPTED_FLAG = "TT_HW_PLANNER_ENV_FIX_ATTEMPTED"
+
+
+# Which transformers release a model needs: its own module (cli.py is past the repo's file-size limit).
+from .transformers_release import (  # noqa: E402
+    release_registering as _transformers_release_registering,
+    unregistered_model_type as _unregistered_model_type,
+)
+
+
+def _install_transformers_and_reexec(spec: Optional[str] = None) -> bool:
+    """Install ``spec`` (default: the active pin) and re-exec this command so the fresh transformers
+    is imported cleanly. Returns False only when the install failed; on success it never returns."""
+    print(f"  Attempting automatic fix (installing {spec or _active_transformers_pin()})...")
+    fixed, log_tail = _upgrade_transformers_from_upstream(spec) if spec else _upgrade_transformers_from_upstream()
+    if not fixed:
+        print("  Automatic fix failed. Pip output tail:")
+        for line in log_tail.splitlines():
+            print(f"      {line}")
+        return False
+    print(
+        "  Upgrade complete. Re-executing this command with the upgraded "
+        "transformers so the fresh version is picked up cleanly...\n"
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    new_env = dict(os.environ)
+    new_env[_ENV_FIX_ATTEMPTED_FLAG] = "1"
+    os.execvpe(sys.executable, [sys.executable, "-m", "scripts.tt_hw_planner", *sys.argv[1:]], new_env)
+    return False
 
 
 def _classify_load_error(msg: str) -> str:
@@ -378,6 +407,26 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
             "  torchvision`). Upgrading transformers will not help."
         )
         return False
+    if kind == "version" and allow_fix and not os.environ.get(_ENV_FIX_ATTEMPTED_FLAG):
+        model_type = _unregistered_model_type(model_id, msg)
+        target = _transformers_release_registering(model_type) if model_type else ""
+        if target:
+            from .module_tree import _installed_version
+
+            print(
+                f"  The installed transformers ({_installed_version('transformers')}) does not know this model's\n"
+                f"  architecture `{model_type}`; transformers {target} is the first release that does and\n"
+                f"  that installs on this Python. Installing it into this env (off tt-metal's pin).\n"
+                f"  To revert: pip install transformers=={_installed_version('transformers')}"
+                "  (or `uv pip install ...` in a pip-less venv)."
+            )
+            _install_transformers_and_reexec(f"transformers=={target}")
+            print("  Falling back to the reference-loader path.")
+        elif model_type:
+            print(
+                f"  No transformers release that installs on this Python registers `{model_type}`;\n"
+                "  falling back to the reference-loader path."
+            )
     _non_hf_native = False
     try:
         from . import reference_loader_resolver as _rlr
@@ -424,26 +473,10 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
         )
         return False
 
-    print("  Attempting automatic fix (upgrading transformers from upstream)...")
-    fixed, log_tail = _upgrade_transformers_from_upstream()
-    if not fixed:
-        print("  Automatic fix failed. Pip output tail:")
-        for line in log_tail.splitlines():
-            print(f"      {line}")
+    if not _install_transformers_and_reexec():
         print(
             "  Bring-up will continue, but CPU-fallback stubs will error at " "runtime until you fix the env by hand."
         )
-        return False
-
-    print(
-        "  Upgrade complete. Re-executing this command with the upgraded "
-        "transformers so the fresh version is picked up cleanly...\n"
-    )
-    sys.stdout.flush()
-    sys.stderr.flush()
-    new_env = dict(os.environ)
-    new_env[_ENV_FIX_ATTEMPTED_FLAG] = "1"
-    os.execvpe(sys.executable, [sys.executable, "-m", "scripts.tt_hw_planner", *sys.argv[1:]], new_env)
     return False
 
 

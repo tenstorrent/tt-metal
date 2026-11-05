@@ -115,3 +115,30 @@ def ensure_ttl(installer=None, uninstaller=None, version_lister=None, cache_dir=
             return {"available": True, "version": v, "action": "installed"}
         uninst()
     return {"available": False, "version": None, "action": "failed", "tried": tried}
+
+
+def main() -> int:
+    """Install tt-lang into THIS interpreter's env, the way the optimize run does (same resolver,
+    same cache), so a provisioning script can call one entry point instead of a bare `pip install`
+    that, in a pip-less uv venv, silently targets the system Python instead.
+
+    Never fatal to the caller's intent: tt-lang only feeds optimize's tt-lang kernel rung, so a
+    miss is reported (with this interpreter's Python, the usual reason) and exits 1 for the caller
+    to treat as a warning."""
+    import sys
+
+    result = ensure_ttl(cache_dir=str(Path(__file__).resolve().parent.parent))
+    py = "%d.%d" % sys.version_info[:2]
+    if result.get("available"):
+        print(f"tt-lang available ({result.get('version')}, {result.get('action')}) for Python {py}")
+        return 0
+    print(
+        f"tt-lang could not be installed for this env's Python {py} (tried: {result.get('tried') or 'none'}). "
+        "Usually no tt-lang build exists for this Python version. Only optimize's tt-lang kernel rung "
+        "needs it; bring-up and the other optimize rungs are unaffected."
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
