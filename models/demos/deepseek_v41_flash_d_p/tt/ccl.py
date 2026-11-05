@@ -202,8 +202,8 @@ def rs_links(mesh, axis: int = TP_AXIS) -> int:
     pairs += [((r, c), (r + 1, c)) for r in range(rows - 1) for c in range(cols)] if axis == 0 else []
     found = min(
         min(
-            len(ttnn.get_forwarding_link_indices(node(*a), node(*b))),
-            len(ttnn.get_forwarding_link_indices(node(*b), node(*a))),
+            len(ttnn.get_forwarding_link_indices(mesh, node(*a), node(*b))),
+            len(ttnn.get_forwarding_link_indices(mesh, node(*b), node(*a))),
         )
         for a, b in pairs
     )
