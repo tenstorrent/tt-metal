@@ -34,6 +34,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     kv_block_size,
     kv_cache_bf8_enabled,
     mamba_chain_moves_enabled,
+    mamba_prefill_checkpoints_enabled,
     mamba_spec_enabled,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
@@ -237,6 +238,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     _tt_allow_decode_trace_buffer_reuse = True
     decode_input_update_contract = 1
     _ENABLE_MTP = False  # MTP contract subclass overrides
+    # Whose prefill_forward writes vLLM's prefill checkpoint states (QWEN36_MAMBA_PREFILL_CKPT)
+    _PREFILL_CHECKPOINTS = False
 
     # QWEN36_SERVE_DEVICE_DECODE=0: supports_async_decode=False -- the decode inputs (host-packed RoPE, [B,1] token
     # input) are reloaded every step, so there is no on-device token/position continuity, and replaying a stale
@@ -278,6 +281,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         bs = int(cc.block_size)
         # Mode none: one state block per request and group, as upstream resolves mamba_block_size = max_model_len.
         max_len = int(vllm_config.model_config.max_model_len)
+        ckpt = mode == "align" and cls._PREFILL_CHECKPOINTS and mamba_prefill_checkpoints_enabled()
+        mm = getattr(vllm_config.model_config, "multimodal_config", None)
+        limit = getattr(mm, "get_limit_per_prompt", None)
+        if ckpt and mm is not None and (limit is None or any(limit(m) > 0 for m in ("image", "video"))):
+            # A multimodal prompt runs as one segment (no split at a checkpoint), so its checkpoint states would stay
+            # unwritten, and a text prompt that shares the text before the image would hit one.
+            logger.warning(
+                "QWEN36_MAMBA_PREFILL_CKPT is ignored: multimodal inputs are enabled (set --limit-mm-per-prompt "
+                'to {"image": 0, "video": 0} to use prefill checkpoints)'
+            )
+            ckpt = False
         return qwen36_kv_cache_spec(
             tc,
             _mesh_tp(),
@@ -286,6 +300,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             num_speculative_blocks=cls._SPEC_K if cls._ENABLE_MTP else 0,
             mamba_cache_mode=mode,
             mamba_block_size=-(-max_len // bs) * bs if mode == "none" else bs,
+            # Block-aligned offsets: the prefill reaches a checkpoint state by ending a segment there, and a segment
+            # must start on a KV block boundary (paged_fill_cache writes from the first row of its first block).
+            prefill_checkpoint_alignment=bs if ckpt else None,
         )
 
     @classmethod
@@ -1308,6 +1325,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
     _ENABLE_MTP = True
+    _PREFILL_CHECKPOINTS = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
     # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
@@ -1704,6 +1722,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             if ids is None:
                 raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
             gdn.set_prefill_blocks(ids)
+            gdn.set_prefill_checkpoints(
+                kwargs.pop("state_checkpoint_ids_per_layer", None), kwargs.pop("state_checkpoint_positions", None)
+            )
         greq = (lambda i: {}) if gdn is None else (lambda i: {"gdn_req": i})
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])

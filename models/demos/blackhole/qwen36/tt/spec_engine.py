@@ -56,7 +56,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
-from models.demos.blackhole.qwen36.tt.spec_block_state import WARMUP_REQ
+from models.demos.blackhole.qwen36.tt.spec_block_state import WARMUP_REQ, CheckpointPoints
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     ChainDevice,
@@ -2994,17 +2994,33 @@ class MTPSpecEngine:
         s = vLLM's start_pos from the request's block, with no snapshot saves; None = the unchanged from-0 prefill.
         Recompute from 0 when start_pos is 0, off the 128 grid or off a KV block boundary (paged_fill_cache writes a
         segment from the first row of its first block), or leaves fewer than 3 tokens: the cached KV is rewritten with
-        the same values. A multimodal prompt always recomputes."""
+        the same values. A multimodal prompt always recomputes.
+        vLLM's prefill checkpoints of the request (QWEN36_MAMBA_PREFILL_CKPT) become the save points: the prompt runs
+        as segments that end at them, and each one's state goes into vLLM's block (CheckpointPoints)."""
+        paged = self._paged_state()
+        ckpts = [] if gdn_req is None or gdn_req == WARMUP_REQ else paged.prefill_checkpoints(gdn_req)
         if vision_tokens is not None:
             return None
         s = int(start_pos or 0)
         from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
 
         if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
+            if ckpts:
+                raise RuntimeError(
+                    f"multimodal prefill row {gdn_req}: vLLM asks for prefill checkpoints at "
+                    f"{[n for n, _ in ckpts]}, which a multimodal prompt cannot write"
+                )
             s = 0
-        if s == 0 and final:
+        for n, _ in ckpts:
+            if not s < n < Tp or n % self.block_size:
+                raise ValueError(
+                    f"prefill row {gdn_req} [{s}, {Tp}): checkpoint at {n} is not a KV block boundary inside the "
+                    f"prefill (block {self.block_size})"
+                )
+        if s == 0 and final and not ckpts:
             return None
-        return (s, (self._paged_state(), gdn_req) if s > 0 else None, [])
+        points = CheckpointPoints(ckpts, paged.write_checkpoint) if ckpts else []
+        return (s, (paged, gdn_req) if s > 0 else None, points)
 
     def _paged_reprefill(self, row):
         """Point the block state's prefill blocks at engine row ``row``'s running blocks (the staged step's start
@@ -3488,12 +3504,15 @@ class MTPSpecEngine:
                     return None  # only the first from-0 segment may decline, before any side effect
                 if not final:
                     # the bound scratch = the state after tokens[:b]
-                    model._prefix_cache.save(
-                        prompt[0],
-                        b,
-                        low_prio=b in getattr(points, "low", ()),
-                        protect=b in getattr(points, "end", ()),
-                    )
+                    if isinstance(points, CheckpointPoints):
+                        points.save(b)
+                    else:
+                        model._prefix_cache.save(
+                            prompt[0],
+                            b,
+                            low_prio=b in getattr(points, "low", ()),
+                            protect=b in getattr(points, "end", ()),
+                        )
                     saved.append(b)
                 a = b
             if run is not None:

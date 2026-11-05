@@ -77,6 +77,13 @@ def mamba_spec_enabled():
     return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
 
 
+def mamba_prefill_checkpoints_enabled():
+    """QWEN36_MAMBA_PREFILL_CKPT (default "0"; needs QWEN36_MAMBA_SPEC=1, mode align, the spec class): the GDN MambaSpec
+    declares one prefill checkpoint block, so vLLM no longer ends a prefill chunk at the prompt's last full block. The
+    prefill then also writes the GDN state after each of vLLM's checkpoint positions into the block vLLM names."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_PREFILL_CKPT", "0") == "1"
+
+
 def mamba_chain_moves_enabled():
     """QWEN36_MAMBA_CHAIN_MOVES (default "0"; needs QWEN36_MAMBA_SPEC=1 and the fused chain): the spec class declares
     supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the device (the chain
