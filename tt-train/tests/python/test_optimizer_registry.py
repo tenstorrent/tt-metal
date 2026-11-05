@@ -437,6 +437,26 @@ def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default, preci
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == expected
 
 
+@pytest.mark.parametrize(
+    "precision, expected",
+    [({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32), ({"reduce_dtype": "bfloat16"}, None), ({}, None)],
+)
+def test_apply_precision_config_sets_the_grad_accumulation_dtype(gradient_reduce_default, precision, expected):
+    """With reduce_dtype float32 the trainable parameters' gradients accumulate in fp32; any other config clears that.
+    Frozen parameters are left alone. Empty tensors, so this needs no device."""
+    trainable, frozen = ttml.autograd.Tensor(), ttml.autograd.Tensor()
+    trainable.set_requires_grad(True)
+    trainable.set_grad_accumulation_dtype(None if expected else ttnn.DataType.FLOAT32)
+    parameters = ttml.NamedParameters()
+    parameters["trainable"] = trainable
+    parameters["frozen"] = frozen
+
+    ttml.core.apply_precision_config({"precision": precision}, parameters)
+
+    assert trainable.get_grad_accumulation_dtype() == expected
+    assert frozen.get_grad_accumulation_dtype() is None
+
+
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
     """A typo under precision stops the run instead of training in the model's dtype; checked before any parameter is
     touched, so this needs no device."""

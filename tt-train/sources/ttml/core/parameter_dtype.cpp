@@ -89,6 +89,13 @@ std::optional<ttnn::DataType> apply_precision_config(
         store_trainable_parameters_as(parameters, *master_dtype);
     }
     autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
+    const auto accumulation_dtype =
+        reduce_dtype == ttnn::DataType::FLOAT32 ? std::optional{ttnn::DataType::FLOAT32} : std::nullopt;
+    for (const auto& [name, parameter] : parameters) {
+        if (parameter->get_requires_grad()) {
+            parameter->set_grad_accumulation_dtype(accumulation_dtype);
+        }
+    }
     return master_dtype;
 }
 

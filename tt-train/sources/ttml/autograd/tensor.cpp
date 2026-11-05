@@ -59,7 +59,28 @@ void Tensor::add_grad(const ttnn::Tensor& grad) {
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    if (m_grad_accumulation_dtype == ttnn::DataType::FLOAT32 || m_grad.dtype() == ttnn::DataType::FLOAT32) {
+        // Both operands in fp32: ttnn adds two fp32 tensors on the SFPU, which gives the IEEE fp32 sum. With a bf16
+        // operand the add runs on the FPU, which reads the fp32 one with 10 fraction bits and drops the rest.
+        const auto as_fp32 = [](const ttnn::Tensor& tensor) {
+            return tensor.dtype() == ttnn::DataType::FLOAT32 ? tensor : ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
+        };
+        m_grad = ttnn::add(as_fp32(m_grad), as_fp32(grad), std::nullopt, std::nullopt, std::nullopt, none, none, none);
+        return;
+    }
     m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none);
+}
+
+void Tensor::set_grad_accumulation_dtype(std::optional<ttnn::DataType> dtype) {
+    TT_FATAL(
+        !dtype.has_value() || *dtype == ttnn::DataType::FLOAT32,
+        "The gradient accumulation dtype is FLOAT32 or unset (the gradient's own dtype), got {}",
+        *dtype);
+    m_grad_accumulation_dtype = dtype;
+}
+
+std::optional<ttnn::DataType> Tensor::get_grad_accumulation_dtype() const {
+    return m_grad_accumulation_dtype;
 }
 
 void Tensor::backward(bool retain_graph) {

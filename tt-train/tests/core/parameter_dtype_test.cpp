@@ -174,3 +174,31 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
     autograd::ctx().open_device();
 }
+
+// With reduce_dtype float32, the trainable parameters' gradients accumulate in fp32; every other config clears that
+// on them. Frozen parameters keep whatever they had.
+TEST_F(ParameterDtypeTest, SetsFp32GradAccumulationOnTrainableParametersWithAnFp32Reduce) {
+    auto trainable = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto frozen = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    auto frozen_marked = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    frozen_marked->set_grad_accumulation_dtype(ttnn::DataType::FLOAT32);
+    const serialization::NamedParameters parameters{
+        {"trainable", trainable}, {"frozen", frozen}, {"frozen_marked", frozen_marked}};
+    const auto apply = [&](const char* training_config) {
+        (void)core::apply_precision_config(YAML::Load(training_config), parameters);
+    };
+
+    apply("precision: {reduce_dtype: float32}");
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(frozen->get_grad_accumulation_dtype(), std::nullopt);
+
+    apply("precision: {reduce_dtype: bfloat16}");
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), std::nullopt);
+
+    apply("precision: {reduce_dtype: float32}");
+    apply("seed: 5489");
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), std::nullopt);
+    EXPECT_EQ(frozen_marked->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
+
+    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
+}

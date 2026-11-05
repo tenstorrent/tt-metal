@@ -31,8 +31,11 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 // the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call
 // passes none (autograd::AutoContext::set_gradient_reduce_dtype), stored every time: unset or null stores none, so each
 // gradient is summed in its own dtype and nothing carries over from a config applied earlier in the process. A script
-// that sets the default itself does so after this call. The block must be a map of known keys, and any other key or
-// name is a TT_FATAL; both are read before anything changes. Returns the master dtype it applied, if any.
+// that sets the default itself does so after this call. With reduce_dtype "float32" it also sets FLOAT32 as the
+// gradient accumulation dtype of every trainable parameter (autograd::Tensor::set_grad_accumulation_dtype), so their
+// micro-batch sums run in fp32 too; otherwise it clears that dtype on them. Frozen parameters keep theirs. The block
+// must be a map of known keys, and any other key or name is a TT_FATAL; both are read before anything changes. Returns
+// the master dtype it applied, if any.
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
