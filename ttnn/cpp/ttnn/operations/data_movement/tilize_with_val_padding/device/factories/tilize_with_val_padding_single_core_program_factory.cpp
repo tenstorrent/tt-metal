@@ -95,7 +95,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
         (output_w - input_w) * output_z * output_y / TILE_HEIGHT * num_blocks_w_output;
     const uint32_t num_leftover_Y = input_y - (input_y / TILE_HEIGHT * TILE_HEIGHT);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const uint32_t num_input_tiles = num_tiles_per_block;
     assert(num_input_tiles > 0);

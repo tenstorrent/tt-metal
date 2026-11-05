@@ -4,30 +4,8 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
-struct TanhshrinkBf16Config {
-    static constexpr uint32_t kDegree = 8u;
-    // Fit: minimax degree-8 polynomial on [0, 3], 1 segment, max pure (continuous) ULP 0.781.
-    static constexpr uint32_t kCoefficientBits[] = {
-        0x00000000u,
-        0x00000000u,
-        0x00000000u,
-        0x3eaa738eu,
-        0x3c52ec0cu,
-        0xbe4a3e90u,
-        0x3dec2feeu,
-        0xbce1764au,
-        0x3b20a66au};
-    static constexpr uint32_t kBoundBits = 0x40400000u;
-    static constexpr uint32_t kScaleBits = 0x3f800000u;
-    static constexpr uint32_t kBiasBits = 0xbf800000u;
-    static constexpr uint32_t kLeftBiasBits = 0x3f800000u;
-    static constexpr uint32_t kBodySlots = 32u;
-    static constexpr uint32_t kRawEqualValue = 0x80ffu;
-    static constexpr uint32_t kRepairedPatterns = 127u;
-    static constexpr uint32_t kMacroSequenceBits = 0x13850000u;
-};
+struct TanhshrinkBf16Config {};
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_tanhshrink_bf16_cascade_signed_abs_affine.h"
 
 namespace ckernel::sfpu {
 
@@ -44,11 +22,7 @@ inline bool bf16_dest_tanhshrink() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
-// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
-// ckernel::sfpu::bf16::tanhshrink::calculate_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config, 32> in a
-// stall-filling order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every
-// BF16 input; other ITERATIONS run the compiled body itself.
+// calculate_signed_abs_affine's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_tanhshrink_bf16_scheduled() {
 // A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
@@ -331,15 +305,10 @@ inline void calculate_tanhshrink_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_tanhshrink_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_tanhshrink_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::tanhshrink::calculate_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config, ITERATIONS>();
-    }
+__attribute__((noinline)) inline void calculate_tanhshrink_bf16() {
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_tanhshrink_bf16_scheduled();
 }
-inline void init_tanhshrink_bf16() {
-    ckernel::sfpu::bf16::tanhshrink::init_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config>();
-}
+inline void init_tanhshrink_bf16() {}
 
 }  // namespace ckernel::sfpu

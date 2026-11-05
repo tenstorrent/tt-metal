@@ -24,6 +24,7 @@
 #include <optional>
 #include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/mesh_device.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
@@ -385,7 +386,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             if (!mesh_device->is_local(local_core.device_coord)) {
                 continue;  // Another rank owns this core and reports it itself.
             }
-            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            auto* local_device = internal::get_device(*mesh_device, local_core.device_coord);
             if (local_device == nullptr) {
                 continue;
             }
@@ -452,7 +453,7 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
         inspector::GlobalSemaphoreData semaphore_data;
         semaphore_data.address = buffer->address();
         semaphore_data.cores = cores;
-        for (const auto* device : buffer->device()->get_devices()) {
+        for (const auto* device : buffer->device()->impl().get_devices()) {
             semaphore_data.chip_ids.push_back(device->id());
         }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
@@ -721,12 +722,12 @@ bool ShouldCaptureTensorSpecs() {
 }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint8_t cq_id) {
     // mesh_command_queue().trace_id() is only supported in fast dispatch and would throw otherwise.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return std::nullopt;
     }
-    return mesh_device->mesh_command_queue().trace_id();
+    return mesh_device->mesh_command_queue(cq_id).trace_id();
 }
 
 void EmitMeshWorkloadDebugEntry(

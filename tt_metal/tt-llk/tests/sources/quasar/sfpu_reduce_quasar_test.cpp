@@ -19,7 +19,7 @@ using namespace ckernel;
 // SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN.
 //
 // Three programs in one file, one per thread:
-//   T0 unpack: load every tile of buffer_A from L1 into Dest. One _llk_unpack_unary_operand_
+//   T0 unpack: load every tile of buffer_A from L1 into Dest. One _llk_unpack_unary_operand_to_dest_block_
 //              call covers the whole TILE_CNT bank - no FPU datacopy is involved.
 //   T1 math:   run calculate_reduce over Dest. REDUCE_COL is called once per tile, since a
 //              column sits inside one tile. REDUCE_ROW is called once for the whole block,
@@ -44,7 +44,7 @@ using namespace ckernel;
 #include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -68,9 +68,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
-        // Configure the unpacker, set it up for TILE_CNT tiles, then pull the whole bank into Dest.
+        // Configure the unpacker and set it up to unpack into Dest; the tile loop pulls the whole bank in.
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_dest_init_();
+        _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
 
         // UNPACK is the producer in the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -91,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     // Hand Dest to the SFPU.
@@ -138,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();

@@ -15,7 +15,7 @@ template <typename Coefficients>
 struct polynomial_indexed_coefficients {
     const Coefficients& values;
     template <uint32_t INDEX>
-    inline vFloat load() const {
+    __attribute__((always_inline)) inline vFloat load() const {
         return values[INDEX];
     }
 };
@@ -57,7 +57,8 @@ __attribute__((always_inline)) inline void eval_polynomial_transport(
 }
 
 template <uint32_t DEGREE, typename Coefficients>
-inline void eval_polynomial_dual(const Coefficients& coeffs, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2) {
+__attribute__((always_inline)) inline void eval_polynomial_dual(
+    const Coefficients& coeffs, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2) {
     static_assert(DEGREE <= 16, "unsupported canonical paired polynomial degree");
     if constexpr (DEGREE == 1) {
         // Retain the canonical immediate path's expression and load order.
