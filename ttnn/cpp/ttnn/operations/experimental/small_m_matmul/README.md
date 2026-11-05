@@ -8,9 +8,14 @@ matmuls (FLUX/LTX transformer weights) where the operand-read bandwidth, not com
 
 For `M < N` the weight `in1[K,N]` is the large operand. Reading it at ~full DRAM bandwidth requires
 each worker to read from a **bank-adjacent** DRAM channel (the `reader == consumer` pattern) and to
-split reads across both NoCs. This op width-shards `in1` across the 8 DRAM banks and places one worker
-per bank per slice, alternating NOC0/NOC1, so the in1 read sustains ~500 GB/s. `in0` (small) is
-delivered by an 8-wide **ring all-gather**; split-K partial sums are reduced up a linear chain.
+split reads across both NoCs. This op width-shards `in1` across all G DRAM banks of the device (G = 8 on
+P150, 7 on P100; read from `num_dram_channels()`) and places one worker per bank per slice, alternating
+NOC0/NOC1, so the in1 read sustains ~500 GB/s. `in0` (small) is delivered by a G-wide **ring all-gather**;
+split-K partial sums are reduced up a linear chain (or a ring reduce-scatter).
+
+On a mesh, one program is built per chip: bank-adjacent workers
+(`MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(noc, coord)`) and NoC hop distances depend on
+each chip's harvesting.
 
 On the target shapes it reaches **79–94% of peak DRAM bandwidth** (measured on Blackhole p150 with the
 device profiler).
@@ -18,7 +23,7 @@ device profiler).
 ## API
 
 ```python
-# Weight must be DRAM width-sharded across the 8 banks via this helper (layout depends on (K,N) only):
+# Weight must be DRAM width-sharded across all DRAM banks via this helper (layout depends on (K, N, #banks)):
 w_mem = ttnn.create_small_m_weight_memory_config(list(weight.shape), ttnn.bfloat16, device)
 in1   = ttnn.from_torch(weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=w_mem)
 in0   = ttnn.from_torch(act,    layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)  # DRAM interleaved
@@ -64,7 +69,8 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
   activation and addcmul are mutually exclusive. Output column-split via `small_m_matmul_split(..., chunks,
   dim=-1)` (1..16 chunks, `N % chunks == 0`, per-chunk tile-aligned), composable with bias/activation/addcmul.
   For split-K (`Pk>1`) the epilogue is applied exactly once at the reduction root.
-- `in1` must be DRAM width-shardable across 8 banks (device must expose ≥ 8 DRAM banks).
+- `in1` must be DRAM width-sharded across all G DRAM banks of the device. The measured auto-select lookup
+  table is 8-bank (P150) only; on other bank counts `config=None` uses the G-parameterised cost model.
 - **Non-divisible dims — balanced tails (implemented):** pass **logical** `M×K` and `K×N` tensors (no
   manual padding); output is logical `M×N`. The planner assigns balanced floor/ceil ownership
   (`CorePlan.k_start/valid_k`, `m_start/valid_m`, `n_start/valid_n`) and separates physical strides
@@ -72,9 +78,9 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
   valid tiles** — the in1 reader skips pad-K rows and wholly-pad-N subblocks (no DRAM read); the writer
   zeros in0's small K/M tail (so `0×garbage=0` kills the K-tail term) and writes only `valid_m×valid_n`
   output tiles. No wholly-padded tile is ever read or written. Correct for all tested corners
-  (Kt%Pk, Nt%8, Mt%Sm, fully sub-tile element dims), PCC ≥ 0.999.
-  - Effective BW on a non-divisible N is bounded by **8-bank quantization**: N shards as `ceil(Nt/8)`
-    tiles per bank, so the fully-loaded banks set the wall-clock. For Nt=145 the ceiling is
+  (Kt%Pk, Nt%G, Mt%Sm, fully sub-tile element dims), PCC ≥ 0.999.
+  - Effective BW on a non-divisible N is bounded by **G-bank quantization**: N shards as `ceil(Nt/G)`
+    tiles per bank, so the fully-loaded banks set the wall-clock. For Nt=145 on 8 banks the ceiling is
     `145/152 ≈ 95%` of delivered; balanced tails remove the pad DRAM traffic but cannot move that
     structural ceiling (the imbalance is across banks, and reader==consumer fixes each bank).
 

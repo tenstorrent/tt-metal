@@ -7,6 +7,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "small_m_matmul_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,8 +28,8 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
         act.buffer() != nullptr && weight.buffer() != nullptr,
         "small_m_matmul inputs must be allocated in device buffers");
 
-    // Blackhole only (v1). The planner's L1 budget, the 8-bank in1 width-shard and the core-count limits are
-    // Blackhole constants; reject other architectures here rather than failing later in CB allocation.
+    // Blackhole only (v1). The planner's L1 budget and the core-count limits are Blackhole constants (the in1
+    // width-shard bank count is read from the device: 8 on P150, 7 on P100); reject other architectures here rather than failing later in CB allocation.
     TT_FATAL(
         act.device()->arch() == tt::ARCH::BLACKHOLE,
         "small_m_matmul is supported only on Blackhole (got arch {})",
@@ -46,7 +47,7 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
 
     // Memory-layout assumptions (v1): the in0-ring reader + output writer use interleaved-DRAM accessors,
     // and the writer / CBs hardcode bf16 tile size/format. Validate these rather than silently reading or
-    // writing a wrongly-formatted tensor. (in1's DRAM 8-bank width-shard is validated separately below.)
+    // writing a wrongly-formatted tensor. (in1's DRAM all-bank width-shard is validated separately below.)
     TT_FATAL(
         act.memory_config().buffer_type() == BufferType::DRAM &&
             act.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -70,8 +71,9 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "small_m_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(a_logical[-2] > 0 && K > 0 && w_logical[-1] > 0, "small_m_matmul dimensions must be positive");
 
-    // in1 must be DRAM width-sharded (built via create_small_m_weight_memory_config): exactly 8 banks,
-    // ROW_MAJOR, shard width == ceil(Nt/8) tiles, and enough K rows to cover the logical Kt.
+    // in1 must be DRAM width-sharded (built via create_small_m_weight_memory_config) across ALL G of the
+    // device's DRAM banks (G = num_dram_channels(): 8 on P150, 7 on P100), ROW_MAJOR, shard width ==
+    // ceil(Nt/G) tiles, and enough K rows to cover the logical Kt. G is also the in0 ring size.
     const auto& w_mem = weight.memory_config();
     TT_FATAL(
         w_mem.buffer_type() == BufferType::DRAM && w_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -81,15 +83,18 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
     auto cdiv32 = [](uint32_t v) { return (v + 31u) / 32u; };
     const uint32_t Kt = cdiv32(K);
     const uint32_t Nt = cdiv32(static_cast<uint32_t>(w_logical[-1]));
-    const uint32_t exp_shard_cols = ((Nt + 7u) / 8u) * 32u;  // ceil(Nt/8) tiles, in elements
+    const uint32_t G = num_dram_banks(act.device());
+    const uint32_t exp_shard_cols = ((Nt + G - 1u) / G) * 32u;  // ceil(Nt/G) tiles, in elements
     TT_FATAL(
-        shard->grid.num_cores() == 8u,
-        "small_m_matmul weight shard must span exactly 8 DRAM banks, got {}",
+        shard->grid.num_cores() == G,
+        "small_m_matmul weight shard must span all {} DRAM banks of the device, got {} (build the weight "
+        "memory config with create_small_m_weight_memory_config on the target device)",
+        G,
         shard->grid.num_cores());
     // The in1 reader addresses DRAM bank `b` for shard `b`, so the shard grid must be exactly the bank-id range
-    // {0..7} x {0} that create_small_m_weight_memory_config builds -- 8 cores anywhere else would read the
+    // {0..G-1} x {0} that create_small_m_weight_memory_config builds -- G cores anywhere else would read the
     // wrong banks.
-    const CoreRangeSet expected_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{7, 0}));
+    const CoreRangeSet expected_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{G - 1u, 0}));
     TT_FATAL(
         shard->grid == expected_grid,
         "small_m_matmul weight shard grid must be the DRAM bank range {} (shard index == bank id), got {}",
@@ -98,8 +103,9 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(shard->orientation == ShardOrientation::ROW_MAJOR, "small_m_matmul weight shard must be ROW_MAJOR");
     TT_FATAL(
         shard->shape[1] == exp_shard_cols,
-        "small_m_matmul weight shard width must be ceil(Nt/8)*32 = {} elements, got {}",
+        "small_m_matmul weight shard width must be ceil(Nt/G)*32 = {} elements (G={} banks), got {}",
         exp_shard_cols,
+        G,
         shard->shape[1]);
     TT_FATAL(
         shard->shape[0] >= Kt * 32u,

@@ -28,7 +28,7 @@ void bind_small_m_matmul(nb::module_& mod) {
 
         Experimental DRAM-bandwidth-optimal matrix multiply (A @ B) for low-arithmetic-intensity
         low-arithmetic-intensity shapes with small M and wide N (M << N), with optional fused epilogue.
-        The transpose case (N << M) is NOT supported: narrow N cannot fill the 8-bank in1 width shard
+        The transpose case (N << M) is NOT supported: narrow N cannot fill the all-bank in1 width shard
         (see SUPPORTED DOMAIN below), so those shapes are refused at program build. Numerics are FIXED:
         BFLOAT16 in/out, HiFi2 math, FP32 dest accumulation, DRAM-interleaved output (there are no
         dtype / memory_config / compute_kernel_config arguments).
@@ -39,7 +39,7 @@ void bind_small_m_matmul(nb::module_& mod) {
           - addcmul:    Y = residual + scalar*(A@B + bias)*gate   (activation and addcmul are exclusive)
 
         The activation A ([.., M, K]) is DRAM interleaved. The weight B ([.., K, N]) must be DRAM
-        WIDTH_SHARDED across 8 banks — build its MemoryConfig with
+        WIDTH_SHARDED across all G DRAM banks of the device (G = 8 on P150, 7 on P100) — build its MemoryConfig with
         ``ttnn.create_small_m_weight_memory_config``. Output is [.., M, N] in TILE layout.
 
         SUPPORTED DOMAIN
@@ -48,12 +48,12 @@ void bind_small_m_matmul(nb::module_& mod) {
         Two SHAPE-DOMAIN limits are structural rather than tuning gaps, so a shape hitting either can only
         be served by a standard matmul:
 
-        1. N must be wide enough to fill the 8-bank in1 width shard: ``7*ceil(Nt/8) < Nt`` where
-           ``Nt = ceil(N/32)``, else the trailing banks would be entirely padding. The smallest workable
-           widths are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, 768, 928..). So narrow
-           N — e.g. N=8 or N=128 — is out of domain.
+        1. N must be wide enough to fill the G-bank in1 width shard: ``(G-1)*ceil(Nt/G) < Nt`` where
+           ``Nt = ceil(N/32)``, else the trailing banks would be entirely padding. On 8 banks the smallest
+           workable widths are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, 768, 928..).
+           So narrow N — e.g. N=8 or N=128 — is out of domain.
         2. The in0 k-slice is kept L1-RESIDENT, so cb0 alone is ~``(Mt/Sm)*(Kt/Pk)`` tiles while core
-           feasibility caps ``8*Pk*Ns*Sm <= 104`` cores (``Pk*Ns*Sm <= 13``). Large Mt with deep K cannot
+           feasibility caps ``G*Pk*Ns*Sm <= 104`` cores (``Pk*Ns*Sm <= 13`` at G=8). Large Mt with deep K cannot
            satisfy both: e.g. Mt=152 (M=4864), Kt=128 (K=4096) would need ``Sm*Pk >~ 32``.
 
         Subblocks are additionally bounded by the 4-tile fp32 DST limit, and ``small_m_matmul_split``
@@ -183,9 +183,9 @@ void bind_small_m_matmul(nb::module_& mod) {
         R"doc(
         create_small_m_weight_memory_config(weight_shape, dtype, device)
 
-        Return the DRAM WIDTH_SHARDED (8-bank, ROW_MAJOR) MemoryConfig required for the small-M matmul
-        weight tensor. K is padded up to a multiple of 8 tiles, N up to a multiple of 8 tiles; the shard
-        spec depends only on (K, N), never on the execution config.
+        Return the DRAM WIDTH_SHARDED (all G DRAM banks of ``device``, ROW_MAJOR) MemoryConfig required for
+        the small-M matmul weight tensor. N is padded up to a multiple of G tiles; the shard spec depends
+        only on (K, N, G), never on the execution config. G is 8 on Blackhole P150 and 7 on P100.
         )doc");
 }
 

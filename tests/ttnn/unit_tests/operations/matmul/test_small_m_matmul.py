@@ -533,9 +533,9 @@ def test_small_m_fused_validation(device, expect_error):
 
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")
 def test_small_m_picker_planner_parity_small_nt(device, expect_error):
-    # A bank-infeasible Nt (Nt <= 7*ceil(Nt/8)) must be rejected cleanly, not crash later in
-    # build_plan(). Nt=9 (N=288): 7*ceil(9/8)=14 >= 9 -> infeasible. A feasible small Nt=8 (N=256)
-    # must still work. Guards feasibility parity across the three places that share
+    # A bank-infeasible Nt (Nt <= (G-1)*ceil(Nt/G), G = DRAM bank count) must be rejected cleanly, not crash
+    # later in build_plan(). Nt=G+1 is always infeasible ((G-1)*2 >= G+1 for G >= 3: N=288 on an 8-bank P150,
+    # N=256 on a 7-bank P100) and the smallest feasible Nt is G itself (N=256 on P150, N=224 on P100). Guards feasibility parity across the three places that share
     # nt_width_shard_feasible: the weight memory-config builder, the picker, and the planner.
     #
     # The rejection now lands at the memory-config builder, which is the EARLIEST reachable point:
@@ -543,12 +543,13 @@ def test_small_m_picker_planner_parity_small_nt(device, expect_error):
     # before a buffer is allocated rather than after. The picker/planner guards behind it are
     # unreachable through the public path by construction, which is the intent.
     M, K = 32, 2048
-    for N, feasible in [(288, False), (256, True)]:
+    banks = device.dram_grid_size().x
+    for N, feasible in [((banks + 1) * 32, False), (banks * 32, True)]:
         t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
         t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
         if not feasible:
-            # the bank-interval limit: Nt=9 cannot fill the 8-bank in1 width shard
-            with expect_error(RuntimeError, "cannot serve N=288"):
+            # the bank-interval limit: Nt=G+1 cannot fill the G-bank in1 width shard
+            with expect_error(RuntimeError, f"cannot serve N={N}"):
                 ttnn.create_small_m_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
             continue
         a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)

@@ -8,6 +8,8 @@
 #include <array>
 #include <bit>
 #include <map>
+#include <numeric>
+#include <unordered_map>
 #include <set>
 #include <string>
 #include <utility>
@@ -16,7 +18,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (M-split placement + ring order)
+#include <tt-metalium/experimental/device.hpp>  // per-chip get_worker_noc_hop_distance / worker_core_from_logical_core
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "small_m_matmul_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -95,18 +100,49 @@ void mkcb(Program& program, const CoreRangeSet& crs, uint32_t idx, uint32_t ntil
     CreateCircularBuffer(program, crs, c);
 }
 
+// One chip of the mesh. Every device-topology query the factory makes goes through here so it is answered for
+// the chip whose program is being built: DRAM-bank-adjacent workers and logical->physical worker coordinates
+// depend on that chip's harvesting, so a mesh-wide (reference-chip) answer is wrong on heterogeneously
+// harvested meshes. Remote coordinates (multi-host) fall back to the mesh-level answer, which is exact on
+// homogeneous meshes -- the same fallback the per-coordinate tt-metal APIs use.
+struct ChipCtx {
+    tt::tt_metal::distributed::MeshDevice* mesh;
+    tt::tt_metal::distributed::MeshCoordinate coord;
+    bool local;
+
+    ChipCtx(tt::tt_metal::distributed::MeshDevice* m, const tt::tt_metal::distributed::MeshCoordinate& c) :
+        mesh(m), coord(c), local(m->get_view().get_local_mesh_coord_range().contains(c)) {}
+
+    uint32_t hop(const CoreCoord& src, const CoreCoord& dst, NOC noc) const {
+        return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(mesh, coord, src, dst, noc);
+    }
+    CoreCoord worker_core(const CoreCoord& logical) const {
+        return local ? tt::tt_metal::experimental::Device::worker_core_from_logical_core(*mesh, coord, logical)
+                     : mesh->worker_core_from_logical_core(logical);
+    }
+    std::vector<CoreCoord> bank_workers(NOC noc) const {
+        const auto xy = optimal_bank_workers(mesh, coord, noc);
+        std::vector<CoreCoord> out;
+        out.reserve(xy.size());
+        for (const auto& c : xy) {
+            out.emplace_back(c.x, c.y);
+        }
+        return out;
+    }
+};
+
 // M-split (Sm>1) worker PLACEMENT (IN1_NEAR). Overrides ONLY P.cores[i].coord; logical core indices,
 // ownership, and the factory's reader->i+s / slave->i-mm runtime-arg math are unchanged. MUST run BEFORE the
 // ring reorder so the ring order recomputes on the new coords. Pass 1 places every mm==0 DRAM reader around
 // its bank target (a logical-Manhattan spiral mirroring the planner's find_near) so slaves can't displace
 // later readers from bank-adjacent cores; pass 2 places each slave at the free worker minimizing the directed
 // reader->slave hop on the group's in1-reader NoC. No-op / never called at Sm==1.
-void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo) {
-    namespace expd = tt::tt_metal::experimental::Device;
-    const uint32_t preaders = geo.num_cores / 8u;
-    const CoreCoord grid = device->compute_with_storage_grid_size();
-    const auto opt0 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
-    const auto opt1 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1);
+void place_m_split_workers(plan::ExecutionPlan& P, const ChipCtx& chip, const plan::Geometry& geo) {
+    const uint32_t G = geo.G;
+    const uint32_t preaders = geo.num_cores / G;
+    const CoreCoord grid = chip.mesh->compute_with_storage_grid_size();
+    const auto opt0 = chip.bank_workers(NOC::NOC_0);
+    const auto opt1 = chip.bank_workers(NOC::NOC_1);
     std::set<std::pair<uint32_t, uint32_t>> used;
     auto bank_tgt = [&](uint32_t b, uint32_t noc) { return noc ? opt1[b] : opt0[b]; };
     // logical-Manhattan spiral over the compute grid (mirrors the planner's find_near).
@@ -136,7 +172,7 @@ void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::
         P.cores[i].coord.y = c.y;
     };
     // pass 1: every mm==0 reader around its bank target (readers-first).
-    for (uint32_t b = 0; b < 8u; ++b) {
+    for (uint32_t b = 0; b < G; ++b) {
         for (uint32_t p = 0; p < preaders; ++p) {
             const uint32_t i = b * preaders + p;
             if (P.cores[i].mm == 0u) {
@@ -145,7 +181,7 @@ void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::
         }
     }
     // pass 2: slaves — IN1_NEAR minimizes the directed reader->slave hop on the reader NoC.
-    for (uint32_t b = 0; b < 8u; ++b) {
+    for (uint32_t b = 0; b < G; ++b) {
         for (uint32_t p = 0; p < preaders; ++p) {
             const uint32_t i = b * preaders + p;
             if (P.cores[i].mm == 0u) {
@@ -162,7 +198,7 @@ void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::
                     if (used.count(std::make_pair(x, y))) {
                         continue;
                     }
-                    const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, CoreCoord{x, y}, rnoc);
+                    const uint32_t dd = chip.hop(rc, CoreCoord{x, y}, rnoc);
                     if (!found || dd < bestd) {
                         bestd = dd;
                         best = CoreCoord{x, y};
@@ -192,15 +228,19 @@ void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::
 // MM0 (score only the mm==0 ring: min ring0.max then ring0.total) establishes the aggtot budget and seeds the
 // search, so PARETO route-dominates MM0 by construction (never a worse total) — it keeps the Sm=2 win and
 // stays within noise of MM0 on Sm=1.
-void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Sm) {
-    namespace expdev = tt::tt_metal::experimental::Device;
-    const uint32_t preaders = geo.num_cores / 8u;
-    // directed route cost of one 8-core cycle over a single ring's hop matrix: (max edge, total hops).
-    auto ring_cost = [](const std::array<uint32_t, 8>& ord,
-                        const std::array<std::array<uint32_t, 8>, 8>& d) -> std::pair<uint32_t, uint32_t> {
+void optimize_in0_ring_order(plan::ExecutionPlan& P, const ChipCtx& chip, const plan::Geometry& geo, uint32_t Sm) {
+    // G = ring size = DRAM bank count (8 on P150, 7 on P100). The exhaustive search below permutes G-1 banks
+    // ((G-1)! cycles: 5040 at G=8, 720 at G=7), so cap G to keep host build time bounded.
+    const uint32_t G = geo.G;
+    TT_FATAL(G >= 2u && G <= 9u, "small_m_matmul in0 ring order search supports 2..9 banks, got {}", G);
+    const uint32_t preaders = geo.num_cores / G;
+    using Order = std::vector<uint32_t>;
+    using HopMatrix = std::vector<std::vector<uint32_t>>;
+    // directed route cost of one G-core cycle over a single ring's hop matrix: (max edge, total hops).
+    auto ring_cost = [G](const Order& ord, const HopMatrix& d) -> std::pair<uint32_t, uint32_t> {
         uint32_t mx = 0, tot = 0;
-        for (uint32_t p = 0; p < 8u; ++p) {
-            const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
+        for (uint32_t p = 0; p < G; ++p) {
+            const uint32_t e = d[ord[p]][ord[(p + 1u) % G]];
             tot += e;
             mx = std::max(mx, e);
         }
@@ -209,16 +249,16 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
     for (uint32_t base = 0; base < preaders; base += Sm) {
         // shared writer NoC (opposite the reader's): noc==0 -> writer NOC1; noc==1 -> writer NOC0.
         const NOC wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-        // one 8x8 hop matrix per mm-ring (same wnoc, different physical cores).
-        std::vector<std::array<std::array<uint32_t, 8>, 8>> dm(Sm);
+        // one GxG hop matrix per mm-ring (same wnoc, different physical cores).
+        std::vector<HopMatrix> dm(Sm, HopMatrix(G, std::vector<uint32_t>(G, 0u)));
         for (uint32_t mm = 0; mm < Sm; ++mm) {
             auto lc = [&](uint32_t b) {
                 const auto& c = P.cores[b * preaders + base + mm].coord;
                 return CoreCoord{c.x, c.y};
             };
-            for (uint32_t a = 0; a < 8u; ++a) {
-                for (uint32_t b = 0; b < 8u; ++b) {
-                    dm[mm][a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
+            for (uint32_t a = 0; a < G; ++a) {
+                for (uint32_t b = 0; b < G; ++b) {
+                    dm[mm][a][b] = (a == b) ? 0u : chip.hop(lc(a), lc(b), wnoc);
                 }
             }
         }
@@ -227,7 +267,7 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
         struct Metrics {
             uint32_t r0max, r0tot, aggmax, aggtot;
         };
-        auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
+        auto metrics = [&](const Order& ord) -> Metrics {
             Metrics m{0, 0, 0, 0};
             for (uint32_t mm = 0; mm < Sm; ++mm) {
                 const auto [rm, rt] = ring_cost(ord, dm[mm]);
@@ -241,22 +281,22 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
             return m;
         };
         auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) { return a0 < b0 || (a0 == b0 && a1 < b1); };
-        auto cand_of = [](const std::array<uint32_t, 7>& t) {
-            std::array<uint32_t, 8> c{};
+        auto cand_of = [](const Order& t) {
+            Order c(t.size() + 1u);
             c[0] = 0;
-            for (uint32_t i = 0; i < 7u; ++i) {
-                c[i + 1u] = t[i];
-            }
+            std::copy(t.begin(), t.end(), c.begin() + 1);
             return c;
         };
-        const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
-        // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
+        Order bank(G);
+        std::iota(bank.begin(), bank.end(), 0u);
+        const Order tail_init(bank.begin() + 1, bank.end());  // {1, .., G-1}
+        // exhaustive: fix bank 0 at pos 0, permute the other G-1 ((G-1)! cycles; directed => both orientations).
         // Pass 1 — MM0 objective (establishes the PARETO aggtot budget).
-        std::array<uint32_t, 8> opt_mm0 = bank;
+        Order opt_mm0 = bank;
         Metrics b_mm0{~0u, ~0u, ~0u, ~0u};
-        std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+        Order tail = tail_init;
         do {
-            const std::array<uint32_t, 8> cand = cand_of(tail);
+            const Order cand = cand_of(tail);
             const Metrics m = metrics(cand);
             if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
                 b_mm0 = m;
@@ -265,12 +305,12 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
         } while (std::next_permutation(tail.begin(), tail.end()));
         // Pass 2 — PARETO: min aggmax (then aggtot) subject to aggtot <= MM0's aggtot. Seeded with MM0 itself
         // (satisfies the constraint by construction).
-        std::array<uint32_t, 8> opt_pareto = opt_mm0;
+        Order opt_pareto = opt_mm0;
         Metrics b_pa = b_mm0;
         const uint32_t budget = b_mm0.aggtot;
-        std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
+        Order tail2 = tail_init;
         do {
-            const std::array<uint32_t, 8> cand = cand_of(tail2);
+            const Order cand = cand_of(tail2);
             const Metrics m = metrics(cand);
             if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
                 b_pa = m;
@@ -281,11 +321,11 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
         // agree per bank, preserving in0/in1 pairing under M-split).
         for (uint32_t mm = 0; mm < Sm; ++mm) {
             const uint32_t jj = base + mm;
-            for (uint32_t pos = 0; pos < 8u; ++pos) {
+            for (uint32_t pos = 0; pos < G; ++pos) {
                 const uint32_t ci = opt_pareto[pos] * preaders + jj;
                 P.cores[ci].ring_pos = pos;
-                P.cores[ci].ring_next_idx = opt_pareto[(pos + 1u) % 8u] * preaders + jj;
-                P.cores[ci].ring_prev_idx = opt_pareto[(pos + 7u) % 8u] * preaders + jj;
+                P.cores[ci].ring_next_idx = opt_pareto[(pos + 1u) % G] * preaders + jj;
+                P.cores[ci].ring_prev_idx = opt_pareto[(pos + G - 1u) % G] * preaders + jj;
             }
         }
     }
@@ -306,26 +346,28 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
 // because the in1 read was measured to be DRAM-bound (76-98% of peak in isolation) and insensitive to distance.
 //
 // Layout: cores (bank b, slice p) -> (x=b, y=p) for p < grid.y; overflow slices each take their own column at
-// x >= 8 with the 8 banks down rows 0..7. Collision-free by construction. mm-siblings are consecutive in p,
+// x >= G with the G banks down rows 0..G-1. Collision-free by construction. mm-siblings are consecutive in p,
 // so M-split slaves land adjacent to their reader, which keeps the in1 forward short without a separate pass.
 void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoord& grid) {
-    const uint32_t preaders = geo.num_cores / 8u;
-    const uint32_t overflow_cols = (grid.x > 8u) ? (grid.x - 8u) : 0u;
+    const uint32_t G = geo.G;
+    const uint32_t preaders = geo.num_cores / G;
+    const uint32_t overflow_cols = (grid.x > G) ? (grid.x - G) : 0u;
+    // Overflow slices put the G banks down a column, so they also need grid.y >= G.
     TT_FATAL(
-        grid.x >= 8u && preaders <= grid.y + overflow_cols,
+        grid.x >= G && preaders <= grid.y + overflow_cols && (preaders <= grid.y || grid.y >= G),
         "small_m_matmul mesh placement does not fit: {} slices need <= {} (grid {}x{})",
         preaders,
         grid.y + overflow_cols,
         grid.x,
         grid.y);
-    for (uint32_t b = 0; b < 8u; ++b) {
+    for (uint32_t b = 0; b < G; ++b) {
         for (uint32_t p = 0; p < preaders; ++p) {
             const uint32_t i = b * preaders + p;
             if (p < grid.y) {
                 P.cores[i].coord.x = b;  // banks along x, slices along y
                 P.cores[i].coord.y = p;
             } else {
-                P.cores[i].coord.x = 8u + (p - grid.y);  // one spare column per overflow slice
+                P.cores[i].coord.x = G + (p - grid.y);  // one spare column per overflow slice
                 P.cores[i].coord.y = b;
             }
         }
@@ -339,9 +381,9 @@ void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoo
 // SENDER's writer NoC (writer runs opposite the core's in1-reader NoC), which is asymmetric on the torus
 // and therefore cannot be approximated by a coordinate distance. Pk==4 searches all 3! orders exactly;
 // larger Pk uses greedy nearest-neighbour (P! is infeasible). Mutates only the rs_* fields.
-void optimize_reduce_scatter_order(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Pk) {
-    namespace expdev = tt::tt_metal::experimental::Device;
-    for (uint32_t b = 0; b < 8u; ++b) {
+void optimize_reduce_scatter_order(
+    plan::ExecutionPlan& P, const ChipCtx& chip, const plan::Geometry& geo, uint32_t Pk) {
+    for (uint32_t b = 0; b < geo.G; ++b) {
         for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
             std::vector<uint32_t> idx(Pk);
             for (uint32_t kk = 0; kk < Pk; ++kk) {
@@ -356,7 +398,7 @@ void optimize_reduce_scatter_order(plan::ExecutionPlan& P, IDevice* device, cons
                     return 0u;
                 }
                 const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-                return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
+                return chip.hop(lc(a), lc(c), wnoc);
             };
             std::vector<uint32_t> ord(Pk);
             if (Pk == 4u) {
@@ -412,8 +454,28 @@ void optimize_reduce_scatter_order(plan::ExecutionPlan& P, IDevice* device, cons
 
 }  // namespace
 
-SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
+SmallMMatmulProgramFactory::cached_mesh_workload_t SmallMMatmulProgramFactory::create_mesh_workload(
     const SmallMMatmulParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const SmallMMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    // One program PER CHIP: worker placement follows each chip's own DRAM-bank-adjacent cores and NoC hop
+    // distances, which differ chip to chip with harvesting. Kernel binaries are still shared on homogeneous
+    // meshes (same sources, compile args and defines); only placement / runtime args differ.
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        const ttnn::MeshCoordinateRange range(coord);
+        mesh_workload.add_program(range, std::move(cached_program.program));
+        shared_variables.emplace(range, std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create_at(
+    const SmallMMatmulParams& operation_attributes,
+    const ttnn::MeshCoordinate& coord,
     const SmallMMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     Program program = CreateProgram();
@@ -421,13 +483,14 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     const auto& in0 = tensor_args.input_tensor;
     const auto& in1 = tensor_args.weight_tensor;
     Tensor& out = tensor_return_value[0];  // chunk 0 (or the sole output when chunks==1)
-    IDevice* device = in0.device();
+    tt::tt_metal::distributed::MeshDevice* device = in0.device();
+    const ChipCtx chip(device, coord);
+    const uint32_t num_banks = num_dram_banks(device);
 
     // Resolve config=None via the auto-selector (deterministic in the tile dims, program-cache-safe).
     const uint32_t Mt_r = (static_cast<uint32_t>(in0.logical_shape()[-2]) + 31u) / 32u;
     const uint32_t Kt_r = (static_cast<uint32_t>(in0.logical_shape()[-1]) + 31u) / 32u;
     const uint32_t Nt_r = (static_cast<uint32_t>(in1.logical_shape()[-1]) + 31u) / 32u;
-    const SmallMMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
     // ---- Fused epilogue detection (all off => byte-identical no-fusion path). ----
     // Detected BEFORE planning: the fused operand CBs (c_4..c_6) and the reduce-scatter epilogue scratch
@@ -449,9 +512,13 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
         // broadcast_gate defaults to 1 when there is no ternary; only meaningful when has_ternary.
         .broadcast_gate = has_ternary && broadcast_gate != 0u,
         .gate_is_fp32 = gate_is_fp32};
+    // The picker is fusion-aware (fused operand CBs are real L1), so it must see the fusion inputs: an unfused
+    // pick can overflow L1 once c_4..c_6 / c_10 are added and would then be rejected by the planner.
+    const SmallMMatmulConfig cfg =
+        operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r, num_banks, fusion));
 
-    // ---- Run the pure host planner ----
-    auto planres = make_and_build_plan(device, in0, in1, cfg, fusion);
+    // ---- Run the pure host planner (per chip: bank-adjacent workers come from the chip at `coord`) ----
+    auto planres = make_and_build_plan(device, coord, in0, in1, cfg, fusion);
     TT_FATAL(planres.ok(), "small_m_matmul planner rejected config: {}", planres.error);
     plan::ExecutionPlan& P = *planres.plan;  // mutable: the ring-order diag overrides ring_pos/next/prev below
     const plan::Geometry& geo = P.geo;
@@ -549,7 +616,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     // This is what lets the two Sm>1 ring-heavy shapes in (256x15360x768, 256x2048x512).
     const uint32_t Ns_gate = cfg.n_slices ? cfg.n_slices : 1u;
     const uint64_t ring_bytes =
-        static_cast<uint64_t>(geo.num_cores) * 7u * geo.W * geo.M_block_capacity * kb * kTileBytesBf16;
+        static_cast<uint64_t>(geo.num_cores) * (geo.G - 1u) * geo.W * geo.M_block_capacity * kb * kTileBytesBf16;
     const uint64_t in1_bytes = static_cast<uint64_t>(geo.Kt) * geo.Nt * kTileBytesBf16;
     // Mt >= 8 is REQUIRED. The mesh trades in1 read locality (cores leave their own DRAM bank) for a ~70% cut
     // in in0 ring traffic, and ring traffic per shard scales with M_block = Mt/Sm. At Mt <= 4 the shards are
@@ -559,20 +626,23 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     // topology (512x6144x2304 +16.4%, 256x6144x768 +23.9%).
     const bool mesh_gate = geo.Mt >= 8u && (((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
                                             (ring_bytes >= 2u * in1_bytes));
-    // The mesh needs 8 columns plus one row (or one spare column) per slice group. On a smaller (e.g. harvested)
+    // The mesh needs G columns plus one row (or one spare column) per slice group. On a smaller (e.g. harvested)
     // grid fall back to the default placement instead of failing at program build; place_mesh re-asserts the fit.
     const CoreCoord full_grid = device->compute_with_storage_grid_size();
     const uint32_t grid_x = static_cast<uint32_t>(full_grid.x);
     const uint32_t grid_y = static_cast<uint32_t>(full_grid.y);
-    const uint32_t mesh_slices = geo.num_cores / 8u;
-    const bool mesh_fits = grid_x >= 8u && mesh_slices <= grid_y + (grid_x - std::min(grid_x, 8u));
+    const uint32_t mesh_slices = geo.num_cores / geo.G;
+    const bool mesh_fits = grid_x >= geo.G && mesh_slices <= grid_y + (grid_x - std::min(grid_x, geo.G)) &&
+                           (mesh_slices <= grid_y || grid_y >= geo.G);
     const bool use_mesh = mesh_gate && mesh_fits;
     // Observability: report what the picker and the internal gates actually chose. Runs once per program-cache
     // miss (enable with TT_LOGGER_LEVEL=Debug). There is no other way to read the auto-selected config from
     // Python, and a host-side mirror of the picker could silently drift from auto_select_config.
     log_debug(
         tt::LogOp,
-        "small_m_cfg M={} K={} N={} pick=({},{},{},{},{}) cores={} reduction={} placement={}",
+        "small_m_cfg coord={} banks={} M={} K={} N={} pick=({},{},{},{},{}) cores={} reduction={} placement={}",
+        coord,
+        geo.G,
         Mt_r * 32u,
         Kt_r * 32u,
         Nt_r * 32u,
@@ -587,15 +657,15 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     if (use_mesh) {
         place_mesh(P, geo, full_grid);
     } else if (Sm > 1u) {
-        place_m_split_workers(P, device, geo);
+        place_m_split_workers(P, chip, geo);
     }
 
     // ---- Physical-topology-aware in0 ring ordering (PARETO) over each (kk,nn) group's Sm mm-rings. ----
-    optimize_in0_ring_order(P, device, geo, Sm);
+    optimize_in0_ring_order(P, chip, geo, Sm);
 
     // ---- Reduce-scatter cyclic order over each group's Pk cores (after placement + ring ordering). ----
     if (rscatter) {
-        optimize_reduce_scatter_order(P, device, geo, Pk);
+        optimize_reduce_scatter_order(P, chip, geo, Pk);
     }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
@@ -699,7 +769,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
         kb,                      // 0 K_block
         geo.N_sub,               // 1 N_block
         geo.W,                   // 2 W
-        geo.G,                   // 3 G (=8)
+        geo.G,                   // 3 G (ring size == DRAM bank count)
         kTileBytesBf16,          // 4 tile_bytes
         geo.N_bpc,               // 5 N_bpc
         geo.in1_shard_stride_n,  // 6 in1_shard_stride_n (physical per-bank width)
@@ -789,7 +859,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
 
     auto phys = [&](uint32_t core_idx) {
         const auto& c = P.cores[core_idx].coord;
-        return device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
+        return chip.worker_core(CoreCoord{c.x, c.y});
     };
 
     for (uint32_t i = 0; i < geo.num_cores; ++i) {
@@ -918,12 +988,21 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
 }
 
 void SmallMMatmulProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    cached_mesh_workload_t& cached_workload,
     const SmallMMatmulParams& /*operation_attributes*/,
     const SmallMMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& sv = cached_program.shared_variables;
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        override_program_runtime_arguments(
+            program, cached_workload.shared_variables.at(coordinate_range), tensor_args, tensor_return_value);
+    }
+}
+
+void SmallMMatmulProgramFactory::override_program_runtime_arguments(
+    Program& program,
+    const shared_variables_t& sv,
+    const SmallMMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
 
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();

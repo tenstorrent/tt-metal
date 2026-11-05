@@ -29,18 +29,39 @@ struct SmallMMatmulProgramFactory {
         bool has_ternary{false};
         uint32_t n_chunks{1};
     };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    // One program per mesh coordinate: placement depends on each chip's DRAM-bank-adjacent workers and NoC
+    // hop distances, which differ with per-chip harvesting.
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    static cached_program_t create(
+    static cached_mesh_workload_t create_mesh_workload(
         const SmallMMatmulParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const SmallMMatmulInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        cached_mesh_workload_t& cached_workload,
         const SmallMMatmulParams& operation_attributes,
         const SmallMMatmulInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
+
+private:
+    // Kept private: a public cached_program_t would also make this type match ProgramFactoryConcept.
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create_at(
+        const SmallMMatmulParams& operation_attributes,
+        const ttnn::MeshCoordinate& coord,
+        const SmallMMatmulInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
+
+    static void override_program_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const shared_variables_t& shared_variables,
+        const SmallMMatmulInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<SmallMMatmulProgramFactory>);
 
 }  // namespace ttnn::experimental::prim

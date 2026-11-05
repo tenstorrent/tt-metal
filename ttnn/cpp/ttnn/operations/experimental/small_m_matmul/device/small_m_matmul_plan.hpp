@@ -40,7 +40,10 @@ namespace ttnn::operations::experimental::small_m_matmul::plan {
 // window drive config feasibility, so any change here changes codegen or picker behaviour.
 constexpr uint32_t kTileBytesBf16 = 2048u;          // bf16 tile bytes
 constexpr uint32_t kTileBytesFp32 = 4096u;          // fp32 tile bytes
-constexpr uint32_t kNumBanks = 8u;                  // small_m_matmul fixes the in1 DRAM width-shard to 8 banks (== G)
+// NOTE: the DRAM bank count is NOT a constant. in1 is width-sharded across ALL of the device's DRAM banks and the
+// in0 ring size G equals that bank count; it is derived from the device (num_dram_channels(), == the length of the
+// optimal bank->worker assignment). Blackhole P150 exposes 8 banks, P100 exposes 7.
+constexpr uint32_t kMinBanks = 2u;                  // ring needs >= 2 members
 constexpr uint32_t kL1BudgetBytes = 1440u * 1024u;  // BH usable L1 per core
 constexpr uint32_t kMinCores = 16u;                 // auto-picker feasibility: core-count window [kMin, kMax]
 constexpr uint32_t kMaxCores = 104u;
@@ -105,10 +108,11 @@ struct PlanInputs {
     uint32_t grid_x{};
     uint32_t grid_y{};
 
-    // Bank-adjacent logical worker cores, one per DRAM bank (8), for each NoC.
-    // device->get_optimal_dram_bank_to_logical_worker_assignment(NOC_0 / NOC_1).
-    std::vector<PlanXY> opt0;  // size 8
-    std::vector<PlanXY> opt1;  // size 8
+    // Bank-adjacent logical worker cores, one per DRAM bank, for each NoC, indexed by bank id
+    // (MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(noc, coord)). Their common length IS the
+    // bank count G (ring size): 8 on Blackhole P150, 7 on P100.
+    std::vector<PlanXY> opt0;  // size G
+    std::vector<PlanXY> opt1;  // size G
 
     // Logical cores that are unavailable (grid holes / reserved). find_near skips these.
     std::set<PlanXY> holes;
@@ -130,7 +134,7 @@ struct PlanInputs {
 
 // Geometry with THREE cleanly separated concepts (balanced-tail design):
 //   (a) PHYSICAL STRIDES — derived from the tensor layouts; the ONLY values used as address strides.
-//   (b) SCHEDULE CAPACITIES — fixed uniform kernel block sizes (may round up to kb*8 / nsb); the loop
+//   (b) SCHEDULE CAPACITIES — fixed uniform kernel block sizes (may round up to kb*G / nsb); the loop
 //       trip-counts and CB sizes. Invalid block positions are locally zero-filled, never DRAM-read.
 //   (c) LOGICAL OWNERSHIP — per-core balanced (start, valid_extent) ranges over the logical tiles.
 // Schedule capacities must NEVER be used as a tensor address stride.
@@ -139,23 +143,23 @@ struct Geometry {
 
     // (a) physical strides (tiles), from tensor layouts:
     uint32_t in0_stride_k{};        // in0 [Mt,Kt] row stride = Kt
-    uint32_t in1_shard_stride_n{};  // in1 per-bank shard width = ceil(Nt/8) (K-row stride within a bank)
+    uint32_t in1_shard_stride_n{};  // in1 per-bank shard width = ceil(Nt/G) (K-row stride within a bank)
     uint32_t out_stride_n{};        // out [Mt,Nt] row stride = Nt
 
     // (b) schedule capacities (uniform kernel blocks):
-    uint32_t K_slice_capacity{};  // K tiles processed per k-slice = rup(ceil(Kt/Pk), kb*8) (== G*W*kb)
+    uint32_t K_slice_capacity{};  // K tiles processed per k-slice = rup(ceil(Kt/Pk), kb*G) (== G*W*kb)
     uint32_t M_block_capacity{};  // M tiles per m-block = ceil(Mt/Sm)
     uint32_t N_slice_capacity{};  // N tiles per core = N_bpc * N_sub (rounded to nsb)
-    uint32_t N_band{};            // per-bank physical width = ceil(Nt/8) (also == in1_shard_stride_n)
+    uint32_t N_band{};            // per-bank physical width = ceil(Nt/G) (also == in1_shard_stride_n)
     uint32_t N_sub{};             // N-subblock width (nsb, or N_own when nsb==0)
     uint32_t N_bpc{};             // N-subblocks per core
-    uint32_t K_num_blocks_eff{};  // K_slice_capacity / kb  (== G*W, multiple of 8)
-    uint32_t W{};                 // ring shard width = K_num_blocks_eff / 8
-    uint32_t G{8};                // ring size (fixed 8 banks)
+    uint32_t K_num_blocks_eff{};  // K_slice_capacity / kb  (== G*W, multiple of G)
+    uint32_t W{};                 // ring shard width = K_num_blocks_eff / G
+    uint32_t G{};                 // ring size == DRAM bank count (device-derived: 8 on P150, 7 on P100)
 
     uint32_t preaders{};   // Pk*Ns*Sm
     uint32_t mfac{};       // Ns*Sm (reduction stride in core index)
-    uint32_t num_cores{};  // 8*preaders
+    uint32_t num_cores{};  // G*preaders
 
     // Reporting only (effective-vs-delivered): schedule zero-fill fraction over K and N.
     double waste_k{}, waste_n{};
@@ -249,7 +253,7 @@ inline CbSizes compute_cb_sizes(
 // capacities and zero-fills positions >= valid.
 struct CorePlan {
     PlanXY coord{};    // assigned logical worker core
-    uint32_t bank{};   // DRAM bank id 0..7
+    uint32_t bank{};   // DRAM bank id 0..G-1
     uint32_t noc{};    // 0 => reader on NOC0 / writer on NOC1 ; 1 => swapped
     uint32_t kk{};     // k-slice index 0..Pk-1
     uint32_t nn{};     // n-slice index 0..Ns-1
@@ -268,8 +272,8 @@ struct CorePlan {
     // in0 ring: position and cyclic neighbours (physical coords filled by the device op;
     // here we store the ring member core INDICES so the op can translate to physical coords).
     uint32_t ring_pos{};
-    uint32_t ring_next_idx{};  // core index of (pos+1)%8 in this ring
-    uint32_t ring_prev_idx{};  // core index of (pos+7)%8 in this ring
+    uint32_t ring_next_idx{};  // core index of (pos+1)%G in this ring
+    uint32_t ring_prev_idx{};  // core index of (pos+G-1)%G in this ring
 
     // split-K reduction chain.
     bool is_bottom{};         // kk == 0
@@ -293,10 +297,10 @@ struct ExecutionPlan {
     std::vector<CorePlan> cores;  // size num_cores, index i = bank*preaders + slice
 
     // Physical in1 DRAM width-shard requirement, per bank, in tiles: [rows, cols]. rows must cover the
-    // logical Kt; cols = ceil(Nt/8) (== geo.in1_shard_stride_n). Depends only on (Kt, Nt), not on the
+    // logical Kt; cols = ceil(Nt/G) (== geo.in1_shard_stride_n). Depends only on (Kt, Nt, G), not on the
     // schedule config.
     uint32_t in1_shard_rows{};  // Kt
-    uint32_t in1_shard_cols{};  // ceil(Nt/8)
+    uint32_t in1_shard_cols{};  // ceil(Nt/G)
 };
 
 struct PlanResult {
@@ -312,11 +316,13 @@ struct PlanResult {
 inline uint32_t rap_cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rap_rup(uint32_t x, uint32_t y) { return rap_cdiv(x, y) * y; }
 
-// Width-sharding in1 across 8 banks requires every bank's physical N-interval to intersect logical Nt
-// (else trailing banks are wholly padded/empty). N_band = ceil(Nt/8); infeasible iff 7*N_band >= Nt.
+// Width-sharding in1 across G banks requires every bank's physical N-interval to intersect logical Nt
+// (else trailing banks are wholly padded/empty). N_band = ceil(Nt/G); infeasible iff (G-1)*N_band >= Nt.
 // SHARED by the planner (build_plan) and the auto-picker (pick_plan) so config=None never selects a shape
 // the planner will later reject — keep this the single source of truth for the bank-interval constraint.
-inline bool nt_width_shard_feasible(uint32_t Nt) { return 7u * rap_cdiv(Nt, 8u) < Nt; }
+inline bool nt_width_shard_feasible(uint32_t Nt, uint32_t G) {
+    return G >= kMinBanks && (G - 1u) * rap_cdiv(Nt, G) < Nt;
+}
 
 // Balanced prefix range for owner `i` of `parts` over `[0, total)`:
 //   start = floor(i*total/parts), end = floor((i+1)*total/parts). Disjoint, exact cover, sizes differ
@@ -356,15 +362,19 @@ inline PlanResult build_plan(const PlanInputs& in) {
         res.error = "k_slices (Pk) must be <= Kt (empty k-slice otherwise)";
         return res;
     }
-    if (in.opt0.size() != 8 || in.opt1.size() != 8) {
-        res.error = "opt0/opt1 must each have 8 bank-adjacent cores";
+    // G (ring size) == DRAM bank count == length of the per-bank worker assignment.
+    const uint32_t G = static_cast<uint32_t>(in.opt0.size());
+    if (G < kMinBanks || in.opt1.size() != G) {
+        res.error = "opt0/opt1 must each have one bank-adjacent core per DRAM bank (>= 2), got " +
+                    std::to_string(in.opt0.size()) + " and " + std::to_string(in.opt1.size());
         return res;
     }
-    // Width-sharding across 8 banks requires every bank's physical N-interval to intersect logical Nt
-    // (else the last banks are wholly padded / empty). N_band = ceil(Nt/8); bank b owns [b*N_band, ...).
-    const uint32_t N_band = rap_cdiv(in.Nt, 8u);
-    if (!nt_width_shard_feasible(in.Nt)) {
-        res.error = "Nt too small to width-shard across 8 banks without empty banks (need Nt > 7*ceil(Nt/8))";
+    // Width-sharding across G banks requires every bank's physical N-interval to intersect logical Nt
+    // (else the last banks are wholly padded / empty). N_band = ceil(Nt/G); bank b owns [b*N_band, ...).
+    const uint32_t N_band = rap_cdiv(in.Nt, G);
+    if (!nt_width_shard_feasible(in.Nt, G)) {
+        res.error = "Nt too small to width-shard across " + std::to_string(G) +
+                    " banks without empty banks (need Nt > (G-1)*ceil(Nt/G))";
         return res;
     }
 
@@ -378,8 +388,8 @@ inline PlanResult build_plan(const PlanInputs& in) {
     g.N_band = N_band;
     g.in1_shard_stride_n = N_band;
     g.out_stride_n = in.Nt;
-    // (b) schedule capacities — uniform kernel blocks (round to kb*8 / nsb); tail positions zero-filled.
-    g.K_slice_capacity = rap_rup(rap_cdiv(in.Kt, Pk), kb * 8u);
+    // (b) schedule capacities — uniform kernel blocks (round to kb*G / nsb); tail positions zero-filled.
+    g.K_slice_capacity = rap_rup(rap_cdiv(in.Kt, Pk), kb * G);
     g.M_block_capacity = rap_cdiv(in.Mt, Sm);
     const uint32_t N_own = rap_cdiv(N_band, Ns);  // max N tiles a core owns (balanced subdivision bound)
     g.N_sub = c.n_subblock_tiles ? c.n_subblock_tiles : N_own;
@@ -390,20 +400,20 @@ inline PlanResult build_plan(const PlanInputs& in) {
     g.N_bpc = rap_cdiv(N_own, g.N_sub);
     g.N_slice_capacity = g.N_bpc * g.N_sub;
     g.K_num_blocks_eff = g.K_slice_capacity / kb;
-    if (g.K_num_blocks_eff % 8u != 0u) {
-        res.error = "internal: K_num_blocks_eff not a multiple of 8";
+    if (g.K_num_blocks_eff % G != 0u) {
+        res.error = "internal: K_num_blocks_eff not a multiple of G";
         return res;
     }
-    g.W = g.K_num_blocks_eff / 8u;
-    g.G = 8u;
+    g.W = g.K_num_blocks_eff / G;
+    g.G = G;
     g.preaders = Pk * Ns * Sm;
     g.mfac = Ns * Sm;
-    g.num_cores = 8u * g.preaders;
+    g.num_cores = G * g.preaders;
     // Schedule zero-fill fraction (compute/NoC-internal overhead; DRAM reads only valid tiles).
     g.waste_k = static_cast<double>(Pk * g.K_slice_capacity) / in.Kt - 1.0;
-    g.waste_n = static_cast<double>(8u * Ns * g.N_slice_capacity) / in.Nt - 1.0;
+    g.waste_n = static_cast<double>(G * Ns * g.N_slice_capacity) / in.Nt - 1.0;
 
-    // --- Core-count feasibility (8 * Pk * Ns * Sm <= available workers) ---
+    // --- Core-count feasibility (G * Pk * Ns * Sm <= available workers) ---
     const uint32_t grid_cells = in.grid_x * in.grid_y;
     const uint32_t available = (grid_cells > in.holes.size()) ? (grid_cells - (uint32_t)in.holes.size()) : 0u;
     if (g.num_cores > available) {
@@ -452,10 +462,10 @@ inline PlanResult build_plan(const PlanInputs& in) {
     plan.geo = g;
     plan.cb = cb;
     plan.in1_shard_rows = g.Kt;      // physical shard must cover the logical K tiles
-    plan.in1_shard_cols = g.N_band;  // ceil(Nt/8) per bank
+    plan.in1_shard_cols = g.N_band;  // ceil(Nt/G) per bank
     plan.cores.resize(g.num_cores);
 
-    for (uint32_t b = 0; b < 8u; ++b) {
+    for (uint32_t b = 0; b < G; ++b) {
         for (uint32_t p = 0; p < g.preaders; ++p) {
             const uint32_t i = b * g.preaders + p;
             CorePlan cp;
@@ -520,19 +530,15 @@ inline PlanResult build_plan(const PlanInputs& in) {
     }
 
     // --- Ring membership + ordering ---
-    // For each slice index j, the ring is the 8 cores {pos*preaders + j} in BANK ORDER [0..7]. This is the
+    // For each slice index j, the ring is the G cores {pos*preaders + j} in BANK ORDER [0..G-1]. This is the
     // canonical plan output (unit-tested offline); the program factory re-derives the physical PARETO ring
     // order at runtime (optimize_in0_ring_order) from the device's NoC hop distances.
     for (uint32_t j = 0; j < g.preaders; ++j) {
-        std::vector<uint32_t> order(8);
-        for (uint32_t k = 0; k < 8u; ++k) {
-            order[k] = k;
-        }
-        for (uint32_t pos = 0; pos < 8u; ++pos) {
-            const uint32_t ci = order[pos] * g.preaders + j;
+        for (uint32_t pos = 0; pos < G; ++pos) {
+            const uint32_t ci = pos * g.preaders + j;
             plan.cores[ci].ring_pos = pos;
-            plan.cores[ci].ring_next_idx = order[(pos + 1u) % 8u] * g.preaders + j;
-            plan.cores[ci].ring_prev_idx = order[(pos + 7u) % 8u] * g.preaders + j;
+            plan.cores[ci].ring_next_idx = ((pos + 1u) % G) * g.preaders + j;
+            plan.cores[ci].ring_prev_idx = ((pos + G - 1u) % G) * g.preaders + j;
         }
     }
 

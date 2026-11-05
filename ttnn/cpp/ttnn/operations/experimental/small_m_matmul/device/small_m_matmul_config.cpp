@@ -14,6 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -22,15 +23,20 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Shared hardware/layout constants (bank count, L1 budget, tile bytes, core-count window) live in
+// Shared hardware/layout constants (L1 budget, tile bytes, core-count window) live in
 // small_m_matmul_plan.hpp — the SINGLE source of truth — and are reached here via the `plan::` alias.
+// The DRAM bank count G is NOT a constant: it is read from the device (8 on Blackhole P150, 7 on P100).
 using plan::kL1BudgetBytes;
-using plan::kNumBanks;
 using plan::kTileBytesBf16;
 using plan::kTileBytesFp32;
 
 inline uint32_t cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rup(uint32_t x, uint32_t y) { return cdiv(x, y) * y; }
+
+// The measured lookup table below was swept on an 8-bank Blackhole (P150). Its entries encode 8-bank core
+// counts and K/N roundings, so it is consulted only when the device has exactly this many banks; other bank
+// counts (P100 = 7) go straight to the cost model, which is parameterised on G.
+constexpr uint32_t kTableBanks = 8u;
 
 // ---- Auto-selector: measured lookup table + cost-model fallback ----
 // Cost-model params (grid-search best on a 3262-config on-device sweep: geomean 96.8% of the measured optimum).
@@ -57,30 +63,31 @@ bool pick_plan(
     uint32_t Sm,
     uint32_t kb,
     uint32_t nsb,
+    uint32_t G,
     const plan::FusionInputs& fu,
     PickGeo& g) {
     // Share the planner's bank-interval feasibility so config=None never selects a shape build_plan()
-    // will later reject (picker/planner parity). This constraint is a function of Nt only.
-    if (!plan::nt_width_shard_feasible(Nt)) {
+    // will later reject (picker/planner parity). This constraint is a function of (Nt, G) only.
+    if (!plan::nt_width_shard_feasible(Nt, G)) {
         return false;
     }
-    g.cores = kNumBanks * Pk * Ns * Sm;
+    g.cores = G * Pk * Ns * Sm;
     if (g.cores < plan::kMinCores || g.cores > plan::kMaxCores) {
         return false;
     }
-    g.Ktl = rup(cdiv(Kt, Pk), kb * kNumBanks);
+    g.Ktl = rup(cdiv(Kt, Pk), kb * G);
     g.wasteK = static_cast<double>(Pk * g.Ktl) / Kt - 1.0;
     if (g.wasteK > 0.20) {
         return false;
     }
     g.Mblk = cdiv(Mt, Sm);
-    const uint32_t Nband = cdiv(Nt, kNumBanks);
+    const uint32_t Nband = cdiv(Nt, G);
     g.Nown = cdiv(Nband, Ns);
     if (nsb > g.Nown) {
         return false;
     }
     g.Nbpc = cdiv(g.Nown, nsb);
-    g.wasteN = static_cast<double>(kNumBanks * Ns * g.Nbpc * nsb) / Nt - 1.0;
+    g.wasteN = static_cast<double>(G * Ns * g.Nbpc * nsb) / Nt - 1.0;
     if (g.wasteN > 0.20) {
         return false;
     }
@@ -112,7 +119,13 @@ double pick_cost_v3(uint32_t Kt, uint32_t Nt, uint32_t Pk, uint32_t kb, uint32_t
 // config is feasible. Shared by the narrow-N hysteresis (choosing M-split over a feasible Sm=1 anchor) and by
 // the large-Mt rescue (where NO Sm=1 config fits), so both rank candidates identically.
 double best_msplit_config(
-    uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t Nband, const plan::FusionInputs& fu, SmallMMatmulConfig& best) {
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    uint32_t Nband,
+    uint32_t G,
+    const plan::FusionInputs& fu,
+    SmallMMatmulConfig& best) {
     double best_cost = std::numeric_limits<double>::infinity();
     for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
         for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
@@ -121,7 +134,7 @@ double best_msplit_config(
                 for (uint32_t kb : {1u, 2u, 4u, 8u}) {
                     for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
                         PickGeo g{};
-                        if (!pick_plan(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb, fu, g)) {
+                        if (!pick_plan(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb, G, fu, g)) {
                             continue;
                         }
                         const double c = pick_cost_v3(Kt, Nt, Pk, kb, nsb, g);
@@ -144,7 +157,9 @@ double best_msplit_config(
 
 }  // namespace
 
-SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, const plan::FusionInputs& fu) {
+SmallMMatmulConfig auto_select_config(
+    uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t G, const plan::FusionInputs& fu) {
+    TT_FATAL(G >= plan::kMinBanks, "small_m_matmul needs >= {} DRAM banks, got {}", plan::kMinBanks, G);
     // Lookup table of measured winners (exhaustive on-device sweeps, Blackhole p150, unfused), keyed by TILE
     // dims (Mt,Kt,Nt). value = {k_slices(Pk), n_slices(Ns), m_slices(Sm), k_block_tiles(kb), n_subblock_tiles(nsb)}.
     // Trailing comment = logical M x K x N. Shapes not listed fall through to the cost model below.
@@ -203,7 +218,7 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
         {{2, 192, 24}, {3, 1, 1, 8, 3}},    // 64x6144x768
         {{1, 160, 40}, {5, 1, 1, 4, 3}},    // 32x5120x1280
     };
-    if (auto it = kTable.find({Mt, Kt, Nt}); it != kTable.end()) {
+    if (auto it = (G == kTableBanks) ? kTable.find({Mt, Kt, Nt}) : kTable.end(); it != kTable.end()) {
         // Every table entry is a MEASURED unfused winner, so an unfused lookup is returned unconditionally --
         // byte-identical to before. Fused operands (c_4..c_6, c_10) add L1 that the measurements never paid
         // for, so when fusing we check the entry still fits and otherwise fall through to the cost model.
@@ -214,7 +229,7 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
         }
         const SmallMMatmulConfig& t = it->second;
         const uint32_t t_Ns = t.n_slices ? t.n_slices : 1u;
-        const uint32_t t_nsb = t.n_subblock_tiles ? t.n_subblock_tiles : cdiv(cdiv(Nt, kNumBanks), t_Ns);
+        const uint32_t t_nsb = t.n_subblock_tiles ? t.n_subblock_tiles : cdiv(cdiv(Nt, G), t_Ns);
         PickGeo tg{};
         if (pick_plan(
                 Mt,
@@ -225,6 +240,7 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
                 t.m_slices ? t.m_slices : 1u,
                 t.k_block_tiles ? t.k_block_tiles : 1u,
                 t_nsb,
+                G,
                 fu,
                 tg)) {
             return t;
@@ -235,14 +251,14 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
     SmallMMatmulConfig anchor{};
     double anchor_cost = std::numeric_limits<double>::infinity();
     PickGeo anchor_g{};
-    const uint32_t Nband = cdiv(Nt, kNumBanks);
+    const uint32_t Nband = cdiv(Nt, G);
     for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
         for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
             const uint32_t Nown = cdiv(Nband, Ns);
             for (uint32_t kb : {1u, 2u, 4u, 8u}) {
                 for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
                     PickGeo g{};
-                    if (!pick_plan(Mt, Kt, Nt, Ns, Pk, 1u, kb, nsb, fu, g)) {
+                    if (!pick_plan(Mt, Kt, Nt, Ns, Pk, 1u, kb, nsb, G, fu, g)) {
                         continue;
                     }
                     const double c = pick_cost(Kt, Nt, kb, nsb, g);
@@ -273,25 +289,25 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
         // reporting "no config fits L1" for a too-narrow N is simply wrong -- and narrow N is the case users
         // hit first. Check it explicitly so the error names the real cause and the real remedy.
         TT_FATAL(
-            plan::nt_width_shard_feasible(Nt),
+            plan::nt_width_shard_feasible(Nt, G),
             // Report Nt, not a reconstructed N: only the tile count reaches here, and printing
             // Nt*TILE_WIDTH would quote a PADDED width back at a user who asked for something narrower
             // (N=8 would be reported as "N=32").
-            "small_m_matmul cannot serve this N: in1 is DRAM width-sharded across {} banks, which requires "
-            "7*ceil(Nt/8) < Nt so that every bank holds real data. This request rounds up to Nt={} tiles "
-            "({} elements), where the trailing banks would be entirely padding. The smallest workable widths "
-            "are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, 768, 928..). This is a "
-            "SHAPE-DOMAIN limit of the small-M matmul, not a tuning failure: use a standard matmul for this N.",
-            kNumBanks,
+            "small_m_matmul cannot serve this N: in1 is DRAM width-sharded across G={} banks, which requires "
+            "(G-1)*ceil(Nt/G) < Nt so that every bank holds real data. This request rounds up to Nt={} tiles "
+            "({} elements), where the trailing banks would be entirely padding (on 8 banks the smallest "
+            "workable widths are Nt = 8, 15, 16, 22, 23, 24, 29..). This is a SHAPE-DOMAIN limit of the "
+            "small-M matmul, not a tuning failure: use a standard matmul for this N.",
+            G,
             Nt,
             Nt * tt::constants::TILE_WIDTH);
         SmallMMatmulConfig rescue{};
-        const double rescue_cost = best_msplit_config(Mt, Kt, Nt, Nband, fu, rescue);
+        const double rescue_cost = best_msplit_config(Mt, Kt, Nt, Nband, G, fu, rescue);
         TT_FATAL(
             rescue_cost != std::numeric_limits<double>::infinity(),
             "small_m_matmul cannot serve Mt={} Kt={} Nt={}: no Sm=1 config fits L1 ({} KB/core) and no "
             "M-split config is feasible either. This op keeps the in0 k-slice L1-RESIDENT, so cb0 alone is "
-            "~(Mt/Sm)*(Kt/Pk) tiles, while core feasibility caps 8*Pk*Ns*Sm <= {} cores, i.e. Pk*Ns*Sm <= {}; "
+            "~(Mt/Sm)*(Kt/Pk) tiles, while core feasibility caps G*Pk*Ns*Sm <= {} cores, i.e. Pk*Ns*Sm <= {}; "
             "shrinking cb0 needs a larger Sm*Pk than that cap allows, so at large Mt with deep K the two "
             "cannot both be satisfied (e.g. Mt=152, Kt=128 needs Sm*Pk >~ 32 against Pk*Ns*Sm <= {}). This is "
             "a SHAPE-DOMAIN limit of the small-M matmul, not a tuning failure: use a standard matmul for this shape.",
@@ -300,8 +316,8 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
             Nt,
             plan::kL1BudgetBytes / 1024u,
             plan::kMaxCores,
-            plan::kMaxCores / kNumBanks,
-            plan::kMaxCores / kNumBanks);
+            plan::kMaxCores / G,
+            plan::kMaxCores / G);
         return rescue;
     }
 
@@ -312,7 +328,7 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
         return anchor;
     }
     SmallMMatmulConfig bestG{};
-    const double bestG_cost = best_msplit_config(Mt, Kt, Nt, Nband, fu, bestG);
+    const double bestG_cost = best_msplit_config(Mt, Kt, Nt, Nband, G, fu, bestG);
     const double anchor_cost_v3 =
         pick_cost_v3(Kt, Nt, anchor.k_slices, anchor.k_block_tiles, anchor.n_subblock_tiles, anchor_g);
     if (bestG_cost < std::numeric_limits<double>::infinity() && bestG_cost < anchor_cost_v3 * (1.0 - kMSplitMargin)) {
@@ -322,7 +338,8 @@ SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, con
 }
 
 plan::PlanResult make_and_build_plan(
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
     const Tensor& in0,
     const Tensor& in1,
     const std::optional<SmallMMatmulConfig>& cfg_opt,
@@ -336,19 +353,13 @@ plan::PlanResult make_and_build_plan(
 
     // config=None -> auto-select (deterministic in (Mt,Kt,Nt), so program-cache-safe: the cache key is
     // (nullopt config + tensor shapes) and the same shapes always resolve to the same config).
-    const SmallMMatmulConfig cfg = cfg_opt.value_or(auto_select_config(Mt, Kt, Nt, fusion));
+    const SmallMMatmulConfig cfg = cfg_opt.value_or(auto_select_config(Mt, Kt, Nt, num_dram_banks(device), fusion));
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
 
-    auto to_plan_xy = [](const std::vector<CoreCoord>& src) {
-        std::vector<plan::PlanXY> out;
-        out.reserve(src.size());
-        for (const auto& c : src) {
-            out.push_back(plan::PlanXY{static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y)});
-        }
-        return out;
-    };
-    const auto opt0 = to_plan_xy(device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
+    // Per-device bank-adjacent worker assignment for the chip at `coord` (exact on heterogeneously harvested
+    // meshes; the deprecated mesh-wide overload returns the reference chip's cores for every chip).
+    const auto opt0 = optimal_bank_workers(device, coord, NOC::NOC_0);
     // NOTE: we deliberately use the NOC_0 assignment for BOTH NoCs. The API returns "the worker to the RIGHT
     // of the DRAM controller" for either NoC, which is downstream (short) only for NOC_0: a NOC_1 read
     // response from a DRAM column travels -x and therefore wraps most of the way round the torus to reach a
@@ -380,6 +391,34 @@ plan::PlanResult make_and_build_plan(
     return plan::build_plan(in);
 }
 
+uint32_t num_dram_banks(const IDevice* device) {
+    const int n = device->num_dram_channels();
+    TT_FATAL(
+        n >= static_cast<int>(plan::kMinBanks),
+        "small_m_matmul needs >= {} DRAM banks, device has {}",
+        plan::kMinBanks,
+        n);
+    return static_cast<uint32_t>(n);
+}
+
+std::vector<plan::PlanXY> optimal_bank_workers(
+    tt::tt_metal::distributed::MeshDevice* device, const tt::tt_metal::distributed::MeshCoordinate& coord, NOC noc) {
+    const auto by_bank = device->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+    const uint32_t G = num_dram_banks(device);
+    TT_FATAL(
+        by_bank.size() == G,
+        "small_m_matmul: optimal DRAM worker assignment at {} has {} entries, expected one per DRAM bank ({})",
+        coord,
+        by_bank.size(),
+        G);
+    std::vector<plan::PlanXY> out(G);
+    for (const auto& [bank, core] : by_bank) {
+        TT_FATAL(bank < G, "small_m_matmul: DRAM bank id {} out of range [0, {})", bank, G);
+        out[bank] = plan::PlanXY{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
+    }
+    return out;
+}
+
 MemoryConfig create_small_m_weight_memory_config(const ttnn::Shape& weight_shape, DataType dtype, IDevice* device) {
     // v1 supports only bf16 in1 (the reader + CBs are bf16). Reject other dtypes rather than accepting and
     // silently ignoring the argument — the shard byte layout below assumes a bf16 tile size.
@@ -396,35 +435,30 @@ MemoryConfig create_small_m_weight_memory_config(const ttnn::Shape& weight_shape
     // valid-looking MemoryConfig for an infeasible N lets a caller lay a weight down at load time and
     // only discover at program build that no config exists -- by which point the layout choice is
     // already baked into the loaded parameter. Same bank-interval constraint pick_plan enforces.
+    // in1 is width-sharded across ALL of the device's DRAM banks (G = 8 on P150, 7 on P100); the op's in0 ring
+    // size equals G, so the weight layout is device-dependent (but still config-independent).
+    const uint32_t G = num_dram_banks(device);
     TT_FATAL(
-        plan::nt_width_shard_feasible(Nt),
+        plan::nt_width_shard_feasible(Nt, G),
         "create_small_m_weight_memory_config cannot serve N={} (Nt={} tiles): in1 is DRAM width-sharded "
-        "across {} banks, which requires 7*ceil(Nt/8) < Nt so that every bank holds real data. The "
-        "smallest workable widths are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, "
-        "768, 928..). This is a SHAPE-DOMAIN limit of the small-M matmul: use a standard matmul for "
-        "this N. NOTE at tensor parallelism this is the LOCAL (per-device) N, not the global one.",
+        "across G={} banks, which requires (G-1)*ceil(Nt/G) < Nt so that every bank holds real data (on 8 "
+        "banks the smallest workable widths are Nt = 8, 15, 16, 22, 23, 24, 29..). This is a SHAPE-DOMAIN "
+        "limit of the small-M matmul: use a standard matmul for this N. NOTE at tensor parallelism this is "
+        "the LOCAL (per-device) N, not the global one.",
         N,
         Nt,
-        kNumBanks);
+        G);
 
     // Config-independent + minimal padding: K is NOT padded (shard height = the tile-aligned K rows;
-    // the balanced-tail reader never reads beyond valid K). N is padded up to a multiple of 8 tiles so
-    // the width shard divides evenly across the 8 banks. Shard spec depends only on (K, N).
-    const uint32_t Nt_pad = rup(Nt, kNumBanks);
+    // the balanced-tail reader never reads beyond valid K). N is padded up to a multiple of G tiles so
+    // the width shard divides evenly across the G banks. Shard spec depends only on (K, N, G).
+    const uint32_t Nt_pad = rup(Nt, G);
 
-    // Shard shape in ELEMENTS: Kt rows, ceil(Nt/8) columns per bank (width sharding across 8 banks).
-    const std::array<uint32_t, 2> shard_shape = {Kt * TILE_HEIGHT, (Nt_pad / kNumBanks) * TILE_WIDTH};
+    // Shard shape in ELEMENTS: Kt rows, ceil(Nt/G) columns per bank (width sharding across G banks).
+    const std::array<uint32_t, 2> shard_shape = {Kt * TILE_HEIGHT, (Nt_pad / G) * TILE_WIDTH};
 
-    // Shard grid = the first 8 DRAM banks (the op fixes G=8). NOTE: this assumes the target device
-    // exposes >= 8 DRAM banks along the DRAM grid row (BH p150b = 8). Guard against smaller grids.
-    const CoreCoord dram_grid = device->dram_grid_size();
-    TT_FATAL(
-        static_cast<uint32_t>(dram_grid.x) * static_cast<uint32_t>(dram_grid.y) >= kNumBanks,
-        "small_m_matmul in1 width-shard needs >= {} DRAM banks, device exposes {}x{}",
-        kNumBanks,
-        dram_grid.x,
-        dram_grid.y);
-    const CoreRangeSet shard_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{kNumBanks - 1, 0}));
+    // Shard grid = DRAM banks {0..G-1} x {0}: shard index == bank id, which the in1 reader relies on.
+    const CoreRangeSet shard_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{G - 1, 0}));
 
     const ShardSpec shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR);
     return MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::DRAM, shard_spec);
