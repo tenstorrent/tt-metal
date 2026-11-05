@@ -14,8 +14,19 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 
+namespace ckernel::sfpu {}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_polygamma_bf16.h"
+
 namespace ckernel::sfpu {
 
+// The n_packed the generated polygamma kernel is fitted for, as FP32 bits; any other n_packed runs the stock kernel.
+inline constexpr std::uint32_t polygamma_bf16_n_packed_bits = 0x3f800000u;
+// The scale_packed the generated polygamma kernel is fitted for, as FP32 bits; any other scale_packed runs the stock
+// kernel.
+inline constexpr std::uint32_t polygamma_bf16_scale_packed_bits = 0x3f800000u;
+// Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
+inline constexpr bool polygamma_bf16_whole_tile = true;
 /**
  * Fused SFPU kernel for polygamma function: ψ^(n)(x)
  *
@@ -39,6 +50,13 @@ namespace ckernel::sfpu {
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_polygamma() && n_packed == ckernel::sfpu::polygamma_bf16_n_packed_bits &&
+            scale_packed == ckernel::sfpu::polygamma_bf16_scale_packed_bits) {
+            calculate_polygamma_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // Exact terms (k=0..NUM_TERMS-1). The Euler-Maclaurin tail (with B2,B4,B6 corrections)
     // is applied at z = x + NUM_TERMS. For the supported domain (x >= 0.5) this puts
     // z >= 6.5, where the asymptotic remainder is far below bfloat16 precision, so 6 exact
@@ -146,10 +164,13 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_polygamma_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
