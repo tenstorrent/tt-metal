@@ -1472,8 +1472,9 @@ void RiscFirmwareInitializer::initialize_firmware(
                 cluster_.write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
+            // 2-ERISC mode is base firmware on ERISC0 releasing ERISC1; without base firmware the host launches.
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
-                !rtoptions_.get_enable_2_erisc_mode()) {
+                !rtoptions_.get_enable_2_erisc_mode() || !hal_.has_eth_base_firmware()) {
                 if (is_idle_eth && !quasar_ethernet) {
                     // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
                     // we switch to runtime FW. Must happen before we write PC and deassert.
@@ -1797,7 +1798,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     cluster_.l1_barrier(device_id);
 
     for (const auto& worker_core : not_done_cores) {
-        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
+        // Base firmware releases a 2-ERISC core itself; a core without base firmware is deasserted here.
+        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode() &&
+            hal_.has_eth_base_firmware()) {
             continue;
         }
 
