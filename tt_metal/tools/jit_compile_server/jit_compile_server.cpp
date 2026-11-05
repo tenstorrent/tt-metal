@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/jit_server/jit_compile_server_controller.hpp"
+#include "impl/jit_server/server_cache_pruner.hpp"
 #include "impl/jit_server/types.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
@@ -78,6 +80,10 @@ constexpr const char* kDefaultEndpoint = "localhost:9876";
 constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 std::string g_server_cache_root = kDefaultServerCacheRoot;
+
+// Deletes least recently used kernel directories when the cache filesystem runs low on space.
+// Created in main() before the server accepts requests; disabled unless configured (see README).
+std::unique_ptr<tt::tt_metal::jit_server::ServerCachePruner> g_cache_pruner;
 
 // This server's own build root (TT_METAL_HOME, trailing-slash), set at startup. Used to re-root
 // client-shipped toolchain/link paths onto THIS server's tree. Empty => re-root disabled.
@@ -144,6 +150,7 @@ std::string firmware_cache_dir(std::uint64_t build_key, const std::string& targe
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
 // PoC limitation: uploaded firmware is assumed durable in the configured server cache root.
 // If the server cache is cleared after upload, compile will fail until the client re-uploads.
+// That is why the cache pruner never deletes firmware.
 fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
     if (target.weakened_firmware_name.empty()) {
         throw std::runtime_error(
@@ -396,6 +403,10 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             validate_safe_relative_path(file.name, "generated_file name");
         }
 
+        // Every file this request reads or writes is under its kernel directory; the lease keeps
+        // the cache pruner away from it until the response is built.
+        const auto cache_lease = g_cache_pruner->acquire(kernel_cache_dir(request.build_key, request.kernel_name));
+
         log_info(
             tt::LogMetal,
             "compile {}: targets={} genfiles={} outstanding={}",
@@ -533,6 +544,16 @@ int main() {
         }
     }
 
+    tt::tt_metal::jit_server::CachePruneConfig prune_config;
+    try {
+        prune_config = tt::tt_metal::jit_server::CachePruneConfig::from_env();
+    } catch (const std::exception& e) {
+        log_error(tt::LogMetal, "Invalid JIT server cache prune setting: {}", e.what());
+        return 1;
+    }
+    g_cache_pruner = std::make_unique<tt::tt_metal::jit_server::ServerCachePruner>(
+        g_server_cache_root, prune_config, [](const std::string& message) { log_info(tt::LogMetal, "{}", message); });
+
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -544,11 +565,28 @@ int main() {
         tt::LogMetal,
         "JIT compile server build root: {}",
         g_server_root.empty() ? "<TT_METAL_HOME unset; re-root disabled>" : g_server_root);
+    if (prune_config.enabled()) {
+        log_info(
+            tt::LogMetal,
+            "JIT compile server cache pruning: below {}% free, delete kernels idle >= {}s until {}% free; check "
+            "every {}s",
+            prune_config.start_below_free_pct,
+            prune_config.min_idle.count(),
+            prune_config.stop_at_free_pct,
+            prune_config.check_interval.count());
+    } else {
+        log_info(
+            tt::LogMetal,
+            "JIT compile server cache pruning: disabled (set {} to enable)",
+            tt::tt_metal::jit_server::kCacheMinFreePctEnv);
+    }
+    g_cache_pruner->start();
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     server.stop();
+    g_cache_pruner->stop();
     return 0;
 }

@@ -209,8 +209,9 @@ clients still write their own ELF copy after the server returns it. The server c
 a later request for the same kernel skip recompilation.
 
 The default is `/tmp/tt-metal-cache/`. Relocate it when `/tmp` is too small or ephemeral —
-objects and ELFs accumulate for every unique kernel, with no garbage collection, and a few
-large workloads can fill a tmpfs. Use a node-local disk with headroom.
+objects and ELFs accumulate for every unique kernel and, unless pruning is enabled (below),
+nothing removes them; a few large workloads can fill a tmpfs. Use a node-local disk with
+headroom.
 
 Keep it distinct from any client `TT_METAL_CACHE`; the two layouts differ. There is a real
 collision to avoid when the server shares a host with its clients (§4a, §4b): a client
@@ -218,6 +219,38 @@ whose `TT_METAL_CACHE` is unset falls back to `$HOME/.cache/tt-metal-cache/`, bu
 `$HOME` is also unset or missing — common in containers — it falls back to
 `/tmp/tt-metal-cache/`, which is exactly the server's default. Set both variables
 explicitly in that case.
+
+### Cache pruning
+
+Off by default. Set `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` to have the server keep the
+cache filesystem from filling up:
+
+```bash
+# Below 20% free, delete least recently used kernels until 30% is free again
+export TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT=20
+export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=30   # default: MIN_FREE_PCT + 10
+./build/tools/jit_compile_server
+```
+
+A background thread checks free space at startup and every
+`TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` seconds (default 300). The check is one
+`statvfs` call; the cache is only scanned once free space is below the threshold. Then the
+server deletes whole `<build_key>/kernels/<kernel>/<hash>/` directories, least recently
+used first across all build keys, until free space reaches the target. Each run logs one
+`Cache prune:` line with what it deleted.
+
+- **Deleting a kernel only costs a recompile.** The next request for it is a cache miss.
+- **Kernels in use are never deleted.** A request holds its kernel directory for its whole
+  duration, so a prune cannot race a compile.
+- **Recently used kernels are kept.** Nothing used within the last
+  `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` seconds (default 3600) is deleted. Every request
+  stamps its kernel directory's mtime, so last use is exact for kernels this server has
+  served; for older entries the newest file mtime or atime counts.
+- **Firmware and the shared `pch/` directory are never deleted.** Running clients upload
+  firmware only once (§5c). If they are what fills the disk, the log line says the target
+  could not be reached.
+
+A malformed value stops the server at startup rather than silently disabling pruning.
 
 ### Point a client at it
 
@@ -435,7 +468,11 @@ local ELF.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `TT_METAL_JIT_SERVER_ENDPOINT` | `localhost:9876` | Bind address. Use `0.0.0.0:9876` or a specific interface to accept remote clients — see the disclaimer. |
-| `TT_METAL_JIT_SERVER_CACHE_ROOT` | `/tmp/tt-metal-cache/` | Directory for compiled objects, ELFs, and firmware. Grows without bound; relocate off `/tmp` when disk is tight. See §3. |
+| `TT_METAL_JIT_SERVER_CACHE_ROOT` | `/tmp/tt-metal-cache/` | Directory for compiled objects, ELFs, and firmware. Grows without bound unless pruning is enabled; relocate off `/tmp` when disk is tight. See §3. |
+| `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | unset (off) | Enables cache pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. See §3, Cache pruning. |
+| `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | `MIN_FREE_PCT + 10` (at most 100) | Pruning stops once free space reaches this percentage. |
+| `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | `3600` | Kernels used more recently than this are never pruned. |
+| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. |
 
 ---
 
@@ -446,7 +483,8 @@ local ELF.
 | `TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured` | Neither `..._ENDPOINTS` nor `..._ENDPOINT` set on the client. |
 | `Failed to connect to remote JIT compile server at <ep>` | Server not running, wrong port, firewall, or server bound to `localhost` while the client is remote. |
 | Compile fails with "No such file or directory" on a header or kernel source | §5a/§5b: the server does not see the same tree, or the generated source isn't on a shared filesystem. Fix the mount, or use `TT_METAL_JIT_PREPROCESS=1`. |
-| `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). |
+| `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). Cache pruning never deletes firmware. |
+| `Cache prune: ... Could not reach N%` | Everything left is firmware, PCH, or used within `..._MIN_IDLE_S`. Free space elsewhere, lower the idle window, or move the cache root to a bigger disk. |
 | `Absolute <field> is not allowed` / `must not contain '..'` | The server rejected a client-supplied path component. Expected for a malformed or mismatched client; report it if it happens in a normal run. |
 | No speedup at all | No kernel overlap, and no extra compile CPU — see §2. |
 | Slower than local | Unique kernels on similar CPU, or `TT_METAL_JIT_PREPROCESS` left on unnecessarily. |
