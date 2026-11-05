@@ -21,6 +21,9 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
+#include "llk_math_common.h"
+#endif
 
 namespace topk_xl_split
 {
@@ -122,8 +125,12 @@ inline void take_pack_token()
 }
 
 // Raise the two tokens to the depth the schedule needs. Runs before PACK issues any SFPU instruction.
+// Also turns the Dst remap off: fast tilize, pack_untilize and the HW cleanup leave DEST_ACCESS_CFG remap_addrs and
+// swizzle_32b set, and with both set a MATH (FPU) Dst write in the same cycle as one of PACK's SFPU Dst writes can be
+// lost. MATH and PACK write Dst concurrently for the whole row, so the bits must be clear before either starts.
 inline void init_tokens()
 {
+    _llk_math_reconfig_remap_(false);
     ckernel::t6_semaphore_init(F2S, 0 /*min_value*/, TOKEN_DEPTH /*max_value*/);
     ckernel::t6_semaphore_init(S2F, 0 /*min_value*/, TOKEN_DEPTH /*max_value*/);
 }

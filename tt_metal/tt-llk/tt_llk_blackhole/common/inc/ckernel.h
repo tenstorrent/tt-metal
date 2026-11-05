@@ -681,8 +681,8 @@ enum ExecBool : bool
 template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 [[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)
 {
-    // ENABLE_GATHERING is controlled by JIT build.
-    // Not enabled by default due to tt-metal#16439.
+    // ENABLE_GATHERING is controlled by JIT build (on by default on Blackhole). Gathering must be off while
+    // a replay record is loaded, so the record is bracketed by disable/enable.
 #if defined(ENABLE_GATHERING)
     disable_gathering();
 #endif
