@@ -562,6 +562,10 @@ class TtLatentCache:
         ids = self.page_table_host[self.prefill_slot(user), :n_blocks].tolist()
         if ids == list(range(ids[0], ids[0] + n_blocks)):  # contiguous (identity-like) fast path
             blocks = ttnn.slice(self.cache, [ids[0], 0, 0, 0], [ids[0] + n_blocks, 1, self.block_size, self.latent_dim])
+            if blocks.buffer_address() == self.cache.buffer_address():
+                # G53F-0256: a slice of ALL the cache's blocks (one slot, rows reaching max_seq_len) is the cache itself
+                # and its reshape a view of it, so the callers' deallocate would free the cache: copy it
+                blocks = ttnn.clone(blocks)
         else:
             parts = [ttnn.slice(self.cache, [b, 0, 0, 0], [b + 1, 1, self.block_size, self.latent_dim]) for b in ids]
             blocks = ttnn.concat(parts, dim=0)
