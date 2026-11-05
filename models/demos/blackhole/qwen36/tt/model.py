@@ -23,13 +23,13 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
-from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
 from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
-from models.demos.blackhole.qwen36.tt.tp_common import GDN_SNAP_SLOTS
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size, kv_cache_bf8_enabled, kv_write_masked_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
+    GDN_SNAP_SLOTS,
     pack_u32_rows,
     prefill_intrace_snap_enabled,
     prefill_intrace_snap_min_rows,
@@ -39,10 +39,10 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
-    spec_vfy_outs_prealloc_enabled,
     verify_attn_lean_enabled,
     verify_dar_enabled,
     verify_device_topk_m,
+    spec_vfy_outs_prealloc_enabled,
 )
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -113,9 +113,7 @@ class _VfyBucket:
         self.standins = []  # tensors freed once the bucket is captured
         # QWEN36_ATTN_KV_SPLIT gate: a split variant of width b (b == B allowed), not a row bucket
         self.kv_split = False
-        self.pre = (
-            {}
-        )  # QWEN36_SPEC_VFY_OUTS_PREALLOC: "normed" / "logits_rm" -> pre-capture destination (kept warm output)
+        self.pre = {}  # QWEN36_SPEC_VFY_OUTS_PREALLOC: "normed" / "logits_rm" -> pre-capture destination (kept warm output)
 
 
 class _ShortPrefillTrace:
@@ -887,18 +885,14 @@ class Qwen36Model:
         if weight is None or weight is self.lm_head_weight or not _tpc.draft_head_dshard_enabled():
             return False
         if getattr(self, "_lm_head_dshard", None) is None:
-            logger.warning(
-                f"{_tpc.DRAFT_HEAD_DSHARD_ENV} ignored: QWEN36_LMHEAD_DSHARD is off or the head is not vocab-sharded"
-            )
+            logger.warning(f"{_tpc.DRAFT_HEAD_DSHARD_ENV} ignored: QWEN36_LMHEAD_DSHARD is off or the head is not vocab-sharded")
             return False
         if getattr(self, "_lm_head_dshard_extra", None) is None:
             self._lm_head_dshard_extra = {}
         mode = _tpc.lm_head_dshard_mode()
         d = _tpc.LMHeadDShard(weight, self.mesh_device, mode, _tpc.lm_head_dshard_readers(mode))
         self._lm_head_dshard_extra[id(weight)] = (weight, d)  # holds the weight: its id stays unique
-        logger.info(
-            f"{_tpc.DRAFT_HEAD_DSHARD_ENV}: drafter head copy {list(weight.shape)} {weight.dtype} DRAM-sharded ({mode})"
-        )
+        logger.info(f"{_tpc.DRAFT_HEAD_DSHARD_ENV}: drafter head copy {list(weight.shape)} {weight.dtype} DRAM-sharded ({mode})")
         return True
 
     def _lm_head(self, x, out_dtype=None, gather=True, weight=None):
@@ -3456,9 +3450,7 @@ class Qwen36Model:
             for t in bk.standins:
                 ttnn.deallocate(t)
             bk.standins, bk.handoff = [], {}
-            for (
-                t
-            ) in bk.pre.values():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: warmed, never captured (captured ones are {} here)
+            for t in bk.pre.values():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: warmed, never captured (captured ones are {} here)
                 ttnn.deallocate(t)
             bk.pre = {}
             if bk.dl is not None:
@@ -4018,9 +4010,7 @@ class Qwen36Model:
         _lg = self._forward_verify_logits_body(bk)
         bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
         bk.pre = {}
-        if (
-            spec_vfy_outs_prealloc_enabled()
-        ):  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
+        if spec_vfy_outs_prealloc_enabled():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
             self._vfy_pre_keep(bk.pre, "logits_rm", _lg[1])
             self._vfy_pre_keep(bk.pre, "normed", bk.normed)
             self._vfy_pre_warm(bk.pre)
@@ -7883,8 +7873,7 @@ class Qwen36Model:
         first, then the rest the 2048 one; same rows covered, so the tail is unchanged. self._last_chunk names the last
         replayed chunk (output, rows) for callers that read its output.
 
-        snap: QWEN36_PREFILL_INTRACE_SNAP in-replay snapshots of the replayed chunks (see _replay_chunks); None = none.
-        """
+        snap: QWEN36_PREFILL_INTRACE_SNAP in-replay snapshots of the replayed chunks (see _replay_chunks); None = none."""
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).

@@ -794,13 +794,8 @@ def _dsmc_decode(x, weight, compute_cfg, progcfg, act_shard, out_memory_config):
     """QWEN36_BFP4_LAYOUT dsmc decode matmul (M <= 1 tile): x -> its K width shard (unless already in it), the
     multi-core DRAM-sharded pipeline into L1 width-sharded, then `out_memory_config` (interleaved)."""
     x_sh = x if x.memory_config() == act_shard else ttnn.to_memory_config(x, act_shard)
-    y = ttnn.linear(
-        x_sh,
-        weight,
-        compute_kernel_config=compute_cfg,
-        program_config=progcfg,
-        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-    )
+    y = ttnn.linear(x_sh, weight, compute_kernel_config=compute_cfg, program_config=progcfg,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
     if x_sh is not x:
         ttnn.deallocate(x_sh)
     out = ttnn.to_memory_config(y, out_memory_config)
@@ -2226,18 +2221,11 @@ class TPGatedDeltaNet:
         args = self.args
         if "qkvz_dec" in self.tw:
             return _dsmc_decode(
-                x,
-                self.tw["qkvz_dec"],
-                self.cfg_in,
-                args.gdn_qkvz_dsmc_progcfg_bfp4,
-                args.gdn_qkvz_dsmc_act_shard_bfp4,
+                x, self.tw["qkvz_dec"], self.cfg_in, args.gdn_qkvz_dsmc_progcfg_bfp4, args.gdn_qkvz_dsmc_act_shard_bfp4,
                 out_memory_config,
             )
         pc = args.gdn_qkvz_decode_1d_progcfg
-        if (
-            self.tw["qkvz"].dtype == ttnn.bfloat4_b
-            and getattr(args, "gdn_qkvz_decode_1d_progcfg_bfp4", None) is not None
-        ):
+        if self.tw["qkvz"].dtype == ttnn.bfloat4_b and getattr(args, "gdn_qkvz_decode_1d_progcfg_bfp4", None) is not None:
             pc = args.gdn_qkvz_decode_1d_progcfg_bfp4
         return tpc.matmul_1d_decode(x, self.tw["qkvz"], pc, self.cfg_in, out_memory_config=out_memory_config)
 
@@ -2248,18 +2236,11 @@ class TPGatedDeltaNet:
             if weight is self.tw["out"] and "out_dec" in self.tw:
                 # QWEN36_BFP4_LAYOUT (gdn_out=dsmc): multi-core DRAM-sharded pipeline on the decode twin -> DRAM.
                 return _dsmc_decode(
-                    x,
-                    self.tw["out_dec"],
-                    self.cfg_out_dec,
-                    self.args.gdn_out_dsmc_progcfg_bfp4,
-                    self.args.gdn_out_dsmc_act_shard_bfp4,
-                    ttnn.DRAM_MEMORY_CONFIG,
+                    x, self.tw["out_dec"], self.cfg_out_dec, self.args.gdn_out_dsmc_progcfg_bfp4,
+                    self.args.gdn_out_dsmc_act_shard_bfp4, ttnn.DRAM_MEMORY_CONFIG,
                 )
             pc = self.args.gdn_out_decode_1d_progcfg
-            if (
-                weight.dtype == ttnn.bfloat4_b
-                and getattr(self.args, "gdn_out_decode_1d_progcfg_bfp4", None) is not None
-            ):
+            if weight.dtype == ttnn.bfloat4_b and getattr(self.args, "gdn_out_decode_1d_progcfg_bfp4", None) is not None:
                 pc = self.args.gdn_out_decode_1d_progcfg_bfp4  # QWEN36_BFP4_LAYOUT (gdn_out=1d)
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             ck = self.cfg_out_dec if weight is self.tw["out"] else self.cfg
@@ -4461,12 +4442,7 @@ class TPGatedDeltaNet:
         decode_ar (QWEN36_VERIFY_DAR): all-reduce into the replicated RES40 residual (no zero pad: bucket == R)."""
         tw = self.tw
         mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
-        if (
-            decode_ar is not None
-            and R == bucket
-            and getattr(self.args, "proj_1d_decode", False)
-            and "out_dec" not in tw
-        ):
+        if decode_ar is not None and R == bucket and getattr(self.args, "proj_1d_decode", False) and "out_dec" not in tw:
             # QWEN36_VERIFY_OUT_RES40 (default off -> None): out-proj written straight into RES40, no reshard.
             # cfg_out_dec = self.cfg unless QWEN36_BFP4_LAYOUT_LOFI runs a bfloat4_b out-proj in LoFi (== HiFi2 there).
             # Not over a QWEN36_BFP4_LAYOUT gdn_out=dsmc twin (out_dec; not in the tuned table): that keeps _row_proj.

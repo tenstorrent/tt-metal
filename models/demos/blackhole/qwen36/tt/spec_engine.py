@@ -125,14 +125,14 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_device_mask_enabled,
     spec_device_penalties_enabled,
     spec_device_topp_enabled,
-    spec_dr_outs_prealloc_enabled,
-    spec_dr_readback_tolerant_enabled,
     spec_fast_join_enabled,
     spec_fast_prefill_enabled,
     spec_fused_audit_enabled,
     spec_fused_audit_every,
     spec_fused_enabled,
     spec_fused_sampled_enabled,
+    spec_dr_outs_prealloc_enabled,
+    spec_dr_readback_tolerant_enabled,
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
@@ -1251,8 +1251,7 @@ class MTPSpecEngine:
 
     def _dv_decide(self):
         """QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of the step about to run, full while any active row is off-vocab
-        (DraftVocabGuard). Sets the MTP switch the eager drafter paths read; _dr_trace_for picks the trace set from it.
-        """
+        (DraftVocabGuard). Sets the MTP switch the eager drafter paths read; _dr_trace_for picks the trace set from it."""
         full = self._dv_guard.any_off(self._active)
         self._dv_full_now = full
         self.mtp._draft_full = full
@@ -2115,9 +2114,7 @@ class MTPSpecEngine:
             feed = self.model.spec_feed_rows(z)
             if feed is not z:
                 ttnn.deallocate(z)
-            if (
-                self._dr_outs_pre
-            ):  # QWEN36_SPEC_DR_OUTS_PREALLOC: the B-row body with its in-place ids copy, as captured
+            if self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: the B-row body with its in-place ids copy, as captured
                 self._drafter_body(feed, self.B, list(self._dr_outs_pre))
             else:
                 for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
@@ -2138,9 +2135,7 @@ class MTPSpecEngine:
                     self._drafter_body(feed, b, list(self._dr_standins))
                 for b in self._ksp_dr_widths:
                     self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
-            if (
-                self._dv_guard is not None
-            ):  # QWEN36_DRAFT_VOCAB_FALLBACK: every full-head body, ids handed over in place
+            if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: every full-head body, ids handed over in place
                 if not self._dr_standins:
                     self._dr_standins = tuple(
                         ttnn.zeros(
