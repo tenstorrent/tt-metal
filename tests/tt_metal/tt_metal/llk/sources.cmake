@@ -13,6 +13,7 @@ set(UNIT_TESTS_LLK_SRC
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
     test_generic_moe_gate_compute.cpp
+    test_gguf_decode_mm.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
