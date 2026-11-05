@@ -240,6 +240,7 @@ tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/sources.cmake @tenstorrent/metalium-api-owners
 tt_metal/test @tenstorrent/metalium-developers-infra
 tt_metal/tools/* @kmabeeTT @mo-tenstorrent @yusufbashiTT @ihamer-tt
+tt_metal/tools/watcher_dump/ @tenstorrent/metalium-runtime
 tt_metal/tools/dispatch_telemetry_dump/ @tenstorrent/metalium-runtime-performance
 tt_metal/tools/dispatch_telemetry_dump/**/CMakeLists.txt @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tt_metal/tools/jit_compile_server @ruizhangTT @tenstorrent/metalium-runtime
