@@ -82,6 +82,16 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
+    // A workload's device writes, collected to fan out across dispatch_thread_pool_.
+    struct ProgramWrite {
+        Device* device = nullptr;
+        const ProgramCommandSequence* program_cmd_seq = nullptr;
+        const vector_aligned<uint32_t>* packed = nullptr;  // nullptr: write the fragments
+        uint32_t packed_size = 0;
+    };
+    std::vector<ProgramWrite> program_writes_;
+    std::vector<uint32_t> program_write_device_ids_;
+    std::vector<vector_aligned<uint32_t>> packed_programs_;
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
