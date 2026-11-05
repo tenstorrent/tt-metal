@@ -22,6 +22,11 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 imported_by_a_perf_test() {
     local module
     module=$(basename "$1" .py)
+    # Without the perf tests, grep finds nothing and every imported test reads as harmless.
+    if ! compgen -G "$ROOT/$TESTS/python_tests/perf_*.py" >/dev/null; then
+        echo "No perf_*.py under $ROOT/$TESTS/python_tests: check out the perf tests." >&2
+        exit 1
+    fi
     grep -qsE "^[[:space:]]*(from|import)[[:space:]]+${module}\b" "$ROOT/$TESTS"/python_tests/perf_*.py
 }
 
