@@ -243,11 +243,11 @@ void run_full_matrix_case(uint32_t M, uint32_t K, const char* label) {
 }
 }  // namespace
 
-TEST_F(KSplitGramMatmulTest, FullMatrixMultiBlock) {
+TEST_F(KSplitGramMatmulTest, NIGHTLY_FullMatrixMultiBlock) {
     run_full_matrix_case(8192, 512, "FullMatrixMultiBlock");
 }
 
-TEST_F(KSplitGramMatmulTest, FullMatrixPartialEdgeBlock) {
+TEST_F(KSplitGramMatmulTest, NIGHTLY_FullMatrixPartialEdgeBlock) {
     run_full_matrix_case(5440, 512, "FullMatrixPartialEdgeBlock");
 }
 
@@ -261,7 +261,7 @@ TEST_F(KSplitGramMatmulTest, RejectsUnsupportedK) {
     EXPECT_THROW(ttml::metal::gram_matmul(make_random_tensor(320, 96)), std::exception);
 }
 
-TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
+TEST_F(KSplitGramMatmulTest, NIGHTLY_SmokeAllShapes) {
     struct Shape {
         uint32_t M, K;
     };
