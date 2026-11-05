@@ -2228,6 +2228,8 @@ class MTPSpecEngine:
                     "chain body's exact fp32 range (2^24)"
                 )
             kw["ring_pages"] = (paged.pages_dev, paged.G)
+            if paged.windows_dev is not None:  # QWEN36_MAMBA_CHAIN_MOVES
+                kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
@@ -3015,12 +3017,15 @@ class MTPSpecEngine:
 
     def _stage_gdn_windows(self, gdn_windows, start0, active):
         """Stage one step's GDN state windows (QWEN36_MAMBA_SPEC). ``gdn_windows`` = ([G] int64 [B, 1 + K] block windows,
-        int64 [B] state_accepted_counts), runner slots; ``start0`` / ``active`` in engine rows. Rows the step does not
-        compute are held (ctrl page HOLD)."""
+        int64 [B] state_accepted_counts[, moves]), runner slots; ``start0`` / ``active`` in engine rows. Rows the step
+        does not compute are held (ctrl page HOLD). ``moves`` (QWEN36_MAMBA_CHAIN_MOVES, a chained step): ([G] start
+        blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K]) per accepted count of the pending verify, for the chained
+        rows (state_accepted_counts -1)."""
         paged = self._paged_state()
         if gdn_windows is None:
             raise ValueError("QWEN36_MAMBA_SPEC: decode_forward needs gdn_windows (state_block_windows_per_layer)")
-        blocks, counts = gdn_windows
+        blocks, counts, *rest = gdn_windows
+        moves = rest[0] if rest else None
         if len(blocks) != paged.G:
             raise ValueError(f"gdn_windows has {len(blocks)} groups, the model binds {paged.G}")
         blocks = [torch.as_tensor(b).to(torch.int64) for b in self._to_rows(*blocks)]
@@ -3045,8 +3050,18 @@ class MTPSpecEngine:
         boundary = []
         if paged.cache_mode == "align":
             sp = torch.as_tensor(start0).to(torch.int64).reshape(-1)
-            boundary = [(u, 0) for u in torch.nonzero(act & ((sp + 1) % paged.mamba_block_size == 0)).reshape(-1).tolist()]
+            boundary = [
+                (u, 0) for u in torch.nonzero(act & ((sp + 1) % paged.mamba_block_size == 0)).reshape(-1).tolist()
+            ]
         paged.set_step(blocks, (counts - 1).clamp(0, self.T - 1), live, boundary)
+        if moves is not None and self._paged_unknown:
+            starts = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*moves[0])]
+            wins = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*moves[1])]
+            if any(tuple(x.shape) != (self.B, self.T) for x in starts) or any(
+                tuple(x.shape) != (self.B, self.T, self.T) for x in wins
+            ):
+                raise ValueError(f"chained state moves for {len(starts)} groups do not have [{self.B}, {self.T}(, T)]")
+            paged.set_moves(starts, wins, self._paged_unknown)
         self.model._spec_hold = torch.nonzero(~act).reshape(-1).tolist()
         self._paged_step_rows = live
 
@@ -4236,7 +4251,7 @@ class MTPSpecEngine:
                 self._chain_ev = self._chain_ev or "park"  # a held row: the chain body has no HOLD rows
             unknown = self.__dict__.pop("_paged_unknown", ())
             if unknown:  # a chain row the host staged: its start column is its materialized count - 1
-                self._paged_state().book.set_start({u: int(mi_prev[u]) for u in unknown})
+                self._paged_state().set_start({u: int(mi_prev[u]) for u in unknown}, start_pos)
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
@@ -5587,9 +5602,16 @@ class MTPSpecEngine:
         kw = dict(read_logits=False, page_tables=vpt, inactive=(~active).tolist())
         self._bucket_kw(kw)  # the bucket was decided in _decode_forward_deferred
         chain = dict(chain, lo=lo, hi=hi)
-        return self._def_enqueue(
+        paged = self._paged_state()
+        moved = paged is not None and bool(paged.book.moves)
+        if moved:  # QWEN36_MAMBA_CHAIN_MOVES: the boundary conv write of the count that starts at a block's last position
+            paged.chain_boundaries(lo)
+        h = self._def_enqueue(
             "s" if sampling is not None else "g", clean, start_hi, pt, active, nv_rows, args, kw, sampling, aux, chain
         )
+        if moved:  # the rows' window maps follow the actual counts once the reader has them (no device wait)
+            paged.moves_counts = lambda h=h: None if h._data is None else h._data["counts"]
+        return h
 
     def _def_enqueue(self, kind, tokens, start_pos, pt, active, nv, args, kw, sampling, aux, chain=None):
         """The enqueue half of a fused step (greedy 'g' or sampled 's'; ``chain`` None = host-staged first step of a chain): the call

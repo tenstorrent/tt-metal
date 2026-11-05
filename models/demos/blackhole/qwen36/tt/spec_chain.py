@@ -254,6 +254,9 @@ class ChainDevice:
                         [2 + G, W_v] with ``ring_pages`` (QWEN36_MAMBA_SPEC: the fp32 [B, T*G*Nv] start-page table of
                         the G GDN groups, SpecBlockBook.pages_cat): one ctrl page per group, start pages gathered at
                         column mi' (chain_reference with ring_idx)
+             ring_windows  with ``ring_windows`` (QWEN36_MAMBA_CHAIN_MOVES): each group's ring_page_idx (uint32 RM
+                        [B, T*Nv]) = the fp32 window-page table [B, T*G*T*Nv] (SpecBlockBook.windows_cat) at accepted
+                        count mi' + 1, so the verify writes the window of the count the pending verify accepted
              next_aux_out = aux_prev_in itself (int32 [7, W_a]): every value is read before the final copy.
     All values are integers < 2^24, so fp32 TILE math is exact.
     QWEN36_SPEC_CHAIN_KERNEL=1: ``body`` is ONE single-core kernel on the same buffers (spec_fused_kernels.ChainKernel); the op
@@ -296,10 +299,12 @@ class ChainDevice:
         tok_out=None,
         vaux_out=None,
         ring_pages=None,
+        ring_windows=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
-        checked), None allocates a standalone one. ``ring_pages`` = (fp32 TILE [B, T * G * Nv] table, G): see the class
-        docstring."""
+        checked), None allocates a standalone one. ``ring_pages`` = (fp32 TILE [B, T * G * Nv] table, G);
+        ``ring_windows`` = (fp32 TILE [B, T * G * T * Nv] table, [G] uint32 RM [B, T * Nv] ring_page_idx outputs), needs
+        ``ring_pages``: see the class docstring."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
@@ -311,6 +316,16 @@ class ChainDevice:
             got = (tuple(int(d) for d in self.ring_pages.shape), self.ring_pages.dtype, self.ring_pages.layout)
             want = ((B, (K + 1) * self.G * Nv), ttnn.float32, ttnn.TILE_LAYOUT)
             assert got == want, f"bound ring_pages: {got} != {want}"
+        self.ring_windows, self.ring_idx_outs = (None, []) if ring_windows is None else ring_windows
+        if self.ring_windows is not None:
+            T = K + 1
+            assert self.ring_pages is not None, "ring_windows needs ring_pages"
+            got = (tuple(int(d) for d in self.ring_windows.shape), self.ring_windows.dtype, self.ring_windows.layout)
+            want = ((B, T * self.G * T * Nv), ttnn.float32, ttnn.TILE_LAYOUT)
+            assert got == want, f"bound ring_windows: {got} != {want}"
+            assert len(self.ring_idx_outs) == self.G, (len(self.ring_idx_outs), self.G)
+            for g, t in enumerate(self.ring_idx_outs):
+                cls._check_bound(f"ring_idx_outs[{g}]", t, (B, T * Nv), ttnn.uint32)
         R = self.R
         self.W_res, self.W_a = _align(max(R, B)), _align(max(B, 5))
         self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(B, Nv)
@@ -440,6 +455,18 @@ class ChainDevice:
                 )
                 acc = term if acc is None else ttnn.add(acc, term)  # [B, G*Nv]
             blks = [ttnn.slice(acc, [0, g * Nv], [B, (g + 1) * Nv]) for g in range(self.G)]
+            if self.ring_windows is not None:  # QWEN36_MAMBA_CHAIN_MOVES: the window of count mi' + 1, per group
+                GTN = self.G * T * Nv
+                win = None
+                for t in range(T):
+                    term = ttnn.multiply(
+                        ttnn.slice(self.ring_windows, [0, t * GTN], [B, (t + 1) * GTN]),
+                        ttnn.slice(sel, [0, t], [B, t + 1]),
+                    )
+                    win = term if win is None else ttnn.add(win, term)  # [B, G*T*Nv]
+                for g, out in enumerate(self.ring_idx_outs):
+                    w = ttnn.slice(win, [0, g * T * Nv], [B, (g + 1) * T * Nv])
+                    ttnn.copy(ttnn.to_layout(ttnn.typecast(w, ttnn.uint32), RM), out)
         ctrls = [
             padw(cat([parity, ttnn.transpose(min_, 0, 1), ttnn.reshape(blk, (1, B * Nv))], 1), 1 + B + B * Nv)
             for blk in blks

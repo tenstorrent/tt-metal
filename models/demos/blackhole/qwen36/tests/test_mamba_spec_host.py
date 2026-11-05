@@ -875,7 +875,10 @@ def test_zeroing_waits_for_the_forward_and_skips_written_blocks(monkeypatch):
     ones a block copy wrote since; a flush with nothing pending runs no device work."""
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st._zero_pending = {}
-    st.book = SimpleNamespace(forget_block=lambda b: None, copy_plan=lambda copies: [("copy", s, d) for s, d in copies])
+    st.book = SimpleNamespace(
+        forget_block=lambda b: None, copy_plan=lambda copies: [("copy", s, d) for s, d in copies], moves={}
+    )
+    st.moves_counts = None
     zeroed = []
     st._zero_now = lambda ids: zeroed.append(list(ids))
     monkeypatch.setattr(sbs.SpecGdnBlockState, "_timed", lambda self, kind, n: contextlib.nullcontext())
@@ -1019,3 +1022,127 @@ def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
     st.book.set_prefill_blocks([torch.tensor([40])])
     st.restore(0)
     assert dn.conv_carry.label == ("x3", "x4", "x5")
+
+
+# ------------------------------------------------------------------------------------- chained state moves
+# QWEN36_MAMBA_CHAIN_MOVES: on a chained step the plugin sends, per accepted count c of the pending verify, each row's
+# start block and state window. The chain body gathers both tables (SpecBlockBook.pages_cat / windows_cat) at column
+# c - 1; the host adopts the window of the actual count once it has the count.
+
+
+def _moves_case(G=2):
+    lay = _layout(4, 2048, 8, "two_pool")
+    book = sbs.SpecBlockBook(lay, G, B, T, "align", 2048)
+    stay = torch.arange(1, B * T + 1).reshape(B, T) * 2 + 10  # every row's staged (optimistic) window
+    blocks = [stay + 100 * g for g in range(G)]
+    book.set_step(blocks, torch.full((B,), T - 1), range(B))
+    # row 1 chained: counts 1..2 stay in the staged window's previous column set, counts 3..4 move one column on
+    starts = [torch.zeros(B, T, dtype=torch.int64) for _ in range(G)]
+    wins = [torch.zeros(B, T, T, dtype=torch.int64) for _ in range(G)]
+    for g in range(G):
+        old = torch.tensor([60, 61, 62, 63]) + 100 * g
+        new = blocks[g][1]
+        starts[g][1] = torch.tensor([old[0], old[1], old[2], old[3]])
+        wins[g][1, :2] = old
+        wins[g][1, 2:] = new
+    return lay, book, blocks, starts, wins
+
+
+def test_chain_tables_select_start_block_and_window_per_count():
+    lay, book, blocks, starts, wins = _moves_case()
+    G, nv = 2, lay.nv
+    plain_pages, plain_wins = book.pages_cat(), book.windows_cat()
+    book.set_moves(starts, wins, [1])
+    pages, wtab = book.pages_cat(), book.windows_cat()
+    for u in range(B):
+        for c in range(1, T + 1):
+            for g in range(G):
+                got_start = pages[u, (c - 1) * G * nv + g * nv : (c - 1) * G * nv + (g + 1) * nv].to(torch.int64)
+                got_win = wtab[u, ((c - 1) * G + g) * T * nv : ((c - 1) * G + g + 1) * T * nv].to(torch.int64)
+                if u == 1:
+                    want_start = lay.head_pages(starts[g][1, c - 1])
+                    want_win = lay.head_pages(wins[g][1, c - 1]).reshape(-1)
+                else:  # rows without moves: start column c - 1 of the staged window, the staged window at every count
+                    want_start = lay.head_pages(blocks[g][u, c - 1])
+                    want_win = lay.head_pages(blocks[g][u]).reshape(-1)
+                assert torch.equal(got_start, want_start), (u, c, g)
+                assert torch.equal(got_win, want_win), (u, c, g)
+    others = [u for u in range(B) if u != 1]
+    assert torch.equal(pages[others], plain_pages[others]) and torch.equal(wtab[others], plain_wins[others])
+
+
+@pytest.mark.parametrize("c", [1, 2, 3, 4])
+def test_chained_row_adopts_the_window_of_its_count(c):
+    """Once the host has the count, a copy from the window column of the actual count carries that column's conv rows;
+    the optimistic window's blocks no longer map to the row."""
+    lay, book, blocks, starts, wins = _moves_case()
+    book.set_moves(starts, wins, [1])
+    book.resolve_moves(torch.tensor([T, c, T, T]))
+    assert not book.moves
+    for g in range(2):
+        for t in range(T):
+            b = int(wins[g][1, c - 1, t])
+            assert book.window_map[b] == (1, t, g)
+            assert int(book.idx_host[g][1, t * lay.nv]) == int(lay.head_pages(b)[0])
+    ops = book.copy_plan([(int(wins[0][1, c - 1, 1]), 199)])
+    assert ops[-1] == ("conv", 1, 1, 0, 199)
+    if c <= 2:  # the optimistic window is not the actual one: its blocks are not the row's any more
+        assert int(blocks[0][1, 3]) not in book.window_map
+
+
+def test_an_unresolved_chained_row_forces_the_next_upload():
+    lay, book, blocks, starts, wins = _moves_case()
+    book.set_moves(starts, wins, [1])
+    changed = book.set_step(blocks, torch.zeros(B, dtype=torch.int64), range(B))
+    assert changed == [0, 1] and not book.moves
+
+
+def test_a_chained_row_the_host_stages_starts_from_its_start_block():
+    """A chain that falls back to the host (count known): set_start adopts that count's window and start block, and in
+    mode align a start at a block's last position leaves the conv write of window column 0 due."""
+    lay, book, blocks, starts, wins = _moves_case()
+    book.set_moves(starts, wins, [1])
+    changed = book.set_start({1: 1}, start_pos=torch.tensor([0, 2047, 0, 0]))
+    assert changed == [0, 1]
+    for g in range(2):
+        assert torch.equal(book.init[g][1], lay.head_pages(starts[g][1, 1]))
+        assert torch.equal(book.step_blocks[g][1], wins[g][1, 1])
+    assert book.take_pending() == [(1, 0, 0, int(wins[0][1, 1, 0])), (1, 0, 1, int(wins[1][1, 1, 0]))]
+
+
+def test_chain_boundary_conv_write_targets_the_count_that_starts_there():
+    lay, book, blocks, starts, wins = _moves_case()
+    book.pending = [(1, 0)]  # set_step's guess from a provisional position: dropped for a chained row
+    book.set_moves(starts, wins, [1])
+    assert book.pending == []
+    book.chain_boundaries(torch.tensor([0, 2046, 0, 0]))  # count 2 starts at position 2047
+    assert book.take_pending() == [(1, 0, 0, int(wins[0][1, 1, 0])), (1, 0, 1, int(wins[1][1, 1, 0]))]
+
+
+def test_chain_moves_keywords_are_grouped_and_copies_refused(monkeypatch):
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+
+    specs = _per_layer_specs()
+    groups = sbs.gdn_groups_by_slot(specs, lambda e: isinstance(e[0], tuple))
+    blocks = SimpleNamespace(group_windows=lambda w: sbs.group_windows(w, groups, 3))
+    me = SimpleNamespace(model=[SimpleNamespace(_spec_blocks=blocks)])
+    me._pop_state_kwargs = Qwen36MTPContractForCausalLM._pop_state_kwargs
+
+    def kwargs(copy_src=0):
+        per = lambda make: [None if i % 4 == 3 else make(groups[i]) for i in range(64)]
+        return dict(
+            state_block_windows_per_layer=per(lambda g: torch.full((2, T), 10 + g)),
+            state_accepted_counts=torch.tensor([-1, -1]),
+            state_chain_copies_per_layer=per(
+                lambda g: torch.full((2, T, 2), 0).index_fill_(2, torch.tensor([0]), copy_src)
+            ),
+            state_chain_start_blocks_per_layer=per(lambda g: torch.full((2, T), 20 + g)),
+            state_chain_windows_per_layer=per(lambda g: torch.full((2, T, T), 30 + g)),
+        )
+
+    out, counts, moves = Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(), 4)
+    assert [int(w[0, 0]) for w in out] == [10, 11, 12] and counts.tolist() == [-1, -1, 1, 1]
+    assert [int(s[1, 3]) for s in moves[0]] == [20, 21, 22] and [int(s[3, 0]) for s in moves[0]] == [0, 0, 0]
+    assert [tuple(w.shape) for w in moves[1]] == [(4, T, T)] * 3 and int(moves[1][2][0, 1, 2]) == 32
+    with pytest.raises(NotImplementedError):  # allow-pytest.raises: host test without the device conftest
+        Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(copy_src=7), 4)

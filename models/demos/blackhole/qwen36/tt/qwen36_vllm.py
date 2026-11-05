@@ -33,6 +33,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
     kv_block_size,
     kv_cache_bf8_enabled,
+    mamba_chain_moves_enabled,
     mamba_spec_enabled,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
@@ -1349,6 +1350,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_prefill_over_pending_spec": bool(
             spec_chain_enabled() and spec_fused_enabled() and spec_prefill_overlap_enabled()
         ),
+        # QWEN36_MAMBA_CHAIN_MOVES=1: a chained verify in mode align gets state_chain_start_blocks_per_layer and
+        # state_chain_windows_per_layer (one entry per accepted count of the pending verify) and the chain body selects
+        # them on the device (state_chain_copies_per_layer must be all no-op pairs: retention 0)
+        "supports_mamba_chained_state_moves": bool(
+            spec_chain_enabled() and spec_fused_enabled() and mamba_chain_moves_enabled()
+        ),
         # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
         # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.
         "supports_finishing_slots": True,
@@ -1477,24 +1484,46 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         )
 
     def _gdn_windows(self, kwargs, B):
-        """The engine's gdn_windows for a decode step (runner slots), or None without MambaSpec groups."""
+        """The engine's gdn_windows for a decode step (runner slots), or None without MambaSpec groups: ([G] block
+        windows [B, 1 + K], state_accepted_counts [B], moves). ``moves`` is None, or, on a chained step with
+        supports_mamba_chained_state_moves, ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K]) indexed by the
+        pending verify's accepted count - 1."""
         blocks = getattr(self.model[0], "_spec_blocks", None)
+        copies = kwargs.pop("state_chain_copies_per_layer", None)
+        starts = kwargs.pop("state_chain_start_blocks_per_layer", None)
+        wins = kwargs.pop("state_chain_windows_per_layer", None)
         if blocks is None:
             return None
         _, windows, counts = self._pop_state_kwargs(kwargs)
         if windows is None or counts is None:
             raise ValueError("QWEN36_MAMBA_SPEC decode needs state_block_windows_per_layer and state_accepted_counts")
-        g = blocks.group_windows(windows)
-        out = []
-        for w in g:
-            pad = torch.zeros(B, w.shape[1], dtype=torch.int64)
+
+        def pad_rows(w):
+            out = torch.zeros((B,) + tuple(w.shape[1:]), dtype=torch.int64)
             n = min(B, w.shape[0])
-            pad[:n] = w[:n]
-            out.append(pad)
+            out[:n] = w[:n]
+            return out
+
+        out = [pad_rows(w) for w in blocks.group_windows(windows)]
         c = torch.ones(B, dtype=torch.int64)
         cc = torch.as_tensor(counts).to(torch.int64).reshape(-1)
         c[: min(B, cc.numel())] = cc[:B]
-        return out, c
+        moves = None
+        if starts is not None or wins is not None or copies is not None:
+            if starts is None or wins is None:
+                raise ValueError("chained state moves need state_chain_start_blocks_per_layer and _windows_per_layer")
+            for e in copies or ():
+                if e is not None and bool((torch.as_tensor(e)[..., 0] != torch.as_tensor(e)[..., 1]).any()):
+                    raise NotImplementedError(
+                        "state_chain_copies_per_layer holds a block copy (a boundary copy at a nonzero "
+                        "prefix_cache_retention_interval); QWEN36_MAMBA_CHAIN_MOVES runs only the start-block and window "
+                        "selection on the device"
+                    )
+            moves = (
+                [pad_rows(s) for s in blocks.group_windows(starts)],
+                [pad_rows(w) for w in blocks.group_windows(wins)],
+            )
+        return out, c, moves
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):

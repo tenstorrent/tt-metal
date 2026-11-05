@@ -161,6 +161,26 @@ def cmd_perf(a):
     print(json.dumps({k: v for k, v in out.items() if k != "spec_counters"}))
 
 
+def cmd_ttft(a):
+    """Cold prefill latency: one request at a time, 2 tokens each, ``reps`` + 1 per prompt length in words (each a
+    different slice of the article, so no prefix hit); the first of each length is dropped (one-time costs). Prints the
+    median and every time to the first streamed token, in ms."""
+    model = a.model or _model(a.url)
+    words = _words()
+    out = {}
+    for n in (int(x) for x in a.words.split(",")):
+        times = []
+        for r in range(a.reps + 1):
+            pool = words * (n // len(words) + 2)
+            start = (53 * r) % len(words)
+            prompt = " ".join(pool[start : start + n]) + "\n\nContinue the text."
+            times.append(1000 * _stream(a.url, model, prompt, 2)["ttft"])
+        times = times[1:]
+        out[str(n)] = {"median_ms": round(sorted(times)[len(times) // 2], 1), "ms": [round(x, 1) for x in times]}
+    pathlib.Path(a.out).write_text(json.dumps(out, indent=1))
+    print(json.dumps(out))
+
+
 def _ids(url, model, ids, max_tokens):
     out = _post(
         url.rstrip("/") + "/v1/completions",
@@ -174,6 +194,28 @@ def _ids(url, model, ids, max_tokens):
         },
     )
     return out["choices"][0]["token_ids"], out["choices"][0]["text"]
+
+
+def cmd_cross(a):
+    """Block boundaries under batching: ``n`` concurrent greedy requests whose prompts end 3, 10, 17, ... tokens before
+    the block boundary ``block`` (each a different slice of the article), ``max_tokens`` each, so every row decodes
+    across the boundary at its own step. Writes the outputs in the ``run`` file format (part "concurrent")."""
+    model = a.model or _model(a.url)
+    toks = _post(a.url.rstrip("/") + "/tokenize", {"model": model, "prompt": " ".join(_words() * 2)})["tokens"]
+    res = {"concurrent": {}}
+
+    def one(i):
+        L = a.block - 3 - 7 * i
+        ids, text = _ids(a.url, model, toks[37 * i : 37 * i + L], a.max_tokens)
+        res["concurrent"][str(i)] = {"prompt_tokens": L, "ids": ids, "text": text}
+
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(a.n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    pathlib.Path(a.out).write_text(json.dumps(res, indent=1))
+    print(f"wrote {a.out}: {len(res['concurrent'])} requests")
 
 
 def cmd_followup(a):
@@ -284,6 +326,19 @@ def main():
     f.add_argument("--n", type=int, default=8)
     f.add_argument("--words", type=int, default=300)
     f.add_argument("--max-tokens", type=int, default=512)
+    x = sub.add_parser("cross")
+    x.add_argument("--url", default="http://localhost:8000")
+    x.add_argument("--model", default=None)
+    x.add_argument("--out", required=True)
+    x.add_argument("--block", type=int, default=2048)
+    x.add_argument("--n", type=int, default=8)
+    x.add_argument("--max-tokens", type=int, default=160)
+    t = sub.add_parser("ttft")
+    t.add_argument("--url", default="http://localhost:8000")
+    t.add_argument("--model", default=None)
+    t.add_argument("--out", required=True)
+    t.add_argument("--words", default="300,1500,3000")
+    t.add_argument("--reps", type=int, default=5)
     u = sub.add_parser("followup")
     u.add_argument("--url", default="http://localhost:8000")
     u.add_argument("--model", default=None)
@@ -300,6 +355,8 @@ def main():
     c.add_argument("b")
     a = ap.parse_args()
     cmds = {"run": cmd_run, "perf": cmd_perf, "prefix": cmd_prefix, "followup": cmd_followup, "replay": cmd_replay}
+    cmds["ttft"] = cmd_ttft
+    cmds["cross"] = cmd_cross
     return {**cmds, "compare": cmd_compare}[a.cmd](a) or 0
 
 

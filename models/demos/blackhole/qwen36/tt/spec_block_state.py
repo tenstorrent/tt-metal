@@ -273,6 +273,10 @@ class SpecBlockBook:
         self._pages = [torch.zeros(self.B, self.T, nv, dtype=torch.int64) for _ in range(self.G)]  # head pages
         self._rows = torch.arange(self.B)
         self._map_live, self._map_dirty = None, True  # live rows the window map was built for; a copy changed it
+        # chained state moves of the staged verify: {engine row: ([G] start blocks [T], [G] windows [T, T])}, indexed by
+        # the pending verify's accepted count - 1; the rows' window maps follow once that count is known (resolve_moves)
+        self.moves = {}
+        self.pending_blocks = []  # (row, column, group, block) conv writes that name their block (chained rows)
 
     def set_step(self, blocks, start_col, live_rows, boundary=()):
         """Stage one verify. ``blocks``: [G] int64 [B, T] in ENGINE rows (0 = the null block on rows no request holds);
@@ -283,9 +287,12 @@ class SpecBlockBook:
         them."""
         if len(blocks) != self.G:
             raise ValueError(f"{len(blocks)} window groups, the model binds {self.G}")
+        # chained rows of the previous verify whose count never reached the host: the device window rows are unknown
+        stale = bool(self.moves)
+        self._map_dirty = self._map_dirty or stale
         changed = []
         for g in range(self.G):
-            if self.step_blocks is None or not torch.equal(blocks[g], self.step_blocks[g]):
+            if stale or self.step_blocks is None or not torch.equal(blocks[g], self.step_blocks[g]):
                 self._pages[g] = self.layout.head_pages(blocks[g])  # [B, T, Nv]
                 self.idx_host[g] = self._pages[g].reshape(self.B, -1).to(torch.int32)
                 changed.append(g)
@@ -293,6 +300,8 @@ class SpecBlockBook:
         self.step_start = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1).clone()
         self.init = [p[self._rows, self.step_start] for p in self._pages]
         self.pending = [(int(u), int(t)) for u, t in boundary]
+        self.pending_blocks = []
+        self.moves = {}
         live = tuple(int(u) for u in live_rows)
         if changed or self._map_dirty or live != self._map_live:
             for u in live:
@@ -313,7 +322,7 @@ class SpecBlockBook:
         staged start columns."""
         if start_col is not None and self.step_blocks is not None:
             cols = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1)
-            init = torch.stack([p[self._rows, cols] for p in self._pages])
+            init = torch.stack([p[self._rows, cols] for p in self._start_pages()])
         else:
             init = torch.stack(self.init)  # [G, B, Nv]
         B, nv = self.B, self.layout.nv
@@ -329,17 +338,93 @@ class SpecBlockBook:
         out[:, 1 + B : 1 + B + B * nv] = init.reshape(self.G, -1)
         return as_u32_words(out)
 
-    def set_start(self, cols):
-        """Move staged rows' start columns: {engine row: column} (a chained row the host stages after all)."""
+    def set_start(self, cols, start_pos=None):
+        """Move staged rows' start columns: {engine row: column} (a chained row the host stages after all). A row with
+        chained state moves starts from its start block of count column + 1 and writes that count's window; with
+        ``start_pos`` (int64 [B], the true start positions) its boundary conv write follows (mode align). Returns the
+        groups whose ring_page_idx rows changed."""
+        changed = set()
         for u, c in cols.items():
-            self.step_start[u] = int(c)
+            u, c = int(u), int(c)
+            self.step_start[u] = c
+            mv = self.moves.pop(u, None)
+            if mv is not None:
+                self._adopt_window(u, c + 1, mv[1])
+                changed.update(range(self.G))
+                if start_pos is not None and self._at_boundary(int(start_pos[u])):
+                    self.pending.append((u, 0))
             for g in range(self.G):
-                self.init[g][u] = self._pages[g][u, int(c)]
+                self.init[g][u] = self._pages[g][u, c] if mv is None else self.layout.head_pages(mv[0][g][c])
+        return sorted(changed)
+
+    def _at_boundary(self, pos):
+        return self.cache_mode == "align" and (pos + 1) % self.mamba_block_size == 0
+
+    def set_moves(self, starts, windows, rows):
+        """Chained state moves of the staged verify (after set_step): ``starts`` [G] int64 [B, T] start blocks and
+        ``windows`` [G] int64 [B, T, T] state windows, entry [u, c - 1] for accepted count c of the pending verify;
+        ``rows``: the chained engine rows (the others keep the staged window). The boundary conv writes set_step
+        derived for these rows from provisional positions are dropped (chain_boundaries / set_start set them)."""
+        self.moves = {int(u): ([s[int(u)].clone() for s in starts], [w[int(u)].clone() for w in windows]) for u in rows}
+        self.pending = [(u, t) for u, t in self.pending if u not in self.moves]
+
+    def chain_boundaries(self, start_lo):
+        """Mode align, rows with chained state moves: ``start_lo`` (int64 [B]) = each row's start position for accepted
+        count 1. The one count whose first query token is the last position of a block gets its conv write into that
+        count's window column 0 (the boundary's block); at another count that block holds the row's state after
+        token 0 (counts below) or is outside the row's window (counts above)."""
+        for u, (_, win) in self.moves.items():
+            for c in range(1, self.T + 1):
+                if self._at_boundary(int(start_lo[u]) + c - 1):
+                    self.pending_blocks.extend((u, 0, g, int(win[g][c - 1, 0])) for g in range(self.G))
+
+    def resolve_moves(self, counts):
+        """The pending verify of the staged chained rows accepted ``counts[u]`` (engine rows): their window maps and
+        staged pages become those of that count."""
+        moves, self.moves = self.moves, {}
+        for u, (_, win) in moves.items():
+            self._adopt_window(u, int(counts[u]), win)
+
+    def _adopt_window(self, u, c, win):
+        self.forget_row(u)
+        mapped = []
+        for g in range(self.G):
+            w = win[g][c - 1]
+            self.step_blocks[g][u] = w
+            self._pages[g][u] = self.layout.head_pages(w)
+            self.idx_host[g][u] = self._pages[g][u].reshape(-1).to(torch.int32)
+            for t, b in enumerate(w.tolist()):
+                if b > 0:
+                    self.window_map[b] = (u, t, g)
+                    mapped.append(b)
+        self.row_blocks[u] = mapped
 
     def pages_cat(self):
-        """float32 [B, T * G * Nv]: the head pages of every group, column t * G * Nv + g * Nv + h (the chain body's
-        start-page table, gathered at column mi')."""
-        return torch.stack(self._pages, dim=2).reshape(self.B, -1).to(torch.float32)
+        """float32 [B, T * G * Nv]: the chain body's start-page table, gathered at column mi': column t * G * Nv + g * Nv
+        + h = the first page of head h of the block a row starts from for start column t, its window column t, or, on
+        a row with chained state moves, its start block for accepted count t + 1."""
+        return torch.stack(self._start_pages(), dim=2).reshape(self.B, -1).to(torch.float32)
+
+    def _start_pages(self):
+        """[G] int64 [B, T, Nv]: head pages of the start block per start column (column c - 1 for accepted count c)."""
+        if not self.moves:
+            return self._pages
+        pages = [p.clone() for p in self._pages]
+        for u, (st, _) in self.moves.items():
+            for g in range(self.G):
+                pages[g][u] = self.layout.head_pages(st[g])
+        return pages
+
+    def windows_cat(self):
+        """float32 [B, T * G * T * Nv]: the chain body's window-page table (QWEN36_MAMBA_CHAIN_MOVES), gathered at
+        accepted count c = mi' + 1: column (c - 1) * G * T * Nv + g * T * Nv + t * Nv + h = the first page of head h of
+        the block that takes the state after query token t, the staged window for every count on a row without chained
+        state moves."""
+        nv = self.layout.nv
+        out = torch.stack(self._pages, dim=1).unsqueeze(1).expand(self.B, self.T, self.G, self.T, nv).clone()
+        for u, (_, win) in self.moves.items():
+            out[u] = torch.stack([self.layout.head_pages(win[g]) for g in range(self.G)], dim=1)
+        return out.reshape(self.B, -1).to(torch.float32)
 
     def step_start_blocks(self, u):
         """[G] block ids of engine row u's start column in the staged step, or None."""
@@ -352,7 +437,7 @@ class SpecBlockBook:
     def take_pending(self):
         """[(row, column, group, block)] conv writes the staged verify left due; clears them."""
         pending, self.pending = self.pending, []
-        out = []
+        out, self.pending_blocks = list(self.pending_blocks), []
         for u, t in pending:
             for b in list(self.row_blocks.get(u, ())):
                 ent = self.window_map.get(b)
@@ -527,6 +612,17 @@ class SpecGdnBlockState:
         self.pages_dev = ttnn.from_torch(
             self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
         )
+        # QWEN36_MAMBA_CHAIN_MOVES: the chain body's window-page table (SpecBlockBook.windows_cat), selected by count
+        from models.demos.blackhole.qwen36.tt.tp_common import mamba_chain_moves_enabled
+
+        self.windows_dev = None
+        if mamba_chain_moves_enabled():
+            self.windows_dev = ttnn.from_torch(
+                self.book.windows_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+            )
+        self._up = {}  # host copy of the last upload of pages_dev / windows_dev
+        self._tables_moved = False  # the last upload held a row's chained state moves
+        self.moves_counts = None  # () -> engine-row accepted counts of the chained verify, None until the host has them
 
     cache_mode = property(lambda self: self.book.cache_mode)
     mamba_block_size = property(lambda self: self.book.mamba_block_size)
@@ -536,22 +632,63 @@ class SpecGdnBlockState:
         return group_windows(windows_per_layer, self.layer_groups, self.G)
 
     def set_step(self, blocks, start_col, live_rows, boundary=()):
+        self.resolve_moves()
+        changed = self.book.set_step(blocks, start_col, live_rows, boundary)
+        self._upload_idx(changed)
+        if changed or self._tables_moved:
+            self._upload_tables()
+
+    def _upload_idx(self, groups):
         import ttnn
 
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
-        changed = self.book.set_step(blocks, start_col, live_rows, boundary)
-        for g in changed:
+        for g in groups:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
                     self.book.idx_host[g], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
                 ),
                 self._idx_dev[g],
             )
-        if changed:
+
+    def _upload_tables(self):
+        """pages_dev (and windows_dev) from the book, each only when it differs from its last upload."""
+        import ttnn
+
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        tables = [("pages", self.book.pages_cat(), self.pages_dev)]
+        if self.windows_dev is not None:
+            tables.append(("windows", self.book.windows_cat(), self.windows_dev))
+        for name, host, dev in tables:
+            if name in self._up and torch.equal(self._up[name], host):
+                continue
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep),
-                self.pages_dev,
+                ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), dev
             )
+            self._up[name] = host
+        self._tables_moved = bool(self.book.moves)
+
+    def set_moves(self, starts, windows, rows):
+        """A chained step's state moves (SpecBlockBook.set_moves), engine rows; the chain body's tables follow."""
+        if self.windows_dev is None:
+            raise RuntimeError("chained state moves without QWEN36_MAMBA_CHAIN_MOVES=1 (no window-page table)")
+        self.book.set_moves(starts, windows, rows)
+        self._upload_tables()
+
+    def chain_boundaries(self, start_lo):
+        self.book.chain_boundaries(start_lo)
+
+    def set_start(self, cols, start_pos=None):
+        self._upload_idx(self.book.set_start(cols, start_pos))
+
+    def resolve_moves(self):
+        """Adopt the window of each chained row's actual count once the host has the chained verify's counts (the
+        runner read it); until then the rows keep the optimistic window map."""
+        if not self.book.moves or self.moves_counts is None:
+            return
+        counts = self.moves_counts()
+        if counts is not None:
+            self.book.resolve_moves(counts)
+            self.moves_counts = None
 
     def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
         return self.book.ctrl_rows(mi, parity, words, hold, start_col)
@@ -678,6 +815,7 @@ class SpecGdnBlockState:
     def copy_blocks(self, copies):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
 
+        self.resolve_moves()
         ops = self.book.copy_plan(copies)
         for op in ops:
             self._zero_pending.pop(int(op[-1]), None)  # the copy writes the destination's state

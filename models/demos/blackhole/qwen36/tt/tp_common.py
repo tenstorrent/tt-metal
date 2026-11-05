@@ -77,6 +77,14 @@ def mamba_spec_enabled():
     return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
 
 
+def mamba_chain_moves_enabled():
+    """QWEN36_MAMBA_CHAIN_MOVES (default "0"; needs QWEN36_MAMBA_SPEC=1 and the fused chain): the spec class declares
+    supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the device (the chain
+    body selects each row's start block and state window by the pending verify's accepted count) and block boundaries
+    no longer break the chain."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_CHAIN_MOVES", "0") == "1"
+
+
 def verify_device_topk_m():
     """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 1 = on; 0 turns it off): 0 when off, else
     M = QWEN36_VERIFY_TOPK_M (default 64) candidates per vocab shard. Read by the model (third verify trace),
