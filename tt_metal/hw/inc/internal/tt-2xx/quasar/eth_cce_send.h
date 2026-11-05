@@ -43,7 +43,7 @@ constexpr uint64_t kHsioCceSramOffset = 0x2800000;
 // CCE-local PF_CTRL_TILE_ID, a strap: bit 0 is the CCE, bits 3:1 the HSIO tile.
 constexpr uintptr_t kPfCtrlTileIdAddr = 0x03200008;
 
-// What halt() posts to the router postcode word.
+// What halt() posts to the router postcode word (fabric_postcode_ptr in tunneling.h, which includes this header).
 enum class HaltCode : uint32_t {
     RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
     RemoteRegValueTooWide = 0xCCEEF002,  // detail: the value's upper 32 bits
@@ -54,10 +54,8 @@ enum class HaltCode : uint32_t {
 // fabric scratch word and @p code to the router postcode word, where the host reads them, then asserts and spins. Not
 // a trap: the CCE firmware installs no trap vector.
 [[noreturn, gnu::cold, gnu::noinline]] inline void halt(HaltCode code, uint32_t detail) {
-    *reinterpret_cast<volatile uint32_t*>(
-        static_cast<uintptr_t>(MEM_IERISC_FABRIC_SCRATCH_BASE + MEM_IERISC_UNCACHED_BASE)) = detail;
-    *reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(
-        MEM_IERISC_FABRIC_POSTCODES_BASE + MEM_IERISC_UNCACHED_BASE)) = static_cast<uint32_t>(code);
+    fabric_scratch_ptr[0] = detail;
+    POSTCODE(code);
     ASSERT(false);
     while (true) {
     }
