@@ -34,9 +34,9 @@ enum class ReduceAuxiliaryTileType : std::uint8_t {
 namespace compute_kernel_lib {
 
 /**
- * scaler_dfb_id for a reduce() that has no auxiliary CB. Valid only on the SFPU paths (Int32, bf16 MIN, Accurate
- * fp32; REDUCE_ROW/REDUCE_COL), which read no auxiliary tile. With the by-reference reduce(), pass the input
- * DataflowBuffer in the scaler_dfb slot.
+ * scaler_dfb_id for a reduce() that has no auxiliary CB. Valid only for ReduceAlgorithm::Native on the SFPU paths
+ * (Int32, bf16 MIN, Accurate fp32; REDUCE_ROW/REDUCE_COL), which read no auxiliary tile. With the by-reference
+ * reduce(), pass the input DataflowBuffer in the scaler_dfb slot.
  */
 inline constexpr std::uint32_t REDUCE_NO_AUXILIARY_CB = 0xFF;
 

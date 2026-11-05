@@ -627,6 +627,37 @@ def _streamed_input_cases() -> list[ReduceCase]:
     return cases
 
 
+def _bounded_bulk_cases() -> list[ReduceCase]:
+    # TileSum reads a bulk by index, so each bulk must fit inside one lap of the input CB ring.
+    cases = []
+    for input_cb_tiles in (3, 6):
+        cases.append(
+            _case(
+                f"bounded-bulk-TileSum-REDUCE_ROW-cb{input_cb_tiles}",
+                dim="REDUCE_ROW",
+                rows=2,
+                cols=3,
+                batches=2,
+                algorithm="TileSum",
+                input_cb_tiles=input_cb_tiles,
+            )
+        )
+    for cols, input_cb_tiles in ((3, 6), (3, 12), (4, 4), (4, 8)):
+        cases.append(
+            _case(
+                f"bounded-bulk-TileSum-REDUCE_COL-cols{cols}-group2-cb{input_cb_tiles}",
+                dim="REDUCE_COL",
+                rows=2,
+                cols=cols,
+                batches=2,
+                algorithm="TileSum",
+                output_group=2,
+                input_cb_tiles=input_cb_tiles,
+            )
+        )
+    return cases
+
+
 ALL_CASES = tuple(
     _algorithm_cases()
     + _partial_cases()
@@ -638,6 +669,7 @@ ALL_CASES = tuple(
     + _stride_cases()
     + _regression_cases()
     + _streamed_input_cases()
+    + _bounded_bulk_cases()
 )
 assert len({case.name for case in ALL_CASES}) == len(ALL_CASES)
 
@@ -943,9 +975,19 @@ def test_reduce_explicit_modes(device, case: ReduceCase):
         )
 
 
+@pytest.mark.parametrize("input_dtype, fp32_mode", (("bf16", "Fast"), ("fp32", "Accurate")))
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
-def test_reduce_tile_sum_rejects_a_missing_auxiliary_cb(device, expect_error, dim):
-    case = _case(f"no-auxiliary-TileSum-{dim}", dim=dim, rows=2, cols=3, algorithm="TileSum", no_auxiliary=True)
+def test_reduce_tile_sum_rejects_a_missing_auxiliary_cb(device, expect_error, dim, input_dtype, fp32_mode):
+    case = _case(
+        f"no-auxiliary-TileSum-{dim}-{input_dtype}-{fp32_mode}",
+        dim=dim,
+        rows=2,
+        cols=3,
+        algorithm="TileSum",
+        input_dtype=input_dtype,
+        fp32_mode=fp32_mode,
+        no_auxiliary=True,
+    )
     with expect_error(RuntimeError, "Native and TileSum reductions require an auxiliary CB"):
         _run_case(device, case)
 

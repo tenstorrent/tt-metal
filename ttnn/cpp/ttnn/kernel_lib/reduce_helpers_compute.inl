@@ -372,6 +372,9 @@ ALWI void reduce_tile_sum(
         const uint32_t default_output_group = Wt < DEST_AUTO_LIMIT ? Wt : DEST_AUTO_LIMIT;
         const uint32_t group = output_group > 0 ? output_group : default_output_group;
         ASSERT(group > 0 && group <= DEST_AUTO_LIMIT);
+        // Indexed reads do not wrap the CB ring, so no group may straddle it. A short tail group shifts the next
+        // batch, so then whole batches must tile the ring.
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) % (Wt % group == 0 ? Ht * group : Ht * Wt) == 0));
 
         for (uint32_t nc = 0; nc < NC; ++nc) {
             for (uint32_t wt = 0; wt < Wt; wt += group) {
@@ -438,6 +441,9 @@ ALWI void reduce_tile_sum(
         return;
     }
 
+    if constexpr (bulk_per_output) {
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) % cnt == 0));  // indexed reads do not wrap the CB ring
+    }
     for (uint32_t o = 0; o < n_out; ++o) {
         if constexpr (bulk_per_output) {
             input_dfb.wait_front(cnt);
@@ -844,8 +850,9 @@ ALWI void reduce(
     // =============================================================================
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
     static_assert(
-        has_auxiliary || is_sfpu,
-        "Native and TileSum reductions require an auxiliary CB: Native reads its scaler and TileSum its zero tile");
+        has_auxiliary || (is_sfpu && algorithm == ReduceAlgorithm::Native),
+        "Native and TileSum reductions require an auxiliary CB: Native reads its scaler and TileSum its zero tile. "
+        "Only Native on an SFPU path runs without one");
     static_assert(
         scale_bits == REDUCE_UNIT_SCALE_BITS || algorithm == ReduceAlgorithm::TileSum || is_sfpu,
         "ReduceAlgorithm::Native carries its scale in the scaler tile, so scale_bits must be 1.0f");
@@ -853,6 +860,11 @@ ALWI void reduce(
         ASSERT(partial_mode == ReducePartialMode::None);
     }
     if constexpr (algorithm == ReduceAlgorithm::TileSum) {
+#ifdef ARCH_QUASAR
+        static_assert(
+            input_policy != ReduceInputPolicy::WaitAndPopPerTile,
+            "ReduceAlgorithm::TileSum + WaitAndPopPerTile reads the legacy CB read pointer, which Quasar does not have");
+#endif
         static_assert(
             reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
             "ReduceAlgorithm::TileSum computes SUM or AVG. AVG is the sum times the caller's scale_bits; "

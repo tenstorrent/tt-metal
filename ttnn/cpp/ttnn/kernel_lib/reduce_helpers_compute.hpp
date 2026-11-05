@@ -189,14 +189,16 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @tparam reduce_type SUM, AVG, MAX or MIN
  * @tparam reduce_dim REDUCE_ROW (Ht outputs per batch), REDUCE_COL (Wt) or REDUCE_SCALAR (1)
  * @tparam input_dfb_id, scaler_dfb_id, output_dfb_id CB ids. Formats are deduced from them: Int32, bf16 MIN and
- *         Accurate fp32 use the SFPU path (ROW/COL only), where scaler_dfb_id may be REDUCE_NO_AUXILIARY_CB.
+ *         Accurate fp32 use the SFPU path (ROW/COL only), where a Native reduce may pass REDUCE_NO_AUXILIARY_CB as
+ *         scaler_dfb_id.
  * @tparam input_policy, reconfig_mode, fp32_mode, algorithm, within_tile See their enums in reduce_types.hpp.
  * @tparam scale_bits float32 bits of the factor each finished output is multiplied by before post_reduce_op, on the
  *         TileSum and SFPU paths (1/N for an AVG). Native requires 1.0f: its scaler tile carries the scale.
  * @param input_dfb, scaler_dfb, output_dfb The kernel's DataflowBuffers for the three ids.
  *        No auxiliary CB (scaler_dfb_id == REDUCE_NO_AUXILIARY_CB): pass input_dfb again as scaler_dfb. The slot
  *        is a placeholder; reduce() never waits on, reads or pops it. Passing any other buffer fails the debug
- *        ASSERT on scaler_dfb.get_id(). Native and TileSum reject REDUCE_NO_AUXILIARY_CB at compile time.
+ *        ASSERT on scaler_dfb.get_id(). TileSum, and Native off the SFPU paths, reject REDUCE_NO_AUXILIARY_CB at
+ *        compile time.
  * @param input_memory_layout Strides of a resident input (NoWaitNoPop / WaitUpfrontNoPop).
  * @param accumulate NoAccumulation or Accumulate.
  * @param post_reduce_op Called with each output's DST index before packing; with Accumulate, only on at_last.
