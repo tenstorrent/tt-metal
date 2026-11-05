@@ -1286,3 +1286,165 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+_tilize_force_codegen = ttnn._ttnn.operations.data_movement.tilize_force_codegen
+
+_CODEGEN_TORCH_DTYPES = {
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.float32: torch.float32,
+    ttnn.int32: torch.int32,
+    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.int32,
+}
+
+
+# Shapes cover each codegen route: few tile columns (compact row reader), many tile rows with a
+# wide row (chunked stick reader), and few tile rows with a wide row (rows split across cores).
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 64, 64), (2, 3, 32, 96), (1, 1, 1024, 320), (1, 1, 32, 1024), (2, 64, 512)],
+    ids=lambda s: "x".join(map(str, s)),
+)
+@pytest.mark.parametrize("dtype", list(_CODEGEN_TORCH_DTYPES), ids=lambda d: str(d).split(".")[-1])
+@pytest.mark.parametrize("out_buffer", [ttnn.BufferType.DRAM, ttnn.BufferType.L1], ids=["dram", "l1"])
+def test_tilize_codegen_forced_matches_input(device, shape, dtype, out_buffer):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("tilize codegen runs only on Wormhole and Blackhole")
+    torch.manual_seed(0)
+    torch_dtype = _CODEGEN_TORCH_DTYPES[dtype]
+    if torch_dtype.is_floating_point:
+        host = torch.randn(shape, dtype=torch_dtype)
+    else:
+        host = torch.randint(0, 60000 if dtype == ttnn.uint16 else 2**31 - 1, shape, dtype=torch_dtype)
+    x = ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = _tilize_force_codegen(x, memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, out_buffer))
+
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert out.dtype == dtype
+    assert_equal(ttnn.to_torch(x), ttnn.to_torch(out))
+
+
+# bf16 -> int32 edge values: infinities, NaN, values past the int32 range, the int32 limits, values that truncate to
+# zero, and the largest bf16 below 2**31 (exact as an int32).
+_INT32_EDGE_VALUES = [
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    3e9,
+    -3e9,
+    2.0**31,
+    -(2.0**31),
+    0.5,
+    -0.5,
+    -0.0,
+    2.0**31 - 2.0**23,
+]
+
+
+def _with_int32_edge_values(host):
+    """Plants _INT32_EDGE_VALUES at the start of the first tile row."""
+    flat = host.reshape(-1)
+    flat[: len(_INT32_EDGE_VALUES)] = torch.tensor(_INT32_EDGE_VALUES, dtype=host.dtype)
+    return flat.reshape(host.shape)
+
+
+def _trunc_saturate_int32(host):
+    """The codegen bf16 -> int32 conversion: truncate toward zero, saturate at the int32 limits, NaN by its sign bit."""
+    int32_min, int32_max = -(2**31), 2**31 - 1
+    wide = host.to(torch.float64)
+    out = torch.trunc(wide).clamp(int32_min, int32_max)
+    out = torch.where(torch.isnan(wide), torch.where(torch.signbit(wide), int32_min, int32_max), out)
+    return out.to(torch.int32)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 64), (1, 1, 256, 2048)], ids=lambda s: "x".join(map(str, s)))
+def test_tilize_codegen_forced_bfloat16_to_int32(device, shape):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("tilize codegen runs only on Wormhole and Blackhole")
+    torch.manual_seed(0)
+    host = _with_int32_edge_values((torch.randn(shape) * 1000).to(torch.bfloat16))
+    x = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = _tilize_force_codegen(x, dtype=ttnn.int32)
+
+    assert out.dtype == ttnn.int32
+    assert_equal(_trunc_saturate_int32(host), ttnn.to_torch(out))
+
+
+# More tile rows than any Wormhole or Blackhole grid has cores, on the compact row reader (4 tiles per row): 161
+# rows split unevenly over the cores; 144 rows split evenly on 56-, 64-, 110- and 130-core grids.
+@pytest.mark.parametrize("tile_rows", [161, 144])
+@pytest.mark.parametrize(
+    "in_dtype,out_dtype",
+    [
+        (ttnn.bfloat16, None),
+        (ttnn.float32, None),
+        (ttnn.int32, None),
+        (ttnn.bfloat16, ttnn.int32),
+    ],
+    ids=["bfloat16", "float32", "int32", "bfloat16_to_int32"],
+)
+def test_tilize_codegen_forced_multi_row_per_core(device, tile_rows, in_dtype, out_dtype):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("tilize codegen runs only on Wormhole and Blackhole")
+    grid = device.compute_with_storage_grid_size()
+    assert tile_rows > grid.x * grid.y, "the case must keep more tile rows than cores"
+    torch.manual_seed(0)
+    shape = (1, 1, 32 * tile_rows, 128)
+    if in_dtype == ttnn.int32:
+        host = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch.int32)
+    elif out_dtype == ttnn.int32:
+        host = _with_int32_edge_values((torch.randn(shape) * 1000).to(torch.bfloat16))
+    else:
+        host = torch.randn(shape, dtype=_CODEGEN_TORCH_DTYPES[in_dtype])
+    x = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = _tilize_force_codegen(x, dtype=out_dtype)
+
+    assert out.layout == ttnn.TILE_LAYOUT
+    if out_dtype == ttnn.int32:
+        assert out.dtype == ttnn.int32
+        assert_equal(_trunc_saturate_int32(host), ttnn.to_torch(out))
+    else:
+        assert out.dtype == in_dtype
+        native = ttnn._ttnn.operations.data_movement.tilize_force_native(x)
+        assert_equal(ttnn.to_torch(native), ttnn.to_torch(out))
+        assert_equal(ttnn.to_torch(x), ttnn.to_torch(out))
+
+
+# Large inputs, one per codegen path the small cases above stay off: several tile rows per core on the compact
+# reader (8x3x224x224), the chunked reader with grouped tile writes (4096x4096, 1024x4096, 512x32768), and one wide
+# tile row split across cores (32x32768).
+@pytest.mark.parametrize(
+    "shape,dtype,in_buffer",
+    [
+        ((8, 3, 224, 224), ttnn.bfloat16, ttnn.BufferType.L1),
+        ((8, 3, 224, 224), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 4096, 4096), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 1024, 4096), ttnn.float32, ttnn.BufferType.DRAM),
+        ((1, 1, 512, 32768), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 32, 32768), ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ],
+    ids=[
+        "8x3x224x224_bf16_l1",
+        "8x3x224x224_bf16_dram",
+        "4096x4096_bf16",
+        "1024x4096_fp32",
+        "512x32768_bf16",
+        "32x32768_bf16",
+    ],
+)
+def test_tilize_codegen_forced_large(device, shape, dtype, in_buffer):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("tilize codegen runs only on Wormhole and Blackhole")
+    torch.manual_seed(0)
+    host = torch.randn(shape, dtype=_CODEGEN_TORCH_DTYPES[dtype])
+    placement = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, in_buffer)
+    x = ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
+
+    out = _tilize_force_codegen(x)
+
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert_equal(ttnn.to_torch(x), ttnn.to_torch(out))

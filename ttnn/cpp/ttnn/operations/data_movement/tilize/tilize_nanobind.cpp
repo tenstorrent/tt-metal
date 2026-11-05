@@ -10,6 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "tilize.hpp"
+#include "tilize_force.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
@@ -18,9 +19,12 @@ void bind_tilize(nb::module_& mod) {
     const auto* doc = R"doc(
         Changes data layout of input tensor to TILE.
 
-        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16, FLOAT32, INT32,
+        UINT32, UINT16, UINT8 or FP8_E4M3 data type.
 
-        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+        Output tensor will be on TT accelerator device, in TILE layout, with the input's data type unless `dtype`
+        is given. An FP8_E4M3 input defaults to a FLOAT32 output and requires a floating-point output other than
+        FP8_E4M3, and its padded width must span more than one tile.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -49,5 +53,31 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("use_low_perf") = false,
         nb::arg("tile") = tt::tt_metal::Tile(),  // default to 32x32 tile
         nb::arg("sub_core_grids") = nb::none());
+
+    // Verification-only: pin the implementation. Deliberately not registered under ttnn.*.
+    mod.def(
+        "tilize_force_native",
+        &tilize_force_native,
+        "Verification only: forces the native tilize implementation, with the same arguments as ttnn.tilize. Not "
+        "part of the public API.",
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("use_low_perf") = false,
+        nb::arg("tile") = tt::tt_metal::Tile(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
+    mod.def(
+        "tilize_force_codegen",
+        &tilize_force_codegen,
+        "Verification only: forces the codegen tilize implementation and raises if codegen does not support the "
+        "case, rather than falling back to native. Not part of the public API.",
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
 }
 }  // namespace ttnn::operations::data_movement::detail
