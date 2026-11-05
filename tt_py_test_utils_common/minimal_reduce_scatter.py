@@ -92,12 +92,12 @@ def run_reduce_scatter_impl(
     ), "contiguous staging requires Ring topology and scatter dim != 0"
 
     ##### All gather input setup #####
-    logger.info(f"Reduce scatter shape: {rs_input_shape}")
-    logger.info(f"Reduce scatter dim: {dim}")
-    logger.info(f"input mem config: {mem_config_input}")
-    logger.info(f"Reduce input mem config: {mem_config_rs}")
-    logger.info(f"intermediate mem config: {mem_config_intermediate}")
-    logger.info(f"topology: {rs_topology}")
+    logger.debug(f"Reduce scatter shape: {rs_input_shape}")
+    logger.debug(f"Reduce scatter dim: {dim}")
+    logger.debug(f"input mem config: {mem_config_input}")
+    logger.debug(f"Reduce input mem config: {mem_config_rs}")
+    logger.debug(f"intermediate mem config: {mem_config_intermediate}")
+    logger.debug(f"topology: {rs_topology}")
 
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
@@ -129,7 +129,7 @@ def run_reduce_scatter_impl(
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
     ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
+    logger.debug("Creating persistent buffers")
     persistent_intermediate_buffers = []
     persistent_output_buffers = []
     persistent_penult_intermediate_buffers = []
@@ -164,7 +164,7 @@ def run_reduce_scatter_impl(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
             )
-    logger.info("Done creating persistent buffers")
+    logger.debug("Done creating persistent buffers")
 
     ##### Perform torch ops #####
     torch_reduce_scatter_output_list = []
@@ -178,7 +178,7 @@ def run_reduce_scatter_impl(
 
     def run_op(i):
         if use_new:
-            logger.info(f"Using new reduce scatter")
+            logger.debug(f"Using new reduce scatter")
             tt_reduce_scatter_output_tensor = ttnn.reduce_scatter(
                 tt_input_tensor_mesh_list[i],
                 dim=dim,
@@ -193,7 +193,7 @@ def run_reduce_scatter_impl(
                 num_buffers_per_channel=num_buffers_per_channel,
             )
         else:
-            logger.info(f"Using experimental reduce scatter")
+            logger.debug(f"Using experimental reduce scatter")
             if use_persistent_buffers:
                 buffers = [persistent_intermediate_buffers[i], persistent_output_buffers[i]]
                 if persistent_penult_intermediate_buffers[i] is not None:
@@ -224,7 +224,7 @@ def run_reduce_scatter_impl(
         tt_reduce_scatter_output_trace_list = []
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-        logger.info(f"Done compiling Op")
+        logger.debug(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -232,11 +232,11 @@ def run_reduce_scatter_impl(
             tt_reduce_scatter_output_tensor = run_op(i)
             tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        logger.info(f"Done capturing trace")
+        logger.debug(f"Done capturing trace")
 
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        logger.info(f"Done executing trace")
+        logger.debug(f"Done executing trace")
 
         # Synchronize the devices
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -253,11 +253,11 @@ def run_reduce_scatter_impl(
             tt_reduce_scatter_output_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
 
-            logger.info(f"Waiting for op")
+            logger.debug(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info(f"Done op")
+            logger.debug(f"Done op")
 
-            logger.info(f"Done iteration {i}")
+            logger.debug(f"Done iteration {i}")
 
     if verify_output:
         for i in range(num_iters):
@@ -271,7 +271,7 @@ def run_reduce_scatter_impl(
             else:
                 eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
-            logger.info(f"{output}, iteration {i}")
+            logger.debug(f"{output}, iteration {i}")
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()

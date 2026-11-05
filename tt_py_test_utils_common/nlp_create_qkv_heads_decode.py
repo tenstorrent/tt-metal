@@ -100,9 +100,9 @@ def run_test_create_min_width_shard(
         slice_size=slice_size,
         memory_config=CREATE_HEAD_OUTPUT_MEMCFG,
     )
-    logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
-    logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
-    logger.info(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
+    logger.debug(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
+    logger.debug(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
+    logger.debug(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
 
     if batch_offset is None and slice_size is None:
         batch_offset = 0
@@ -129,14 +129,14 @@ def run_test_create_min_width_shard(
     # compare
     q_heads_tt_cpu = ttnn.to_torch(q_heads_tt)
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch)
-    logger.info(f"PCC value: {output_pcc_q}")
+    logger.debug(f"PCC value: {output_pcc_q}")
 
     k_heads_tt_cpu = ttnn.to_torch(k_heads_tt)
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch)
-    logger.info(f"PCC value: {output_pcc_k}")
+    logger.debug(f"PCC value: {output_pcc_k}")
 
     v_heads_tt_cpu = ttnn.to_torch(v_heads_tt)
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch)
-    logger.info(f"PCC value: {output_pcc_v}")
+    logger.debug(f"PCC value: {output_pcc_v}")
 
     assert out_pass_q and out_pass_k and out_pass_v

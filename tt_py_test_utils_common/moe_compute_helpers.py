@@ -24,7 +24,7 @@ def validate_per_expert_tokens(
     expert_token_counts,
     worker_mcast_bbox=None,
 ):
-    logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
+    logger.debug(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
     per_expert_tokens_all_passed = True
 
     # L1 alignment constant (16 bytes)
@@ -43,7 +43,7 @@ def validate_per_expert_tokens(
     per_expert_total_tokens_torch = ttnn.to_torch(
         per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )
-    logger.info(f"Per expert total tokens torch shape: {per_expert_total_tokens_torch.shape}")
+    logger.debug(f"Per expert total tokens torch shape: {per_expert_total_tokens_torch.shape}")
 
     assert per_expert_total_tokens_torch.shape == expected_per_expert_shape, (
         f"per_expert_total_tokens shape mismatch: expected {expected_per_expert_shape}, "
@@ -100,7 +100,7 @@ def validate_per_expert_tokens(
                         )
                         per_expert_tokens_all_passed = False
                     else:
-                        logger.info(
+                        logger.debug(
                             f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
                             f"Expert {local_exp_idx}: count={actual_count} PASSED"
                         )
@@ -130,7 +130,7 @@ def validate_per_expert_tokens(
                         )
                         per_expert_tokens_all_passed = False
                     else:
-                        logger.info(
+                        logger.debug(
                             f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: count={actual_count} PASSED"
                         )
                 if core_in_bbox and device_idx == 0:
@@ -142,7 +142,7 @@ def validate_per_expert_tokens(
         logger.warning("No cores received per-expert counts via mcast — bbox calculation broken?")
         per_expert_tokens_all_passed = False
     else:
-        logger.info(
+        logger.debug(
             f"Per-expert counts validated on {cores_per_device_validated} cores per device "
             f"(of {num_cores} grid cores total)"
         )
@@ -153,7 +153,7 @@ def validate_per_expert_tokens(
 def validate_activation(
     mesh_device, experts_per_device, num_devices, expert_activation_output_tensor, golden_activation
 ):
-    logger.info(f"\n========== Expert Activation Tensor Validation ==========")
+    logger.debug(f"\n========== Expert Activation Tensor Validation ==========")
     activation_all_passed = True
 
     # Row size in uint32 elements (aligned to 16 bytes = 4 uint32s)
@@ -167,7 +167,7 @@ def validate_activation(
     expert_activation_torch = ttnn.to_torch(
         expert_activation_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )
-    logger.info(f"Expert activation torch shape: {expert_activation_torch.shape}")
+    logger.debug(f"Expert activation torch shape: {expert_activation_torch.shape}")
 
     for device_idx in range(num_devices):
         golden_rows = golden_activation[device_idx]
@@ -178,7 +178,7 @@ def validate_activation(
         device_activation = expert_activation_torch[device_idx].flatten().to(torch.int64)
         max_rows = len(device_activation) // aligned_row_elements
 
-        logger.info(
+        logger.debug(
             f"Device {device_idx}: expecting {num_expected_rows} activated tokens, tensor has space for {max_rows} rows"
         )
 
@@ -238,7 +238,7 @@ def validate_activation(
 
 
 def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t_output_tensor, golden_e_t):
-    logger.info(f"\n========== E-T (Expert-to-Token) Tensor Validation ==========")
+    logger.debug(f"\n========== E-T (Expert-to-Token) Tensor Validation ==========")
     e_t_all_passed = True
 
     # L1 alignment constant (16 bytes)
@@ -256,10 +256,10 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
     # Convert e_t tensor to torch
     # Shape per device: [experts_per_device, e_t_row_elements] as uint32
     e_t_torch = ttnn.to_torch(e_t_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    logger.info(f"E-T torch shape: {e_t_torch.shape}")
+    logger.debug(f"E-T torch shape: {e_t_torch.shape}")
 
     if e_t_torch.shape != expected_e_t_shape:
-        logger.info(f"e_t shape mismatch: expected {expected_e_t_shape}, got {e_t_torch.shape}")
+        logger.warning(f"e_t shape mismatch: expected {expected_e_t_shape}, got {e_t_torch.shape}")
         return False
 
     for device_idx in range(num_devices):
@@ -299,7 +299,7 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
                     )
                     e_t_all_passed = False
                 elif tokens_match:
-                    logger.info(
+                    logger.debug(
                         f"  Device {device_idx}, Expert {local_exp_idx}: "
                         f"{num_expected_tokens} tokens validated, sentinel PASSED"
                     )
@@ -364,7 +364,7 @@ def validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_thr
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
                 logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
-            logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
+            logger.debug(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
     return combine_all_passed
 
@@ -396,11 +396,11 @@ def create_torch_w0(L, E, K, N):
     if mode in ["baseline", "golden", "random_w2"]:
         # Use constant/golden weights for w0
         torch_w0 = torch.ones((L, E, K, N), dtype=torch.bfloat16) * 0.1
-        logger.info(f"[WEIGHT_INIT] w0: GOLDEN (constant 0.1) - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w0: GOLDEN (constant 0.1) - mode={mode}")
     else:
         # Use random weights for w0
         torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-        logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
 
     return torch_w0
 
@@ -429,11 +429,11 @@ def create_torch_w1(L, E, K, N):
     if mode in ["baseline", "golden", "random_w2"]:
         # Use constant/golden weights for w1
         torch_w1 = torch.ones((L, E, K, N), dtype=torch.bfloat16) * 0.1
-        logger.info(f"[WEIGHT_INIT] w1: GOLDEN (constant 0.1) - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w1: GOLDEN (constant 0.1) - mode={mode}")
     else:
         # Use random weights for w1
         torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-        logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
 
     return torch_w1
 
@@ -462,11 +462,11 @@ def create_torch_w2(L, E, N, K):
     if mode in ["baseline", "golden", "random_w0w1"]:
         # Use constant/golden weights for w2
         torch_w2 = torch.ones((L, E, N, K), dtype=torch.bfloat16) * 0.1
-        logger.info(f"[WEIGHT_INIT] w2: GOLDEN (constant 0.1) - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w2: GOLDEN (constant 0.1) - mode={mode}")
     else:
         # Use random weights for w2
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-        logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
+        logger.debug(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
     return torch_w2
 
@@ -1051,7 +1051,7 @@ def _build_moe_host_data(
     # save the original dense tokens to create matmul goldens
     tilize_golden_layer_outputs = []
 
-    logger.info(f"Creating goldens and input tensors")
+    logger.debug(f"Creating goldens and input tensors")
 
     for layer_id in range(num_layers):
         # Generate test data
@@ -1069,7 +1069,7 @@ def _build_moe_host_data(
         tilize_golden_output, expert_token_counts = compute_selective_tilize_golden(
             sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
         )
-        logger.info(f"  expert_token_counts:\n{expert_token_counts}")
+        logger.debug(f"  expert_token_counts:\n{expert_token_counts}")
         per_expert_tokens_goldens.append(expert_token_counts)
         tilize_golden_layer_outputs.append(tilize_golden_output)
 
@@ -1077,7 +1077,7 @@ def _build_moe_host_data(
             expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
         )
         for d in range(num_devices):
-            logger.info(f"  Device {d} activated tokens: {len(golden_activation[d])}")
+            logger.debug(f"  Device {d} activated tokens: {len(golden_activation[d])}")
         activation_goldens.append(golden_activation)
 
         golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
@@ -1091,9 +1091,9 @@ def _build_moe_host_data(
     tilize_golden_outputs = torch.stack(tilize_golden_layer_outputs)
     del tilize_golden_layer_outputs
 
-    logger.info(f"Done creating tilize goldens and input tensors")
+    logger.debug(f"Done creating tilize goldens and input tensors")
 
-    logger.info(f"Creating matmul goldens and input tensors")
+    logger.debug(f"Creating matmul goldens and input tensors")
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1189,7 +1189,7 @@ def _build_quantized_weight_host_tensors(
     mesh_device teardown and are landed on each invocation's device via to_device.
     """
 
-    logger.info(f"Building weights for {hidden_size=} {N=} {experts_per_device=} {has_bias=}")
+    logger.debug(f"Building weights for {hidden_size=} {N=} {experts_per_device=} {has_bias=}")
 
     def _upload_raw(t):
         return ttnn.from_torch(

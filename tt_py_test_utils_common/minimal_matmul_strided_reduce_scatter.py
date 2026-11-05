@@ -160,11 +160,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     input_shape = [1, 1, M, K]
     weight_shape_global = [num_devices, 1, K, N]  # dim 0 is device-shard dimension
 
-    logger.info(f"Input shape per device: {input_shape}")
-    logger.info(f"Weight shape per device: [1, 1, {K}, {N}]")
-    logger.info(f"MM output shape per device: [1, 1, {M}, {N}]")
-    logger.info(f"RS scatter dim: {dim}, ring_size: {num_devices}")
-    logger.info(f"RS output shape per device: [1, 1, {M}, {N // num_devices}]")
+    logger.debug(f"Input shape per device: {input_shape}")
+    logger.debug(f"Weight shape per device: [1, 1, {K}, {N}]")
+    logger.debug(f"MM output shape per device: [1, 1, {M}, {N}]")
+    logger.debug(f"RS scatter dim: {dim}, ring_size: {num_devices}")
+    logger.debug(f"RS output shape per device: [1, 1, {M}, {N // num_devices}]")
 
     input_tensor_mesh_list = []
     input_b_tensor_mesh_list = []  # fused-concat second in0 source (when fused_concat)
@@ -422,14 +422,14 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         # Compile
         run_op(0)
         ttnn.synchronize_device(mesh_device)
-        logger.info("Done compiling op")
+        logger.debug("Done compiling op")
 
         # Capture trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_mm_out, tt_rs_out = run_op(0)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        logger.info("Done capturing trace")
+        logger.debug("Done capturing trace")
 
         # Execute trace
         signpost("start")
@@ -439,7 +439,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             tt_mm_out_tensor_list.append(tt_mm_out)
             tt_rs_out_tensor_list.append(tt_rs_out)
         signpost("stop")
-        logger.info("Done executing trace")
+        logger.debug("Done executing trace")
     else:
         if check_program_cache:
             mesh_device.enable_program_cache()
@@ -455,9 +455,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             tt_mm_out_tensor_list.append(tt_mm_out)
             tt_rs_out_tensor_list.append(tt_rs_out)
 
-            logger.info(f"Waiting for op")
+            logger.debug(f"Waiting for op")
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"Done iteration {i}")
+            logger.debug(f"Done iteration {i}")
             if check_program_cache:
                 if i == 0:
                     cache_entries_after_miss = mesh_device.num_program_cache_entries()
@@ -469,7 +469,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 
     ##### Verify results #####
     if not check_correctness:
-        logger.info("Skipping correctness check (perf/sweep mode)")
+        logger.debug("Skipping correctness check (perf/sweep mode)")
         return
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
@@ -512,7 +512,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         for device_id in range(0 if mm_window_blocks is None else num_devices, num_devices):
             tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
             eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
-            logger.info(f"MM output device {device_id}, iter {i}: {output}")
+            logger.debug(f"MM output device {device_id}, iter {i}: {output}")
             assert eq, f"iter {i} device {device_id} MM FAILED: {output}"
 
         # Check RS output
@@ -532,7 +532,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         tt_rs_chunks = torch.chunk(tt_rs_out_torch, num_devices, dim=dim)
         for device_id in range(num_devices):
             eq, output = comp_pcc(tt_rs_chunks[device_id], torch_rs_golden[device_id], allowed_pcc)
-            logger.info(f"RS output device {device_id}, iter {i}: {output}")
+            logger.debug(f"RS output device {device_id}, iter {i}: {output}")
             assert eq, f"iter {i} device {device_id} RS FAILED: {output}"
 
-    logger.info("All checks passed!")
+    logger.debug("All checks passed!")
