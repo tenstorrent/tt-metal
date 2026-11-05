@@ -478,7 +478,7 @@ class ttMLA:
             packer_l1_acc=True,
         )
 
-        # Same HiFi2 fidelity with an fp32 dest, for tuned matmuls that set fp32_dest_acc. A wide
+        # Same HiFi2 fidelity with an fp32 dest, for tuned matmuls that set fp32_dest_acc (no math_fidelity). A wide
         # in0_block_w accumulates that much more K in dest before the packer spills; in bf16 dest that
         # costs precision (Mistral q_a_proj at in0_block_w=8: 1.4% rel. error vs 0.86% default), in fp32
         # it is both faster and more accurate than the default (0.44%).
@@ -972,8 +972,7 @@ class ttMLA:
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults.
 
-        Always carries compute_kernel_config: HiFi2 by default, or HiFi2 with an fp32 dest when the
-        tuned config sets ``fp32_dest_acc``. Pinned either way -- a program_config with no explicit
+        Always carries compute_kernel_config (see _tuned_compute_kernel_config): a program_config with no explicit
         compute config silently drops the matmul to LoFi.
         """
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)

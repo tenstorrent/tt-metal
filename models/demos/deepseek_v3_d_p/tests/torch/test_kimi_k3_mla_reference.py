@@ -30,6 +30,7 @@ on host in seconds instead of surfacing as an unattributable device PCC miss.
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -293,11 +294,10 @@ def test_k3_accuracy_pinned_blocking():
         fp32 dest HiFi2          15 us  0.44e-2 / -0.22%
         fp32 dest HiFi3 ibw=14   16 us  0.17e-2 / ~0       0.99948 (bf16 rounding floor)
 
-    With an fp32 dest the result is bit-identical for any in0_block_w, so it is not pinned. Depth gate:
+    With an fp32 dest the result was bit-identical across in0_block_w 1..28, so it is not pinned. Depth gate:
     test_mla_chunked_prefill[k3-production-50k+5k-cpu-torus-xy-8x4] (11 x 5120 tokens, every chunk asserted).
     Resolved through ttMLA._select_cfg because the 640 slot holds several models' candidates.
     """
-    import ttnn
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG
 
@@ -306,11 +306,16 @@ def test_k3_accuracy_pinned_blocking():
     mla.q_lora_rank = KimiK3Config.Q_LORA_RANK
     mla.is_chunked = True
     mla._is_dsa_family = False
-    mla.tp_factor = 4  # Galaxy split; the entry is untagged, so it must resolve at any TP
+    mla.default_compute_kernel_config, mla.hifi2_fp32_compute_kernel_config = "bf16/HiFi2", "fp32/HiFi2"
+    mla.hifi3_fp32_compute_kernel_config = "fp32/HiFi3"
 
-    cfg = mla._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640])
-    assert cfg is not None, "'kv_a_proj_with_mqa' lost its Kimi-K3 tuned config at seq_len_local=640"
-    assert cfg.get("fp32_dest_acc") and cfg.get("math_fidelity") == ttnn.MathFidelity.HiFi3, (
-        "kv_a_proj_with_mqa must use an fp32 dest at HiFi3 for ACCURACY (see this docstring): a bf16 dest or HiFi2 "
-        "biases |y| and fails the 0.98 chunked-prefill PCC at depth. Re-run the 56320-token depth case first."
-    )
+    # The entry is untagged, so it must resolve (K divisibility included) at every TP the boxes run.
+    for tp in (1, 2, 4):
+        mla.tp_factor = tp
+        mla.kv_a_proj_with_mqa_weight = SimpleNamespace(shape=(KimiK3Config.EMB_SIZE // tp, 576))
+        cfg = mla._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640], "kv_a_proj_with_mqa")
+        assert cfg is not None, f"kv_a_proj_with_mqa lost its Kimi-K3 tuned config at seq_len_local=640, TP={tp}"
+        assert mla._tuned_compute_kernel_config(cfg) == "fp32/HiFi3", (
+            "kv_a_proj_with_mqa must use an fp32 dest at HiFi3 for ACCURACY (see this docstring): a bf16 dest or HiFi2 "
+            "biases |y| and fails the 0.98 chunked-prefill PCC at depth. Re-run the 56320-token depth case first."
+        )
