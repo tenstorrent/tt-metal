@@ -860,7 +860,7 @@ def _plan(
                         f"fabric_all_gather: {coord} -> {peer} is not a direct link "
                         f"(topology={topology}, fabric={ttnn.get_fabric_config()})"
                     )
-                links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
+                links = ttnn.get_forwarding_link_indices(mesh_device, node(coord), node(peer))
                 if len(links) < num_links:
                     raise ValueError(
                         f"fabric_all_gather: {coord} -> {peer} has {len(links)} usable link(s), {num_links} requested "

@@ -600,7 +600,7 @@ def _mesh_plan(mesh_device, num_links, torus):
                     continue
                 if not ttnn.get_neighbor_eth_directions(mesh_device, node((r, c)), node(peer)):
                     raise ValueError(f"sparse_all_gather_2d: {(r, c)} -> {peer} is not a direct link")
-                links = ttnn.get_forwarding_link_indices(node((r, c)), node(peer))
+                links = ttnn.get_forwarding_link_indices(mesh_device, node((r, c)), node(peer))
                 if len(links) < num_links:
                     raise ValueError(f"sparse_all_gather_2d: {(r, c)} -> {peer} has {len(links)} links")
                 ports[d] = dict(peer=peer, links=links[:num_links])

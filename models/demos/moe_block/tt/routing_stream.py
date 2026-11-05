@@ -815,7 +815,7 @@ class RoutingStream:
             dy = 1 if key[1] == 2 else -1
             peer = ((coord[0] + dy) % self.R, coord[1])
             args += [int(self.yhello.buffer_address()), int(node(peer).chip_id), int(node(peer).mesh_id)]
-            link = ttnn.get_forwarding_link_indices(node(coord), node(peer))[0]
+            link = ttnn.get_forwarding_link_indices(self.mesh, node(coord), node(peer))[0]
             args += list(ttnn.setup_fabric_connection(node(coord), node(peer), link, prog, core))
         return args
 

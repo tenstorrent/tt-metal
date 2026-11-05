@@ -655,7 +655,7 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         pairs = list(zip(grp[:-1], grp[1:])) + ([(grp[-1], grp[0])] if ring else [])
         for s, d in pairs:
             hops += [(s, d), (d, s)]
-    links = {(s, d): list(ttnn.get_forwarding_link_indices(node(s), node(d))) for s, d in hops}
+    links = {(s, d): list(ttnn.get_forwarding_link_indices(mesh, node(s), node(d))) for s, d in hops}
     avail = min(len(v) for v in links.values())
     if avail == 0:
         raise ValueError("matmul_reduce_scatter: a hop of the group has no usable fabric link (no wrap link?)")
