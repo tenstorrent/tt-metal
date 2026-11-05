@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""GDN state in vLLM-owned MambaSpec blocks (QWEN36_MAMBA_SPEC=1, mamba_cache_mode "none"; prototype).
+"""GDN state in vLLM-owned MambaSpec blocks (QWEN36_MAMBA_SPEC=1, mamba_cache_mode "none" or "align"; prototype).
 
 vLLM overlays its KV cache groups: block id b names the same page in the attention layer of a layer slot
 (``tensor_idx``) and in each GDN layer of that slot, and one group owns a block id at a time. A GDN layer keeps the
@@ -14,9 +14,14 @@ Decode reads and writes them through gdn_decode_step(state_page_idx=...), one pe
 per GDN layer (device-row order): row h = first fp32 page of head h, row Nv + h = first bf16 page of its history. In
 this pooled mode the op keeps channel chunk c in both tile rows 2c and 2c + 1 of the packed history, so a request may
 change batch-row parity. Prefill keeps writing the model's [Bmax, ...] decode buffers (now a staging row per
-device row) and copies the row into the request's block afterwards, duplicating the history into both parities. The views use alias_view's default checks, so a
-block must hold whole fp32 and bf16 pages on every bank: BF8 [N, 1, 2048, 256] holds 17 fp32 pages per bank (136 per
-block; TP=8 needs 96), BF8 4096 holds 272 (TP=4 needs 192), bf16 2048 holds 256.
+device row) and copies the row into the request's block afterwards, duplicating the history into both parities. The
+views use alias_view's default checks, so a block must hold whole fp32 and bf16 pages on every bank: BF8
+[N, 1, 2048, 256] holds 17 fp32 pages per bank (136 per block; TP=8 needs 96), BF8 4096 holds 272 (TP=4 needs 192),
+bf16 2048 holds 256.
+
+A prefill that starts at start_pos > 0 (a prefix hit in mode "align", or a later chunk of a prompt) first loads the
+request's block into the B=1 prefill scratch (GdnBlockState.restore). The runner's (src, dst) block copies
+(copy_kv_blocks) move whole blocks, so they carry every GDN layer's state of the block's group with them.
 """
 
 from types import SimpleNamespace
@@ -168,6 +173,55 @@ class GdnBlockState:
                 ttnn.experimental.slice_write(src, ps.hist_view, [blk, 0, 0, 0], [blk + 1, nr, 32, 32], [1, 1, 1, 1])
                 ttnn.deallocate(src)
 
+    def set_prefill_blocks(self, state_block_ids_per_layer):
+        """The state block ids of this prefill step (row u = prefilled request u), for restore()."""
+        self._prefill_ids = state_block_ids_per_layer
+
+    def restore(self, u):
+        """Load the state block of prefilled request u into the bound B=1 prefill scratch of every GDN layer
+        (rec_state [1, Nv, Dk, Dv] fp32, conv_carry [1, K - 1, C] bf16), so the prefill resumes at vLLM's start_pos.
+        The block holds the state after exactly start_pos tokens: the runner copied a prefix hit's boundary state into
+        it (mamba_cache_mode "align"), or the previous chunk of this prompt wrote it. Same contract as
+        GdnPrefixStateCache.restore (Qwen36Model._prefill_with_prefix_cache calls either)."""
+        for i, dn in self.layers:
+            blk = self._block_ids(self._prefill_ids, i, u + 1)[u]
+            if blk <= 0:
+                raise ValueError(f"layer {i}: resumed prefill of request {u} has the null block {blk}")
+            ps = dn._paged_state
+            nv, dk, dv, nr = dn.Nv, dn.Dk, dn.Dv, dn.Nv * 4
+            s0 = blk * (ps.rec_pages // HALF_HEAD_PAGES)
+            rec = ttnn.slice(ps.rec_view, (s0, 0, 0, 0), (s0 + 2 * nv, 1, dk // 2, dv))
+            ttnn.copy(ttnn.reshape(rec, (1, nv, dk, dv)), dn.rec_state)
+            ttnn.deallocate(rec)
+            hist = ttnn.to_layout(
+                ttnn.slice(ps.hist_view, (blk, 0, 0, 0), (blk + 1, nr, 32, 32)), ttnn.ROW_MAJOR_LAYOUT
+            )
+            rows = ttnn.embedding(
+                self._unpack_table(dn), ttnn.reshape(hist, (nr * 32, 32)), layout=ttnn.ROW_MAJOR_LAYOUT
+            )  # [1, (K - 1) * C / 32, 32]
+            ttnn.deallocate(hist)
+            carry = ttnn.to_layout(ttnn.reshape(rows, (1, dn.K - 1, dn.qkv_dim_tp)), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(rows)
+            ttnn.copy(carry, dn.conv_carry)
+            ttnn.deallocate(carry)
+
+    def _unpack_table(self, dn):
+        """uint32 [1, (K - 1) * C / 32] gather table: 32-channel row (j, ch) of conv_carry <- packed row
+        (h * 4 + j + 1) * 32 + 2c of one block's history, viewed as [Nv * 4 * 32, 32] rows. (h, c) is the head and
+        chunk of channel group ch in [q | k | v], as in TPGatedDeltaNet._pack_tables "to_rm" for batch row 0; the
+        pooled history holds the same chunk at parity 1."""
+        tabs = self.__dict__.setdefault("_unpack_tables", {})
+        key = (dn.Nv, dn.Nk, dn.Dk, dn.Dv, dn.K)
+        if key not in tabs:
+            tabs[key] = ttnn.from_torch(
+                unpack_rows(*key).reshape(1, -1).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        return tabs[key]
+
     def _mirror_table(self, nr, parity):
         """uint32 [1, nr * 32] gather table: packed tile row r of tile t <- row 2 * (r // 2) + parity of the same tile.
         The decode row's packing (chunk c in row 2c + parity, the other parity zero) becomes the pooled packing (chunk c
@@ -184,6 +238,57 @@ class GdnBlockState:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
         return tabs[(nr, parity)]
+
+
+def unpack_rows(nv, nk, dk, dv, k):
+    """int64 [K - 1, C / 32]: the packed history row of each 32-channel group of conv_carry (see
+    GdnBlockState._unpack_table)."""
+    rf, qn, vn = nv // nk, dk // 32, dv // 32
+    kd32 = nk * dk // 32
+    cpr = 2 * kd32 + nv * vn
+    out = torch.zeros(k - 1, cpr, dtype=torch.int64)
+    for j in range(k - 1):
+        for ch in range(cpr):
+            if ch < kd32:  # q of key head ch // qn, read by its first value head
+                h, c = (ch // qn) * rf, ch % qn
+            elif ch < 2 * kd32:  # k
+                h, c = ((ch - kd32) // qn) * rf, qn + (ch - kd32) % qn
+            else:  # v
+                h, c = (ch - 2 * kd32) // vn, 2 * qn + (ch - 2 * kd32) % vn
+            out[j, ch] = (h * 4 + j + 1) * 32 + 2 * c
+    return out
+
+
+def copy_kv_blocks(model, copies):
+    """vLLM's (src, dst) block copies, in list order: copy the whole block in every K and V buffer of
+    model._paged_kv_caches. A block id belongs to one KV cache group at a time and each layer slot holds that group's
+    layer at the block, so a whole-block copy moves exactly that group's content (attention K and V, or the recurrent
+    state and conv history of the group's GDN layers). paged_fill_cache is a tile copy (dataflow kernels only), so the
+    fp32 and bf16 bytes inside a BF8 buffer move unchanged."""
+    kv_caches = getattr(model, "_paged_kv_caches", None)
+    if not copies or not kv_caches:
+        return
+    mesh = model.mesh_device
+    for src, dst in copies:
+        src, dst = int(src), int(dst)
+        if src == dst:
+            continue
+        if src <= 0 or dst <= 0:
+            raise ValueError(f"block copy {src} -> {dst} names the null block 0")
+        pt = ttnn.from_torch(
+            torch.tensor([[dst]], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        for kv in kv_caches:
+            for t in kv:
+                end = [src + 1] + [int(x) for x in t.shape[1:]]
+                blk = ttnn.slice(t, (src, 0, 0, 0), end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.experimental.paged_fill_cache(t, blk, pt, batch_idx=0)
+                ttnn.deallocate(blk)
+        ttnn.deallocate(pt)
 
 
 def zero_kv_blocks(model, block_ids):

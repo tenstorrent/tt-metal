@@ -6273,7 +6273,14 @@ class Qwen36Model:
         ]
 
     def prefill_paged_slots(
-        self, token_ids_list, page_table, empty_slots, valid_lens=None, start_positions=None, vision_tokens_list=None
+        self,
+        token_ids_list,
+        page_table,
+        empty_slots,
+        valid_lens=None,
+        start_positions=None,
+        vision_tokens_list=None,
+        gdn_resume=None,
     ):
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
 
@@ -6298,7 +6305,11 @@ class Qwen36Model:
         stashes MODEL-GLOBAL grids (_req_image_grid_thw / _req_video_grid_thw) that the prefill's M-RoPE build reads --
         and deallocated right after it. A multimodal user bypasses the prefix cache entirely (start position ignored,
         no snapshot lookup, no saves). After every user's prefill its M-RoPE delta (0 for text) is recorded per decode
-        slot (set_slot_rope_delta) for the batched decode rope index."""
+        slot (set_slot_rope_delta) for the batched decode rope index.
+
+        gdn_resume (QWEN36_MAMBA_SPEC): the GDN state lives in vLLM blocks; gdn_resume.restore(u) loads request u's
+        state at start_positions[u] into the bound scratch. Text requests then resume there (_plan_block_resume) and
+        the GDN snapshot stores are not used."""
         if vision_tokens_list is not None and not self.short_prefill_trace_enabled():
             raise NotImplementedError("batched multimodal prefill requires QWEN36_PREFILL_BUCKET_TRACE=1")
         if not self.short_prefill_trace_enabled():
@@ -6330,8 +6341,11 @@ class Qwen36Model:
                     start, plan = 0, None
                 else:
                     start = int(start_positions[u]) if start_positions is not None else 0
-                    cont = self._maybe_partial_chunk(step_tokens, actual - max(start, 0), actual)
-                    plan = self._plan_prefix_prefill(toks[:, :actual], actual, start, cont=cont)
+                    if gdn_resume is not None:
+                        plan = self._plan_block_resume(actual, start, (gdn_resume, u))
+                    else:
+                        cont = self._maybe_partial_chunk(step_tokens, actual - max(start, 0), actual)
+                        plan = self._plan_prefix_prefill(toks[:, :actual], actual, start, cont=cont)
                 if vt is not None:
                     host_logits.append(
                         self.prefill_traced_chunked(
@@ -6434,6 +6448,23 @@ class Qwen36Model:
         if s == 0 and not points and not chunk_pts and not cont and (cache is None or L - 3 < stride):
             return None  # nothing to resume or save: legacy path
         return s, src, sorted(points), stride, start, chunk_pts, cont
+
+    def _plan_block_resume(self, L, start, src):
+        """QWEN36_MAMBA_SPEC: the _prefill_with_prefix_cache plan that resumes at vLLM's start from
+        src = (GdnBlockState, request index), with no snapshot saves; None = recompute from 0. Recompute when there is
+        nothing to resume (start 0), when _prefill_range cannot resume there (start not 128-aligned, fewer than 3
+        tokens after it), or without the chunk trace. Recomputing a prefix whose KV is cached rewrites the same
+        values."""
+        if self._prefix_cache is not None or self._chunk_state_cache is not None:
+            raise RuntimeError("QWEN36_MAMBA_SPEC keeps GDN state in vLLM blocks; the GDN snapshot stores must be off")
+        A = self._PREFIX_ALIGN
+        if start <= 0 or start % A or L - start < 3 or self._chunked_trace_id is None:
+            return None
+        chunk = self._chunked_chunk_size or 2048
+        n = L - start
+        # As _plan_prefix_prefill: a 1-2 token tail after the last full chunk would run eagerly; split 128 earlier.
+        points = [start + (n // chunk) * chunk - A] if n > chunk and 0 < n % chunk < 3 else []
+        return start, src, points, 1 << 62, start, set(), False
 
     def _prefill_with_prefix_cache(self, toks, pt_row, L, plan):
         """Resumable text prefill of one request on the BOUND B=1 GDN scratch: restore the snapshot at s (or zero),

@@ -149,3 +149,200 @@ def test_mirror_table_duplicates_the_row_parity():
             assert t[0, 22].item() == 22 + parity and t[0, 23].item() == 22 + parity  # chunk 11: rows 22, 23
     finally:
         gbs.ttnn = real
+
+
+# --- Device ops on torch: prefill write, block copy, restore ------------------------------------------------------
+
+NK, KCONV = 4, 4  # TP=4 per-device key heads, conv kernel
+CONV_DIM = 2 * NK * DK + NV * DV  # 2560
+POOL_BLOCKS = 24
+_TORCH_DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
+
+
+class _Paged:
+    """A paged cache buffer [N, 1, block, hd] of `dtype` tiles as raw bytes, one row per block."""
+
+    def __init__(self, n, block, dtype="bf8"):
+        self.shape = [n, 1, block, HD]
+        self.dtype = dtype
+        self.bytes = torch.zeros(n, block * HD // 1024 * {"bf8": 1088, "bf16": 2048}[dtype], dtype=torch.uint8)
+
+
+class _TorchTTNN:
+    """The ttnn surface of gdn_block_state on torch tensors. alias_view is a real torch view of a _Paged buffer's
+    bytes, so writes through a view, block copies and later reads see one memory (layouts are no-ops)."""
+
+    bfloat16, float32, bfloat8_b, uint32, int32 = "bf16", "fp32", "bf8", "u32", "i32"
+    ROW_MAJOR_LAYOUT, TILE_LAYOUT, DRAM_MEMORY_CONFIG = "rm", "tile", "dram"
+
+    def __init__(self):
+        self.fills = []
+        self.experimental = SimpleNamespace(
+            alias_view=self.alias_view, slice_write=self.slice_write, paged_fill_cache=self.paged_fill_cache
+        )
+
+    @staticmethod
+    def ReplicateTensorToMesh(mesh):
+        return None
+
+    @staticmethod
+    def from_torch(x, dtype=None, layout=None, device=None, mesh_mapper=None, memory_config=None):
+        return x.clone()
+
+    @staticmethod
+    def alias_view(t, shape, dtype):
+        return t.bytes.view(_TORCH_DTYPES[dtype]).reshape(shape)
+
+    @staticmethod
+    def reshape(t, shape):
+        return t.reshape(tuple(shape))
+
+    @staticmethod
+    def slice(t, start, end, memory_config=None):
+        if isinstance(t, _Paged):
+            out = _Paged.__new__(_Paged)
+            out.shape, out.dtype = [1] + t.shape[1:], t.dtype
+            out.bytes = t.bytes[start[0] : start[0] + 1].clone()
+            return out
+        return t[tuple(slice(s, e) for s, e in zip(start, end))].clone()
+
+    @staticmethod
+    def slice_write(src, dst, start, end, step):
+        dst[tuple(slice(s, e) for s, e in zip(start, end))] = src
+
+    def paged_fill_cache(self, cache, blk, pt, batch_idx=0):
+        self.fills.append((cache, int(pt[batch_idx][0])))
+        cache.bytes[int(pt[batch_idx][0])] = blk.bytes[0]
+
+    @staticmethod
+    def to_layout(t, layout, memory_config=None):
+        return t.clone()
+
+    @staticmethod
+    def embedding(idx, weight, layout=None, memory_config=None):
+        return weight[idx.long()]
+
+    @staticmethod
+    def copy(src, dst):
+        dst.copy_(src)
+
+    @staticmethod
+    def copy_host_to_device_tensor(src, dst):
+        dst.copy_(src)
+
+    @staticmethod
+    def deallocate(t):
+        pass
+
+
+@pytest.fixture
+def torch_ttnn(monkeypatch):
+    t = _TorchTTNN()
+    monkeypatch.setattr(gbs, "ttnn", t)
+    monkeypatch.setattr(gbs, "_tile_bytes", lambda dtype: {"bf16": 2048, "fp32": 4096, "bf8": 1088}[dtype])
+    return t
+
+
+def _pack_tables(monkeypatch, bmax):
+    """The production RM <-> packed history tables (TPGatedDeltaNet._pack_tables) on torch."""
+    from models.demos.blackhole.qwen36.tt.gdn import tp as gdn_tp
+
+    monkeypatch.setattr(gdn_tp, "ttnn", _TorchTTNN())
+    me = SimpleNamespace(
+        _decode_B=bmax, Nv=NV, Nk=NK, Dk=DK, Dv=DV, K=KCONV, mesh=None, _shared_const=lambda key, make: make()
+    )
+    return gdn_tp.TPGatedDeltaNet._pack_tables(me)
+
+
+def _staged_model(monkeypatch, bmax=8, n_layers=8, block=4096):
+    """A model whose GDN decode buffers hold random state: rec_state, and the packed history of a random conv carry
+    per row, packed for the row's parity by the production table."""
+    tab = _pack_tables(monkeypatch, bmax)
+    cpr = tab["cpr"]
+    model = _model(n_layers=n_layers, bmax=bmax)
+    g = torch.Generator().manual_seed(7)
+    carries = torch.randn(bmax, KCONV - 1, CONV_DIM, generator=g).to(torch.bfloat16)
+    for layer in model.layers:
+        dn = layer.attention
+        dn.Nk, dn.K, dn.qkv_dim_tp, dn._decode_B = NK, KCONV, CONV_DIM, bmax
+        dn.rec_state = torch.randn(bmax, NV, DK, DV, generator=g)
+        packed = []
+        for b in range(bmax):
+            w = torch.cat([carries[b].reshape((KCONV - 1) * cpr, 32), torch.zeros(1, 32, dtype=torch.bfloat16)])
+            packed.append(w[tab["slot_to_packed"][b & 1].long()].reshape(NV, 4, 32, 32))
+        dn._conv_hist_packed = torch.stack(packed)
+        dn._rec_row_shard_memcfg = dn._packed_row_shard_memcfg = lambda: None
+    model.prepare_gdn_decode_width = lambda b: None
+    n_attn = len(model._attention_layer_indices)
+    kv = [[_Paged(POOL_BLOCKS, block), _Paged(POOL_BLOCKS, block)] for _ in range(n_attn)]
+    model._paged_kv_caches = kv
+    return model, kv, carries
+
+
+def _ids(model, bases):
+    """state_block_ids_per_layer: request u holds block bases[u] + 8 * g in GDN group g = layer % 4 (one group owns a
+    block id, so the GDN layers that share a layer slot never share a block)."""
+    out = []
+    for i, _ in enumerate(model.layers):
+        blocks = [b + 8 * (i % 4) for b in bases]
+        out.append(torch.tensor(blocks + [0] * (8 - len(blocks)), dtype=torch.int32).reshape(-1, 1))
+    return out
+
+
+def _group_copies(src, dst):
+    return [(src + 8 * g, dst + 8 * g) for g in range(3)]
+
+
+def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch):
+    model, kv, carries = _staged_model(monkeypatch)
+    st = gbs.GdnBlockState(model, _specs(model), kv)
+    rec0 = {i: dn.rec_state.clone() for i, dn in st.layers}
+    st.write_prefill_rows(_ids(model, [5, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
+    gbs.copy_kv_blocks(model, _group_copies(5, 7))
+    for i, dn in st.layers:  # the B=1 prefill scratch, bound
+        dn.rec_state = torch.zeros(1, NV, DK, DV)
+        dn.conv_carry = torch.zeros(1, KCONV - 1, CONV_DIM, dtype=torch.bfloat16)
+    st.set_prefill_blocks(_ids(model, [7, 2]))
+    for u, row in ((0, 3), (1, 0)):
+        st.restore(u)
+        for i, dn in st.layers:
+            assert torch.equal(dn.rec_state[0], rec0[i][row]), (u, i)
+            assert torch.equal(dn.conv_carry[0], carries[row]), (u, i)
+
+
+def test_pooled_history_holds_both_parities(torch_ttnn, monkeypatch):
+    model, kv, _ = _staged_model(monkeypatch)
+    st = gbs.GdnBlockState(model, _specs(model), kv)
+    st.write_prefill_rows(_ids(model, [4, 6]), rows=[1, 2])
+    nck = 2 * (DK // 32) + DV // 32
+    for i, dn in st.layers:
+        for base, row in ((4, 1), (6, 2)):
+            blk = base + 8 * (i % 4)
+            pooled = dn._paged_state.hist_view[blk, : NV * 4].reshape(NV, 4, 32, 32)
+            src = dn._conv_hist_packed[row]
+            for c in range(nck):
+                assert torch.equal(pooled[:, :, 2 * c], src[:, :, 2 * c + (row & 1)])
+                assert torch.equal(pooled[:, :, 2 * c + 1], src[:, :, 2 * c + (row & 1)])
+
+
+def test_block_copies_run_in_order_over_every_buffer(torch_ttnn, monkeypatch):
+    model, kv, _ = _staged_model(monkeypatch)
+    for j, (k, v) in enumerate(kv):
+        for blk in range(POOL_BLOCKS):
+            k.bytes[blk] = 2 * blk + 1
+            v.bytes[blk] = 2 * blk + 2
+    gbs.copy_kv_blocks(model, [(3, 4), (4, 5), (6, 6)])  # 3 -> 4, then that copy -> 5; 6 -> 6 is skipped
+    assert len(torch_ttnn.fills) == 2 * 2 * len(kv)
+    for k, v in kv:
+        assert int(k.bytes[4, 0]) == int(k.bytes[5, 0]) == 7 and int(v.bytes[5, 0]) == 8
+        assert int(k.bytes[6, 0]) == 13 and int(k.bytes[3, 0]) == 7
+    with pytest.raises(ValueError):
+        gbs.copy_kv_blocks(model, [(0, 4)])
+
+
+def test_unpack_rows_inverts_the_production_packing(monkeypatch):
+    tab = _pack_tables(monkeypatch, 2)
+    rows = gbs.unpack_rows(NV, NK, DK, DV, KCONV).reshape(-1)
+    to_packed = tab["slot_to_packed"][0].reshape(-1)  # parity 0: packed row <- RM carry row
+    for rm_row, packed_row in enumerate(rows.tolist()):
+        assert int(to_packed[packed_row]) == rm_row
