@@ -976,6 +976,12 @@ def use_small_m(args, S):
     return 0 < getattr(args, "prefill_small_m_max", 0) and S <= args.prefill_small_m_max
 
 
+def use_small_m_mlp(args, S):
+    """use_small_m for the dense TP MLP: args.prefill_small_m_mlp_max (defaults to prefill_small_m_max)."""
+    m = getattr(args, "prefill_small_m_mlp_max", getattr(args, "prefill_small_m_max", 0))
+    return 0 < m and S <= m
+
+
 def tp_all_gather(x, tt_ccl, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=ttnn.Topology.Ring):
     """All-gather x along `dim` over the TP axis (cluster_axis=1): [.., K/tp] -> [.., K], same dtype as x.
 
