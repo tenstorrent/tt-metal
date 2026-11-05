@@ -5,8 +5,10 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
@@ -1001,6 +1003,17 @@ MatmulProgramConfig get_program_config(
     const MatmulUnifiedProgramConfig* requested =
         attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
                                               : nullptr;
+    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to; the plan picks the rest.
+    if (!attributes.prefetcher_pipes.empty() &&
+        (requested != nullptr ? requested->cores.num_cores() == 0 : !attributes.program_config.has_value())) {
+        MatmulUnifiedProgramConfig config =
+            requested != nullptr ? *requested
+                                 : MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation};
+        config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
+                           ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes))
+                           .merge_ranges();
+        return config;
+    }
     if (requested != nullptr && requested->cores.num_cores() == 0) {
         std::optional<MatmulUnifiedProgramConfig> chosen = ttnn::prim::qsr::choose_unified_placement(
             input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, *requested);
@@ -1014,22 +1027,7 @@ MatmulProgramConfig get_program_config(
         return attributes.program_config.value();
     }
     // Quasar takes the Quasar-native matmul wherever it runs, fusing user_fused_activation as the legacy auto config
-    // for a user grid does; the legacy picker covers the rest. Only the Quasar-native matmul reads B from prefetcher
-    // pipes.
-    if (!attributes.prefetcher_pipes.empty()) {
-        std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
-            input_tensor_a,
-            input_tensor_b,
-            bias_single_tile_size,
-            attributes,
-            MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation});
-        TT_FATAL(
-            unified.has_value(),
-            "prefetcher_pipes: no MatmulUnifiedProgramConfig on the pipes' receivers fits L1, or the unified matmul "
-            "does not support this matmul (transposed operands, untilized output, tiles other than 32x32, a "
-            "sub-device)");
-        return unified.value();
-    }
+    // for a user grid does; the legacy picker covers the rest.
     if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
         std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
             input_tensor_a,

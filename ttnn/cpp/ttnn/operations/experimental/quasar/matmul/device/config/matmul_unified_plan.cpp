@@ -24,7 +24,6 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
-#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/types.hpp"
 
@@ -556,6 +555,16 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         base.B_from_pipes ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
                           : config.C_slice_N_tiles.value_or(
                                 batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
+    // Over prefetcher pipes an auto K chunk is at most one MIN_PIPE_RING_K_CHUNKS of which fit the ring (a relay is
+    // the ring, not program L1, so dfbs_fit does not bound it); at least one tile, so the ring check reports a short
+    // ring.
+    const uint32_t max_K_chunk_tiles =
+        base.B_from_pipes ? std::clamp<uint32_t>(
+                                attributes.prefetcher_pipes.front()->ring_size() /
+                                    (MIN_PIPE_RING_K_CHUNKS * max_C_slice_N_tiles * tt::tile_size(base.B_format)),
+                                1,
+                                base.K_tiles)
+                          : base.K_tiles;
 
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
     const std::optional<tt::tt_metal::ShardSpec>& C_shard =
@@ -599,14 +608,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     // reports it.
     MatmulUnifiedPlan candidate;
     for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
-        // Over prefetcher pipes an auto K chunk is at most one MIN_PIPE_RING_K_CHUNKS of which fit the ring.
-        const uint32_t max_K_chunk_tiles =
-            base.B_from_pipes ? std::clamp<uint32_t>(
-                                    attributes.prefetcher_pipes.front()->ring_size() /
-                                        (MIN_PIPE_RING_K_CHUNKS * C_slice_N_tiles * tt::tile_size(base.B_format)),
-                                    1,
-                                    base.K_tiles)
-                              : base.K_tiles;
         // Batch groups: the config's, else one (every core takes every batch) and, with batches that have their own B,
         // the count that leaves the busiest core fewest C slices (the fewest groups on a tie), so that few C slices per
         // batch do not leave cores idle. Only one group can multicast.
@@ -896,20 +897,6 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                 B.shard_spec()->shape[1] / TILE_WIDTH,
                 ONE_BATCH_GROUP);
         }
-    }
-
-    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to (merged, so that a
-    // rectangle of them multicasts A).
-    if (!attributes.prefetcher_pipes.empty()) {
-        candidates.clear();
-        add_candidate(
-            tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
-                ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes))
-                .merge_ranges(),
-            ROW_MAJOR,
-            std::nullopt,
-            std::nullopt,
-            ONE_BATCH_GROUP);
     }
 
     // ---- 3. Plan every candidate; the best ranked wins ----
