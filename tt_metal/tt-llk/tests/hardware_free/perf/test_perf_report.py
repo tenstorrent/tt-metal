@@ -17,6 +17,7 @@ the optional-None and dynamic-param cases static reading can't. Needs the LLK en
 """
 
 import os
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +25,9 @@ import pandas as pd
 import pytest
 from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
+from helpers.perf import phases
 from helpers.perf.core import (
+    L1_CONGESTION_PHASES,
     PerfConfig,
     PerfReport,
     _assert_matches_catalog,
@@ -32,10 +35,14 @@ from helpers.perf.core import (
     _prune_runs,
     _refresh_latest,
     _reject_duplicate_keys,
+    _selected_run_types,
+    add_pipeline_coupling,
+    assert_one_zone_per_phase,
     assert_zones_dont_overlap,
     combine_perf_reports,
     postprocess_tile_loop,
 )
+from helpers.perf.l1_contention import summarize
 from helpers.perf.schema import (
     MARKER,
     MEAN,
@@ -127,6 +134,50 @@ def test_report_columns_conform_to_output_schema():
         stat_column("MATH_ISOLATE", STD),
     ]:
         assert expected in combined.columns, f"missing expected column {expected!r}"
+
+
+def test_pipeline_coupling_is_l1_to_l1_minus_the_slowest_stage():
+    frame = pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [50.0, 100.0],
+            stat_column("UNPACK_ISOLATE", MEAN): [40.0, 60.0],
+            stat_column("MATH_ISOLATE", MEAN): [45.0, 80.0],
+            stat_column("PACK_ISOLATE", MEAN): [30.0, float("nan")],
+        }
+    )
+    coupling = add_pipeline_coupling(frame)[stat_column("COUPLING", MEAN)]
+    assert pd.isna(coupling[0]), "INIT rows carry no coupling"
+    assert (
+        coupling[1] == 20.0
+    ), "a missing stage is skipped, the slowest present one counts"
+    # Without isolates (or without L1_TO_L1) there is nothing to compare: no column, so the schema stays per-test.
+    only_pipeline = pd.DataFrame(
+        {"marker": ["TILE_LOOP"], stat_column("L1_TO_L1", MEAN): [1.0]}
+    )
+    assert (
+        stat_column("COUPLING", MEAN)
+        not in add_pipeline_coupling(only_pipeline).columns
+    )
+    # The report the run writes carries it, and per tile after post-processing like the other timing columns.
+    combined = _build(_fake_formats())
+    assert stat_column("COUPLING", MEAN) in combined.columns
+    post = postprocess_tile_loop(combined.copy())
+    tile = post[post["marker"] == "TILE_LOOP"].iloc[0]
+    assert (
+        tile[stat_column("COUPLING", MEAN)] == 0.0
+    )  # L1_TO_L1 20 - MATH_ISOLATE 20, divided by 4 tiles
+
+
+def test_l1_congestion_runs_only_when_asked_for(monkeypatch):
+    every = list(PerfRunType)
+    monkeypatch.delenv("LLK_PERF_RUN_TYPES", raising=False)
+    assert PerfRunType.L1_CONGESTION not in _selected_run_types(every)
+    assert PerfRunType.L1_TO_L1 in _selected_run_types(every)
+    monkeypatch.setenv("LLK_PERF_RUN_TYPES", "ALL_MODES_AND_CONGESTION")
+    assert PerfRunType.L1_CONGESTION in _selected_run_types(every)
+    monkeypatch.setenv("LLK_PERF_RUN_TYPES", "L1_CONGESTION")
+    assert _selected_run_types(every) == [PerfRunType.L1_CONGESTION]
 
 
 def test_report_without_formats_still_conforms():
@@ -272,7 +323,7 @@ def _one_run_events(seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _run_hw_free(monkeypatch, run_types, run_count):
+def _run_hw_free(monkeypatch, run_types, run_count, write_runtimes=None):
     """Run PerfConfig.run() end-to-end with no chip; return the produced frame."""
     # Class-level execution config: execute-only (skip build, don't pytest.skip),
     # counters off, artefacts dir unused (get_elf_text_size is stubbed).
@@ -316,6 +367,8 @@ def _run_hw_free(monkeypatch, run_types, run_count):
         "wait_for_tensix_operations_finished",
     ):
         monkeypatch.setattr(cfg, seam, lambda *a, **k: None)
+    if write_runtimes is not None:
+        monkeypatch.setattr(cfg, "write_runtimes_to_L1", write_runtimes)
 
     report = PerfReport()
     cfg.run(report, run_count=run_count)
@@ -357,6 +410,72 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     frame = _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
     assert stat_column("MATH_ISOLATE", MEAN) in frame.columns
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
+
+
+def test_averaged_rows_run_once_per_start_phase(monkeypatch):
+    # a Wormhole perf row in AVERAGED runs its mode's design (latin: _run_hw_free builds without --speed-of-light) instead
+    # of run_count launches; the others keep run_count
+    monkeypatch.setattr(PerfConfig, "_wormhole_perf_barrier", lambda self: True)
+    monkeypatch.setattr(TestConfig, "PERF_INIT_LAUNCH", False)
+    monkeypatch.setattr(
+        phases,
+        "AVERAGED",
+        {("perf_hwfree", PerfRunType.MATH_ISOLATE.name): ("latin", "grid")},
+    )
+    written = []
+    frame = _run_hw_free(
+        monkeypatch,
+        [PerfRunType.MATH_ISOLATE, PerfRunType.UNPACK_ISOLATE],
+        run_count=2,
+        write_runtimes=lambda release_phase=None: written.append(release_phase),
+    )
+    warmups = [None, None]  # one unrecorded launch per run type, at the canonical phase
+    assert written == warmups + list(phases.PHASE_DESIGNS["latin"]) + [(0, 0)] * 2
+    # fake_get_data's TILE_LOOP takes 15 + k cycles at launch k: the mean over the 31 phases, and their spread in std
+    tile = frame[frame[MARKER] == "TILE_LOOP"].iloc[0]
+    assert tile[stat_column("MATH_ISOLATE", MEAN)] == pytest.approx(15 + 15)
+    assert tile[stat_column("MATH_ISOLATE", STD)] > 0
+
+
+def test_release_phase_follows_the_runtime_arguments():
+    block = phases.with_release_phase(b"\x01" * 8, (3, -2))
+    assert len(block) == 0x400 and block[:8] == b"\x01" * 8
+    assert block[8 : phases.RELEASE_PHASE_OFFSET] == bytes(
+        phases.RELEASE_PHASE_OFFSET - 8
+    )
+    assert block[phases.RELEASE_PHASE_OFFSET :] == struct.pack(
+        "<Iiii", phases.RELEASE_PHASE_VALID, 3, -2, 0
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="overlap the release phase"
+    ):
+        phases.with_release_phase(bytes(phases.RELEASE_PHASE_OFFSET + 1), (0, 0))
+
+
+def test_release_phase_matches_the_firmware():
+    helpers = Path(__file__).parents[2] / "helpers"
+    brisc = (helpers / "src/brisc.cpp").read_text()
+    assert ".set  .Lrel_phase, __runtime_args_end - 16" in brisc
+    assert f".set  .Lrel_phase_valid, 0x{phases.RELEASE_PHASE_VALID:08X}" in brisc
+    memory = (helpers / "ld/memory.wormhole.ld").read_text()
+    assert "ORIGIN = RUNTIME_ARGS_START, LENGTH = 1K" in memory
+    assert phases.RELEASE_PHASE_OFFSET == 1024 - 16
+
+
+def test_phase_designs_cover_every_lfsr_phase():
+    period = phases.LFSR_PERIOD
+    grid = phases.PHASE_DESIGNS["grid"]
+    assert len(set(grid)) == period * period and grid[0] == phases.CANONICAL_PHASE
+    # (a, b) moves the first released thread's phase by a + b and the second's by b: latin gives each once
+    latin = phases.PHASE_DESIGNS["latin"]
+    assert len(latin) == period
+    assert {(a + b) % period for a, b in latin} == set(range(period))
+    assert {b % period for a, b in latin} == set(range(period))
+    sources = Path(__file__).parents[2] / "sources"
+    for (source, run_type), designs in phases.AVERAGED.items():
+        assert (sources / source).is_file() and any(designs)
+        assert all(d is None or d in phases.PHASE_DESIGNS for d in designs)
+        assert PerfRunType[run_type] != PerfRunType.L1_CONGESTION
 
 
 def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
@@ -1252,3 +1371,66 @@ def test_unpaired_zone_records_are_rejected(entries):
         ValueError, match="buffer corruption"
     ):
         Profiler._parse_thread("unpack", _zone_words(entries), _ZONE_META)
+
+
+def test_l1_contention_splits_pipeline_waits_from_stream_demand():
+    frame = pd.DataFrame(
+        {
+            "tiles": [4.0],
+            "L1_TO_L1:wait0": [2.0],
+            "L1_TO_L1:wait1": [3.0],
+            "UNPACK_ISOLATE:wait0": [1.0],
+            "PACK_ISOLATE:wait1": [0.5],
+            "UNPACK_ISOLATE:words0": [48.0],
+            "UNPACK_ISOLATE:words1": [16.0],
+            "PACK_ISOLATE:words1": [32.0],
+            "PACK_ISOLATE:words8": [32.0],
+            "UNPACK_ISOLATE": [100.0],
+            "PACK_ISOLATE": [200.0],
+        }
+    )
+    out = summarize(frame).iloc[0]
+    assert out["l2l_wait_per_tile"] == 5.0
+    # what the isolates do not wait on their own
+    assert out["l2l_cross_wait_per_tile"] == 3.5
+    assert out["unpack_words_per_tile"] == 64.0 and out["pack_words_per_tile"] == 64.0
+    # port 1 at the isolate pace: 16 words x 4 tiles in 100 cycles plus 32 x 4 in 200
+    assert out["saturation_port1_load"] == pytest.approx(1.28)
+    assert out["saturation_bank_load"] == pytest.approx(
+        (64 * 4 / 100 + 64 * 4 / 200) / 16
+    )
+
+
+def _phased_events(phases):
+    """KERNEL around one INIT and one TILE_LOOP per phase on every thread; phase k's TILE_LOOP takes 100 + k cycles."""
+    events = [(t, "KERNEL", 9, 0, 1000 * (phases + 1)) for t in _THREADS]
+    for k in range(phases):
+        base = 10 + 1000 * k
+        events += [(t, "INIT", 0, base, base + 50) for t in _THREADS]
+        events += [(t, "TILE_LOOP", 1, base + 100, base + 200 + k) for t in _THREADS]
+    return events
+
+
+def test_phased_l1_congestion_reports_the_mean_over_its_phases():
+    data = ProfilerData(_zones(*_phased_events(L1_CONGESTION_PHASES)))
+    assert_zones_dont_overlap(data)
+    assert_one_zone_per_phase(data)
+    stats = Profiler.STATS_FUNCTION[PerfRunType.L1_CONGESTION](data)
+    tile = stats[stats[MARKER] == "TILE_LOOP"].iloc[0]
+    for side in ("UNPACK", "PACK"):
+        column = f"L1_CONGESTION[{side}]"
+        assert tile[stat_column(column, MEAN)] == pytest.approx(
+            100 + (L1_CONGESTION_PHASES - 1) / 2
+        )
+        assert tile[stat_column(column, STD)] > 0  # the spread over the phases
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match=f"expected {L1_CONGESTION_PHASES}"
+    ):
+        assert_one_zone_per_phase(
+            ProfilerData(_zones(*_phased_events(L1_CONGESTION_PHASES - 1)))
+        )
+
+
+def test_l1_congestion_phase_count_matches_the_firmware():
+    barrier_h = Path(__file__).parents[2] / "helpers/include/barrier.h"
+    assert f"L1_CONGESTION_PHASES = {L1_CONGESTION_PHASES};" in barrier_h.read_text()

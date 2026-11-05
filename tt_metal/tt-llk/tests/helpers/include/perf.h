@@ -48,13 +48,95 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// The PACK_ISOLATE and L1_CONGESTION pack loops release every dest section as tile_regs_release does in production
+// (Wormhole only for now: without the drain its four packers can lock into their slow pattern for the whole loop)
+#if defined(ARCH_WORMHOLE)
+constexpr bool PERF_PACK_SECTION_RELEASE = true;
+#else
+constexpr bool PERF_PACK_SECTION_RELEASE = false;
+#endif
+
+// LLK_PERF_OOL threads run INIT and the code after the loop out of line at the end of the kernel code (sections.ld), by
+// value and noipa, so changes to them cannot move the loop. The other threads keep INIT inline.
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY) // INIT measurement build: INIT's body out of line, timed by counters.h init_zone
+#define LLK_INIT_BEGIN \
+    {                  \
+        auto _llk_init_body_ = [=]() __attribute__((noipa, section(".llk_init_body")))
+#define LLK_INIT_END                                     \
+    ;                                                    \
+    llk_perf::init_zone<PERF_RUN_TYPE>(_llk_init_body_); \
+    }
+#define LLK_INIT_ZONE_END() llk_perf::init_zone_end()
+#define LLK_INIT_PREP_END                                                                 \
+    ;                                                                                     \
+    llk_perf::init_zone<PERF_RUN_TYPE, decltype(_llk_init_body_), true>(_llk_init_body_); \
+    }
+#elif defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
+#define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_INIT_END   ()
+#else
+#define LLK_INIT_BEGIN
+#define LLK_INIT_END
+#endif
+// An INIT block that goes on to prepare the loop's data (pack_dest_bank fills dest): INIT's zone ends at
+// LLK_INIT_ZONE_END(), after the thread's own init, and the block closes with LLK_INIT_PREP_END instead of LLK_INIT_END
+#if !(defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY))
+#define LLK_INIT_ZONE_END()
+#define LLK_INIT_PREP_END LLK_INIT_END
+#endif
+// A constant INIT and the loop share: INIT's noipa body would read a const local from its closure at run time, where
+// production folds it, so the INIT measurement build makes it static constexpr; every other build keeps the plain const
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY)
+#define LLK_INIT_CONST static constexpr
+#else
+#define LLK_INIT_CONST const
+#endif
+// A constexpr local INIT passes by value is still captured (the copy odr-uses it) and read at run time; the INIT
+// measurement build makes it static, so it folds as production's operand arrays do; every other build is unchanged
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY)
+#define LLK_INIT_STATIC static
+#else
+#define LLK_INIT_STATIC
+#endif
+// The code after the measured loop (uninit): placed like INIT, but never timed as INIT in the INIT measurement build.
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
+#define LLK_UNINIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_UNINIT_END   ()
+#else
+#define LLK_UNINIT_BEGIN
+#define LLK_UNINIT_END
+#endif
+
+// Kernels with inline INIT: the code after the loop out of line, so it cannot move the loop, and opaque INIT copies of
+// values INIT and the loop share, so INIT's code cannot change the loop's registers.
+#if defined(LLK_DBG_BARRIER)
+#define LLK_POST_LOOP_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_POST_LOOP_END   ()
+#if defined(LLK_PERF_INIT_ONLY) // INIT's own noipa body cannot change the loop's registers: its copies fold as in production
+#define LLK_PERF_OPAQUE(v)
+#else
+#define LLK_PERF_OPAQUE(v) asm volatile("" : "+r"(v))
+#endif
+#else
+#define LLK_POST_LOOP_BEGIN
+#define LLK_POST_LOOP_END
+#define LLK_PERF_OPAQUE(v)
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
-// UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
+// UNPACK_ISOLATE's math mock, and every L1_CONGESTION mock. Blackhole and Quasar keep the RISC-V loop mocks below.
+// A mock call site shared by UNPACK_ISOLATE and L1_CONGESTION whose UNPACK_ISOLATE mock keeps the RISC-V loop: only
+// L1_CONGESTION's goes through the MOP expander
+constexpr PerfRunType perf_cong_mock(const PerfRunType run_type)
+{
+    return run_type == PerfRunType::L1_CONGESTION ? run_type : PerfRunType::L1_TO_L1;
+}
+
 template <PerfRunType RUN_TYPE>
 constexpr bool perf_mock_mop()
 {
 #if defined(ARCH_WORMHOLE)
-    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE;
+    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::L1_CONGESTION;
 #else
     return false;
 #endif
@@ -416,9 +498,8 @@ inline void _perf_math_clear_valid(std::uint32_t source)
 #endif
 }
 
-// The source handshakes as a RISC-V loop, one per iteration. The _stream_ versions below take the run type and use the MOP
-// stream where it serves it (perf_mock_mop); a caller that stays on the loop calls these by name.
-template <bool set_a, bool set_b>
+// RUN_TYPE: the run type the mock serves (perf_mock_mop); the default (L1_TO_L1, which has no mock) keeps the RISC-V loop
+template <bool set_a, bool set_b, PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 {
     while (iterations-- > 0)
@@ -445,7 +526,7 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
     }
 }
 
-template <bool clear_a, bool clear_b>
+template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 {
     while (iterations-- > 0)
@@ -462,32 +543,7 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
     }
 }
 
-// iterations source handshakes for the run type RUN_TYPE: one MOP stream on Wormhole isolate runs, else the RISC-V loop
-template <bool set_a, bool set_b, PerfRunType RUN_TYPE>
-inline void _perf_unpack_stream_set_valid(std::uint32_t iterations)
-{
-#if defined(ARCH_WORMHOLE)
-    if constexpr (perf_mock_mop<RUN_TYPE>())
-    {
-        return llk_perf_mock::run<true>((set_b ? llk_perf_mock::SRC_B : 0) | (set_a ? llk_perf_mock::SRC_A : 0), iterations);
-    }
-#endif
-    _perf_unpack_loop_set_valid<set_a, set_b>(iterations);
-}
-
-template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE>
-inline void _perf_math_stream_clear_valid(std::uint32_t iterations)
-{
-#if defined(ARCH_WORMHOLE)
-    if constexpr (perf_mock_mop<RUN_TYPE>())
-    {
-        return llk_perf_mock::run<false>((clear_b ? llk_perf_mock::SRC_B : 0) | (clear_a ? llk_perf_mock::SRC_A : 0), iterations);
-    }
-#endif
-    _perf_math_loop_clear_valid<clear_a, clear_b>(iterations);
-}
-
-template <PerfRunType RUN_TYPE>
+template <PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)
@@ -564,7 +620,7 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
     }
 }
 
-template <PerfRunType RUN_TYPE>
+template <PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)

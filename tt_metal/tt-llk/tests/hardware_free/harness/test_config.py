@@ -235,3 +235,289 @@ def test_variants_do_not_share_list_objects():
 
     assert second.templates == ["TEMPLATE_A"]
     assert shared == ["TEMPLATE_A"]
+
+
+# --------------------------------------------------------------------------- #
+# Runs without --speed-of-light share speed-of-light INIT builds by this key.
+# --------------------------------------------------------------------------- #
+
+
+def test_init_share_key_leaves_out_only_the_neutral_names():
+    """Two tests share an INIT build only if their headers differ in the source's neutral names alone."""
+    from helpers.perf.init_share import INIT_NEUTRAL, init_share_key
+
+    assert "CT_DIM" in INIT_NEUTRAL["matmul_test.cpp"]
+    assert "MATH_FIDELITY" not in INIT_NEUTRAL["matmul_test.cpp"]
+    source = "sources/matmul_test.cpp"
+    header = "\n".join(
+        [
+            "#pragma once",
+            "constexpr std::uint32_t CT_DIM = 2;",
+            "constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::LoFi;",
+        ]
+    )
+    key = init_share_key(source, ["inputs"], header)
+    assert init_share_key(source, ["inputs"], header.replace("= 2", "= 4")) == key
+    assert init_share_key(source, ["inputs"], header.replace("LoFi", "HiFi4")) != key
+    assert init_share_key(source, ["other inputs"], header) != key
+
+
+def test_init_share_key_of_an_unlisted_source_keeps_every_line():
+    from helpers.perf.init_share import init_share_key
+
+    header = "constexpr std::uint32_t CT_DIM = 2;"
+    source = "sources/not_in_the_table.cpp"
+    assert init_share_key(source, [], header) != init_share_key(
+        source, [], header.replace("= 2", "= 4")
+    )
+
+
+def test_init_share_key_keeps_the_names_that_change_init_code():
+    """eltwise binary's input formats, tile sizes and binary op, and pack_dest_bank's block and tile counts change the
+    instructions INIT executes (e.g. Float16 vs Float32 inputs: one unpack config value more), so they are in the key.
+    """
+    from helpers.perf.init_share import INIT_NEUTRAL
+
+    code = {
+        "UNPACK_A_IN",
+        "UNPACK_B_IN",
+        "UNPACK_S_IN",
+        "TILE_SIZE_UNPACK_A",
+        "TILE_SIZE_UNPACK_B",
+        "ELTWISE_BINARY_OP",
+    }
+    assert not code & INIT_NEUTRAL["eltwise_binary_test.cpp"]
+    assert INIT_NEUTRAL["pack_dest_bank_perf.cpp"] == {"LOOP_FACTOR"}
+
+
+def test_init_neutral_is_the_checked_table():
+    """INIT_NEUTRAL is the table checked on the full Wormhole perf suite: every key group, every thread, one executed INIT
+    window (Tensix words in full, same addresses and length) and one speed-of-light INIT value. Changing it needs that
+    check again before this digest is updated."""
+    from hashlib import sha256
+
+    from helpers.perf.init_share import INIT_NEUTRAL
+
+    table = repr(
+        sorted((source, sorted(names)) for source, names in INIT_NEUTRAL.items())
+    )
+    assert sha256(table.encode()).hexdigest()[:16] == "6112bfde4b3ba87e", (
+        "INIT_NEUTRAL changed: check every key group of the full suite again (one INIT window and one INIT value per "
+        "thread), then update this digest"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Wormhole perf builds place the functions a TILE_LOOP window runs (test_config.py assembly passes, sections.ld).
+# --------------------------------------------------------------------------- #
+
+# GCC's shape: bar before the TILE_LOOP park, foo (calling baz) in the window, patchable entry NOPs ahead of two entries
+_KERNEL_ASM = """\t.text
+\t.align\t2
+\t.globl\t_Z3bari
+\t.section\t__patchable_function_entries,"awo",@progbits,.LPFE0
+\t.align\t2
+\t.4byte\t.LPFE0
+\t.text
+.LPFE0:
+\tnop
+\t.type\t_Z3bari, @function
+_Z3bari:
+\tret
+\t.size\t_Z3bari, .-_Z3bari
+\t.align\t2
+\t.globl\t_Z3bazi
+\t.type\t_Z3bazi, @function
+_Z3bazi:
+\tret
+\t.size\t_Z3bazi, .-_Z3bazi
+\t.align\t2
+\t.globl\t_Z3fooi
+\t.type\t_Z3fooi, @function
+_Z3fooi:
+\tcall\t_Z3bazi
+\tret
+\t.size\t_Z3fooi, .-_Z3fooi
+\t.section\t.text.run_kernel,"ax",@progbits
+\t.align\t11
+\t.globl\t_Z10run_kernelRK13RuntimeParams
+\t.section\t__patchable_function_entries,"awo",@progbits,.LPFE1
+\t.align\t2
+\t.4byte\t.LPFE1
+\t.section\t.text.run_kernel
+.LPFE1:
+\tnop
+\t.type\t_Z10run_kernelRK13RuntimeParams, @function
+_Z10run_kernelRK13RuntimeParams:
+\tcall\t_Z3bari
+ #APP
+\tllk_park 1, 0, 0, 1024, 0
+ #NO_APP
+.L2:
+\tcall\t_Z3fooi
+\tbnez\ta0,.L2
+ #APP
+\tllk_park 0, 0, 0, 1024, 0
+ #NO_APP
+\tcall\t_Z3bari
+\tret
+\t.size\t_Z10run_kernelRK13RuntimeParams, .-_Z10run_kernelRK13RuntimeParams
+"""
+
+
+def _placement(text):
+    """({function or NOP label: section}, whether each slot opens right before its function's label)"""
+    from helpers.test_config import _asm_functions
+
+    lines = text.split("\n")
+    functions, sections = _asm_functions(lines)
+    where = {name: f[3] for name, f in functions.items()}
+    where.update(
+        {l[:-1]: sections[i] for i, l in enumerate(lines) if l.startswith(".LPFE")}
+    )
+    slots = [
+        f[1] for f in functions.values() if f[3].startswith(".text.llk_loop_callee")
+    ]
+    starts = all(
+        lines[label - 2].startswith("\t.pushsection\t.text.llk_loop_callee")
+        for label in slots
+    )
+    return where, starts
+
+
+# the out of line INIT threads' parks (barrier.h): the TILE_LOOP one pads by llk_loop_pad, the others do not
+_OOL_PARKS = {
+    "\tllk_park 1, 0, 0, 1024, 0": "\t.word 0x00100073\n.rept (llk_loop_pad / 4) * 1",
+    "\tllk_park 0, 0, 0, 1024, 0": "\t.word 0x00100073\n.rept (llk_loop_pad / 4) * 0",
+}
+
+
+@pytest.mark.parametrize("ool", [False, True], ids=["inline-init", "ool-init"])
+def test_tile_loop_window_callees_get_slots_and_the_rest_follows_the_libraries(ool):
+    from helpers.test_config import _loop_callees_in_slot, _text_after_libraries
+
+    text = _KERNEL_ASM
+    for park, ool_park in _OOL_PARKS.items() if ool else ():
+        text = text.replace(park, ool_park)
+    where, starts = _placement(_text_after_libraries(_loop_callees_in_slot(text)))
+    assert where["_Z3fooi"] == ".text.llk_loop_callee._Z3fooi"
+    assert (
+        where["_Z3bazi"] == ".text.llk_loop_callee._Z3bazi"
+    )  # called by a window callee
+    assert (
+        where["_Z3bari"] == ".llk_text_rest"
+    )  # run only before the park and after the next one
+    assert where["_Z10run_kernelRK13RuntimeParams"] == ".text.run_kernel"
+    # entry NOPs: the unplaced function keeps its NOP ahead of it, a placed one's leaves its section
+    assert where[".LPFE0"] == where[".LPFE1"] == ".llk_text_rest"
+    assert starts
+
+
+def test_init_build_keeps_the_kernel_text_order():
+    from helpers.test_config import _text_after_libraries
+
+    where, _ = _placement(_text_after_libraries(_KERNEL_ASM, rest=False))
+    assert where["_Z3bari"] == where[".LPFE0"] == ".text"
+    assert where[".LPFE1"] == ".llk_text_rest"
+
+
+def test_tile_loop_build_puts_the_harness_after_the_kernel():
+    from helpers.test_config import _harness_last
+
+    harness = (
+        '\t.section\t.text.startup,"ax",@progbits\n\t.globl\tmain\n\t.type\tmain, @function\nmain:\n\tret\n'
+        '\t.size\tmain, .-main\n\t.section\t.init,"ax",@progbits\n\t.globl\t_start\n\t.type\t_start, @function\n'
+        "_start:\n\tcall\tmain\n #APP\n\t.word 0x00100073\n.balign 512\n #NO_APP\n\t.size\t_start, .-_start\n"
+        '\t.pushsection .init, "ax"\n\tnop\n\t.popsection\n'
+        '\t.section\t.init_array,"aw"\n'
+    )
+    where, _ = _placement(_harness_last(_KERNEL_ASM + harness))
+    assert where["main"] == where["_start"] == ".llk_harness"
+    assert where["_Z10run_kernelRK13RuntimeParams"] == ".text.run_kernel"
+    text = _harness_last(harness)
+    assert '.pushsection .llk_harness, "ax"' in text and ".init_array" in text
+    assert ".balign 512" not in text  # the parks in main need no restart alignment
+    assert ".balign 512" in _harness_last(
+        _KERNEL_ASM.replace(
+            "\tret\n\t.size\t_Z10run", ".balign 512\n\tret\n\t.size\t_Z10run"
+        )
+    )
+
+
+# run_kernel as GCC lays it out: INIT's cold block (.L4) between the window's code and the loop's out of line block (.L5)
+_KERNEL_TAIL_ASM = """\t.section\t.text.run_kernel,"ax",@progbits
+\t.align\t2
+\t.type\t_Z10run_kernelRK13RuntimeParams, @function
+_Z10run_kernelRK13RuntimeParams:
+\tbeqz\ta4,.L4
+.L6:
+ #APP
+\tllk_park 1, 0, 0, 1024, 0
+ #NO_APP
+.L2:
+\tbnez\ta0,.L5
+\taddi\ta0,a0,-1
+.L3:
+\tbnez\ta1,.L2
+ #APP
+\tllk_park 0, 0, 0, 1024, 0
+ #NO_APP
+\taddi\tsp,sp,16
+\tjr\tra
+.L4:
+\tli\ta2,1
+\tj\t.L6
+.L5:
+\tli\ta3,2
+\tj\t.L3
+\t.size\t_Z10run_kernelRK13RuntimeParams, .-_Z10run_kernelRK13RuntimeParams
+"""
+
+
+def test_tile_loop_window_blocks_follow_the_window_and_the_rest_comes_after():
+    from helpers.test_config import _window_chains_first
+
+    lines = _window_chains_first(_KERNEL_TAIL_ASM).split("\n")
+    at = {line.strip(): i for i, line in enumerate(lines)}
+    # the code after the closing park becomes a chain of its own, after the loop's out of line block
+    assert lines[at["llk_park 0, 0, 0, 1024, 0"] + 2] == "\tj\t.Lllk_after_park0"
+    assert lines[at["llk_park 0, 0, 0, 1024, 0"] + 3] == ".L5:"
+    assert at[".L5:"] < at[".Lllk_after_park0:"] < at["jr\tra"] < at[".L4:"]
+
+
+def _two_block_kernel(first, second):
+    blocks = {
+        ".L9": "\tli\ta3,2\n\tj\t.L3",
+        ".L7": "\tli\ta4,3\n\tj\t.L3",
+    }
+    return f"""\t.section\t.text.run_kernel,"ax",@progbits
+\t.type\t_Z10run_kernelRK13RuntimeParams, @function
+_Z10run_kernelRK13RuntimeParams:
+ #APP
+\tllk_park 1, 0, 0, 1024, 0
+ #NO_APP
+.L2:
+\tbnez\ta0,.L9
+\tbnez\ta1,.L7
+.L3:
+\tbnez\ta2,.L2
+ #APP
+\tllk_park 0, 0, 0, 1024, 0
+ #NO_APP
+\tjr\tra
+{first}:
+{blocks[first]}
+{second}:
+{blocks[second]}
+\t.size\t_Z10run_kernelRK13RuntimeParams, .-_Z10run_kernelRK13RuntimeParams
+"""
+
+
+def test_tile_loop_window_blocks_take_their_label_order_not_gccs():
+    from helpers.test_config import _window_chains_first
+
+    # GCC's block order can follow code outside the window; the window's own label numbers cannot
+    a = _window_chains_first(_two_block_kernel(".L9", ".L7"))
+    b = _window_chains_first(_two_block_kernel(".L7", ".L9"))
+    assert a == b
+    assert a.index(".L7:") < a.index(".L9:") < a.index(".Lllk_after_park0:")

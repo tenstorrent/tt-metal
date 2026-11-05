@@ -51,6 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint8_t UNPACK_FMT = resolve_binop_format(UNPACK_A_IN);
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
@@ -58,6 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), UNPACK_FMT, UNPACK_FMT);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -118,6 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS)
             SFPU_UNARY_SCALAR);
     };
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -127,6 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS)
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -153,6 +157,10 @@ void run_kernel(RUNTIME_PARAMETERS)
                     }
                 }
             }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
+        {
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -234,6 +242,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint8_t PACK_FMT = resolve_binop_format(UNPACK_A_IN);
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */);
@@ -241,6 +250,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -257,6 +267,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT((block_tile < MAX_TILES_DEST), "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
             }

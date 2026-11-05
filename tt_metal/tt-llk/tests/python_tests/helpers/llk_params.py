@@ -744,6 +744,17 @@ class MailboxesCoverageQuasar(Enum):
     Sfpu = Unpacker + 12
 
 
+class BriscCmd(Enum):
+    IDLE_STATE = 0
+    START_TRISCS = 1
+    RESET_TRISCS = 2
+    UPDATE_START_ADDR_CACHE_AND_START = 3
+    START_TRISCS_DBG_BARRIER = 4
+    UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER = 5
+    START_TRISCS_DBG_BARRIER_PHASES = 6
+    UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES = 7
+
+
 format_tile_sizes = {
     DataFormat.Bfp8_b: 1088,
     DataFormat.Bfp4_b: 576,

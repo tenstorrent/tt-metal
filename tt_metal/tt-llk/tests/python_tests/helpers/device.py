@@ -285,9 +285,75 @@ def host_signal_address(slot: int) -> int | None:
     """
     if get_chip_architecture() != ChipArchitecture.QUASAR:
         return None
-    # The emulator models the cluster control registers; ttsim (a shared library) does not
-    target = TestTargetConfig._instance
-    if target is not None and target.runs_on_ttsim():
+    return _NOC_OVERLAY_START_ADDR + slot * _NOC_STREAM_REG_SPACE_SIZE + index * 4
+
+
+def commit_brisc_command(
+    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
+):
+    global common_counter
+
+    if common_counter & 1:
+        write_words_to_device(location, Mailboxes.BriscCommand1.value, [command.value])
+    else:
+        write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
+
+    common_counter += 1
+    counter_addr = host_signal_address(HOST_SIGNAL_BRISC_COUNTER_SLOT)
+    mask = HOST_SIGNAL_MASK if counter_addr is not None else 0xFFFFFFFF
+    if counter_addr is None:
+        counter_addr = Mailboxes.BriscCounter.value
+    end_time = time.time() + timeout
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
+        temp_value = read_word_from_device(location, counter_addr, 0)
+        if temp_value == common_counter & mask:
+            return
+        if expired:
+            break
+
+    logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
+
+    raise TimeoutError(
+        (
+            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
+            f"Start counter: 0x{read_from_device(location, Mailboxes.BriscBread0.value, 0)} | "
+            f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
+            f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"
+        )
+    )
+
+
+def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
+    """Block until BRISC firmware has signalled it is in the polling loop.
+
+    On silicon this returns in microseconds. On TTSim, each read advances the
+    simulator clock, so this loop is what actually drives BRISC through its
+    init sequence to the point where it is safe for the host to write the
+    first command.
+    """
+    end_time = time.time() + timeout
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
+        if (
+            read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
+            == BRISC_BOOT_READY_SENTINEL
+        ):
+            return
+        if expired:
+            break
+
+    last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
+    soft_reset = get_register_store(location, 0).read_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0"
+    )
+    raise TimeoutError(
+        f"BRISC firmware did not signal boot-ready within {timeout}s | "
+        f"BriscCounter=0x{last_value:08x} | Reset register=0x{soft_reset:08x}"
+    )
+    if target is not None and target.run_simulator and sim.endswith(".so"):
         return None
     return _QUASAR_HOST_SIGNAL_BASE + slot * 4
 

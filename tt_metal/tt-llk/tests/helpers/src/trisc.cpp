@@ -105,11 +105,37 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+        // INIT with icache prefetch, as tt-metal's trisck.cc runs a kernel's init; counters.h init_zone ends it before the loop
+        ckernel::icache_prefetch_init_begin();
+#endif
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_RUN_TYPE_L1_CONGESTION) && !defined(LLK_PERF_INIT_ONLY)
+        // once per BRISC release phase (brisc.cpp serve_phases), so L1_CONGESTION reports the mean over the phases
+        for (std::uint32_t phase = 0; phase < llk_barrier::L1_CONGESTION_PHASES; ++phase)
+        {
+            run_kernel(temp_args);
+            ckernel::tensix_sync();
+        }
+#else
         run_kernel(temp_args);
+#endif
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+        ckernel::icache_prefetch_init_end();
+#endif
 
         ckernel::fence_compiler();
 
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PROFILER) &&                     \
+    ((defined(LLK_PERF_RUN_TYPE_PACK_ISOLATE) && defined(LLK_TRISC_PACK)) || \
+     (!defined(LLK_PERF_INIT_ONLY) &&                                        \
+      ((defined(LLK_PERF_RUN_TYPE_UNPACK_ISOLATE) && defined(LLK_TRISC_UNPACK)) || (defined(LLK_PERF_RUN_TYPE_MATH_ISOLATE) && defined(LLK_TRISC_MATH)))))
+        // The measured thread releases the peers held at their TILE_LOOP end (profiler.h); they are held, so only it flips
+        llk_barrier::detail::flip(llk_barrier::RELEASE_SEM);
+#endif
         ckernel::tensix_sync();
+#if defined(LLK_DBG_BARRIER) // a thread that finishes first waits halted, so no code outside run_kernel runs in another zone
+        llk_barrier::detail::park<llk_barrier::PARK_PLAIN>();
+#endif
     }
 
     llk_perf::read_last_zone();
@@ -122,6 +148,11 @@ int main(void)
     *mailbox = ckernel::KERNEL_COMPLETE; // kept in L1 too: ttsim's only signal, and what trisc_hangs and llk_triage.py read
     asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(LLK_DBG_BARRIER) // the flag has landed before the last arrival, which ends BRISC's serving
+    (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
+        host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
+        host_signal::STREAM_SCRATCH_REG_INDEX * 4));
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 }
 

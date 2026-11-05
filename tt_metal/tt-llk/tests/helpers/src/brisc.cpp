@@ -28,10 +28,362 @@ static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 
 static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
 
-// A BRISC read of a TRISC's PC buffer returns once that TRISC waits on its own PC buffer read with nothing queued and its
-// Tensix thread is idle, which trisc.cpp does when its kernel is done.
-static const mailbox_t trisc_pc_bufs[] = {
-    reinterpret_cast<mailbox_t>(PC_BUF_BASE), reinterpret_cast<mailbox_t>(PC1_BUF_BASE), reinterpret_cast<mailbox_t>(PC2_BUF_BASE)};
+enum class BriscCommandState : std::uint32_t
+{
+    IDLE_STATE                        = 0,
+    START_TRISCS                      = 1,
+    RESET_TRISCS                      = 2,
+    UPDATE_START_ADDR_CACHE_AND_START = 3,
+    // Wormhole perf launches: as 1 and 3, then serve the TRISC barrier (see dbg_barrier)
+    START_TRISCS_DBG_BARRIER                      = 4,
+    UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER = 5,
+    // Wormhole L1_CONGESTION launches: as 4 and 5, served by serve_phases
+    START_TRISCS_DBG_BARRIER_PHASES                      = 6,
+    UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES = 7,
+};
+
+// Written to `brisc_counter` as the LAST step of firmware init. The host polls
+// for this value after deasserting BRISC reset to confirm the firmware has
+// finished init and entered the polling loop. Required for read-pumped sim
+// targets (TTSim) where host writes alone do not advance the clock — without
+// this handshake, the host's first command write can race with the firmware's
+// own zero-init of the command slots. The sentinel is overwritten by the
+// regular protocol counter as soon as the first command is processed.
+constexpr std::uint32_t BRISC_BOOT_READY_SENTINEL = 0xB001CAFEU;
+
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM) // serves the TRISC rendezvous of barrier.h park() in perf launches
+namespace dbg_barrier
+{
+constexpr std::uint32_t PC_BUF[3]        = {0xFFE80000U, 0xFFE90000U, 0xFFEA0000U};
+constexpr std::uint32_t DBG_CNTL_0       = 0xFFB12080U;
+constexpr std::uint32_t DBG_CNTL_1       = 0xFFB12084U;
+constexpr std::uint32_t DBG_STATUS_0     = 0xFFB12088U;
+constexpr std::uint32_t DBG_STATUS_1     = 0xFFB1208CU;
+constexpr std::uint32_t REQ              = 1U << 31;
+constexpr std::uint32_t READ_VALID       = 1U << 30;
+constexpr std::uint32_t WR               = 1U << 16;
+constexpr std::uint32_t REG_STATUS       = 0;
+constexpr std::uint32_t REG_COMMAND      = 1;
+constexpr std::uint32_t STATUS_PAUSED    = 1U << 0;
+constexpr std::uint32_t COMMAND_CONTINUE = 1U << 2;
+constexpr std::uint32_t COMMAND_FLUSH    = 1U << 8; // without debug mode (bit 31) the flush restarts at the reset PC
+
+inline volatile std::uint32_t& reg(std::uint32_t addr)
+{
+    return *reinterpret_cast<volatile std::uint32_t*>(addr);
+}
+
+constexpr std::uint32_t DBG_REGS        = DBG_CNTL_0 - 0x80U;
+constexpr std::uint32_t PC_BUF_OVERRIDE = 0xFFB12090U; // TRISC_PC_BUF_OVERRIDE: bit 10 * t = override enable of TRISC t
+constexpr std::uint32_t RELEASE_ALL     = (1U << 0) | (1U << 10) | (1U << 20);
+static_assert(REQ == 1U << 31 && READ_VALID == 1U << 30 && REG_STATUS == 0, "serve() tests REQ and READ_VALID by sign");
+static_assert(DBG_CNTL_1 == DBG_CNTL_0 + 4 && DBG_STATUS_0 == DBG_CNTL_0 + 8 && DBG_STATUS_1 == DBG_CNTL_0 + 12 && PC_BUF_OVERRIDE == DBG_CNTL_0 + 16);
+
+// L1_CONGESTION's release phases (serve_phases), {thread order, spins}: order is 2 bits per release store, TRISC first;
+// spins (about 3.5 cycles each) go before the first store and between the stores, 10 bits each.
+constexpr std::uint32_t UMP = 0 | (1 << 2) | (2 << 4); // unpack, math, pack
+constexpr std::uint32_t PUM = 2 | (0 << 2) | (1 << 4); // pack, unpack, math
+
+constexpr std::uint32_t spins(std::uint32_t before, std::uint32_t between_1_2, std::uint32_t between_2_3)
+{
+    return before | (between_1_2 << 10) | (between_2_3 << 20);
+}
+
+// Even phases release all three 0..15 spins later (the TRISC branch table LFSR phase), odd ones pack or unpack later
+// (the relative start of the two streams). The free-running streams lock into an orbit that both pick.
+constexpr std::uint32_t RELEASE_PHASES[llk_barrier::L1_CONGESTION_PHASES][2] = {
+    {UMP, spins(0, 0, 0)},  {UMP, spins(0, 0, 1)},  {UMP, spins(1, 0, 0)},  {PUM, spins(0, 1, 0)},  {UMP, spins(2, 0, 0)},  {UMP, spins(0, 0, 2)},
+    {UMP, spins(3, 0, 0)},  {PUM, spins(0, 2, 0)},  {UMP, spins(4, 0, 0)},  {UMP, spins(0, 0, 3)},  {UMP, spins(5, 0, 0)},  {PUM, spins(0, 4, 0)},
+    {UMP, spins(6, 0, 0)},  {UMP, spins(0, 0, 4)},  {UMP, spins(7, 0, 0)},  {PUM, spins(0, 8, 0)},  {UMP, spins(8, 0, 0)},  {UMP, spins(0, 0, 6)},
+    {UMP, spins(9, 0, 0)},  {PUM, spins(0, 16, 0)}, {UMP, spins(10, 0, 0)}, {UMP, spins(0, 0, 8)},  {UMP, spins(11, 0, 0)}, {PUM, spins(0, 32, 0)},
+    {UMP, spins(12, 0, 0)}, {UMP, spins(0, 0, 12)}, {UMP, spins(13, 0, 0)}, {UMP, spins(0, 0, 16)}, {UMP, spins(14, 0, 0)}, {UMP, spins(0, 0, 24)},
+    {UMP, spins(15, 0, 0)}, {UMP, spins(0, 0, 32)},
+};
+
+// This launch's two release gaps in cycles, set by serve() before the first release (local data memory)
+extern "C"
+{
+    __attribute__((used)) volatile std::uint32_t llk_release_gaps[2];
+}
+
+// Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
+// Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
+// PHASES (serve_phases) adds the .if blocks, which assemble to nothing in serve().
+template <bool PHASES>
+__attribute__((always_inline)) inline void serve_loop()
+{
+    asm volatile(
+        "li    t0, 0x00ffffff\n\t"
+        "li    t4, %[wr_cmd]\n\t"
+        "li    t3, %[req_wr_cmd]\n\t"
+        "li    t1, %[pcb0]\n\t"
+        "li    a7, %[pcb1]\n\t"
+        "li    a6, %[pcb2]\n\t"
+        "li    s0, %[slot0]\n\t"
+        "li    t2, %[complete]\n\t"
+        "li    s2, %[slot1]\n\t"
+        "li    s1, %[slot2]\n\t"
+        "li    t6, %[req]\n\t"
+        "li    a5, %[dbg]\n\t"
+        "li    a0, %[tstep]\n\t"
+        "li    a1, %[tend]\n\t"
+        "li    t5, %[flush_cmd]\n\t"
+        "li    s4, %[release]\n" // unused; s4 holds the release schedule from 60: on
+        "li    s5, 0\n"          // park count: park 2 is the INIT entry park
+        "1:\n\t"                 // arrive
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n"
+        "65:\n\t" // the last scheduled release has done the first read (after 53:)
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, %[scratch](s0)\n\tand   a4, a4, t0\n\tbeq   a4, t2, 9f\n"
+        "2:\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // on to the ebreak
+        // halted? The debug request bit is synchronized and edge detected (tt_tensix.sv): hold it until STATUS_0
+        // shows it, then let it fall
+        "lui   a2, %%hi(%[tstep])\n"
+        "3:\n\t"
+        "or    s3, a2, t6\n"
+        "4:\n\t"
+        "sw    s3, %[cntl0](a5)\n"
+        "5:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 5b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "6:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 6b\n"
+        "7:\n\t"
+        "lw    a4, %[status0](a5)\n\tslli  a3, a4, 1\n\tbgez  a3, 7b\n\t" // read valid
+        "lw    a4, %[status1](a5)\n\tandi  a4, a4, %[paused]\n\tbeqz  a4, 4b\n\t"
+        "add   a2, a2, a0\n\tbne   a2, a1, 3b\n\t"
+        "li    a4, 512\n" // fetch ahead of the halted cores settles
+        "8:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 8b\n\t"
+        "li    a3, 1024\n" // 64 L1 reads from address 0 (a4 = 0): every bank arbiter last granted BRISC
+        "10:\n\t"
+        "lw    a2, 0(a4)\n\tandi  a2, a2, 0\n\taddi  a4, a4, 16\n\tbne   a4, a3, 10b\n\t"
+        // the INIT entry park takes its own copy of the rest (40:), which releases the three INITs one after another so
+        // each INIT zone runs alone; every other park keeps this path unchanged (TILE_LOOP sees the same release)
+        "addi  s5, s5, 1\n\tli    a4, 2\n\tbeq   s5, a4, 40f\n\t"
+        // the other parks continue at 60:, placed after the INIT path, so that path keeps its code and addresses
+        "j     60f\n\tnop\n\tnop\n"
+        "61:\n\t"
+        "li    a4, 64\n"
+        "11:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 11b\n\t"
+        "lui   a3, %%hi(%[tstep])\n\t" // flush: COMMAND = FLUSH | CONTINUE, TRISC 0, 1, 2
+        "addi  s3, a5, %[cntl1]\n"
+        "12:\n\t"
+        "sw    t5, 0(s3)\n\t"
+        "or    a4, a3, t3\n\t"
+        "sw    a4, %[cntl0](a5)\n\t"
+        "or    a2, a3, t4\n"
+        "13:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 13b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "14:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 14b\n\t"
+        "add   a3, a3, a0\n\tbne   a3, a1, 12b\n\t"
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t" // all parked on their hold read: nothing below depends on data
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "li    a4, 512\n"
+        "15:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
+        ".if %[phases]\n\t" // round k's TILE_LOOP entry is park 4 + 4k (trisc.cpp runs the kernel once per phase)
+        "andi  a4, s5, 3\n\tbnez  a4, 79f\n\t"
+        "srli  a4, s5, 2\n\tli    a3, %[nphases]\n\tbleu  a4, a3, 80f\n"
+        "79:\n\t"
+        ".endif\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "j     1b\n"
+        ".if %[phases]\n"
+        "80:\n\t" // a4 = k + 1: the three release stores in phase k's order with its spins (s3, s4 are free here)
+        "slli  a4, a4, 3\n\tlui   a3, %%hi(%[table] - 8)\n\taddi  a3, a3, %%lo(%[table] - 8)\n\tadd   a4, a4, a3\n\t"
+        "lw    s3, 0(a4)\n\tlw    s4, 4(a4)\n\t"
+        "andi  a2, s3, 3\n\tslli  a2, a2, 16\n\tadd   a2, a2, t1\n\t"
+        "srli  a3, s3, 2\n\tandi  a3, a3, 3\n\tslli  a3, a3, 16\n\tadd   a3, a3, t1\n\t"
+        "srli  a4, s3, 4\n\tandi  a4, a4, 3\n\tslli  a4, a4, 16\n\tadd   a4, a4, t1\n\t"
+        "andi  s3, s4, 1023\n\tbeqz  s3, 82f\n"
+        "81:\n\taddi  s3, s3, -1\n\tbnez  s3, 81b\n"
+        "82:\n\tsw    zero, 0(a2)\n\t"
+        "srli  s3, s4, 10\n\tandi  s3, s3, 1023\n\tbeqz  s3, 84f\n"
+        "83:\n\taddi  s3, s3, -1\n\tbnez  s3, 83b\n"
+        "84:\n\tsw    zero, 0(a3)\n\t"
+        "srli  s3, s4, 20\n\tandi  s3, s3, 1023\n\tbeqz  s3, 86f\n"
+        "85:\n\taddi  s3, s3, -1\n\tbnez  s3, 85b\n"
+        "86:\n\tsw    zero, 0(a4)\n\t"
+        "j     1b\n"
+        ".endif\n"
+        "40:\n\t" // INIT entry park: as above, then unpack, math and pack released %[stagger] spins apart
+        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n"
+        "41:\n\t"
+        "li    a4, 64\n"
+        "42:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 42b\n\t"
+        "lui   a3, %%hi(%[tstep])\n\t"
+        "addi  s3, a5, %[cntl1]\n"
+        "43:\n\t"
+        "sw    t5, 0(s3)\n\t"
+        "or    a4, a3, t3\n\t"
+        "sw    a4, %[cntl0](a5)\n\t"
+        "or    a2, a3, t4\n"
+        "44:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 44b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "45:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 45b\n\t"
+        "add   a3, a3, a0\n\tbne   a3, a1, 43b\n\t"
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "li    a4, 512\n"
+        "46:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 46b\n\t"
+        "sw    zero, 0(t1)\n\t"
+        "li    a4, %[stagger]\n"
+        "47:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 47b\n\t"
+        "sw    zero, 0(a7)\n\t"
+        "li    a4, %[stagger]\n"
+        "48:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 48b\n\t"
+        "sw    zero, 0(a6)\n\t"
+        "j     1b\n"
+        "9:\n\t" // TRISC 0 is done: done if all are, else serve
+        "lw    a4, %[scratch](s2)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
+        "lw    a4, %[scratch](s1)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // out of the kernel
+        "j     99f\n"
+        "60:\n\t" // every park but the INIT entry: TRISC 0-2 icaches, then the park's release schedule (barrier.h)
+        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n\t"
+        "lui   a3, %%hi(%[sched])\n\tlw    s4, %%lo(%[sched])(a3)\n\tbeqz  s4, 61b\n\t" // 0: a plain park
+        "sw    zero, %%lo(%[sched])(a3)\n\t"                                            // cleared, so the next park is a plain one
+        "li    a4, 64\n"
+        "62:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 62b\n\t"
+        ".set  .Lrel_lead, 1024\n\t" // clock read to the first request: room for the first pass's icache misses
+        ".set  .Lrel_gap1, 5180\n\t" // first to second request: the first thread has reached its wait or its park
+        ".set  .Lrel_gap2, 5173\n\t" // second to third; with gap1 the spacing the spin loop gave before, so no value moves
+        ".set  .Lrel_quiet, 900\n\t" // spins (about 5 cycles each) after a request without register or L1 accesses
+        ".set  .Lrel_near, 64\n\t"   // the timed pass starts when the request is this many cycles away
+        ".set  .Lrel_k, 24\n\t"      // the timed pass runs (request - its clock read - k) NOPs, 0 to m
+        ".set  .Lrel_m, 24\n\t"
+        ".set  .Lrel_phase, __runtime_args_end - 16\n\t" // the start phase (perf/phases.py), runtime arguments' last 16 B
+        ".set  .Lrel_phase_valid, 0x6A900000\n\t"        // its first word when the host wrote one: then cycles added to gap1, gap2
+        // this launch's gaps (llk_release_gaps): the canonical ones plus the start phase, read before any thread runs
+        "lui   a4, %%hi(.Lrel_phase)\n\tlw    a3, %%lo(.Lrel_phase)(a4)\n\tli    s3, .Lrel_phase_valid\n\t"
+        "li    a2, .Lrel_gap1\n\tli    a1, .Lrel_gap2\n\tbne   a3, s3, 67f\n\t"
+        "lw    a3, %%lo(.Lrel_phase + 4)(a4)\n\tadd   a2, a2, a3\n\tlw    a3, %%lo(.Lrel_phase + 8)(a4)\n\tadd   a1, a1, a3\n"
+        "67:\n\t"
+        "lui   a4, %%hi(llk_release_gaps)\n\tsw    a2, %%lo(llk_release_gaps)(a4)\n\tsw    a1, %%lo(llk_release_gaps + 4)(a4)\n\t"
+        // on its own 256 B boundary, so a change elsewhere in serve() (or before it) cannot move it
+        "j     50f\n\t.balign 256\n"
+        // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush request on a wall clock cycle
+        // (a0): the threads start (and their branch table LFSRs run) a fixed number of cycles apart, whatever BRISC fetches
+        "50:\n\t"
+        "lw    a0, %[wall](a5)\n\taddi  a0, a0, .Lrel_lead\n" // a0, a1 and t0 are borrowed until the last release
+        "51:\n\t"
+        "andi  a2, s4, 3\n\taddi  a3, a2, 1\n\tslli  a3, a3, 17\n\t" // debug target: TRISC t is t + 1
+        "or    a1, a3, t3\n\tor    s3, a3, t4\n\t"                   // the flush request and its end
+        "li    t0, -1\n" // a first pass runs all the code below with m NOPs and no request, so the timed pass hits the icache
+        "70:\n\t"
+        "lw    a4, %[wall](a5)\n\tsub   a4, a0, a4\n\taddi  a4, a4, -.Lrel_k\n\t"
+        "li    a2, .Lrel_m\n\txor   a3, a4, a2\n\tand   a3, a3, t0\n\txor   a4, a4, a3\n\t"
+        "sltiu a3, a4, .Lrel_m + 1\n\tbeqz  a3, 77f\n\t"
+        "slli  a4, a4, 2\n"
+        "71:\n\t"
+        "la    a2, 72f\n\tsub   a2, a2, a4\n\t"
+        "xor   a3, a1, s3\n\tand   a3, a3, t0\n\txor   a3, a3, a1\n\t"
+        "jr    a2\n\t"
+        ".rept .Lrel_m\n\tnop\n\t.endr\n"
+        "72:\n\t"
+        "sw    a3, %[cntl0](a5)\n\t"
+        "bnez  t0, 76f\n"
+        "52:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 52b\n\t"
+        "sw    s3, %[cntl0](a5)\n"
+        "53:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 53b\n\t"
+        "li    t0, 0x00ffffff\n\tli    a1, %[tend]\n\t" // the arrive loop's t0 and a1 back (51: sets its own)
+        // after the last release BRISC waits for TRISC 0 and goes on in lines the earlier releases ran: no L1 fetch
+        ".balign 16\n\t"
+        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbne   s4, a4, 73f\n\t"
+        "lw    a4, 0(t1)\n\t"
+        "and   a4, a4, a4\n\tli    a0, %[tstep]\n\tj     65b\n"
+        "73:\n\t"
+        "lui   a3, %%hi(llk_release_gaps)\n\tlw    a4, %%lo(llk_release_gaps + 4)(a3)\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\t"
+        "lw    a4, %%lo(llk_release_gaps)(a3)\n"
+        "74:\n\t"
+        "add   a0, a0, a4\n\tli    a4, .Lrel_quiet\n"
+        "75:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 75b\n\t"
+        "j     51b\n"
+        "76:\n\t" // after the first pass: on the clock until the request is near, then the timed pass
+        "lw    a4, %[wall](a5)\n\tsub   a4, a0, a4\n\taddi  a4, a4, -.Lrel_near\n\tbgtz  a4, 76b\n\t"
+        // its release token and the command word shortly before the request, as the spin loop wrote them (stored about 600
+        // cycles early, they moved 1 in 3 isolate rows by a cycle or more)
+        "andi  a2, s4, 3\n\tslli  a3, a2, 16\n\tadd   a3, a3, t1\n\tsw    zero, 0(a3)\n\tsw    t5, %[cntl1](a5)\n\t"
+        "li    t0, 0\n\tj     70b\n"
+        "77:\n\t" // outside the sled: only if the gap left too little time
+        "li    a4, 0\n\tj     71b\n"
+        "99:\n"
+        :
+        : [pcb0] "i"(PC_BUF[0]),
+          [pcb1] "i"(PC_BUF[1]),
+          [pcb2] "i"(PC_BUF[2]),
+          [slot0] "i"(host_signal::NOC_OVERLAY_START_ADDR),
+          [slot1] "i"(host_signal::NOC_OVERLAY_START_ADDR + host_signal::NOC_STREAM_REG_SPACE_SIZE),
+          [slot2] "i"(host_signal::NOC_OVERLAY_START_ADDR + 2 * host_signal::NOC_STREAM_REG_SPACE_SIZE),
+          [scratch] "i"(host_signal::STREAM_SCRATCH_REG_INDEX * 4),
+          [complete] "i"(ckernel::KERNEL_COMPLETE & 0xFFFFFFU),
+          [req] "i"(REQ),
+          [dbg] "i"(DBG_REGS),
+          [cntl0] "i"(DBG_CNTL_0 - DBG_REGS),
+          [cntl1] "i"(DBG_CNTL_1 - DBG_REGS),
+          [status0] "i"(DBG_STATUS_0 - DBG_REGS),
+          [status1] "i"(DBG_STATUS_1 - DBG_REGS),
+          [override] "i"(PC_BUF_OVERRIDE - DBG_REGS),
+          [paused] "i"(STATUS_PAUSED),
+          [tstep] "i"(1U << 17), // debug target field: TRISC t is t + 1
+          [tend] "i"(4U << 17),
+          [wr_cmd] "i"(WR | REG_COMMAND),
+          [req_wr_cmd] "i"(REQ | WR | REG_COMMAND),
+          [flush_cmd] "i"(COMMAND_FLUSH | COMMAND_CONTINUE),
+          [icinv] "i"(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32),
+          [release] "i"(RELEASE_ALL),
+          [stagger] "i"(1500),
+          [sched] "i"(llk_barrier::SCHEDULE_REG),
+          [sched_end] "i"(llk_barrier::SCHEDULE_VALID >> 6),
+          [wall] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L - DBG_REGS),
+          [phases] "i"(PHASES ? 1 : 0),
+          [nphases] "i"(llk_barrier::L1_CONGESTION_PHASES),
+          [table] "i"(&RELEASE_PHASES[0][0])
+        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "s5", "memory");
+}
+
+__attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
+{
+    serve_loop<false>();
+}
+
+// L1_CONGESTION: as serve(), but round k's TILE_LOOP is released from RELEASE_PHASES[k], so the report is the mean over
+// the hidden phases that pick the free-running streams' orbit, not one draw.
+__attribute__((noinline, noipa, section(".text.llk_dbg_serve_phases"), aligned(1024))) void serve_phases()
+{
+    serve_loop<true>();
+}
+} // namespace dbg_barrier
+#endif
+
+void reset_state(std::uint32_t& counter)
+{
+    counter++;
+    // Double buffer protocol: host writes the next command to slot (counter & 1),
+    // BRISC reads from the same slot. After processing, bump counter so both sides
+    // move to the other slot, and zero the new slot to prevent retriggering.
+    ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+    commit_store(brisc_counter, counter);
+    host_signal::write(host_signal::BRISC_COUNTER_SLOT, counter);
+}
 
 // One launch per release from soft reset: the host loads the kernels and releases BRISC, BRISC starts the TRISCs, waits
 // on their PC buffers with no L1 traffic (L1 mailboxes on ttsim), marks the launch done for the host on silicon, then puts
@@ -68,10 +420,110 @@ int main()
 #if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1
     for (const mailbox_t mailbox : {mailbox_unpack, mailbox_math, mailbox_pack})
     {
-        do
+        ckernel::invalidate_data_cache();
+
+        // Poll the active slot of the double buffered command mailbox.
+        // The host writes to slot (counter & 1) and BRISC reads the same slot.
+        // Using load_blocking ensures the read completes before the switch.
+        const auto command = static_cast<BriscCommandState>(ckernel::load_blocking(brisc_command_buffer + (counter & 1)));
+#if defined(ARCH_WORMHOLE)
+        [[maybe_unused]] const bool perf_barrier =
+            command == BriscCommandState::START_TRISCS_DBG_BARRIER || command == BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER;
+        [[maybe_unused]] const bool perf_phases =
+            command == BriscCommandState::START_TRISCS_DBG_BARRIER_PHASES || command == BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES;
+#endif
+        switch (command)
         {
-            ckernel::invalidate_data_cache();
-        } while (ckernel::load_blocking(mailbox) != ckernel::KERNEL_COMPLETE);
+            // Wormhole specific, on Blackhole this command has same behaviour as BriscCommandState::START_TRISCS
+#if defined(ARCH_WORMHOLE)
+            case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER:
+            case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES:
+#endif
+            case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START:
+#ifdef ARCH_WORMHOLE
+                // Elf loader can't put T[0-2] PCs to point to _start addresses of every ELF. Thus host needs to write them at particular location,
+                // in case of LLK testing infra, that is last 12 bytes of L1, for T[0-2] to read from right after it's released from reset. Side-effect
+                // of this action(s) is that T[0-2] reset these locations after they read them for this purpose. Because of this, when host loads new ELFs
+                // it needs to tell BRISC to cache those values again, which this block of code does. Afterwards it proceeds with regular kernel start sequence
+                for (int i = 0; i < 3; i++)
+                {
+                    TRISC_ADDR_CACHE[i] = ckernel::load_blocking(trisc_start_addresses + i);
+                }
+#endif
+                [[fallthrough]];
+#if defined(ARCH_WORMHOLE)
+            case BriscCommandState::START_TRISCS_DBG_BARRIER:
+            case BriscCommandState::START_TRISCS_DBG_BARRIER_PHASES:
+#endif
+            case BriscCommandState::START_TRISCS:
+
+#ifdef ARCH_WORMHOLE
+                // Load cached addresses of _start symbol of every kernel ELF is case of Wormhole
+                for (int i = 0; i < 3; i++)
+                {
+                    commit_store(trisc_start_addresses + i, TRISC_ADDR_CACHE[i]);
+                }
+#endif
+
+                commit_store(mailbox_math, ckernel::RESET_VAL);
+                commit_store(mailbox_unpack, ckernel::RESET_VAL);
+                commit_store(mailbox_pack, ckernel::RESET_VAL);
+                for (std::uint32_t slot = 0; slot < 3; ++slot)
+                {
+                    host_signal::write(slot, ckernel::RESET_VAL);
+                }
+
+                commit_store(profiler_barrier, 0U);
+                commit_store(profiler_barrier + 1, 0U);
+                commit_store(profiler_barrier + 2, 0U);
+
+                device_setup();
+
+                llk_perf::clear_debug_features();
+                // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
+                llk_perf::configure_from_brisc();
+
+                // Acknowledge before the release: these stores and readbacks would otherwise run during the TRISCs' startup.
+                reset_state(counter);
+                commit_store(brisc_bread0, counter);
+
+                clear_trisc_soft_reset();
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM)
+                if (perf_barrier)
+                {
+                    dbg_barrier::serve();
+                }
+                else if (perf_phases)
+                {
+                    // BRISC's own icache emptied first: serve_phases()'s release phases are BRISC spin loops
+                    *reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32) = 1;
+                    dbg_barrier::serve_phases();
+                }
+#endif
+                break;
+
+            case BriscCommandState::RESET_TRISCS:
+                set_triscs_soft_reset();
+
+                reset_state(counter);
+                commit_store(brisc_bread1, counter);
+                break;
+
+            default:
+                break;
+        }
+
+#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls about every 12 us
+        constexpr std::uint32_t spin_trips = ARCH_CYCLE_MICRO_SECOND;
+#else
+        constexpr std::uint32_t spin_trips = 100 * ARCH_CYCLE_MICRO_SECOND;
+#endif
+        // A NOP trip takes about 12 cycles with branch prediction off, so this polls about every 1.2 ms: each poll is an
+        // L1 read and a wall clock wait reads its registers over the debug register bus, and both perturb the kernel.
+        for (std::uint32_t i = 0; i < spin_trips; ++i)
+        {
+            asm volatile("nop");
+        }
     }
 #else
     for (const mailbox_t pc_buf : trisc_pc_bufs)
