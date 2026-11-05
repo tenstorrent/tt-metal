@@ -391,7 +391,6 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             TT::Nanobind
-            Boost::algorithm
             TT::Metalium
     )
     # .. enable size optimizations
