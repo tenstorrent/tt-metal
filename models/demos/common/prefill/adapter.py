@@ -166,6 +166,10 @@ class PrefillModelAdapter(ABC):
     # covers all forward_chunks chunks) and leaves its own the same way (outbound_indexer_indices). Otherwise the runner
     # refuses F > 1 on a split that passes indices.
     supports_packed_forward_indexer_indices: bool = False
+    # With supports_packed_forward and supports_mtp, whether prefill_forward runs MTP over a packed forward: it takes one
+    # num_mtp_tokens(K) lookahead block per chunk after every chunk's ids (mtp_tokens=..., [sp, 1, F * num_mtp_tokens])
+    # and one provided-levels count per chunk. Eager only; otherwise the runner refuses PREFILL_MTP_LEVELS > 0 at F > 1.
+    supports_packed_forward_mtp: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
