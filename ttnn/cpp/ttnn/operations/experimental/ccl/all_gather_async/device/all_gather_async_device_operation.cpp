@@ -242,17 +242,19 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    constexpr uint64_t kSalt = 0x616c6c5f67617468ULL;  // "all_gath"
     const bool row_free = select_version(args) == AllGatherAsyncVersion::MINIMAL_DEFAULT;
     const auto hash_tensor = [&](const Tensor& tensor) {
-        return row_free ? ttnn::operations::common::hash_spec_without_rows(tensor, kSalt)
-                        : ttsl::hash::hash_objects_with_default_seed(kSalt, tensor.tensor_spec());
+        return row_free ? ttnn::operations::common::hash_spec_without_rows(tensor)
+                        : ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec());
     };
     uint32_t num_workers_per_direction = 0;
     if (row_free) {
-        const uint32_t output_bytes = tensor_args.persistent_output_buffer.has_value()
-                                          ? tensor_args.persistent_output_buffer->buffer()->size()
-                                          : compute_output_specs(args, tensor_args).compute_packed_buffer_size_bytes();
+        // The default worker count is a function of the output bytes: the packed size of the output's spec here and
+        // in the factory, so the key and the program agree on it.
+        const uint32_t output_bytes =
+            (tensor_args.persistent_output_buffer.has_value() ? tensor_args.persistent_output_buffer->tensor_spec()
+                                                              : compute_output_specs(args, tensor_args))
+                .compute_packed_buffer_size_bytes();
         num_workers_per_direction =
             all_gather_async_num_workers_per_direction(args, tensor_args.input_tensor, output_bytes);
     }
