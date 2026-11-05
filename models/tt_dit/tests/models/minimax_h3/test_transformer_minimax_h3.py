@@ -1117,6 +1117,8 @@ def test_minimax_h3_transformer_block_perf(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        # H3_BLOCK_PERSISTENT=0: transient CCL buffers, as the 4x8 pipeline preset runs the DiT.
+        use_persistent_ccl_buffers=os.environ.get("H3_BLOCK_PERSISTENT", "1") == "1",
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1179,6 +1181,12 @@ def test_minimax_h3_transformer_block_perf(
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    # H3_BLOCK_DUMP: save every device's output shard (bf16), to compare two code paths on the same seeded
+    # weights and inputs, e.g. a fused op against the unfused one it replaces.
+    if os.environ.get("H3_BLOCK_DUMP"):
+        torch.save(
+            [ttnn.to_torch(t).to(torch.bfloat16) for t in ttnn.get_device_tensors(tt_out)], os.environ["H3_BLOCK_DUMP"]
+        )
 
 
 # ---- the token refiner ----
