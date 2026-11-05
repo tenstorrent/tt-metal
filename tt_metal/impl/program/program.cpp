@@ -3379,9 +3379,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     Inspector::program_compile_started(this, device, build_env.build_key());
 
-    // JIT on Quasar Mock is opt-in: TT_METAL_QUASAR_MOCK_JIT.
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR &&
-        !llrt::quasar_mock_jit_enabled()) {
+    if (cluster.mock_skips_kernel_jit()) {
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;

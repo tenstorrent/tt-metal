@@ -193,16 +193,48 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
     return slot;
 }
 
-// Whether a Mock device of `arch` builds firmware. Quasar Mock skips kernel JIT (ProgramImpl::compile), which is
-// what links against the firmware, so it builds firmware only when llrt::quasar_mock_jit_enabled() lifts that skip.
-// Real silicon devices bypass this check.
-bool mock_builds_firmware_for(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::BLACKHOLE: return true;
-        case tt::ARCH::QUASAR: return llrt::quasar_mock_jit_enabled();
-        default: return false;
+// The Ethernet channels (KeraunosNocChannels, hostdev/keraunos_noc_channels.h) of Keraunos chip `chip`, from its SoC
+// descriptor, the same for every core of the chip. Fatal when the chip has more channels than the record holds, a
+// core on a tile its cores word has no bit for, or a Keraunos core whose virtual coordinate is not
+// (KERAUNOS_NOC_CCE0_X + eth_cce, hsio), the rule the device resolves a core's own coordinate by.
+KeraunosNocChannels keraunos_noc_channels(const Cluster& cluster, ChipId chip) {
+    const auto& soc = cluster.get_soc_desc(chip);
+    const uint32_t num_channels = soc.get_num_eth_channels();
+    TT_FATAL(
+        num_channels <= KERAUNOS_NOC_CHANNELS_MAX,
+        "Chip {} has {} Ethernet channels, a Keraunos CCE resolves {}",
+        chip,
+        num_channels,
+        KERAUNOS_NOC_CHANNELS_MAX);
+    KeraunosNocChannels channels{};
+    channels.num_channels = num_channels;
+    for (uint32_t chan = 0; chan < num_channels; chan++) {
+        const tt::umd::KeraunosCore& core = soc.get_keraunos_core_for_channel(chan);
+        const CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            chip, soc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL), CoreType::ETH);
+        TT_FATAL(
+            virtual_core.x == KERAUNOS_NOC_CCE0_X + core.eth_cce && virtual_core.y == core.hsio,
+            "Chip {} Ethernet channel {} (HSIO tile {}, CCE{}) is at virtual {}, not ({}, {})",
+            chip,
+            chan,
+            core.hsio,
+            core.eth_cce,
+            virtual_core.str(),
+            KERAUNOS_NOC_CCE0_X + core.eth_cce,
+            core.hsio);
+        const uint8_t entry = keraunos_noc_channel(core.hsio, core.eth_cce);
+        TT_FATAL(
+            core.hsio < KERAUNOS_NOC_CORES_MAX / 2,
+            "Chip {} Ethernet channel {} is on HSIO tile {}, a Keraunos CCE resolves tiles below {}",
+            chip,
+            chan,
+            core.hsio,
+            KERAUNOS_NOC_CORES_MAX / 2);
+        channels.channels[chan] = entry;
+        channels.cores |= 1u << entry;
     }
+    channels.valid = KERAUNOS_NOC_CHANNELS_VALID;
+    return channels;
 }
 
 int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
@@ -353,9 +385,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             //   1. Mock devices that skip kernel JIT (Cluster::mock_skips_kernel_jit()).
             //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
             //      riscv firmware ELFs are never linked or consumed.
-            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
-                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
-                                        !mock_builds_firmware_for(cluster_.arch()));
+            const bool skip_fw_build =
+                cluster_.get_target_device_type() == tt::TargetDevice::Emule || cluster_.mock_skips_kernel_jit();
             if (!skip_fw_build) {
                 build_env_manager.build_firmware(device_id);
             }
