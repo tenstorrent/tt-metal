@@ -20,6 +20,7 @@ on:
         description: "Commit SHA to test. Empty means github.sha."
 
 permissions:
+  actions: read
   checks: write
   contents: read
 
@@ -32,6 +33,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
+      split-durations: ${{ steps.durations.outputs.found }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
@@ -68,6 +70,46 @@ jobs:
           enabled-skus: sim_quasar_xl
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name }}
+
+      # pytest-split (--splits) cuts by test count unless it finds .test_durations. Take
+      # them from the newest green push run on main, once here, so every leg cuts the
+      # same list. On any failure the legs cut by test count, as before.
+      - name: Fetch test durations from main
+        id: durations
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for run in $(gh run list -w pr-gate.yaml -b main -e push -s success -L 5 --json databaseId --jq '.[].databaseId'); do
+            gh run download "$run" -p 'test-durations-*' -D durations && break
+          done
+          python3 - << 'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path("split-durations").mkdir()
+          found = False
+          for arch in ("quasar",):
+              merged = {}
+              for leg in sorted(Path("durations").glob(f"test-durations-{arch}-*/.test_durations")):
+                  merged.update(json.loads(leg.read_text()))
+              print(f"{arch}: durations for {len(merged)} tests")
+              if merged:
+                  Path(f"split-durations/{arch}.json").write_text(json.dumps(merged))
+                  found = True
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"found={str(found).lower()}\n")
+          PY
+      - name: Upload test durations for the legs
+        if: steps.durations.outputs.found == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: split-durations
+          path: split-durations
 
   fetch-ttsim:
     needs: load-test-matrix
@@ -138,13 +180,32 @@ jobs:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ steps.workspace.outputs.path }}
 
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations
+          path: split-durations
+      - name: Use the test durations for --splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: cp split-durations/quasar.json "$LLK_PATH/tests/python_tests/.test_durations"
+
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
           CHIP_ARCH: quasar
+          PYTEST_ADDOPTS: --store-durations --clean-durations
         run: |
           ${{ matrix.test-group.cmd }}
+
+      - name: Upload test durations
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-durations-quasar-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
+          include-hidden-files: true
 
       - name: Upload JUnit report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
