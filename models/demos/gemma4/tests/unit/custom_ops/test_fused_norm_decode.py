@@ -3,7 +3,6 @@
 """FusedNormDecode (custom op: N cores exchanging partial row sums, FPU broadcasts, residual / two-input /
 multi-output forms) vs the torch golden and ttnn.rms_norm, single chip."""
 
-import os
 
 import pytest
 import torch
@@ -11,6 +10,7 @@ import torch
 import ttnn
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.custom_ops.fused_norm_decode.op import FusedNormDecode
+from models.demos.gemma4.custom_ops.grid import plan_norm_split
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
@@ -35,45 +35,48 @@ def _gamma_full(g, device):
 
 CASES = {
     # name: (R, W, n_out, gammas (bool per out), scalars, residual, two_in, mem, cores)
-    "single_b32": (32, 2816, 1, [True], [1.0], False, False, "dram", 22),
-    "single_b1": (1, 2816, 1, [True], [1.0], False, False, "dram", 22),
+    "single_b32": (32, 2816, 1, [True], [1.0], False, False, "dram", 0),
+    "single_b1": (1, 2816, 1, [True], [1.0], False, False, "dram", 0),
     "single_44cores": (32, 2816, 1, [True], [1.0], False, False, "dram", 44),
     "single_11cores": (32, 2816, 1, [True], [1.0], False, False, "dram", 11),
-    "router_scalar": (32, 2816, 1, [True], [2816**-0.5], False, False, "dram", 22),
-    "no_gamma": (32, 2816, 1, [False], [1.0], False, False, "dram", 22),
-    "residual": (32, 2816, 1, [True], [1.0], True, False, "dram", 22),
-    "residual_scalar": (32, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
-    "two_inputs": (32, 2816, 1, [True], [1.0], False, True, "dram", 22),
+    "router_scalar": (32, 2816, 1, [True], [2816**-0.5], False, False, "dram", 0),
+    "no_gamma": (32, 2816, 1, [False], [1.0], False, False, "dram", 0),
+    "residual": (32, 2816, 1, [True], [1.0], True, False, "dram", 0),
+    "residual_scalar": (32, 2816, 1, [True], [0.7265625], True, False, "dram", 0),
+    "two_inputs": (32, 2816, 1, [True], [1.0], False, True, "dram", 0),
     "two_inputs_44cores": (32, 2816, 1, [True], [1.0], False, True, "dram", 44),
-    "three_outputs": (32, 2816, 3, [True, True, False], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
-    "single_l1": (32, 2816, 1, [True], [1.0], False, False, "l1", 22),
-    "w1024_b8": (8, 1024, 1, [True], [1.0], False, False, "dram", 22),
-    # dense variants: 31B hidden 5376 (168 column tiles -> 21 cores x 8), 12B hidden 3840 (120 -> 20 x 6)
-    "dense31b_single": (32, 5376, 1, [True], [1.0], False, False, "dram", 22),
-    "dense31b_residual_scalar": (32, 5376, 1, [True], [0.90625], True, False, "dram", 22),
-    "dense31b_b1_residual": (1, 5376, 1, [True], [1.0], True, False, "dram", 22),
-    "dense31b_l1": (32, 5376, 1, [True], [1.0], False, False, "l1", 22),
-    "dense12b_single": (32, 3840, 1, [True], [1.0], False, False, "dram", 22),
-    "dense12b_residual_scalar": (32, 3840, 1, [True], [1.1015625], True, False, "dram", 22),
-    "dense12b_b1_residual": (1, 3840, 1, [True], [1.0], True, False, "dram", 22),
+    "three_outputs": (32, 2816, 3, [True, True, False], [1.0, 1.0, 2816**-0.5], False, False, "dram", 0),
+    "single_l1": (32, 2816, 1, [True], [1.0], False, False, "l1", 0),
+    "w1024_b8": (8, 1024, 1, [True], [1.0], False, False, "dram", 0),
+    # dense variants: 31B hidden 5376 (168 column tiles -> 21 cores x 8), 12B hidden 3840 (120 -> 15 x 8)
+    "dense31b_single": (32, 5376, 1, [True], [1.0], False, False, "dram", 0),
+    "dense31b_residual_scalar": (32, 5376, 1, [True], [0.90625], True, False, "dram", 0),
+    "dense31b_b1_residual": (1, 5376, 1, [True], [1.0], True, False, "dram", 0),
+    "dense31b_l1": (32, 5376, 1, [True], [1.0], False, False, "l1", 0),
+    "dense12b_single": (32, 3840, 1, [True], [1.0], False, False, "dram", 0),
+    "dense12b_residual_scalar": (32, 3840, 1, [True], [1.1015625], True, False, "dram", 0),
+    "dense12b_b1_residual": (1, 3840, 1, [True], [1.0], True, False, "dram", 0),
     # the 26B layer's forms as the model issues them: the three-output call with a gamma AND the hidden**-0.5
     # scalar on the router output, and the residual / two-input forms at batch 1
     "three_outputs_router": (32, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
-    "three_outputs_router_b1": (1, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
-    "residual_scalar_b1": (1, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
-    "two_inputs_b1": (1, 2816, 1, [True], [1.0], False, True, "dram", 22),
-    # prefill rows (one N-core exchange group per row tile): the 128-token layer tail's four forms on 4 x 22 cores
-    "prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 22),
+    "three_outputs_router_b1": (1, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 0),
+    "residual_scalar_b1": (1, 2816, 1, [True], [0.7265625], True, False, "dram", 0),
+    "two_inputs_b1": (1, 2816, 1, [True], [1.0], False, True, "dram", 0),
+    # the last field: the GEMMA4_FUSED_NORM_CORES knob (0 = the derived split: the fewest cores whose tiles fit one
+    # dest window, 11 at this width, 22 with two inputs; 22 = the knob's preferred count on two cases)
+    # prefill rows (one N-core exchange group per row tile): the 128-token layer tail's four forms on 4 x 11 cores
+    "prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 0),
     "prefill_r128_two_outputs": (128, 2816, 2, [True, True], [1.0, 1.0], False, False, "dram", 22),
-    "prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 22),
-    "prefill_r128_residual_scalar": (128, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
-    "prefill_r64_l1": (64, 2816, 1, [True], [1.0], False, False, "l1", 22),
+    "prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 0),
+    "prefill_r128_residual_scalar": (128, 2816, 1, [True], [0.7265625], True, False, "dram", 0),
+    "prefill_r64_l1": (64, 2816, 1, [True], [1.0], False, False, "l1", 0),
     # the Wormhole split forced on Blackhole (GEMMA4_TEST_GRID=8x8 on the "wh_" cases): 11 cores x 4 row tiles in
-    # one pass, the two-input form in two passes, 256 rows in two passes; and a many-pass case on the full grid
-    "wh_prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 22),
-    "wh_prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 22),
-    "wh_prefill_r256_two_outputs": (256, 2816, 2, [True, True], [1.0, 1.0], False, False, "dram", 22),
-    "prefill_r1024_residual_scalar": (1024, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
+    # one pass, the two-input form (22 cores) in two passes, 256 rows in two passes; and a many-pass case on the
+    # full grid
+    "wh_prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 0),
+    "wh_prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 0),
+    "wh_prefill_r256_two_outputs": (256, 2816, 2, [True, True], [1.0, 1.0], False, False, "dram", 0),
+    "prefill_r1024_residual_scalar": (1024, 2816, 1, [True], [0.7265625], True, False, "dram", 0),
 }
 
 
@@ -83,7 +86,10 @@ def test_fused_norm_decode(mesh_device, device_params, case, monkeypatch):
     R, W, n_out, has_gamma, scalars, with_res, two_in, mem, cores = CASES[case]
     if case.startswith("wh_"):
         monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")  # the Wormhole grid on this chip
-    os.environ["GEMMA4_FUSED_NORM_CORES"] = str(cores)
+    if cores:
+        monkeypatch.setenv("GEMMA4_FUSED_NORM_CORES", str(cores))
+    else:
+        monkeypatch.delenv("GEMMA4_FUSED_NORM_CORES", raising=False)
     torch.manual_seed(0)
     x = (torch.randn(1, 1, R, W) * 4).to(torch.bfloat16)
     x2 = (torch.randn(1, 1, R, W) * 2).to(torch.bfloat16) if two_in else None
@@ -149,17 +155,28 @@ def _default_cap(monkeypatch):
 
 
 @pytest.mark.usefixtures("_default_cap")
-def test_decode_row_keeps_the_22_core_split():
-    assert FusedNormDecode.plan(COLS_26B, 1, 1, BH) == (22, 4, 1, 1)
-    assert FusedNormDecode.plan(COLS_26B, 1, 1, WH) == (22, 4, 1, 1)
+def test_decode_row_takes_the_fewest_cores_that_fit_a_dest_window():
+    # one row tile: the all-to-all exchange grows with N^2, so the fewest cores whose per-core tiles fit one fp32
+    # dest window (8 tiles, 4 per input with two inputs) win on both grids -- measured on one P150 (W 2816, traced):
+    # 11 cores 17.1 us vs 22 cores 23.6 us vs 44 cores 41.3 us; two inputs 22 cores 43.9 us vs 44 cores 76.2 us
+    assert FusedNormDecode.plan(COLS_26B, 1, 1, BH) == (11, 8, 1, 1)
+    assert FusedNormDecode.plan(COLS_26B, 1, 1, WH) == (11, 8, 1, 1)
     assert FusedNormDecode.plan(COLS_26B, 2, 1, WH) == (22, 4, 1, 1)
-    assert FusedNormDecode.num_cores(COLS_26B, 1) == 22
+    assert FusedNormDecode.plan(COLS_26B, 2, 1, BH) == (22, 4, 1, 1)
+    assert FusedNormDecode.num_cores(COLS_26B, 1) == 11 and FusedNormDecode.num_cores(COLS_26B, 2) == 22
+    # the dense widths (not served by this op: the native norm is faster there) follow the same rule
+    assert FusedNormDecode.plan(5376 // 32, 1, 1, BH) == (21, 8, 1, 1)
+    assert FusedNormDecode.plan(3840 // 32, 1, 1, WH) == (15, 8, 1, 1)
+    # the knob prefers another count when it fits at the same pass count; an impossible one is ignored
+    assert plan_norm_split(BH, COLS_26B, 1, 1, preferred=22) == (22, 4, 1, 1)
+    assert plan_norm_split(BH, COLS_26B, 1, 1, preferred=44) == (44, 2, 1, 1)
+    assert plan_norm_split(BH, COLS_26B, 2, 1, preferred=11) == (22, 4, 1, 1)  # 11 x 8 tiles x 2 inputs: no
 
 
 @pytest.mark.usefixtures("_default_cap")
 def test_prefill_rows_derive_from_the_grid():
-    # 128 rows (4 row tiles): Blackhole 22 cores x 4 groups in one pass, Wormhole 11 x 4 in one pass
-    assert FusedNormDecode.plan(COLS_26B, 1, 4, BH) == (22, 4, 4, 1)
+    # 128 rows (4 row tiles): 11 cores x 4 groups in one pass on both grids (44 cores)
+    assert FusedNormDecode.plan(COLS_26B, 1, 4, BH) == (11, 8, 4, 1)
     assert FusedNormDecode.plan(COLS_26B, 1, 4, WH) == (11, 8, 4, 1)
     # the two-input form needs <= 4 tiles per core: 22 cores -> 2 groups per pass on Wormhole, 2 passes
     assert FusedNormDecode.plan(COLS_26B, 2, 4, WH) == (22, 4, 2, 2)
@@ -183,19 +200,20 @@ def test_degenerate_grids():
     assert raised
     # a narrow width on one core: one row tile per pass, four passes
     assert FusedNormDecode.plan(8, 1, 4, ONE) == (1, 8, 1, 4)
-    # the cap knob bounds the preferred count (fewest passes first), the grid still decides the groups
+    # the knob names a preferred count (fewest passes first), the grid still decides the groups
     import os
 
-    os.environ["GEMMA4_FUSED_NORM_CORES"] = "11"
-    try:
-        assert FusedNormDecode.plan(COLS_26B, 1, 4, BH) == (11, 8, 4, 1)
-        assert FusedNormDecode.plan(COLS_26B, 1, 1, BH) == (11, 8, 1, 1)
-    finally:
-        del os.environ["GEMMA4_FUSED_NORM_CORES"]
-    # nothing under the cap fits: the split goes above it and, as uncapped, takes the most cores at the pass count
-    os.environ["GEMMA4_FUSED_NORM_CORES"] = "4"
+    os.environ["GEMMA4_FUSED_NORM_CORES"] = "22"
     try:
         assert FusedNormDecode.plan(COLS_26B, 1, 4, BH) == (22, 4, 4, 1)
+        assert FusedNormDecode.plan(COLS_26B, 1, 1, BH) == (22, 4, 1, 1)
+        assert FusedNormDecode.plan(COLS_26B, 1, 4, WH) == (11, 8, 4, 1)  # 22 x 4 would take 2 passes on 8x8
+    finally:
+        del os.environ["GEMMA4_FUSED_NORM_CORES"]
+    # a count that fits nowhere is ignored: the fewest cores at the pass count
+    os.environ["GEMMA4_FUSED_NORM_CORES"] = "4"
+    try:
+        assert FusedNormDecode.plan(COLS_26B, 1, 4, BH) == (11, 8, 4, 1)
     finally:
         del os.environ["GEMMA4_FUSED_NORM_CORES"]
 
