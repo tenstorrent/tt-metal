@@ -165,21 +165,23 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
+# 5120-token cases use state_peak 0.65, as in test_actual_start_matches_natural_order.
 @pytest.mark.parametrize(
-    "mesh_device,device_params,sequence",
+    "mesh_device,device_params,sequence,state_peak",
     [
-        pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, SEQUENCE, id="SP2xTP4"),
+        pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, SEQUENCE, 0.6, id="SP2xTP4"),
         pytest.param(
             (8, 4),
             torus_xy_device_params(),
             5120,
+            0.65,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, sequence: int) -> None:
+def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, sequence: int, state_peak: float) -> None:
     """Two replays of the complete split layer must produce identical outputs and carries.
 
     Both layouts run 640 rows per rank in four summary groups per head, the path whose prefix packs the reduced
@@ -227,6 +229,7 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, seque
                 config=config,
                 label=f"split trace replay={replay}",
                 nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
+                state_linf_threshold=state_peak,
             )
             current = [
                 ttnn.to_torch(shard).clone()
