@@ -114,6 +114,7 @@ struct PlanInputs {
     int32_t scatter_dim = -2;  // canonical: -1 or -2
     uint64_t budget = 0;       // free L1 below the live tensors, at most the bank - l1_headroom
     bool column_major_ccl = false;  // ports in the last column (the column strip) instead of logical row 0
+    bool w_dram_sharded = false;  // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
 };
 
 // Planner constants the factory needs too.
