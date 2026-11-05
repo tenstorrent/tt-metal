@@ -50,7 +50,7 @@ def test_rms_norm(device, batch_size, h, w):
     )
 
 
-# HiFi2, approx off, fp32 dest acc, packer L1 acc. h and w stay separate, so all four pairs are gated.
+# HiFi2, approx off, fp32 dest acc, packer L1 acc, for both h and both w.
 _RMS_ROW_MAJOR_MERGE_GATE = (ttnn.MathFidelity.HiFi2, False, True, True)
 
 
