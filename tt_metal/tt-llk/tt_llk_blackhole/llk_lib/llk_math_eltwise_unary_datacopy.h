@@ -24,14 +24,17 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 /**
  * @brief Clear the DEST zero flags of one tile so its rows read back as the data just written.
  *
- * Workaround for budabackend#2730: when a write that clears DEST zero flags as a side effect (unpack-to-dest,
- * MOVA2D) lands in the same cycle as a packer ZEROACC, the flag clear is dropped and the written rows still read
- * as zero. Issuing ZEROACC with the clear-zero-flags bit after the write restores them. The data is not modified.
+ * Workaround for budabackend#2730: a row written to DEST can keep its zero flag and read back as zero. Issuing
+ * ZEROACC with the clear-zero-flags bit after the write clears the flags without modifying the data.
+ * Applied where the failure has been reproduced: 32-bit unpack-to-dest and A2D datacopy (tt-metal#63295).
+ * The exact colliding event is not identified, and other DEST writers have not been shown to need it.
  *
  * @param dst_index: Tile index into the destination register.
  * @param num_faces: Number of faces of the tile to clear (1, 2, or 4).
  * @param clear_fp32: 1 if DEST holds 32-bit data, 0 for 16-bit.
  * @note Uses ADDR_MOD_3, which @ref eltwise_unary_configure_addrmod programs with zero increments.
+ * @note Call with the DEST counter at 0: CLR_16 takes it into its bank select, so a leftover count can send
+ *       the clear to the other DEST half (tt-metal#53693).
  */
 inline void _llk_math_clear_dest_zero_flags_(const std::uint32_t dst_index, const std::uint32_t num_faces, const int clear_fp32)
 {
@@ -323,8 +326,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
         if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
-            // MOVA2D clears DEST zero flags as a side effect, so it hits the same budabackend#2730 drop as unpack-to-dest:
-            // a written row can stay flagged zero and pack back as 0 (tt-metal#63295).
+            // A2D datacopy can leave a written row flagged zero, so it packs back as 0 (budabackend#2730, tt-metal#63295).
             // Reset the DEST counter first: the MOP leaves it at the end of the tile, and CLR_16 derives its bank
             // select from the DEST address, so the last tile of a bank would be cleared in the other half (tt-metal#53693).
             math::clear_dst_reg_addr();
