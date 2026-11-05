@@ -192,15 +192,15 @@ inline void _llk_init_packer_dest_offset_registers_()
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @ref _llk_init_packer_dest_offset_registers_ performs the dest-offset register setup.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool full_sync_bit31 = true>
 inline void _llk_pack_dest_init_()
 {
     reset_dest_offset_id();
     _llk_init_packer_dest_offset_registers_<Dst>();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
-    // Bit 31 of the destination register stays set: the full-sync per-tile pack writes only the three low bytes
-    if constexpr (Dst == DstSync::SyncFull)
+    // Bit 31 of the destination register stays set: the full-sync per-tile pack writes only the three low bytes (main's form leaves it, full_sync_bit31 false)
+    if constexpr (Dst == DstSync::SyncFull && full_sync_bit31)
     {
         TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     }

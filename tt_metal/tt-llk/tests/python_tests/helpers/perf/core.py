@@ -805,6 +805,7 @@ _TRUE_MAIN_KEEP = (
     "MATMUL_FORM_KEYS",
     "MATMUL_PACK_BLOCK",
     "_D",
+    "MATMUL_NB",
 )
 
 
@@ -836,7 +837,11 @@ def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtim
         and by["MATMUL_L1_ACC"].matmul_l1_acc == L1Accumulation.Yes
     )
     nbk = next((r for r in runtimes if type(r).__name__ == "NUM_BLOCKS"), None)
-    nb = nbk.num_blocks if nbk is not None else 1
+    nb = (
+        nbk.num_blocks
+        if nbk is not None
+        else (by["MATMUL_NB"].matmul_nb if "MATMUL_NB" in by else 1)
+    )
     tile = next((r for r in runtimes if type(r).__name__ == "IN_TILE_DIMS"), None)
     r0 = tile.in0_r_dim if tile is not None else 32
     c1 = tile.in1_c_dim if tile is not None else 32

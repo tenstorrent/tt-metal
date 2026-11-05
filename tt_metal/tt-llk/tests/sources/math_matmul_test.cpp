@@ -56,10 +56,17 @@ constexpr bool matmul_bias_write = matmul_kt_key == 0;
 constexpr bool matmul_bias_write = false;
 #endif
 
+// main's form: the table key is 0 (an exact main row, or init before every call); the cell then keeps main's pack init and unpack row mask
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_true_main_key = matmul_kt_key == 0;
+#else
+constexpr bool matmul_true_main_key = false;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+#if defined(ARCH_BLACKHOLE) && (defined(MATMUL_ROW_LE_8) || defined(MATMUL_TRUE_MAIN))
 constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
@@ -226,7 +233,7 @@ constexpr bool matmul_row_end_fold_k = false;
 #define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
 #define MATMUL_MATH_INIT_ARGS                                                                                                                     \
     MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), \
-        dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, 0, 0, matmul_bias_write
+        (dest_sync == DstSync::SyncFull && !matmul_bias_write) || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, 0, 0, matmul_bias_write
 #else
 #define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
 #define MATMUL_MATH_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
@@ -470,7 +477,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             PARTIAL_FACE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, !matmul_true_main_key>();
 #if defined(ARCH_BLACKHOLE)
         if constexpr (matmul_pack_form_v == 4) { _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces); }
 #endif
@@ -496,7 +503,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                     {
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                        _llk_pack_<
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            ckernel::PackMode::Default,
+                            false,
+                            (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
                     }
                 }
             }
@@ -532,7 +544,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
                             const std::uint32_t result_tile = block * result_block_stride + tile;
-                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
+                            _llk_pack_<
+                                dest_sync,
+                                is_fp32_dest_acc_en,
+                                ckernel::PackMode::Default,
+                                false,
+                                (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
                         }
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
