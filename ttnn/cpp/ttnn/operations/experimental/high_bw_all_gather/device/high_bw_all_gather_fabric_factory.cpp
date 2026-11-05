@@ -961,6 +961,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     sender_args.insert(sender_args.end(), outgoing_shards.begin(), outgoing_shards.end());
                     if (fabric_link_worker.has_fabric_connection) {
                         tt::tt_fabric::append_fabric_connection_rt_args(
+                            *mesh_device,
                             mesh_device->get_fabric_node_id(chip),
                             mesh_device->get_fabric_node_id(*downstream),
                             fabric_link_worker.fabric_link_index,
