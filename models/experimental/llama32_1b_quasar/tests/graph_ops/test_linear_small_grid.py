@@ -20,7 +20,8 @@
 # weight in INTERLEAVED DRAM (not DRAM-sharded) — the arrangement that actually runs
 # on Quasar. Small dims (M=32=1 tile, K=64, N=128) keep it sim-tractable.
 # ---------------------------------------------------------------------------
-"""Small-grid Quasar matmul (1D mcast_in0, interleaved-DRAM weight) — stands in for ttnn.linear."""
+"""Small-grid Quasar matmul (1D mcast_in0, interleaved-DRAM weight) — stands in for ttnn.linear.
+no_program_config runs the same operands with no program config (the unified matmul on Quasar)."""
 
 import pytest
 import torch
@@ -28,6 +29,7 @@ import torch
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from tests.ttnn.utils_for_testing import assert_allclose
 
 qsr = ttnn._ttnn.operations.experimental.quasar
 
@@ -37,7 +39,8 @@ _M, _K, _N = 32, 64, 128  # M=1 tile (mcast_in0 needs M in one per_core_M block)
 
 
 @G.with_default_mesh()
-def test_linear_small_grid(ttnn_mesh_device, reset_seeds):
+@pytest.mark.parametrize("use_program_config", [True, False], ids=["mcast_1d", "no_program_config"])
+def test_linear_small_grid(ttnn_mesh_device, reset_seeds, use_program_config):
     mesh_device = ttnn_mesh_device
     dev = mesh_device.compute_with_storage_grid_size()
     if dev.x < _GRID_XY[0] or dev.y < _GRID_XY[1]:
@@ -99,10 +102,12 @@ def test_linear_small_grid(ttnn_mesh_device, reset_seeds):
     out_t = ttnn.experimental.quasar.matmul(
         a_t,
         b_t,
-        program_config=program_config,
+        program_config=program_config if use_program_config else None,
         memory_config=out_mc,
         dtype=ttnn.bfloat16,
     )
 
     ref = torch.matmul(a.float(), b.float())
     U.assert_pcc(ref, out_t, pcc=0.99, mesh_device=mesh_device)
+    if not use_program_config:
+        assert_allclose(ref, U.from_tt(out_t, mesh_device), rtol=0.02, atol=0.02 * ref.abs().max().item())

@@ -313,7 +313,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         chunk_size: Optional[int] = None,  # variable chunk length: which supported size this chunk is
-        request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
+        request_id: int = -1,  # identifies this chunk in the host layer-completion stream
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
         metadata_msg=None,  # accepted for the common-runner contract; no trace-metadata path in this runtime
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
@@ -328,6 +328,8 @@ class TtPrefillRuntime:
         On the first rank ``input_tensor`` is SP-sharded uint32 tokens (``make_chunk_input`` / H2D);
         they are embedded here. Non-first ranks receive activations over D2D already embedded.
         If a LayerAck channel is registered, the model bumps it once per layer via ``on_layer_complete``.
+        The runner already decodes ``metadata_msg`` into ``slot_id``, ``actual_start``, and
+        ``actual_end``. GPT-OSS does not trace or emit D2H acks, so the raw tensor is unused.
 
         Every SP chunk writes K/V. A chunked request, including actual_start == 0, then uses the
         cache-backed RingJointSDPA path; an equal-sized one-shot request uses the all-gather fallback.
@@ -369,7 +371,11 @@ class TtPrefillRuntime:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+                # Migration reads KV outside this command queue. Publish only after
+                # the enqueued writes are device-complete, as in DeepSeek's host ACK path.
+                ttnn.synchronize_device(self.mesh_device)
+                global_layer = self.config.first_layer_idx + layer_idx
+                sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)
 
         else:
             on_layer_complete = None
@@ -394,9 +400,8 @@ class TtPrefillRuntime:
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined (multi-rank) prefill. Called once per layer as
-        ``sink(global_layer_idx, request_id)``; request_id is bound per ``prefill_chunk`` call so the sink
-        reads no mutable runtime state."""
+        """Register a layer-completion sink for pipelined (multi-rank) prefill. Called once per layer as
+        ``sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)``."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
@@ -404,11 +409,15 @@ class TtPrefillRuntime:
         """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
 
         Single-rank, so ``build_kv_chunk_table`` ignores the gathered layouts and resolves each K/V
-        config's own ``buffer_address()``; this one stage only satisfies the runner's gather."""
+        config's own ``buffer_address()``; this one stage only satisfies the runner's gather.
+
+        A bounded sliding cache has no chunk-table layout yet, so it reports no stage and the runner
+        serves without a table."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         kv = self._resolve_kv(kv_caches)
-        assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
+        if kv.bounded_sliding:
+            return []
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         return [KvCacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
@@ -424,9 +433,12 @@ class TtPrefillRuntime:
     ) -> str:
         """Build + serialize the GPT-OSS multi-config KV chunk address table (k_h0..N, v_h0..N) to
         ``path`` and return it. Issues no comms — the engine publishes to the migration worker.
-        Single-rank only (``PREFILL_ENABLE_MIGRATION=1`` is rejected for ``num_ranks>1``). Extra kwargs
-        match the DeepSeek/PP runner call site and are ignored for this single-rank GQA path."""
-        del first_layer_idx, num_my_layers, stage_layouts  # single-rank: whole-model table
+        Single-rank only: the table covers the whole model from each config's own ``buffer_address()``,
+        so the layer kwargs are ignored and ``stage_layouts`` must hold exactly one rank."""
+        assert stage_layouts is None or all(
+            len(layout) == 1 for layout in stage_layouts
+        ), f"GPT-OSS KV chunk table is single-rank, got stage layouts from {[len(l) for l in stage_layouts]} ranks"
+        del first_layer_idx, num_my_layers, stage_layouts
         from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         kv = self._resolve_kv(kv_caches)

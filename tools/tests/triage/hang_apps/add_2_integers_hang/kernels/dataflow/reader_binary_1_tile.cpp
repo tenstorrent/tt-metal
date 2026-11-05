@@ -4,42 +4,47 @@
 
 #include <cstdint>
 
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
 void kernel_main() {
-    // Read parameters from the kernel arguments
-    uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    uint32_t in1_addr = get_arg_val<uint32_t>(1);
+    constexpr uint32_t onetile = 1;
 
-    // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    // The dataflow buffers to read the tiles into. A DataflowBuffer is backed by a circular
+    // buffer on Gen1 (Wormhole, Blackhole) and by a hardware dataflow buffer on Gen2 (Quasar);
+    // the host declares them in the ProgramSpec and binds this kernel as their producer.
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    // Get the tile size used in the circular buffers. We assume the
-    // circular buffers are created with the same tile size as the DRAM
-    // buffers (Which is most of the cases).
-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+    // Address generators for the input tensors. Consider these the pointers for interleaved
+    // buffers. The tensor addresses are supplied as ProgramRunArgs tensor arguments, so the
+    // kernel needs no runtime args of its own.
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto in1 = TensorAccessor(tensor::in1);
 
-    // Create address generators for the input buffers. Consider these the
-    // pointers for interleaved buffers
-    // Setting the page size to be tile_size_bytes works because we set it up
-    // explicitly in host code. This is usually a good idea as it makes coding
-    // easy.
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
+    Noc noc;
 
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto in1 = TensorAccessor(in1_args, in1_addr);
+#ifdef ARCH_QUASAR
+    // Quasar: implicit-sync read. The dataflow buffer credit advances via the per-trid
+    // completion ISR, so no reserve_back / barrier / push_back is required.
+    noc.async_read<NocOptions::TXN_ID>(in0, dfb_in0, {.page_id = 0}, {});
+    noc.async_read<NocOptions::TXN_ID>(in1, dfb_in1, {.page_id = 0}, {});
+#else
+    // read the tile from the first input tensor into its dataflow buffer
+    dfb_in0.reserve_back(onetile);
+    noc.async_read(in0, dfb_in0, dfb_in0.get_entry_size(), {.page_id = 0}, {});
+    noc.async_read_barrier();    // wait until the read is done
+    dfb_in0.push_back(onetile);  // mark the tile as ready
 
-    // read the tiles from DRAM into the circular buffers
-    cb_reserve_back(cb_in0, 1);
-    uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-    noc_async_read_page(0, in0, cb_in0_addr);  // read
-    noc_async_read_barrier();                  // wait until the read is done
-    cb_push_back(cb_in0, 1);                   // mark the tile as ready.
+    // same process for the second input (different dataflow buffer and input tensor)
+    dfb_in1.reserve_back(onetile);
+    noc.async_read(in1, dfb_in1, dfb_in1.get_entry_size(), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    dfb_in1.push_back(onetile);
+#endif
 
-    // same process for the second input (different circular buffer and input buffer)
-    cb_reserve_back(cb_in1, 1);
-    uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-    noc_async_read_page(0, in1, cb_in1_addr);
-    noc_async_read_barrier();
-    cb_push_back(cb_in1, 1);
+    dfb_in0.finish();
+    dfb_in1.finish();
 }

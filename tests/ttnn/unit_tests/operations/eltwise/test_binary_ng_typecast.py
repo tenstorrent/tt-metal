@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc, assert_with_ulp, assert_div_by_zero_outputs

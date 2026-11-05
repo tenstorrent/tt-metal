@@ -25,7 +25,6 @@ inline void rand_prng() {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
@@ -110,14 +109,17 @@ inline void rand_row() {
 template <bool NORMALIZE_PER_ROW>
 inline void rand_rows() {
     constexpr std::uint32_t row_instruction_count = NORMALIZE_PER_ROW ? 17 : 16;
+    // Replay-buffer slot the row is recorded into and replayed from.
+    constexpr std::uint32_t replay_start = 0;
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    TTI_REPLAY(0, row_instruction_count, 1, 1);
-    rand_row<NORMALIZE_PER_ROW>();
+    // load_replay_buf brackets the record with disable_gathering() /
+    // enable_gathering() when ENABLE_GATHERING is defined.
+    load_replay_buf<Exec>(replay_start, row_instruction_count, [] { rand_row<NORMALIZE_PER_ROW>(); });
 #pragma GCC unroll 7
     for (int d = 1; d < 8; d++) {
-        TTI_REPLAY(0, row_instruction_count, 0, 0);
+        TTI_REPLAY(replay_start, row_instruction_count, 0, 0);
     }
 }
 
@@ -136,6 +138,19 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     if (!normalize_per_row) {
         scale -= normalization_exponent << exponent_shift;
     }
+
+    // rand_row stores under ADDR_MOD_6. Program it here rather than in rand_init: the slot persists
+    // across programs and other inits rewrite it (topk_tile_init sets dest incr 32), so a rand_tile not
+    // preceded by rand_tile_init in the same kernel (the seedless ttnn.sampling path after
+    // ttnn.manual_seed) would otherwise store under the previous launch's value. Address mode only --
+    // no counter reset, which would move the face base this call is given. The rewrite is the same
+    // value on every face. Ops relying on ADDR_MOD_6 from their own init (e.g. topk, square, sfpu reduce)
+    // must re-run that init after rand. This is the only state rand re-establishes: an init that changes
+    // SFPU control state (topk enables index tracking, which replaces this kernel's LREG4-7 results) must
+    // be followed by a control-register clear before rand, issued by the caller -- any generic SFPU
+    // *_tile_init or _init_sfpu_config_reg(); the topk ops leave tracking on at exit. rand_tile_init clears
+    // it too but reseeds the stream; rand_init alone does not touch it.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);

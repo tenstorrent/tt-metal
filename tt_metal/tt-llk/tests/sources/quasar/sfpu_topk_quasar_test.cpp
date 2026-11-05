@@ -51,8 +51,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW      = params.FULL_CT_DIM / NUM_STAGES;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t FULL_RT_DIM = params.FULL_RT_DIM;
+    const std::uint32_t FULL_CT_DIM = params.FULL_CT_DIM;
+    const Operand& buffer_A         = params.buffer_A;
+#endif
+    const int NUM_TOPK_PIPELINE_EXECUTIONS = FULL_RT_DIM;
+    const int NUM_VALUE_TILES_PER_ROW      = FULL_CT_DIM / NUM_STAGES;
 
     const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, TOPK_INDEX_FORMAT};
     const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, TOPK_INDEX_FORMAT};
@@ -66,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // (Quasar Int16 transport for the uint16 index payload).
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
-        const int tile_row_offset = current_tile_row * params.FULL_CT_DIM;
+        const int tile_row_offset = current_tile_row * FULL_CT_DIM;
 
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration)
         {
@@ -102,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
                     const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-                        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_A[0]), unpack_src_format);
+                        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), unpack_src_format);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
@@ -154,8 +159,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW      = params.FULL_CT_DIM / NUM_STAGES;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t FULL_RT_DIM = params.FULL_RT_DIM;
+    const std::uint32_t FULL_CT_DIM = params.FULL_CT_DIM;
+#endif
+    const int NUM_TOPK_PIPELINE_EXECUTIONS = FULL_RT_DIM;
+    const int NUM_VALUE_TILES_PER_ROW      = FULL_CT_DIM / NUM_STAGES;
 
     constexpr bool APPROX             = false;
     constexpr std::uint32_t dst_index = 0;
@@ -178,6 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the value format before the SFPU network; the TopK value
     // SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
     const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(value_math_format, value_math_format);
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
@@ -200,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_index        = static_cast<int>(stage);
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                    _configure_alu_formats_<is_fp32_dest_acc_en>(
                         math_format, math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
@@ -213,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-                _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                _configure_alu_formats_<is_fp32_dest_acc_en>(
                     value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
@@ -303,8 +313,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const int NUM_TOPK_PIPELINE_EXECUTIONS       = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW            = params.FULL_CT_DIM / NUM_STAGES;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t FULL_RT_DIM = params.FULL_RT_DIM;
+    const std::uint32_t FULL_CT_DIM = params.FULL_CT_DIM;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    const int NUM_TOPK_PIPELINE_EXECUTIONS       = FULL_RT_DIM;
+    const int NUM_VALUE_TILES_PER_ROW            = FULL_CT_DIM / NUM_STAGES;
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::trisc::TILE_C_DIM) * NUM_STAGES;
 
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK.
@@ -341,14 +357,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if (last_iter)
                     {
                         const int tile_L1_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW + stage_index;
-                        l1_addr_16B               = params.buffer_Res[tile_L1_offset] / 16;
+                        l1_addr_16B              = buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {
-                        const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
+                        const int tile_row_offset  = current_tile_row * FULL_CT_DIM;
                         const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
                         const int tile_L1_offset   = tile_row_offset + stage_index * NUM_VALUE_TILES_PER_ROW + tile_pair_offset;
-                        l1_addr_16B                = params.buffer_A[tile_L1_offset] / 16;
+                        l1_addr_16B                = buffer_A[tile_L1_offset] / 16;
                     }
 
                     const auto bfd_pack =

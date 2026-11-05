@@ -6,7 +6,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_utils.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);

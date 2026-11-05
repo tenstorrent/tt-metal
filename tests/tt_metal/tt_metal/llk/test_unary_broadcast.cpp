@@ -43,7 +43,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "single_core_compute_runners.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -488,7 +488,7 @@ void run_single_core_unary_broadcast(distributed::MeshDevice& mesh_device, const
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    Program program = tt_metal::CreateProgram();
+    Program program = tt_metal::CreateProgram(mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
@@ -605,7 +605,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
 }
 
 // 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
     constexpr struct {
         tt::DataFormat in_t;

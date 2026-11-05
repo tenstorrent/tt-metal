@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
-#include <set>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <tt-metalium/experimental/udm/types.hpp>
@@ -13,6 +15,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

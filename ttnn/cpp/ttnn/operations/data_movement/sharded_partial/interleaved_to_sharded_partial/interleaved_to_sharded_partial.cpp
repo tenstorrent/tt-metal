@@ -6,6 +6,7 @@
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
@@ -20,6 +21,12 @@ Tensor interleaved_to_sharded_partial(
     tt::tt_metal::TensorMemoryLayout shard_scheme,
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
+    TT_FATAL(num_slices > 0, "num_slices must be greater than 0, got {}", num_slices);
+    TT_FATAL(
+        shard_shape[0] > 0 && shard_shape[1] > 0,
+        "shard_shape must be greater than 0 in both dims, got [{}, {}]",
+        shard_shape[0],
+        shard_shape[1]);
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

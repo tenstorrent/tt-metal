@@ -144,12 +144,34 @@ void kernel_main() {
                 }
 
                 uint32_t index_l1_addr = 0;
-                // Selected per dimension below; only a dimension whose index tensor is bound assigns
-                // it, which is the same condition index_is_defined[dim] tests, so it is never null here.
-                DataflowBuffer* index_dfb_obj = nullptr;
+                auto index_op = [&](auto&& fn) {
+#ifdef HAS_INDEX0
+                    if (dim == 0) {
+                        fn(dfb_in1_obj);
+                        return;
+                    }
+#endif
+#ifdef HAS_INDEX1
+                    if (dim == 1) {
+                        fn(dfb_in2_obj);
+                        return;
+                    }
+#endif
+#ifdef HAS_INDEX2
+                    if (dim == 2) {
+                        fn(dfb_in3_obj);
+                        return;
+                    }
+#endif
+#ifdef HAS_INDEX3
+                    if (dim == 3) {
+                        fn(dfb_in4_obj);
+                        return;
+                    }
+#endif
+                };
 #ifdef HAS_INDEX0
                 if (dim == 0) {
-                    index_dfb_obj = &dfb_in1_obj;
                     dfb_in1_obj.reserve_back(1);
                     index_l1_addr = dfb_in1_obj.get_write_ptr();
                     noc.async_read(index0, dfb_in1_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
@@ -157,7 +179,6 @@ void kernel_main() {
 #endif
 #ifdef HAS_INDEX1
                 if (dim == 1) {
-                    index_dfb_obj = &dfb_in2_obj;
                     dfb_in2_obj.reserve_back(1);
                     index_l1_addr = dfb_in2_obj.get_write_ptr();
                     noc.async_read(index1, dfb_in2_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
@@ -165,7 +186,6 @@ void kernel_main() {
 #endif
 #ifdef HAS_INDEX2
                 if (dim == 2) {
-                    index_dfb_obj = &dfb_in3_obj;
                     dfb_in3_obj.reserve_back(1);
                     index_l1_addr = dfb_in3_obj.get_write_ptr();
                     noc.async_read(index2, dfb_in3_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
@@ -173,20 +193,21 @@ void kernel_main() {
 #endif
 #ifdef HAS_INDEX3
                 if (dim == 3) {
-                    index_dfb_obj = &dfb_in4_obj;
                     dfb_in4_obj.reserve_back(1);
                     index_l1_addr = dfb_in4_obj.get_write_ptr();
                     noc.async_read(index3, dfb_in4_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
                 }
 #endif
                 noc.async_read_barrier();
-                index_dfb_obj->push_back(1);
+                index_op([](auto& d) { d.push_back(1); });
 
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 int32_t noc_idx = index_l1_ptr[index_index];
 
-                index_dfb_obj->wait_front(1);
-                index_dfb_obj->pop_front(1);
+                index_op([](auto& d) {
+                    d.wait_front(1);
+                    d.pop_front(1);
+                });
 
                 if (noc_idx < 0) {
                     noc_idx += input_size_list[dim];

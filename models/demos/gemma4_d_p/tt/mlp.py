@@ -6,9 +6,23 @@
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import (
+    is_short_m,
+    prefill_1d_matmul_program_config,
+    prefill_matmul_program_config,
+    short_m_output_memcfg,
+    to_l1_width_sharded,
+)
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
+
+# Gemma4's gate GELU is the tanh form (HF gelu_pytorch_tanh). GELU_TANH's param 1 evaluates it as
+# x / (1 + exp(-2u)): within 1 BF16 ULP of the FP32 tanh form and cheaper on the SFPU.
+_GATE_GELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)
+
+
+# Weight columns per core of the short-M down projection (the gate and up projections keep the 1D default of 2).
+_DOWN_PER_CORE_N = 4
 
 
 class MLP:
@@ -81,7 +95,7 @@ class MLP:
             **common,
         )
 
-    def _matmul_configs(self, hidden_states, weight, fused_activation=None):
+    def _matmul_configs(self, hidden_states, weight, fused_activation=None, per_core_n=None):
         """(program_config, compute_kernel_config) for one projection: explicit blocking with fp32
         accumulation on the widest column count that splits N evenly, or (None, the default compute
         config) for the core-grid path.
@@ -93,7 +107,7 @@ class MLP:
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
         program_config = prefill_1d_matmul_program_config(
-            hidden_states, weight, grid, fused_activation
+            hidden_states, weight, grid, fused_activation, per_core_n
         ) or prefill_matmul_program_config(hidden_states, weight, grid_x, grid.y, fused_activation, fp32_dest_acc=True)
         if program_config is None:
             return None, self.compute_kernel_config
@@ -106,11 +120,13 @@ class MLP:
         )
         return program_config, compute_kernel_config
 
-    def _project(self, hidden_states, weight, memory_config, gelu=False):
+    def _project(self, hidden_states, weight, memory_config, gelu=False, per_core_n=None):
         """hidden_states @ weight, on the explicit config when there is one and the core grid otherwise.
-        With gelu, the GELU is fused either way."""
-        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None
-        program_config, compute_kernel_config = self._matmul_configs(hidden_states, weight, fused_activation)
+        With gelu, the GELU is fused either way. per_core_n sets the 1D config's columns per core."""
+        fused_activation = _GATE_GELU if gelu else None
+        program_config, compute_kernel_config = self._matmul_configs(
+            hidden_states, weight, fused_activation, per_core_n
+        )
         return ttnn.linear(
             hidden_states,
             weight,
@@ -127,13 +143,29 @@ class MLP:
         # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
 
-        gate = self._project(hidden_states, self.gate_proj, act_mc, gelu=True)
-        up = self._project(hidden_states, self.up_proj, act_mc)
+        # Short-M activations are read width-sharded from L1 (see matmul_config.to_l1_width_sharded); gate and up
+        # share one sharded copy.
+        short_m = is_short_m(hidden_states)
+        x = to_l1_width_sharded(hidden_states) if short_m else hidden_states
+        gate_up_mc = short_m_output_memcfg(x, self.gate_proj) if short_m else act_mc
+        gate = self._project(x, self.gate_proj, gate_up_mc, gelu=True)
+        up = self._project(x, self.up_proj, gate_up_mc)
+        # The MLP consumes its gathered input (and any sharded copy of it) before down.
+        hidden_states.deallocate(True)
+        if x is not hidden_states:
+            x.deallocate(True)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
-        # Pack output to DRAM ahead of the reduce-scatter.
-        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
+        # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
+        # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
+        down_mc = ttnn.DRAM_MEMORY_CONFIG
+        if short_m:
+            sharded = to_l1_width_sharded(hidden)
+            hidden.deallocate(True)
+            hidden = sharded
+            down_mc = short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
+        output = self._project(hidden, self.down_proj, down_mc, per_core_n=_DOWN_PER_CORE_N)
         hidden.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
         return output

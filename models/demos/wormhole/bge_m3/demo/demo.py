@@ -580,6 +580,15 @@ def run_bge_benchmark(
         f"{tput_prefill_tps:>20.2f} | {e2el_ms:>12.2f} | {req_tput_rps:>15.2f}"
     )
     logger.info("BGE-M3 benchmark results:\n" + header + "\n" + "-" * len(header) + "\n" + row)
+    from models.demos.utils.common_demo_utils import report_e2e_metrics
+
+    report_e2e_metrics(
+        "bge_m3",
+        {"prefill_t/s": tput_prefill_tps},
+        batch_size=max_concurrency,
+        seq_len=isl,
+        model_type="embedding",
+    )
 
     return metrics
 

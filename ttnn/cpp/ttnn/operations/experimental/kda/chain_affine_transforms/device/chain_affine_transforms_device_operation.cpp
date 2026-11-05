@@ -68,7 +68,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         t_shape[0] == mesh->shape()[attrs.sequence_parallel_axis],
         "{}: transforms must hold one transition per sequence-parallel rank",
         operation_name);
-    // One core per head.
+    // Each head needs at least one core; spare cores split its value columns further.
     const auto grid = mesh->compute_with_storage_grid_size();
     TT_FATAL(
         attrs.batch_heads <= grid.x * grid.y,
@@ -76,6 +76,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         operation_name,
         grid.x * grid.y,
         attrs.batch_heads);
+    // Sized for one value block per head, the most L1 any distribution needs.
     const uint64_t dfb_bytes = chain_affine_transforms_l1_bytes(
         attrs.key_dim / tt::constants::TILE_WIDTH, attrs.value_dim / tt::constants::TILE_WIDTH);
     const uint64_t l1_bytes =

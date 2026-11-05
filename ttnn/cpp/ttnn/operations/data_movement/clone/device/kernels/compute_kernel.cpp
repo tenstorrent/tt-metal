@@ -8,6 +8,8 @@
 
 void kernel_main() {
     constexpr auto num_tiles = get_arg(args::num_tiles);
+    DataflowBuffer dfb_src_obj(dfb::src);
+    DataflowBuffer dfb_dst_obj(dfb::dst);
 
     compute_kernel_hw_startup(dfb::src, dfb::dst);
 
@@ -21,5 +23,6 @@ void kernel_main() {
             dfb::dst,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::IterationShape::tiles(num_tiles), dfb_src_obj, dfb_dst_obj);
 }

@@ -4,21 +4,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
+import json
 import os
 import sys
-import inspect
-import csv
-import json
-from datetime import datetime
 
-import pandas as pd
-import numpy as np
-import seaborn as sns
 import click
-from loguru import logger
-
-from tracy.common import PROFILER_ARTIFACTS_DIR
+import numpy as np
+import pandas as pd
 import tracy.device_post_proc_config as device_post_proc_config
+from loguru import logger
+from tracy.common import PROFILER_ARTIFACTS_DIR
 
 SUM_MARKER_ID_START = 3000
 
@@ -238,6 +234,12 @@ def get_ops(timeseries):
         op = opsDict[opID]
         opCores = {}
 
+        # TS_DATA counter rows never mark an op boundary, and in a merged multipass log their timestamps can fall
+        # outside this FW window (records of later runs); walk the boundary rows without them, then attach them.
+        counterRows = [ts for ts in op if ts[0]["type"] == "TS_DATA"]
+        op = [ts for ts in op if ts[0]["type"] != "TS_DATA"]
+        opEntry = ops[-1]
+
         op.sort(key=lambda ts: ts[1])
         for ts in op:
             if len(ts) == 5:
@@ -255,7 +257,7 @@ def get_ops(timeseries):
                     if is_master_fw_boundary(risc, timerID, "ZONE_START"):
                         if len(opCores[core]) == 2:
                             corruption = False
-                            for core, coreOp in opCores.items():
+                            for otherCore, coreOp in opCores.items():
                                 if coreOp and len(coreOp) != 2:
                                     corruption = True
                             if corruption:
@@ -272,10 +274,10 @@ def get_ops(timeseries):
                     elif is_master_fw_boundary(risc, timerID, "ZONE_END"):
                         assert (
                             len(opCores[core]) == 1
-                        ), "Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
+                        ), f"Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
                         opCores[core] = (opCores[core][0], timerID)
                         opIsDone = True
-                        for core, coreOp in opCores.items():
+                        for otherCore, coreOp in opCores.items():
                             if not coreOp or len(coreOp) != 2:
                                 opIsDone = False
                                 break
@@ -291,6 +293,7 @@ def get_ops(timeseries):
                 ops.append({"timeseries": []})
                 for core in opCores:
                     opCores[core] = None
+        opEntry["timeseries"].extend(counterRows)
     ops.pop()
     return ops
 
@@ -664,9 +667,11 @@ def timeseries_events(riscData, name, analysis):
     if analysis["type"] == "event":
         riscData["events"][name] = []
 
+        marker_risc = analysis["marker"]["risc"]
+        marker_riscs = [marker_risc] if isinstance(marker_risc, str) else marker_risc
         for index, (timerID, timestamp, attachedData, risc, *_) in enumerate(riscData["timeseries"]):
             if (timerID["type"] == "TS_EVENT" or timerID["type"] == "TS_DATA") and (
-                risc == analysis["marker"]["risc"] or analysis["marker"]["risc"] == "ANY"
+                risc in marker_riscs or "ANY" in marker_riscs
             ):
                 riscData["events"][name].append((timerID, timestamp, attachedData, risc, *_))
 

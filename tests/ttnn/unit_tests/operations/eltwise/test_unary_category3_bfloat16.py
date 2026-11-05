@@ -8,6 +8,8 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_all_nonfinite,
+    assert_finite_matches_golden,
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
@@ -38,21 +40,6 @@ assert_allclose's rtol is scaled by actual_result (device output), not
 expected_result (golden), despite its docstring's stated formula — a
 pre-existing quirk of the shared helper, not specific to this file.
 """
-
-
-def _assert_all_nonfinite(result, desc):
-    """Every element must be non-finite (device may pack NaN as ±inf in bf16)."""
-    nonfinite = ~torch.isfinite(result)
-    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
-
-
-def _assert_finite_matches_golden(golden, result, desc):
-    """Finite-input elements must produce finite output (PCC alone can hide an
-    isolated NaN/Inf regression since comparison_funcs zeroes both sides)."""
-    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
-    assert (
-        not unexpected_nonfinite.any()
-    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +101,7 @@ def test_root_ops_negative_domain(device, ttnn_op, high):
     tt_in = to_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=False))
-    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)" if high == 0.0 else f"{ttnn_op.__name__}(x<0)")
+    assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)" if high == 0.0 else f"{ttnn_op.__name__}(x<0)")
 
 
 @pytest.mark.parametrize(
@@ -185,7 +172,7 @@ def test_exp_fast(device):
     golden = torch.exp(input_tensor.float()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=True)).to(torch.bfloat16)
 
-    _assert_finite_matches_golden(golden, result, "exp(fast)")
+    assert_finite_matches_golden(golden, result, "exp(fast)")
     assert_with_pcc(golden, result, pcc=0.999)
     assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=1e-6)
 
@@ -289,7 +276,7 @@ def test_gelu_fast(device):
     golden = F.gelu(input_tensor.double()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.gelu(tt_in, fast_and_approximate_mode=True)).to(torch.bfloat16)
 
-    _assert_finite_matches_golden(golden, result, "gelu(fast)")
+    assert_finite_matches_golden(golden, result, "gelu(fast)")
     assert_with_pcc(golden, result, pcc=0.999)
     assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=0.05)
 
@@ -329,7 +316,7 @@ def test_log_family_nonpositive_domain(device, ttnn_op, fast):
     tt_in = to_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=fast))
-    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)")
+    assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)")
 
 
 def test_log1p_accurate(device):
@@ -349,7 +336,7 @@ def test_log1p_accurate(device):
 
     out_of_domain = x <= -1.0
     assert out_of_domain.any(), "expected x <= -1 band to be non-empty for this exhaustive sweep"
-    _assert_all_nonfinite(result[out_of_domain], "log1p(x<=-1)")
+    assert_all_nonfinite(result[out_of_domain], "log1p(x<=-1)")
 
 
 @pytest.mark.parametrize(

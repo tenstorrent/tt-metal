@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu_rounding_ops.h"

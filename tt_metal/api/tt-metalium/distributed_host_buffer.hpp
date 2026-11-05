@@ -4,13 +4,17 @@
 
 #pragma once
 
-#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <set>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {

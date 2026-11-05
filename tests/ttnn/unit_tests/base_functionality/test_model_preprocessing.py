@@ -19,7 +19,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @contextlib.contextmanager

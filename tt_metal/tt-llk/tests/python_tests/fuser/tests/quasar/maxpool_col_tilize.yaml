@@ -22,7 +22,7 @@ operations:
         reduce_dim: REDUCE_COL
         reduce_pool: MAX
         unpacker: UnpackReduceTilize
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         in0: input_A
         in1: input_B
         block_size: [32, 160]

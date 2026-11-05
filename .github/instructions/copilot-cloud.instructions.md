@@ -78,9 +78,8 @@ actually exercises your change; do not reach for `--build-all`.
 
 Put the result under the **`### Verification`** heading in the PR description
 (`.github/pull_request_template.md`) — that section exists specifically for
-this. Text that is not under that heading is routinely lost: the description
-is written by a separate summarization step after your session ends, and it
-follows the PR template's structure, not your own scratch notes.
+this, and reviewers look for it there. See "Keep the PR description current"
+below for how to maintain the description across sessions.
 
 - **Builds clean** — say so explicitly under `### Verification`, including the
   exact command you ran. `copilot-build.sh` prints a closing
@@ -94,6 +93,35 @@ follows the PR template's structure, not your own scratch notes.
   under `### Verification` that the change is **unverified**, and why.
 
 Do not claim you ran anything you did not run.
+
+## Keep the PR description current
+
+You own the PR description; do not leave it for someone else to write. Before
+you finish a session, make sure it follows `.github/pull_request_template.md`.
+You may be run several times on one PR (the first implementation, then review
+feedback or CI fixes), so what to do depends on the state of the description:
+
+- **Description is still the initial placeholder** — it starts with "Thanks for
+  asking me to work on this" and/or quotes the issue text. Replace it. Fill in
+  **PR Category** (one of the template's options; it must match the category
+  in the PR title), **Summary** (what changed and why, plus `Fixes #<issue>`),
+  **Notes for reviewers** (behaviour changes, trade-offs, anything
+  non-obvious), and **Verification** (see above). Do not keep the placeholder
+  or the quoted issue.
+- **Description already follows the template** (a later session, e.g. addressing
+  review feedback) — do not rewrite it. Change only what your work made out of
+  date:
+  - Summary or Notes, if the behaviour or approach changed.
+  - Verification, if you rebuilt or reran tests: refresh the entry for each
+    check you reran (same command, latest result) instead of stacking
+    duplicates, and keep every other entry that still applies to the current
+    revision (for example, a focused test rerun must not remove the build
+    result). If your changes could affect a check you did not rerun, rerun it,
+    or mark that entry as stale.
+  - Otherwise leave the description untouched.
+- Keep content a human added or edited. Leave the `### Code owners` checkbox as
+  it is, and leave the `### CI Status` section alone: it is regenerated
+  automatically on every push.
 
 ## Things you cannot verify here
 

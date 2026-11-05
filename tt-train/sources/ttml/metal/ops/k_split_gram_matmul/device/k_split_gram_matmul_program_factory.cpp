@@ -4,6 +4,7 @@
 
 #include "k_split_gram_matmul_program_factory.hpp"
 
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -24,7 +25,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     using namespace tt::tt_metal;
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*tensor_args.input_tensor.device());
     const auto& input = tensor_args.input_tensor;
     auto* const device = input.device();
 

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import copy
 
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -20,7 +20,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_torch,
     to_ttnn,
 )
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 # Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
@@ -702,6 +702,56 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([32, 768], 1),
+        ([4, 32, 4096], 1),
+        ([2, 3, 37, 71], 2),
+        ([8, 16384], 1),
+    ],
+)
+@pytest.mark.parametrize("offset", [50.0, 500.0])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layer_norm_mean_far_from_zero(input_shape_normalized_dims, offset, compute_kernel_options, device):
+    input_shape, normalized_dims = input_shape_normalized_dims
+    torch.manual_seed(0)
+    cpu_input = (torch.randn(input_shape) + offset).to(torch.bfloat16)
+    normalized_shape = input_shape[-normalized_dims:]
+    gamma = (torch.rand(normalized_shape) + 0.5).to(torch.bfloat16)
+    beta = (torch.rand(normalized_shape) - 0.5).to(torch.bfloat16)
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+    tt_output, tt_mean, tt_rstd = tt_layer_norm(
+        cpu_input,
+        normalized_dims=normalized_dims,
+        gamma=gamma,
+        beta=beta,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
+    )
+    expected, mean, rstd = torch_layer_norm(
+        cpu_input.double(), normalized_dims=normalized_dims, gamma=gamma.double(), beta=beta.double()
+    )
+    assert torch.allclose(tt_output.double(), expected, rtol=0.05, atol=0.05)
+    if normalized_dims > 1:
+        assert torch.allclose(tt_mean.double(), mean.reshape(tt_mean.shape), rtol=0.01, atol=0.05)
+        assert torch.allclose(tt_rstd.double(), rstd.reshape(tt_rstd.shape), rtol=0.05, atol=0.01)
+
+
+@pytest.mark.parametrize("offset", [50.0, 500.0])
+def test_moreh_group_norm_mean_far_from_zero(offset, device):
+    torch.manual_seed(0)
+    N, C, H, W, G = 2, 32, 64, 64, 8
+    cpu_input = (torch.randn(N, C, H, W) + offset).to(torch.bfloat16)
+    npu_input = to_ttnn(cpu_input, device=device)
+    npu_output = ttnn.operations.moreh.group_norm(
+        npu_input, G, 1e-5, None, None, are_required_outputs=(True, False, False)
+    )[0]
+    tt_output = to_torch(npu_output, shape=[N, C, H, W]).double()
+    expected = F.group_norm(cpu_input.double(), G, eps=1e-5)
+    assert torch.allclose(tt_output, expected, rtol=0.05, atol=0.05)
 
 
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])

@@ -58,7 +58,7 @@ void kernel_main() {
         uint32_t ublock_size_bytes;
         if constexpr (use_dfbs) {
             ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
-            read_and_push_to_cb<true, DataflowBuffer>(
+            read_and_push_to_cb<true>(
                 dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
         } else {
             ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
@@ -74,7 +74,7 @@ void kernel_main() {
     uint32_t ublock_size_bytes;
     if constexpr (use_dfbs) {
         ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
-        read_and_push_to_cb<true, DataflowBuffer>(
+        read_and_push_to_cb<true>(
             dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
     } else {
         ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;

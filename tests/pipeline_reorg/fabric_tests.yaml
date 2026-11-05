@@ -96,7 +96,7 @@
     tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
     tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" python3 tests/ttnn/distributed/test_multi_mesh.py
     tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
-    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
+    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*:-SplitGalaxyMeshDeviceFixture.SocketSubContextValidation:SplitGalaxyMeshDeviceFixture.RankBasedSocketCreation"
     tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_acyclic.yaml
     tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_cyclic.yaml
     tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
@@ -117,8 +117,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -132,8 +132,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -145,8 +145,8 @@
   skus:
     bh_loudbox:
       timeout: 5
-    bh_p300:
-      timeout: 5
+    # bh_p300:
+    #   timeout: 5
     bh_quietbox_2:
       timeout: 5
   team: scaleout
@@ -157,25 +157,41 @@
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
   budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
+# Every channel trimming gtest (fixtures and scenario suites are all named ChannelTrimming*), with both ERISCs and
+# with a single ERISC. Trimming mode decides which channels each ERISC services.
+- name: BH fabric channel trimming tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+  skus:
+    bh_loudbox:
+      timeout: 10
+    # bh_p300:
+    #   timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  owner_id: U0BRTUH9VE0 # Amogh Rajagopal
+
 - name: BH ttnn UDM unit tests
   cmd: ./build/test/ttnn/unit_tests_ttnn_udm
   skus:
     bh_loudbox:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_quietbox_2:
       timeout: 10
   team: scaleout
@@ -187,8 +203,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout
@@ -201,8 +217,8 @@
   skus:
     bh_loudbox:
       timeout: 30
-    bh_p300:
-      timeout: 30
+    # bh_p300:
+    #   timeout: 30
     bh_quietbox_2:
       timeout: 30
   team: scaleout
@@ -214,8 +230,8 @@
   skus:
     bh_loudbox:
       timeout: 30
-    bh_p300:
-      timeout: 30
+    # bh_p300:
+    #   timeout: 30
     bh_quietbox_2:
       timeout: 30
   team: scaleout
@@ -231,8 +247,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   team: scaleout

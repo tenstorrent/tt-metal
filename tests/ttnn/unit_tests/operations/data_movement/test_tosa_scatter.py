@@ -57,3 +57,61 @@ def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout,
         assert ttnn_output.shape == ttnn_input.shape
         assert ttnn_output.dtype == ttnn_input.dtype
         assert_allclose(ttnn.to_torch(ttnn_output), torch_output, rtol=1e-3)
+
+
+# tosa_scatter builds the device op directly instead of going through ttnn::scatter, so it needs
+# its own empty-operand guard: without one, a zero extent reached the program factory's
+# logical_volume() / input_shape[-1] work split and SIGFPE'd the host process. See issue #56881.
+@pytest.mark.parametrize(
+    "N, K, W, C",
+    [
+        (2, 4, 3, 0),  # zero C - every operand is empty
+        (2, 4, 0, 5),  # zero W - empty index and source, non-empty input
+        (0, 4, 3, 5),  # zero N - every operand is empty
+    ],
+)
+@pytest.mark.parametrize("input_layout", [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE])
+def test_tosa_scatter_zero_volume(N, K, W, C, input_layout, device):
+    torch.manual_seed(0)
+
+    torch_input = torch.randn([N, K, C], dtype=torch.bfloat16)
+    torch_index = torch.randint(0, max(K, 1), [N, W], dtype=torch.int64)
+    torch_source = torch.randn([N, W, C], dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=input_layout, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.uint32, layout=input_layout, device=device)
+    ttnn_source = ttnn.from_torch(torch_source, dtype=ttnn.bfloat16, layout=input_layout, device=device)
+
+    torch_output = torch.scatter(
+        torch_input, dim=1, index=torch_index.unsqueeze(-1).expand([N, W, C]), src=torch_source
+    )
+
+    ttnn_output = ttnn.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)
+
+    assert ttnn_output.shape == ttnn_input.shape, f"shape {ttnn_output.shape} != input {ttnn_input.shape}"
+    assert ttnn_output.dtype == ttnn_input.dtype, f"dtype {ttnn_output.dtype} != input {ttnn_input.dtype}"
+    result = ttnn.to_torch(ttnn_output)
+    if result.numel():
+        assert_allclose(result, torch_output, rtol=1e-3)
+
+
+# Same as test_scatter_zero_volume_rejects_invalid_operands: the empty path runs the device
+# operation's validation itself, and nothing else would catch its removal.
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, source_dtype, expected_message",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.float32, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "index_dtype"),
+    ],
+)
+def test_tosa_scatter_zero_volume_rejects_invalid_operands(
+    input_dtype, index_dtype, source_dtype, expected_message, device, expect_error
+):
+    def make(shape, dtype):
+        torch_dtype = select_torch_dtype(dtype)
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+
+    with expect_error(RuntimeError, expected_message):
+        ttnn.tosa_scatter(make([2, 0, 4], input_dtype), make([2, 0], index_dtype), make([2, 0, 4], source_dtype))

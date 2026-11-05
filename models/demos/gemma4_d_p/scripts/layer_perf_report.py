@@ -19,7 +19,7 @@ from pathlib import Path
 
 MANIFEST_DIR = "layer_perf"
 SUMMARY_NAME = "gemma4_d_p_layer_perf.md"
-SIGNPOST_PATTERN = re.compile(r"^gemma4-layer-(global|local)-chunk([0-9]+)-(start|stop)$")
+SIGNPOST_PATTERN = re.compile(r"^gemma4-layer-(global|local)-sz([0-9]+)-chunk([0-9]+)-(start|stop)$")
 GAP_COLUMNS = ("OP TO OP LATENCY [ns]", "OP TO OP LATENCY BR/NRISC START [ns]")
 # GitHub caps a job step summary at 1 MiB.
 SUMMARY_TEXT_LIMIT = 900_000
@@ -51,9 +51,26 @@ def write_manifest(run_id, cells, **meta):
     return path
 
 
-def find_ops_csv(profiler_dir):
-    found = sorted(Path(profiler_dir).glob("reports/**/ops_perf_results_*.csv"), key=lambda p: p.stat().st_mtime)
-    return found[-1] if found else None
+def find_ops_csvs(profiler_dir):
+    return sorted(
+        Path(profiler_dir).glob("reports/**/ops_perf_results_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+
+
+def signposts_in(ops_csv):
+    with open(ops_csv, newline="") as f:
+        return {r["OP CODE"] for r in csv.DictReader(f) if r.get("OP TYPE") == "signpost"}
+
+
+def match_ops_csvs(manifest_paths, manifests, ops_csvs):
+    # Each chunk size runs in its own Tracy session, which writes its ops CSV after the test writes the manifest.
+    signposts = {p: signposts_in(p) for p in ops_csvs}
+    matched = []
+    for path, m in zip(manifest_paths, manifests):
+        need = {s for c in m["cells"] for s in (c["start_signpost"], c["stop_signpost"])}
+        newer = (p for p in ops_csvs if p.stat().st_mtime >= path.stat().st_mtime)
+        matched.append(next((p for p in newer if need <= signposts[p]), None))
+    return matched
 
 
 def read_ops_csv(ops_csv):
@@ -105,7 +122,7 @@ def _validate_signpost(signpost, expected_edge):
     if not isinstance(signpost, str):
         raise ValueError(f"signpost must be a string: {signpost!r}")
     match = SIGNPOST_PATTERN.fullmatch(signpost)
-    if match is None or match.group(3) != expected_edge:
+    if match is None or match.group(4) != expected_edge:
         raise ValueError(f"invalid {expected_edge} signpost: {signpost!r}")
     return signpost
 
@@ -247,6 +264,33 @@ def render_markdown(manifests):
     return "\n".join(lines) + "\n"
 
 
+def _report_manifest(m, ops_csv, fieldnames, rows, out_dir, top):
+    failed = []
+    cell_dir = out_dir / _safe_name(m["run_id"])
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    for c in m["cells"]:
+        out_csv = cell_dir / f"{c['layer_type']}_chunk{c['chunk_idx']}.csv"
+        label = f"{m['run_id']} {c['layer_type']} chunk {c['chunk_idx']}"
+        cell_ops_csv = out_csv.with_name(f"{out_csv.stem}_ops.csv")
+        # tt-perf-report leaves the range open when a signpost is missing, so check before slicing.
+        if not write_cell_ops_csv(fieldnames, rows, c["start_signpost"], c["stop_signpost"], cell_ops_csv):
+            c["report"] = None
+            failed.append(label)
+            print(f"{label}: signposts {c['start_signpost']}..{c['stop_signpost']} are not in {ops_csv.name}")
+            continue
+        ok = run_tt_perf_report(cell_ops_csv, c["start_signpost"], c["stop_signpost"], out_csv)
+        c["report"] = summarize_cell_csv(out_csv, top) if ok else None
+        text_path = out_csv.with_suffix(".txt")
+        if ok and text_path.exists():
+            c["report_text"] = text_path.read_text()
+        if c["report"] is None or c["report"]["n_ops"] == 0:
+            failed.append(label)
+            print(f"{label}: no ops reported, see {out_csv.with_suffix('.log')}")
+        else:
+            print(f"{label}: {c['report']['kernel_us'] / 1000:.2f}ms device kernel")
+    return failed
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profiler-dir", default="generated/profiler", help="Tracy artifacts folder (-o)")
@@ -263,43 +307,27 @@ def main(argv=None):
     if not manifests:
         print(f"error: no manifest_*.json under {out_dir}; did the layer-perf test run?", file=sys.stderr)
         return 1
-    ops_csv = find_ops_csv(args.profiler_dir)
-    if ops_csv is None:
+    ops_csvs = find_ops_csvs(args.profiler_dir)
+    if not ops_csvs:
         print(f"error: no reports/**/ops_perf_results_*.csv under {args.profiler_dir}", file=sys.stderr)
         return 1
-    # Tracy writes the ops CSV after the test writes its manifest; an older CSV is from another run.
-    newest_manifest = max(manifest_paths, key=lambda p: p.stat().st_mtime)
-    if ops_csv.stat().st_mtime < newest_manifest.stat().st_mtime:
-        print(f"error: {ops_csv} is older than {newest_manifest.name}; it is from an earlier run", file=sys.stderr)
-        return 1
-    shutil.copy2(ops_csv, out_dir / ops_csv.name)
-    print(f"ops CSV: {ops_csv}")
-    fieldnames, rows = read_ops_csv(ops_csv)
+    matched = match_ops_csvs(manifest_paths, manifests, ops_csvs)
 
     failed = []
-    for m in manifests:
-        cell_dir = out_dir / _safe_name(m["run_id"])
-        cell_dir.mkdir(parents=True, exist_ok=True)
-        for c in m["cells"]:
-            out_csv = cell_dir / f"{c['layer_type']}_chunk{c['chunk_idx']}.csv"
-            label = f"{m['run_id']} {c['layer_type']} chunk {c['chunk_idx']}"
-            cell_ops_csv = out_csv.with_name(f"{out_csv.stem}_ops.csv")
-            # tt-perf-report leaves the range open when a signpost is missing, so check before slicing.
-            if not write_cell_ops_csv(fieldnames, rows, c["start_signpost"], c["stop_signpost"], cell_ops_csv):
+    for ops_csv in [p for p in ops_csvs if p in matched]:
+        shutil.copy2(ops_csv, out_dir / ops_csv.name)
+        print(f"ops CSV: {ops_csv}")
+        fieldnames, rows = read_ops_csv(ops_csv)
+        for m, m_csv in zip(manifests, matched):
+            if m_csv == ops_csv:
+                failed += _report_manifest(m, ops_csv, fieldnames, rows, out_dir, args.top)
+        del rows
+    for m, m_csv in zip(manifests, matched):
+        if m_csv is None:
+            print(f"{m['run_id']}: no ops CSV newer than its manifest holds its signposts")
+            for c in m["cells"]:
                 c["report"] = None
-                failed.append(label)
-                print(f"{label}: signposts {c['start_signpost']}..{c['stop_signpost']} are not in {ops_csv.name}")
-                continue
-            ok = run_tt_perf_report(cell_ops_csv, c["start_signpost"], c["stop_signpost"], out_csv)
-            c["report"] = summarize_cell_csv(out_csv, args.top) if ok else None
-            text_path = out_csv.with_suffix(".txt")
-            if ok and text_path.exists():
-                c["report_text"] = text_path.read_text()
-            if c["report"] is None or c["report"]["n_ops"] == 0:
-                failed.append(label)
-                print(f"{label}: no ops reported, see {out_csv.with_suffix('.log')}")
-            else:
-                print(f"{label}: {c['report']['kernel_us'] / 1000:.2f}ms device kernel")
+                failed.append(f"{m['run_id']} {c['layer_type']} chunk {c['chunk_idx']}")
 
     (out_dir / "summary.json").write_text(json.dumps(manifests, indent=2))
     summary_dir = root / "perf"

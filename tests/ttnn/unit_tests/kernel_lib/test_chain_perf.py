@@ -155,7 +155,7 @@ def test_func_lifecycle(device, mode, n):
 # Perf tests — profile each config across the n sweep and compare real DEVICE KERNEL ns.
 # =============================================================================
 def _device_kernel_ns(node, subdir):
-    from models.perf.device_perf_utils import run_device_perf_detailed
+    from tt_py_test_utils_common.perf.device_perf_utils import run_device_perf_detailed
 
     command = f'pytest "{PERF}::{node}" -v'
     results = run_device_perf_detailed(command=command, subdir=subdir, cols=["DEVICE KERNEL"], op_name=OP)

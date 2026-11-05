@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -20,6 +21,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -28,15 +30,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
-    const Operand& buffer_A            = params.buffer_A;
-    const Operand& buffer_B            = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
+    const Operand& buffer_A                       = params.buffer_A;
+    const Operand& buffer_B                       = params.buffer_B;
 #endif
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -78,12 +82,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
+        if constexpr (unpack_to_dest)
+        {
+            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+            // bank offset reset to 0 keeps every section at DEST tile 0.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
+        }
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -112,14 +126,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-
                     if constexpr (unpack_to_dest)
                     {
+                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                         }
+                    }
+                    else
+                    {
+                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
 
                     // After datacopy consumes SrcA and clears its dvalid, provide
@@ -164,7 +181,7 @@ inline void run_datacopy_transpose_loop(
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
                 // each operation must program its MOP immediately before execution.
-                _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -173,8 +190,7 @@ inline void run_datacopy_transpose_loop(
                 }
             }
 
-            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format
-            // settings and disables implied math format.
+            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
             _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -196,16 +212,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t tiles_in_block  = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks      = params.INPUT_NUM_BLOCKS;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const int DST_INDEX                 = params.DST_INDEX;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t num_faces                 = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const int DST_INDEX                           = params.DST_INDEX;
 #endif
-    const DataFormat math_format = static_cast<DataFormat>(formats.math);
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
+    const DataFormat math_format       = static_cast<DataFormat>(formats.math);
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (!unpack_to_dest)
@@ -224,11 +242,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -278,15 +296,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR           = params.LOOP_FACTOR;
-    const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
-    const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const int DST_INDEX                       = params.DST_INDEX;
-    const Operand& buffer_Res                 = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const int DST_INDEX                           = params.DST_INDEX;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
+    const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
+    const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -312,7 +332,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
