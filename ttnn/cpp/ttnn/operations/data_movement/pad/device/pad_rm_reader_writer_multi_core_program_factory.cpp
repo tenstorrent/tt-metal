@@ -194,7 +194,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
     // every dispatch that hits this cached Program.
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor_mc(tensor_args, operation_attributes.pad_value);
+    Tensor pad_value_const_tensor =
+        build_pad_value_const_tensor_mc(tensor_args, detail::pad_value_as_float(operation_attributes.pad_value));
     op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
     const auto& pad_value_mesh_tensor = op_owned.back();
 
@@ -251,11 +252,12 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
+        packed_pad_value = detail::pad_value_as_u32(pad_value);
     } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
+        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(detail::pad_value_as_float(pad_value))});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
+        packed_pad_value =
+            pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(detail::pad_value_as_float(pad_value))});
     }
 
     KernelSpec reader{

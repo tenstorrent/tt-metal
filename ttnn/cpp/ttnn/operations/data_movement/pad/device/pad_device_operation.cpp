@@ -237,7 +237,7 @@ PadDeviceOperation::tensor_return_value_t pad(
     const ttnn::Shape& output_logical_shape,
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
-    float pad_value,
+    ttnn::PadValue pad_value,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool use_multicore,
     const std::optional<ttnn::Tensor>& preallocated_output,

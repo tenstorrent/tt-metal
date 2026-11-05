@@ -9,6 +9,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <variant>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -186,7 +187,20 @@ bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& 
     return input.dtype() == DataType::BFLOAT8_B && attrs.packed_pad_value != 0;
 }
 
-uint32_t pack_pad_value(DataType dtype, float value) {
+uint32_t pack_pad_value(DataType dtype, const ttnn::PadValue& pad_value) {
+    if (std::holds_alternative<uint32_t>(pad_value)) {
+        const uint32_t value = std::get<uint32_t>(pad_value);
+        switch (dtype) {
+            case DataType::FLOAT32: return std::bit_cast<uint32_t>(static_cast<float>(static_cast<int32_t>(value)));
+            case DataType::INT32:
+            case DataType::UINT32: return value;
+            default:
+                return pack_two_bfloat16_into_uint32(
+                    {bfloat16(static_cast<float>(static_cast<int32_t>(value))),
+                     bfloat16(static_cast<float>(static_cast<int32_t>(value)))});
+        }
+    }
+    const float value = std::get<float>(pad_value);
     switch (dtype) {
         case DataType::FLOAT32: return std::bit_cast<uint32_t>(value);
         case DataType::INT32:
@@ -212,7 +226,7 @@ bool has_partial_tile(const Tensor& input) {
 ttnn::prim::PadCodegenParams make_codegen_params(
     const Tensor& input,
     std::span<const uint32_t> after,
-    float value,
+    const ttnn::PadValue& value,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     const auto& shape = input.logical_shape();
     TT_FATAL(
@@ -237,7 +251,7 @@ bool in_codegen_scope(const Tensor& input, const tt::tt_metal::MemoryConfig& out
 std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     const Tensor& input,
     std::span<const uint32_t> after,
-    float value,
+    const ttnn::PadValue& value,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     if (!in_codegen_scope(input, output_mem_config)) {
         return std::nullopt;

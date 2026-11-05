@@ -54,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
     log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
     log_debug(tt::LogOp, "input_tensor_start: {}", operation_attributes.input_tensor_start);
-    log_debug(tt::LogOp, "pad_value: {}", pad_value);
+    log_debug(tt::LogOp, "pad_value: {}", detail::pad_value_as_float(pad_value));
 
     const uint32_t num_input_tiles = 2;
     DataflowBufferSpec in0_dfb{
@@ -75,11 +75,14 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
+        packed_pad_value = detail::pad_value_as_u32(pad_value);
     } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+        packed_pad_value = pack_two_uint16_into_uint32(
+            {float_to_uint16(detail::pad_value_as_float(pad_value)),
+             float_to_uint16(detail::pad_value_as_float(pad_value))});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        packed_pad_value = pack_two_bfloat16_into_uint32(
+            {bfloat16(detail::pad_value_as_float(pad_value)), bfloat16(detail::pad_value_as_float(pad_value))});
     }
 
     uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;

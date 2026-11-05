@@ -11,6 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -60,9 +61,41 @@ void bind_pad(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
+                const ttsl::SmallVector<std::array<uint32_t, 2>>&,
+                int,
+                bool,
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+            nb::arg("input_tensor"),
+            nb::arg("padding"),
+            nb::arg("value"),
+            nb::kw_only(),
+            nb::arg("use_multicore") = true,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
                 const ttnn::Array4D&,
                 const ttnn::Array4D&,
                 float,
+                bool,
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+            nb::arg("input_tensor"),
+            nb::arg("output_padded_shape"),
+            nb::arg("input_tensor_start"),
+            nb::arg("value"),
+            nb::kw_only(),
+            nb::arg("use_multicore") = true,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Array4D&,
+                const ttnn::Array4D&,
+                int,
                 bool,
                 const std::optional<MemoryConfig>&,
                 const std::optional<CoreRangeSet>&>(&ttnn::pad),

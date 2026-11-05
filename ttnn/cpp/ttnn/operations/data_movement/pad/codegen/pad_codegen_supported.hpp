@@ -57,14 +57,14 @@ bool fits_live_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs
 bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
 
 // The 32-bit word the kernels replicate into pad regions.
-uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
+uint32_t pack_pad_value(tt::tt_metal::DataType dtype, const ttnn::PadValue& value);
 
 // Builds the attributes for padding a rank-4 tensor by `after` trailing elements per dim. The kernels pad only at
 // the end, so there is no leading padding to carry.
 ttnn::prim::PadCodegenParams make_codegen_params(
     const Tensor& input,
     std::span<const uint32_t> after,
-    float value,
+    const ttnn::PadValue& value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // Padding-independent part of the gate: structural support (device, arch, rank 4, layout, sharding, tile geometry,
@@ -77,7 +77,7 @@ bool in_codegen_scope(const Tensor& input, const tt::tt_metal::MemoryConfig& out
 std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     const Tensor& input,
     std::span<const uint32_t> after,
-    float value,
+    const ttnn::PadValue& value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // True when the TILE input has a partial border tile.
