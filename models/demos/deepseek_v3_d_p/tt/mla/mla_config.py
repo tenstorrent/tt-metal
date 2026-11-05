@@ -307,25 +307,21 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
-            # Kimi-K3 (96 heads). in0_block_w PINNED AT 1 FOR ACCURACY, not perf: this is the only
-            # tuned matmul on the KV-cache path, so its rounding compounds with KV depth instead of
-            # staying local to one chunk. Every faster divisor of K_t=56 fails the 0.98 chunked PCC at
-            # depth -- including in0_block_w=2, which has the BEST single-chunk PCC of any value. The
-            # per-op PCC ranking is INVERTED against depth behaviour here, so no op-level measurement
-            # can justify raising it. Ladder and guard: test_kimi_k3_mla_reference.py::
-            # test_k3_accuracy_pinned_blocking. ibw=1 also matches what the untuned default picks, so
-            # only out_mem_config is reclaimed here (placement cannot change numerics).
-            # K2.6 still runs ibw=14 and shows the same degraded cache PCC; it passes, but thinner
-            # than it needs. Giving it this entry would likely buy ~0.0005 at depth.
+            # Kimi-K3 / K3.1 (96 heads). fp32 dest + HiFi3 PINNED FOR ACCURACY: the only tuned matmul feeding the
+            # KV cache, so any bias in |y| compounds with depth. bf16 dest inflates |y| as in0_block_w grows; HiFi2
+            # shrinks it. fp32 + HiFi3 is at the bf16 rounding floor and bit-identical for any in0_block_w
+            # (14: 16 us vs 40 us for the old bf16 ibw=1 pin; K3 50k+5k PCC @ 51200: 0.99948 vs 0.98578).
+            # Guard: test_kimi_k3_mla_reference.py::test_k3_accuracy_pinned_blocking.
             {
-                # TP-independent tiling (N_t = 18 at any TP, in0_block_w=1 divides any K_t), so no tp_factor tag:
-                # the accuracy-pinned ibw=1 must keep applying at TP=2 too.
+                # TP-independent (N_t = 18, 14 divides K_t at TP 1/2/4): no tp_factor tag.
                 "num_heads": 96,
                 "q_lora_rank": 1536,
                 "chunked_only": True,
+                "fp32_dest_acc": True,
+                "math_fidelity": ttnn.MathFidelity.HiFi3,
                 "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=1,
+                    in0_block_w=14,
                     out_subblock_h=2,
                     out_subblock_w=2,
                     per_core_M=2,

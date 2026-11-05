@@ -489,6 +489,14 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # HiFi3 + fp32 dest for entries with math_fidelity=HiFi3: removes HiFi2's ~0.2% |y| shrink (K3 kv_a_proj).
+        self.hifi3_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         # The NoPE identity rope (x * 1 + rot(x) * 0) is exact only at HiFi4; pinned rather than inherited.
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -981,12 +989,19 @@ class ttMLA:
             "memory_config": cfg["out_mem_config"],
             "program_config": cfg["program_config"],
             "dtype": cfg["out_dtype"],
-            "compute_kernel_config": (
-                self.hifi2_fp32_compute_kernel_config
-                if cfg.get("fp32_dest_acc")
-                else self.default_compute_kernel_config
-            ),
+            "compute_kernel_config": self._tuned_compute_kernel_config(cfg),
         }
+
+    def _tuned_compute_kernel_config(self, cfg: dict):
+        """HiFi2 bf16 dest by default; ``fp32_dest_acc`` -> fp32 dest; ``math_fidelity`` HiFi3 (fp32 dest only)."""
+        fidelity = cfg.get("math_fidelity", ttnn.MathFidelity.HiFi2)
+        if not cfg.get("fp32_dest_acc"):
+            assert fidelity == ttnn.MathFidelity.HiFi2, "math_fidelity overrides are only wired up with fp32_dest_acc"
+            return self.default_compute_kernel_config
+        if fidelity == ttnn.MathFidelity.HiFi3:
+            return self.hifi3_fp32_compute_kernel_config
+        assert fidelity == ttnn.MathFidelity.HiFi2, f"no fp32-dest compute config for {fidelity}"
+        return self.hifi2_fp32_compute_kernel_config
 
     def _early_q_wkv_b1_kwargs(self, seq_len_local: int) -> dict:
         """wkv_b1 on the early-Q path: q is [1, all heads, rows / tp, qk_nope]. A tuned entry tagged with this model's

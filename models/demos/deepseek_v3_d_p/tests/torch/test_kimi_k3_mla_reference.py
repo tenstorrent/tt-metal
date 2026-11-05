@@ -282,51 +282,35 @@ def test_k3_nope_is_load_bearing():
 
 
 def test_k3_accuracy_pinned_blocking():
-    """in0_block_w values pinned for ACCURACY must not be "optimised" without re-running the depth test.
+    """kv_a_proj_with_mqa's fp32 dest + HiFi3 are pinned for ACCURACY; re-run the depth test before changing them.
 
-    This is a tripwire, not a preference. ``kv_a_proj_with_mqa`` is the only tuned matmul feeding the
-    KV cache, which every later chunk re-reads, so its rounding degrades accuracy cumulatively rather
-    than locally. K2.6's ``in0_block_w=14`` drove the chunked output PCC below 0.98 at kv_actual=3840
-    of a 56320-token prefill; ``in0_block_w=1`` passes all 44 chunks (0.98550 at kv_actual=55040). A
-    bisect pinned it to that one field -- the other six tuned matmuls and the k_chunk=640 SDPA entry
-    are all fine.
+    It is the only tuned matmul feeding the KV cache, so any bias in |y| compounds with depth, and single-chunk
+    PCC does not predict it (bf16-dest ibw=2 beats ibw=1 per chunk yet fails at depth). Per chip at TP=4, error
+    vs fp64 (rel / |y| bias) and K3 50k+5k output PCC at kv_actual=51200:
 
-    Raising it is exactly the kind of change that looks free and is not. The full sweep of K_t=56's
-    divisors, each depth-tested:
+        bf16 dest HiFi2 ibw=1    40 us  1.04e-2 / -0.08%   0.98578 (old pin)
+        bf16 dest HiFi2 ibw>=2          |y| inflates with ibw: fails 0.98 at depth
+        fp32 dest HiFi2          15 us  0.44e-2 / -0.22%
+        fp32 dest HiFi3 ibw=14   16 us  0.17e-2 / ~0       0.99948 (bf16 rounding floor)
 
-        ibw   us (isolated)   single-chunk PCC   depth: fails at kv_actual
-          1        44.7          0.9999216       never -- all 44, 0.98550 @ 55040
-          2        28.7          0.9999339           20480
-          4        21.6          0.9999294            7680
-          8        16.5          0.9999034            5120
-         14        17.9          0.9998523            3840
-
-    ibw=2 has the BEST single-chunk PCC of any value -- better than ibw=1, the one that works -- and
-    still fails at 20480. The per-op PCC ranking is INVERTED against depth behaviour here, so no
-    op-level measurement can justify raising this. Only a deep chunked run can:
-    test_mla_chunked_prefill[k3-production-50k+5k-cpu-8x4-fabric2d] is 11 x 5120 = 56320 tokens at
-    S_loc=640, every iteration asserted.
-
-    Resolved through ttMLA rather than by indexing MLA_MATMUL_CONFIG directly: the 640 slot holds
-    several candidates and only _select_cfg / _cfg_matches know which one K3 gets.
+    With an fp32 dest the result is bit-identical for any in0_block_w, so it is not pinned. Depth gate:
+    test_mla_chunked_prefill[k3-production-50k+5k-cpu-torus-xy-8x4] (11 x 5120 tokens, every chunk asserted).
+    Resolved through ttMLA._select_cfg because the 640 slot holds several models' candidates.
     """
+    import ttnn
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG
-
-    pinned = {"kv_a_proj_with_mqa": 1}
 
     mla = object.__new__(ttMLA)
     mla.num_heads = KimiK3Config.NUM_ATTENTION_HEADS
     mla.q_lora_rank = KimiK3Config.Q_LORA_RANK
     mla.is_chunked = True
     mla._is_dsa_family = False
+    mla.tp_factor = 4  # Galaxy split; the entry is untagged, so it must resolve at any TP
 
-    for name, expected_ibw in pinned.items():
-        cfg = mla._select_cfg(MLA_MATMUL_CONFIG[name][640])
-        assert cfg is not None, f"{name!r} lost its Kimi-K3 tuned config at seq_len_local=640"
-        actual = cfg["program_config"].in0_block_w
-        assert actual == expected_ibw, (
-            f"{name}: in0_block_w is {actual}, pinned at {expected_ibw} for ACCURACY (see the ladder "
-            "in this docstring and in mla_config.py). Raising it fails the 0.98 chunked-prefill PCC "
-            "at depth. Re-run the 56320-token depth case before changing this."
-        )
+    cfg = mla._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640])
+    assert cfg is not None, "'kv_a_proj_with_mqa' lost its Kimi-K3 tuned config at seq_len_local=640"
+    assert cfg.get("fp32_dest_acc") and cfg.get("math_fidelity") == ttnn.MathFidelity.HiFi3, (
+        "kv_a_proj_with_mqa must use an fp32 dest at HiFi3 for ACCURACY (see this docstring): a bf16 dest or HiFi2 "
+        "biases |y| and fails the 0.98 chunked-prefill PCC at depth. Re-run the 56320-token depth case first."
+    )
