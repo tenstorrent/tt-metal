@@ -115,12 +115,12 @@ Per production shape (derived, recorded so the implementer can check `plan()`):
 
 | Stage data | Axes | Assignment | Idle cores during it | Why not spread further |
 |------------|------|-----------|----------------------|------------------------|
-| W slices (24 tiles fp32) | hidden | G sender cores, one slice each, read once from DRAM, multicast to the grid | non-sender cores wait (compute untilizes x meanwhile: stall shadow) | the slice is the unit; G parallel senders already run |
+| W slices (24 tiles fp32) | hidden | G sender cores, one slice each, read once from DRAM, multicast to the grid | non-sender cores wait (compute untilizes x meanwhile: stall shadow) | the slice is the unit; G parallel senders already run. Perf R3.2: both RISCs of a sender core issue its DRAM reads (half the K tile pairs each, over their own NoCs; local semaphore `SEM_W_LOCAL`), W lands ~500 cycles earlier on 8x512 |
 | partial logits (`rps` tiles per member) | token x expert | every member computes its own; every member sums all G (redundant, bit-identical) | none | the sum is `rps` tiles of 1 tile column; redundancy replaces a broadcast hop |
-| scores / selection / counts | token x expert | every member of every group (redundant within a group) | none | selection is scalar RISC work on `rps*32` tokens; the leader-only alternative is regime `leader_select` (rejected) |
+| scores / selection / counts | token x expert | softmax + top-2 split over the G members by 16-token half (Perf R3.1: partials reduce-scattered, code faces streamed to the group); selection on every member (redundant within a group) | none | selection is scalar RISC work on `rps*32` tokens; the leader-only alternative is regime `leader_select` (rejected) |
 | count table (num_groups x 8 counts) | group x expert | coordinator **communication role only** (receives rows, multicasts table); the scan itself is done by EVERY core on its own copy | none; the coordinator does no exclusive computation | the scan is O(num_groups * 4) packed adds per core, cheaper than distributing results |
 | pad-row list | out_row | every token core enumerates only the pad rows whose token it holds (closed-form per pad run) | none | already spread over token owners |
-| landing barrier | - | coordinator communication role | all cores wait for the slowest pusher; nothing independent remains (all compute done) | perf lamp L3 (per-owner counted arrival): built as the `ARRIVAL_PER_BLOCK` knob (Refinement 5), parked off: its arrival atomics cost more than the barrier on Blackhole |
+| owner landing (Perf R3.2) | - | every owner counts its own landed push writes (posted-write slave counter, 32 per owned block) | an owner waits only for the pushers that write its blocks | the global barrier (atomics to a coordinator + go multicast, ~1.5-1.9k cycles after the last landing) and the parked `ARRIVAL_PER_BLOCK` per-block atomics are deleted |
 
 **Stall-shadow decisions** (scheme property; recorded here, realized by the schedule order):
 
@@ -131,7 +131,7 @@ Per production shape (derived, recorded so the implementer can check `plan()`):
 | intra-group partial exchange | reader | nothing independent remains on the reader; compute is idle for its duration (short: G-1 unicasts of `rps*2KB`) | - |
 | global count exchange | reader (all token cores) | member `G-1` builds and writes `combine_weights` (depends only on its own selection); local per-slot ranks are computed before the counts are sent | combine_weights needs no global quantity |
 | global count exchange | compute | nothing: all compute that does not need the table is done | - |
-| landing barrier | reader (leader) | `combine_index` write and `expert_counts` write (coordinator) are issued before blocking | need only the table |
+| owner landing | reader | `combine_index` / `combine_weights` writes issued right after the pushes, before the land wait | need only the table |
 
 No reorder changes floating-point order relative to the precision baseline: the logits sum is a fixed
 contributor order `(p_0 + p_1) + p_2`, identical on every member.
@@ -212,7 +212,7 @@ write_combine_weights_block();     // member G-1 (count-exchange shadow)
 assign_rows_block();               // every member: starts, prefix, slot rows, pad list
 write_combine_index_block();       // leader; coordinator writes expert_counts
 push_rows_block();                 // reader + writer: one NoC write per (row, slice, piece)
-land_barrier();                    // every pushing RISC -> coordinator; coordinator multicasts go
+owner_land();                     // wait until 32 * num_blocks posted push writes landed here (both NIUs)
 // every core (owner)
 tilize_gathered_block();           // compute: all owned shards, row-major -> tiles, into dispatched
 ```
@@ -227,12 +227,12 @@ tilize_gathered_block();           // compute: all owned shards, row-major -> ti
 | `logits_block` | `core_token_tiles` tiles, contributor-major input `G x core_token_tiles` | `cb_mask_keep` | one chain per core |
 | `softmax_block` | `core_token_tiles x 1` tiles (Ht = rows, Wt = 1) | scalers | one reduce(max), one chain, one reduce(sum)+recip, one chain per core |
 | `select_block` | `core_token_tiles * 32` tokens x 8 experts (scalar) | scores | one pass |
-| `exchange_counts` | `num_groups x 16 B` table | - | 1 unicast + 1 inc per leader; 1 linked multicast (table + signal) by the coordinator |
+| `exchange_counts` | `num_groups x 16 B` table | - | 1 posted unicast per leader (Perf R3.3: no barrier, no inc); 1 linked multicast (table + signal) by the coordinator |
 | `write_combine_weights_block` | `2 x core_token_tiles` fp32 tiles | - | one zero-fill + `2*core_token_tiles` tile writes per group |
 | `assign_rows_block` | 2 x tokens slot rows + pad list | table | one pass |
 | `write_combine_index_block` | 2 segments of `core_tokens*4 B` | - | 2 writes per group |
 | `push_rows_block` | the RISC's tokens: 2 slots + its pad rows per token, each split into slice-piece intersections | x row staging | one write per intersection, one barrier + one semaphore inc per RISC |
-| `land_barrier` | - | - | `2 * num_token_cores` incs, one signal multicast |
+| `owner_land` | - | - | none (each owner polls its NIU posted-write slave counters) |
 | `tilize_gathered_block` | `num_blocks_this_core` blocks of 1 x `w` tiles in ONE call | - | one tilize init/uninit per core |
 
 ### Perf lamps
@@ -241,7 +241,7 @@ tilize_gathered_block();           // compute: all owned shards, row-major -> ti
 |------|-----------------------------------|-------------------------------|
 | L1 untilize placement | Untilize first hides the W fetch but delays the scores (and so every core's counts) if untilize outlasts the W fetch | untilize after `softmax_block` (inside the count-exchange wait), or split: half before matmul, half after |
 | L2 push split over the two DM RISCs (`PUSH_TILE_ROWS_READER`) | The push is RISC-issue-bound (catalog `split_reader`); at `rps = 1` the default gives the reader nothing; with G=3,k=2 member 1 issues twice the writes of members 0/2 | `rows_reader = 0` (writer only), parity split of tokens, or member-aware split. **Built (Refinement 3)**: token-granular split (`PUSH_READER_SHARE`), and the member imbalance removed by the whole-piece push (`PUSH_WHOLE_PIECES`, host `_push_layout`): each output piece is pushed by the member holding most of it (ties split rows by parity), after it gathers the piece's other tiles from its peers' resident x shards into `cb_stage_tiles` and untilizes that range |
-| L3 landing barrier (grid synchronization) | One global barrier makes every owner wait for the slowest pusher before any tilize starts (overlap lamp) | per-owner counted arrival: each pusher RISC atomically adds the number of pieces it wrote into each owner (owner expects `32 * intersections` per shard), owners tilize each shard as it completes. **Refinement 5**: built as `ARRIVAL_PER_BLOCK` (semaphore per owned block counting 64 B row granules, one atomic per (tile row, piece) run after the RISC's write barrier; owners publish blocks as they complete and interleave their combine_weights writes). Correct, parked off: 15-20 non-posted atomics a RISC at ~160-200 cycles each (2.8-3.4k cycles after every push) outweigh the ~2.4k-cycle barrier hop + ~1.5k tilize overlap (8x512 ~parity, rps <= 2 rows +1-2 us). Full-grid multicast atomics (one per RISC) measured 160+ us. The tail the barrier hid was the leader's 1 MB of combine_weights DRAM writes; `WEIGHTS_SPREAD` (member c writes every G-th tile) took it off (8x512 -1.3 us) |
+| L3 landing barrier (grid synchronization) | One global barrier makes every owner wait for the slowest pusher before any tilize starts (overlap lamp) | per-owner counted arrival: each pusher RISC atomically adds the number of pieces it wrote into each owner (owner expects `32 * intersections` per shard), owners tilize each shard as it completes. **Refinement 5**: built as `ARRIVAL_PER_BLOCK` (semaphore per owned block counting 64 B row granules, one atomic per (tile row, piece) run after the RISC's write barrier; owners publish blocks as they complete and interleave their combine_weights writes). Correct, parked off: 15-20 non-posted atomics a RISC at ~160-200 cycles each (2.8-3.4k cycles after every push) outweigh the ~2.4k-cycle barrier hop + ~1.5k tilize overlap (8x512 ~parity, rps <= 2 rows +1-2 us). Full-grid multicast atomics (one per RISC) measured 160+ us. The tail the barrier hid was the leader's 1 MB of combine_weights DRAM writes; `WEIGHTS_SPREAD` (member c writes every G-th tile) took it off (8x512 -1.3 us). **Perf R3.2**: superseded by owner-side landing: pushes are posted writes and each owner counts them on `NIU_SLV_POSTED_WR_REQ_RECEIVED` of both NIUs (only the pushes are posted, every owned block gets one write per row), so no atomics and no go; `ARRIVAL_PER_BLOCK` deleted (8x512 -0.5..-1.0 us) |
 | L4 coordinator placement / count exchange shape | Last core (10,9) is a grid corner: longest unicast paths for leaders; two-hop gather + multicast | grid-center coordinator; all-gather by per-leader multicast of the 16 B row |
 | L5 W delivery | 4 KB tiles multicast (half is padding) from G senders; 96 KB L1 per core | faces 0 and 2 only (half the bytes, two reads per tile); one sender for all slices |
 | L6 combine_weights write bytes | full 4 KB tiles (1 MB at T=4096) match routing_metadata bit for bit in the padding columns | faces 0 and 2 only, if the consumers are confirmed to read column 0 only |
@@ -258,12 +258,12 @@ tilize_gathered_block();           // compute: all owned shards, row-major -> ti
 | W | fp32, faces 0 and 2 only (Perf 2: the expert columns; half the bytes) | one sender per NoC (Perf 2: every slice a NoC carries goes out as ONE multicast, e.g. slices 0 and 2 on NOC0 at G = 3; full-grid multicasts on one NoC serialize per command): TensorAccessor reads of faces 0/2 of its slices into their compact slots of `cb_router_weight` (`nomic_moe_route_dispatch_w_layout.hpp`; compute reads them through the 1 KB-page view `cb_w_faces`), then ONE multicast to the 11x10 rectangle, **write barrier, then** the slice-c signal multicast (`ttnn.Mcast` fixed sender; one channel per slice, semaphore `sem_weight[c]`) | barrier-before-signal is what makes the W region quiescent grid-wide once any core has used every slice (needed by the `cb_router_weight` / `cb_gathered_rows` alias) |
 | partial logits | fp32 tiles, faces 0 and 2 (expert columns 0..15) | compute packs member c's `rps` partial tiles straight into region `c` of its own `cb_partials` (Perf 2); the reader writes faces 0/2 to the higher-index members on NOC0 and the writer to the lower-index ones on NOC1 (no write wraps a row ring), each: write barrier, inc `sem_partials` on its peers | peers' addresses = the same CB address on every core |
 | scores | fp32 code tiles (faces 0, 2; Perf 2: top-2 decided on the SFPU) | published one tile at a time; reader and writer read their tokens' rows locally (the writer peeks, the reader pops) | token i's row at word `(i < 16 ? 0 : 512) + (i % 16)*16`: col 0 = code (e1 = ctz, e2 = ctz(code & (code - 1)) & 7), col 2 = w1, col 4 = w2 |
-| count table | 16 B row per group: 8 u16 counts | leader writes its row to the coordinator's `table` scratch at row `g`, barrier, inc `sem_counts`; coordinator waits `num_groups`, multicasts the table to the rectangle linked with `sem_table` set | coordinator = core 109 (last core) |
+| count table | 16 B row per group: 8 u16 counts | leader posts its row to the coordinator's `table` scratch at row `g` (Perf R3.3); the coordinator counts the rows on its `NIU_SLV_POSTED_WR_REQ_RECEIVED` (the only posted writes landing before the table; `land_base` advances by them), multicasts the table to the rectangle linked with `sem_table` set | coordinator = core 109 (last core) |
 | slot rows | uint32 | reader computes all; keeps its half, pushes the writer half + writer pad list into `cb_slot_rows` | |
-| rows | bf16 row pieces | for each pushed row r with token t, for each piece p overlapping slice c: one NoC write of `overlap_tiles*64 B` from `x_rows + t_local*ht*64 + (lo - c*ht)*64` to core `s % 110`, address `cb_gathered_rows + (s/110)*w*2048 + (r%32)*w*64 + (lo - p*w)*64`, with `s = (r/32)*k + p`, `[lo,hi) = [c*ht,(c+1)*ht) intersect [p*w,(p+1)*w)` | each RISC: write barrier, then inc `sem_landed` on the coordinator |
-| go | - | coordinator waits `sem_landed == 2*num_token_cores`, multicasts `sem_go` set | |
-| dispatched | bf16 tiles in the core's output shards | reader waits `sem_go`, pushes `num_blocks_this_core*w` pages of `cb_gathered_rows`; compute tilizes into `cb_dispatched` backed on the output buffer (zero-copy) | |
-| metadata | uint32 / fp32 | leader: `combine_index` page k, offset `first_token*4`, each RISC its segment AFTER its landing increment (Perf 2); `combine_weights` tiles `k*T_pad/32 + tile_row` (staging zeroed with `async_write_zeros`, column 0 written), the member's tiles alternated between the writer (NOC1, first) and the reader (NOC0) after their landing increments (Perf 2: 1 MB of NOC0-only writes slowed the readers still pushing); coordinator: `expert_counts` | page sizes as RT args (no recompile per T) |
+| rows | bf16 row pieces | for each pushed row r with token t, for each piece p overlapping slice c: one NoC write of `overlap_tiles*64 B` from `x_rows + t_local*ht*64 + (lo - c*ht)*64` to core `s % 110`, address `cb_gathered_rows + (s/110)*w*2048 + (r%32)*w*64 + (lo - p*w)*64`, with `s = (r/32)*k + p`, `[lo,hi) = [c*ht,(c+1)*ht) intersect [p*w,(p+1)*w)` | posted writes (Perf R3.2), capped on `NIU_MST_POSTED_WR_REQ_SENT`; no source barrier, the owner counts them |
+| owner land | - | the reader polls both NIUs' `NIU_SLV_POSTED_WR_REQ_RECEIVED` until `32 * num_blocks_this_core` above its kernel-start value (Perf R3.2; replaced the coordinator go) | |
+| dispatched | bf16 tiles in the core's output shards | reader waits for its owner landing count, pushes `num_blocks_this_core*w` pages of `cb_gathered_rows`; compute tilizes into `cb_dispatched` backed on the output buffer (zero-copy) | |
+| metadata | uint32 / fp32 | leader: `combine_index` page k, offset `first_token*4`, each RISC its segment right after its pushes; `combine_weights` tiles `k*T_pad/32 + tile_row` (staging zeroed with `async_write_zeros`, column 0 written), the member's tiles alternated between the writer (NOC1, first) and the reader (NOC0) after their pushes (Perf 2: 1 MB of NOC0-only writes slowed the readers still pushing); coordinator: `expert_counts` | page sizes as RT args (no recompile per T) |
 
 **Pad rows** (rows holding no slot, `R - 2T` of them; any x row is a valid copy). Built (Refinement 3): pad `p`
 (in run order) belongs to push unit `p mod 2*num_groups` (one DM RISC of one token group) and carries that RISC's
@@ -336,7 +336,7 @@ proofs of disjointness: `l1_ledger.md`.
 | 2 | `untilize_x_block` | 2 calls: `rows_reader` / `rps - rows_reader` tile rows x `ht` | `untilize<ht>` | `cb_x_tiles`, `rps*ht`, popped | `cb_x_rows_reader`, `cb_x_rows_writer` | x pages popped (ring closed) |
 | 3 | `receive_weight_slice` | `ht` tiles | `ttnn.Mcast` / `McastArgs` sender/receiver | DRAM W | `cb_router_weight`, 24 pages pushed after `sem_weight[c]` | - |
 | 4 | `partial_logits_block` | M=`core_token_tiles`, K=`ht`, N=1 | `matmul_block` | `cb_x_tiles` (round 2, popped), `cb_router_weight` (base `c*ht`, popped at end) | `cb_own_partial`, `rps` | - |
-| 5 | `exchange_partials_block` | `rps` tiles x G | raw NoC (unicast + semaphores) | `cb_own_partial`, popped after the barrier | `cb_partials`, `G*rps` pushed after `sem_partials == G-1` | - |
+| 5 | `exchange_partials_block` | `rps` tiles x G | raw NoC (unicast faces + a landed-tile count write a peer, no barrier) | `cb_own_partial` / `cb_own_partial_west`, one page a packed tile (matmul runs one tile at a time in `TileOrder`, Perf R3.3) | `cb_partials`, G pages a tile once its own page is in and every peer's `sem_partials<c>` counter reached it; the writer sends every tile to every peer | - |
 | 6 | `logits_block` | `rps` tiles | `eltwise_chain` | `cb_partials` (`G*rps`, popped), `cb_mask_keep` (no pop) | `cb_masked_logits`, `rps` | - |
 | 7 | `softmax_block` | `rps x 1` tiles | `reduce` (MAX, ROW), `eltwise_chain` (sub bcast col + Exp), `reduce` (SUM, ROW, recip post-op), `mul` (bcast col) | `cb_masked_logits`, `cb_row_max`, `cb_exps`, `cb_recip_sum`, scalers | `cb_scores`, `rps` | scalers kept |
 | 8 | `select_block` | tokens x 8 | raw RISC scalar | `cb_scores`, popped at end | `reader_scratch` | - |
@@ -345,8 +345,8 @@ proofs of disjointness: `l1_ledger.md`.
 | 11 | `assign_rows_block` | slots + pad runs | raw RISC scalar | table | `cb_slot_rows` (writer half), scratch (reader half) | - |
 | 12 | `write_combine_index_block` | 2 segments | raw NoC | scratch | DRAM `combine_index`, `expert_counts` | - |
 | 13 | `push_rows_block` | the RISC's rows | raw NoC (one-packet writes) | `cb_x_rows_*`, `cb_slot_rows` (writer), popped at end | remote `cb_gathered_rows` | - |
-| 14 | `land_barrier` | - | raw semaphores + `ttnn.Mcast` signal | - | - | - |
-| 15 | `tilize_gathered_block` | `num_blocks_this_core` x `1 x w` | `tilize<w>` | `cb_gathered_rows`, `num_blocks_this_core*w` pushed after `sem_go` | `cb_dispatched` | - |
+| 14 | `owner_land` | - | raw NIU slave-counter reads (no helper exposes them) | - | - | - |
+| 15 | `tilize_gathered_block` | `num_blocks_this_core` x `1 x w` | `tilize<w>` | `cb_gathered_rows`, `num_blocks_this_core*w` pushed after the owner landing count | `cb_dispatched` | - |
 
 ## API Mapping
 

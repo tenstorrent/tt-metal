@@ -39,7 +39,7 @@ MAX_EXPERTS_ACCEPTED = 32  # one tile column holds every expert (validate: E > 3
 MAX_ROWS_PER_SHARD = 4  # packed u16 count table and the fp32 DEST matmul subblock (rps x 1)
 GRID_X, GRID_Y = 11, 10
 NUM_CORES = GRID_X * GRID_Y
-COORDINATOR = NUM_CORES - 1  # receives the count rows, multicasts the table and the landing go
+COORDINATOR = NUM_CORES - 1  # receives the count rows, multicasts the table
 W_SENDER_TOP = NUM_CORES - 2  # sender of W slice c is core W_SENDER_TOP - c
 # NoCs the W slice multicasts alternate over: slice c goes out on the writer RISC (NOC1) when c % W_SLICE_NOCS == 1,
 # else on the reader (NOC0). Full-grid multicasts on one NoC serialize, so 2 runs two slices at once; 1 = all NOC0.
@@ -58,11 +58,6 @@ PUSH_CMD_BUFS = 1
 # holds most of it, which first gathers the piece's other tiles from its peers' x shards, so a row costs one write
 # per piece instead of one per (slice, piece) intersection. Off: every member pushes its slice's intersections.
 PUSH_WHOLE_PIECES = True
-# Landing (perf lamp L3): False = global barrier (every pushing RISC increments the coordinator, which multicasts the
-# go; every owner then tilizes all its blocks). True = per-owner counted arrival: each pushing RISC, once its writes
-# are acked, adds the 64 B row granules it landed in each owner block to that block's semaphore (one atomic per
-# (tile row, piece) run, not per write), and an owner tilizes each block as soon as it is complete.
-ARRIVAL_PER_BLOCK = False
 # combine_weights tiles: False = the group leader writes all of them; True = member c of the group writes every G-th
 # tile from tile c, spreading the DRAM writes over the group.
 WEIGHTS_SPREAD = True
@@ -160,6 +155,9 @@ def _push_layout(hidden_split: int, hidden_tiles: int, pieces: int, width: int) 
         owners.append([m for m, sl in enumerate(slices) if overlap(span, sl) == best])
     if not PUSH_WHOLE_PIECES or all(sum(overlap(span, sl) > 0 for sl in slices) == 1 for span in spans):
         # Intersections: each member pushes its own slice, one write per (slice, piece) intersection.
+        if any(sum(overlap(span, sl) > 0 for sl in slices) != 1 for span in spans):
+            # The owners count 32 landed writes per block (owner_land_count), so a piece must get one write a row.
+            raise UnsupportedAxisValue("nomic_moe_route_dispatch: a piece pushed in more than one write per row")
         member_push = []
         for lo_m, hi_m in slices:
             parts = []

@@ -191,3 +191,211 @@ No row regressed. Every production row (`test_perf_row`) is below its `stock_ns`
 
 - Not graduated, recorded as options: `codeA_perm` (-0.6k more, needs a host-side W column permutation), `codeA_cnt` (changes the slot-page contract).
 - Leads for a next round: (1) the push is now ~35% of the op (12.5k p50 / 14.6k max a RISC; ~7k of it software); (2) the reader/writer select split is token-contiguous, so the writer waits for code tiles 2-3 and the reader then idles 4.1k cycles in `rd_wait_writer_counts` (a per-tile interleaved split would end select ~1.5k earlier); (3) `member_units` on top of the graduated top-2 / tail for rps >= 2, if a single path that does not regress rps = 1 can be found.
+
+## Perf R3.1 - Fan-out perf tournament (continuation round 1 of 3)
+- Date: 2026-11-05
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off, model L1 occupancy). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD 60a745c9f3d)
+Whole op 29.5 / 29.7 us. Zone dumps: `perf_experiments/zones_8x512_r31_before.txt`, `zones_8x512_r31_ablate_push_writes.txt`, `zones_8x512_r31_arrival_per_block.txt`, `zones_8x512_r31_final.txt`. Critical path (cycles from kernel start): W lands 3.8k; partials ready 7.6k; fused softmax + top-2 runs on every G member, 7.6k -> 15.5k (~2k cycles a tile, 4 tiles); select ends 13.2k (reader) / 17.2k (writer), and the reader idles 4.1k in `rd_wait_writer_counts`; table 19.2k; assign ends 20.2k; push 20.3k -> 33.0k p50 / 35.1k max; go 37.6k; tilize ends 39.6k.
+Ablation: push NoC writes stubbed 24.1 / 23.9 us. The push loop is still 7.1-7.3k cycles of RISC software (~131 writes a RISC, ~55 cycles a write). Turning on `ARRIVAL_PER_BLOCK` gave 29.9 / 29.3 us (flat).
+Ranked: push (12.6-14.6k), softmax + top-2 (7.9k, redundant on G members), select tail + table + assign (17.2k -> 20.3k, plus the writer trailing by 4k), tail (push end -> tilize end 4.4k), W (3.8k). The DM gate used the 64 B/cycle link peak because `noc_estimate` is not built in this tree; it puts the push floor near 4.4k cycles.
+
+### Portfolio and verdicts (perf_experiments/r3_<idea>/; whole-op ns on integration copies)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r3_softmax_split`: the partials are reduce-scattered per 16-token half; each member runs softmax8 + top-2 on ~1/G of the halves, one face per pass, ranked in the order the two select RISCs consume them; each code face is streamed to the group with a landed-pass flag write (same NoC / cmd buf / VC, no barrier) | WIN, graduated | 29.0-29.4 -> 26.45 us; softmax end 15.5k -> 11.1k, push start 20.3k -> 16.9k | every G > 1 row -2..-9%; G = 1 has no group and keeps the per-tile path (flat). Bulk-exchange variant `rs` 27.8-28.3 us |
+| `r3_select_split`: `ilv` (select split per 16-token granule), `lean` (select stores no weights; weights filled from the code rows in the table wait), `early` (count row sent from packed totals), `fastscan` (branch-free table scan) | WIN, graduated as `lean + early + fastscan` (ported onto the split softmax in `r3_select_split_on_rs2`) | on the pre-split op 29518 -> 28211; on top of the split 27130 -> 25815 (medians of 3) | everywhere, bit-identical; 4x512 flat. `ilv` dropped: under the split softmax the RISCs already get alternating halves, nothing left. Nulls: `tbl1` flat, table scan split over both RISCs slower (30131), all-gather of count rows by 32 full-grid multicasts broken (103 us), `nobar` 27673 but relies on undocumented write/atomic ordering |
+| `r3_softmax_diet`: band instruction diet (one SFPU start/done per tile, constants in LREGs, fewer shuffles), same exact fp32 | WIN in isolation, NULL on top of the split: not graduated | isolated 184 -> 161 cycles a band, 29566 -> 28654 ns on the pre-split op; on top of the split (`r3_softmax_diet_on_rs2`, plus one-face copy / pack) softmax window 3763 -> 3238 cycles, whole op 26785 -> 27100 (median of 3, noise) | after the split the softmax is off the critical path (select pace sets it). Bit-identical, golden 144/144; ready in `r3_softmax_diet_on_rs2/op/` if the softmax comes back onto the path |
+| `r3_run_push`: stage source rows grouped by expert (local self-copies) and push each expert run with one write per (tile row, piece, chunk) | REGRESSION | best 32489 / 33718 ns | the grouping costs 4.4k cycles a RISC. Run writes make the slowest RISC worse under full-grid contention (16-19k vs 13.7-14.4k), even at 768 B chunks in expert order. Counted arrival does not rescue it. Measured slower on every regime (+2..+11%) |
+| `r3_push_lean`: per-expert destination cursors (no divide, no common-arg load per write), lighter register writes, work stealing between RISCs, bytes-in-flight sweep | NULL (8x512), REGRESSION 2x512 | cursor 29266 -> 29158; stealing 29.7-31.7 us; 2-16 KB in flight 30.5-36.5 us | 2x512 cursor +4.9%. Issue software drops ~15 cycles a write, but the slowest RISC is NoC/ack bound |
+
+### Graduated
+- `r3_softmax_split` (commit 3881681b310) is the op's only path for G > 1. It deleted the redundant per-member softmax over all tiles and the all-to-all partial-face exchange (replaced by the reduce-scatter). It adds `cb_code_stage` (ceil(2 rps / G) fp32 tiles, 12 KB at 8x512) and the 176 B `cb_code_flags`. G = 1 keeps the per-tile publish because it has no group to split over, not because of a carve-out.
+- `r3_select_split` `lean + early + fastscan` (commit e1c4a5cdadc) is the only path everywhere. `select_tokens` no longer loads or stores weights, and the select handshake lost its weights word. New zones: `rd_weights_fill` / `wr_weights_fill`.
+- Whole op 8x512: 29.5 / 29.7 us -> 25.0-26.1 us (four runs: 25.8, 25.0, 26.1, 25.0). Path at the end, in cycles: softmax ends 11.1k; select ends 12.4k (reader) / 12.7k (writer); table 14.3k; assign ends 15.2k; push 15.3k -> 28.0k p50 / 29.7k max; go 31.3k; tilize ends 33.2k. The push is now ~40% of the op.
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144 after each graduation. Unit + precision baseline: 21/21.
+
+### Guard set (all 28 perf rows, one profiled run each, pre-tournament 60a745c9f3d vs HEAD; device ns)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 29177 | 25758 | -11.7% |
+| test_perf_row[6x512_perf] | 24183 | 22316 | -7.7% |
+| test_perf_row[8x384_perf] | 23444 | 21080 | -10.1% |
+| test_perf_row[4x512_perf] | 20648 | 19313 | -6.5% |
+| test_perf_row[8x256_perf] | 20389 | 18980 | -6.9% |
+| test_perf_row[2x512_perf] | 14229 | 13279 | -6.7% |
+| test_perf_row[4x256_perf] | 13991 | 13127 | -6.2% |
+| test_perf_row_dram_out[8x512_perf] | 75646 | 71724 | -5.2% |
+| test_perf_row_dram_out[6x512_perf] | 58550 | 57004 | -2.6% |
+| test_perf_row_dram_out[8x384_perf] | 58036 | 55604 | -4.2% |
+| test_perf_row_dram_out[4x512_perf] | 43910 | 42064 | -4.2% |
+| test_perf_row_dram_out[8x256_perf] | 43638 | 42053 | -3.6% |
+| test_perf_row_dram_out[2x512_perf] | 26952 | 25799 | -4.3% |
+| test_perf_row_dram_out[4x256_perf] | 26810 | 25881 | -3.5% |
+| interleaved_in[8x512 dram_interleaved] | 49121 | 48228 | -1.8% |
+| interleaved_in[8x512 l1_interleaved] | 47278 | 44019 | -6.9% |
+| interleaved_in[6x512 dram_interleaved] | 36256 | 35857 | -1.1% |
+| interleaved_in[6x512 l1_interleaved] | 34722 | 34965 | +0.7% |
+| interleaved_in[8x384 dram_interleaved] | 36518 | 35638 | -2.4% |
+| interleaved_in[8x384 l1_interleaved] | 35714 | 31630 | -11.4% |
+| interleaved_in[4x512 dram_interleaved] | 29468 | 28841 | -2.1% |
+| interleaved_in[4x512 l1_interleaved] | 28139 | 26220 | -6.8% |
+| interleaved_in[8x256 dram_interleaved] | 27153 | 26511 | -2.4% |
+| interleaved_in[8x256 l1_interleaved] | 22794 | 23859 | +4.7% |
+| interleaved_in[2x512 dram_interleaved] | 22558 | 22135 | -1.9% |
+| interleaved_in[2x512 l1_interleaved] | 20087 | 19603 | -2.4% |
+| interleaved_in[4x256 dram_interleaved] | 20884 | 20183 | -3.4% |
+| interleaved_in[4x256 l1_interleaved] | 18492 | 17753 | -4.0% |
+
+I re-ran the two positive rows. 8x256 l1_interleaved, 3 runs each: HEAD 26509 / 27134 / 26191 vs base 28428 / 27268 / 28945, so HEAD is faster. 6x512 l1_interleaved, 9 samples each (the first 4 in separate sessions, then 5 alternating head / base): HEAD median 34093 (31291-35645) vs base median 34722 (31207-36938). Neither row regressed. Every production row is below its `stock_ns` (8x512: 25.8 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `_llk_math_eltwise_unary_sfpu_params_` (VectorMode) | capability | no VectorMode runs face 0 alone or face 2 alone, so a pass that owns one 16-token half would run the SFPU over both faces | 29.5-29.7 us (whole op, VectorMode::C on every member's 4 tiles; isolated per-face cost not separately measured) | 26.75-27.08 us (whole op with the split) | `kernels/nomic_moe_route_dispatch_softmax8.hpp:130` (`share_faces`) |
+| no helper covers this (multicast / collective family: streamed intra-group all-gather) | capability | the mcast helper is one-to-many and barriers each send; nothing sends a producer's pages to a peer set as they are pushed, with a per-sender landed counter that the consumer can poll per page | not available | 26.75-27.08 us (whole op) | `kernels/nomic_moe_route_dispatch_push.hpp:210` (`CodePump`), `:282` (`wait_code_half`) |
+
+- Not graduated, recorded as options: the softmax diet + one-face copy/pack (`r3_softmax_diet_on_rs2/op/`, bit-identical, -525 cycles of softmax window, whole op flat); `nobar` (-0.5 us, depends on write/atomic delivery order).
+- Leads for the next round: (1) the push, 12.6-14.2k cycles of a 33.3k-cycle kernel. Its slowest RISC is NoC/ack bound under full-grid contention, and fewer larger writes, faster issue and work stealing all measured flat or worse, so the lever now is less traffic per link or a better schedule of destinations, not issue cost. (2) The select, now the head of the chain once the first half lands (~37 cycles a token). (3) The tail: go 31.3k -> tilize end 33.2k.
+
+## Perf R3.2 - Fan-out perf tournament (continuation round 2 of 3)
+- Date: 2026-11-05
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off, model L1 occupancy). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD 2697cf6e4de)
+Whole op 25.3 / 25.4 / 25.8 us (subagent same-session median 25.57 us over 16 calls). New permanent zones `rd_land_wait` / `rd_go_send` on the coordinator. Zone dumps: `perf_experiments/zones_8x512_r32_before.txt`, `zones_8x512_r32_ablate_PUSH_WRITES.txt`, `zones_8x512_r32_ablate_PUSH.txt`, `zones_8x512_r32_final.txt`. Path in cycles: W lands 3.8k; matmul math ends 5.4k, pack 6.3k; partials ready 7.4k; softmax 7.4k -> 10.2k; select ends 12.3k (reader) / 12.6k (writer); table 13.7k; assign ends 15.1k; push 15.2k -> 28.0k p50 / 29.8k max; last landing atomic issued 30.3k, coordinator sees the count 31.2k, go lands 31.85k; tilize 32.0k -> 33.7k; kernel end 34.2k.
+Ablation (cumulative): push writes stubbed 20.5 / 20.3 us (push loop 7.1-7.3k cycles of software); whole push stubbed 15.0 / 15.0 us. With the push stubbed, the last landing atomic left at 15.5k but the coordinator saw the full count at 16.9k and go landed at 17.6k: ~1.5-1.9k cycles of barrier overhead independent of the push.
+Ranked: push 13-14.5k (NoC bound, see `r32_push_floor`), W + matmul + exchange 7.4k, softmax + select 5.2k, table + assign 2.6k, landing barrier + go 1.5-1.9k, tilize 1.75k (fast tilize already). `noc_estimate` is not built in this tree; the push gate is the measured replay floor below.
+
+### Portfolio and verdicts (perf_experiments/r32_<idea>/; whole-op ns on integration copies, same session as the op)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r32_owner_land`: posted pushes; each owner counts its landed push writes on both NIUs' `NIU_SLV_POSTED_WR_REQ_RECEIVED` (32 per owned block) and tilizes when its own rows are in; no landing atomics, no go | WIN, graduated | median 25566 -> 24546 (16 calls each, 4 sessions) | everywhere: 2x512 -5.8%, 4x512 -4.6%, 6x512 -6.4%, DRAM out -2.4..-2.5%, dram_interleaved -1.5%. Options: posted without the in-flight cap ~25.4k (pushers end 1-2k later); cap + old go 24.7-25.2k (posted writes alone cost nothing). Counter safety: race probe (`race_probe/`) 0 stale words in 160k samples on REQ_RECEIVED vs up to 100% stale on REQ_STARTED; a `--dev` exact-count assert held on 29 cases; 300 calls x 8 configs bit-exact |
+| `r32_w_early`: both RISCs of a W sender core issue its DRAM reads (half the K tile pairs each, own NoC), local semaphore handoff, one multicast as before | WIN, graduated | median 25490 -> ~24880; `cmp_wait_w` end 3.92k -> 3.32k | everywhere; flat at G = 1 (W off the path). Nulls in the same dir: K halves per NoC with early matmul (flat), 4 senders / two concurrent multicasts a NoC (up to 34 us, unsafe), chunked read -> multicast pipelining (26010, slower: shared sender NIU), deferring the stage gather (25324, collides with the exchange), byte balance across NoCs alone (flat) |
+| `r32_count_chain`: coordinator-side prefix table, flag-written count rows (no barrier / atomic), writer-sent row, coordinator on core 0, byte-packed rows | NULL / REGRESSION | copy 25305 -> flag 25741, flag + prefix 25722, coord 0 25358, writer-sent flat-to-slower, bytes slower | flag polling costs ~20 cycles a row on the coordinator; its serial prefix pass ends ~1k after the last row (every row toucher pays ~1k); 2x512 +3.5%, G = 1 +1.2% |
+| `r32_half_mm`: 32x16 in1 / output router matmul (`is_in1_32x16` LLK path, half the MVMULs, half the pack bytes), bit-identical | NULL | 25478 -> ~25170 (inside noise) | zones unmoved (math end 5.45k, pack end 6.3k in all variants): the stage is not FPU or pack bound (likely the bf16 srcB unpack, not confirmed). Would also drop firmware dynamic throttling and halve `cb_partials` (24 KB); not graduated |
+| `r32_push_floor`: replay of the push's real write list with a near-zero-software kernel, then a schedule search | NULL (gate) | replay floor 13.2-13.5k makespan vs ~15.0k for the op's push; issue stubbed 3.8-4.0k; perfectly balanced synthetic 12.2k | the push is ~90% of its NoC floor. Reorders flat (shuffle -6% in one replay). Only per-write NoC rebalancing within a core moves the replay (-16..-21%), but the run-time handoff in the op costs +35..70 cycles a write: whole op 25345 -> 30284 (+19.5%), 2x512 +23%, 6x512 -3.5% |
+| `r32_unit_select`: selection split over the 2G DM RISCs of a group with slot / count all-gather (v1..v4), lean count row, softmax diet | REGRESSION (split), NULL (diet) | v1 +0.9%, v2 +2.7%, v3 +1.2..+5.2%, v4 +14.7%, lean row +7.9%; diet alone 25430 -> 25152 pooled (-1.1%, noise) | every split adds more DM-RISC work (rank rebase, extra writes, polling) than it removes; diet 2x512 +2.8% (3 of 3 runs). Found the `wr_weights_fill` race below |
+
+### Graduated
+- `r32_owner_land` (commit 042e85559bb): the op's only landing path. Pushes are posted writes capped on `NIU_MST_POSTED_WR_REQ_SENT` (`RowPusher`); the reader snapshots both NIUs' posted-write slave counters at kernel start and publishes its blocks at `+32 * num_blocks` (`rd_wait_land`); each DM RISC ends with a posted-write flush. Deleted: the push write barriers, the landing atomics, the coordinator go multicast and its channel, `sem_arrived`, and the parked `ARRIVAL_PER_BLOCK` mode (`ArrivalCounter`, `signal_arrivals`, its per-block semaphores). The `ABLATE_PUSH*` hooks skip the land wait. No carve-outs (DRAM `dispatched` lands in L1 before its tilize the same way).
+- `r32_w_early` split reads (commit d20bf60e695): the only W delivery path; the split is half the channel's K tile pairs, computed in the kernel (no host knob). Adds `SEM_W_LOCAL` (one semaphore). Stays on `McastArgs` (no bypass). No carve-outs.
+- Correctness fix in the same commit as owner_land: the writer's combine_weights fill (`wr_weights_fill`, G > 1) read the code faces of the reader's halves without waiting for them (introduced in R3.1). HEAD failed 5/16 unit tests under `--dev`; the writer now waits on every half's flag first (`wr_wait_all_code`, ~100 cycles, off the path). Second hazard reported by `r32_unit_select` (`RowPusher::start` snapshotting the non-posted ack counter with writes in flight) is gone: the pusher now counts posted requests sent, and no other posted write precedes it.
+- Whole op 8x512: 25.3-25.8 us -> 23.6-24.5 us (last calls 23637, 24487, 24486, 23636, 23785). Path at the end, in cycles: W lands 3.37k; matmul pack ends 5.8k; select ends 11.8k / 12.1k; table 13.2k; assign ends 14.6k; push 14.7k -> 26.6k p50 / 29.4k max; land wait ends 27.8k p50 / 29.8k max; tilize ends 29.5k p50 / 31.6k max; kernel end ~32.1k.
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144 after each graduation, also under `--dev`. Unit + precision baseline 21/21; unit suite under `--dev` 16/16.
+
+### Guard set (all 28 perf rows, one profiled run each, pre-round 2697cf6e4de vs HEAD d20bf60e695; device ns)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 25056 | 23594 | -5.8% |
+| test_perf_row[6x512_perf] | 22121 | 20732 | -6.3% |
+| test_perf_row[8x384_perf] | 21291 | 20575 | -3.4% |
+| test_perf_row[4x512_perf] | 19586 | 17693 | -9.7% |
+| test_perf_row[8x256_perf] | 19021 | 17110 | -10.0% |
+| test_perf_row[2x512_perf] | 13262 | 12297 | -7.3% |
+| test_perf_row[4x256_perf] | 13400 | 12377 | -7.6% |
+| test_perf_row_dram_out[8x512_perf] | 71121 | 69549 | -2.2% |
+| test_perf_row_dram_out[6x512_perf] | 57369 | 53781 | -6.3% |
+| test_perf_row_dram_out[8x384_perf] | 56916 | 52064 | -8.5% |
+| test_perf_row_dram_out[4x512_perf] | 42179 | 39533 | -6.3% |
+| test_perf_row_dram_out[8x256_perf] | 43045 | 39438 | -8.4% |
+| test_perf_row_dram_out[2x512_perf] | 26179 | 24909 | -4.9% |
+| test_perf_row_dram_out[4x256_perf] | 26285 | 24833 | -5.5% |
+| interleaved_in[8x512 dram_interleaved] | 47658 | 46867 | -1.7% |
+| interleaved_in[8x512 l1_interleaved] | 48399 | 45775 | -5.4% |
+| interleaved_in[6x512 dram_interleaved] | 36156 | 35089 | -3.0% |
+| interleaved_in[6x512 l1_interleaved] | 33913 | 33903 | 0.0% |
+| interleaved_in[8x384 dram_interleaved] | 35372 | 34626 | -2.1% |
+| interleaved_in[8x384 l1_interleaved] | 35213 | 31593 | -10.3% |
+| interleaved_in[4x512 dram_interleaved] | 28777 | 28301 | -1.7% |
+| interleaved_in[4x512 l1_interleaved] | 27378 | 26366 | -3.7% |
+| interleaved_in[8x256 dram_interleaved] | 26682 | 25869 | -3.0% |
+| interleaved_in[8x256 l1_interleaved] | 24975 | 22425 | -10.2% |
+| interleaved_in[2x512 dram_interleaved] | 21422 | 21731 | +1.4% |
+| interleaved_in[2x512 l1_interleaved] | 19521 | 19597 | +0.4% |
+| interleaved_in[4x256 dram_interleaved] | 20427 | 19635 | -3.9% |
+| interleaved_in[4x256 l1_interleaved] | 17844 | 16706 | -6.4% |
+
+I re-ran the two positive rows, 3 alternating runs each. 2x512 dram_interleaved: base 22141 / 21490 / 22118, HEAD 21915 / 21796 / 22009 (median -0.9%). 2x512 l1_interleaved: base 19632 / 18810 / 19149, HEAD 19347 / 19210 / 19447 (median +1.0%, ranges overlap). Both flat, so neither earns a carve-out. Every production row is below its `stock_ns` (8x512: 23.6 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (NoC sync family: owner-side arrival detection; replaces the `ttnn.Mcast` / `McastArgs` go signal + `Semaphore::up` landing atomics) | capability | nothing in kernel_lib reads the NIU slave counters (`NIU_SLV_POSTED_WR_REQ_RECEIVED`), so a receiver cannot count landed writes without the senders signalling it; the only helper-expressible landing proof is sender-side (write barrier + atomic + a coordinator multicast), which costs ~1.5-1.9k cycles after the last landing on 8x512 | 25566 (whole op, median of 16) | 24546 (whole op, median of 16) | `kernels/nomic_moe_route_dispatch_push.hpp:39` (`owner_land_count`), `kernels/nomic_moe_route_dispatch_reader.cpp:511` (`rd_wait_land`) |
+
+- Recorded as options, not graduated: `r32_half_mm` 32x16 matmul (bit-identical, flat, saves 24 KB of `cb_partials` at 8x512, drops dynamic throttling for that matmul); the softmax diet (flat; 2x512 +2.8%).
+- Leads for the next round: (1) the push is ~90% of its replay floor; the only lever left there is moving writes to the NoC with fewer hops per write, and it pays only if the RISC assignment is free (e.g. decided by the select) since a per-write run-time decision costs more than it saves. (2) The tail is now the slowest pusher plus one owner's full tilize (~2.3k); the NIU counter is per core, so per-block publishing would need another signal. (3) W land -> partials ready (3.4k -> 7.4k) is not FPU or pack bound (`r32_half_mm`); the srcB unpack of the 32 bf16 x tiles and the partial exchange are the unmeasured candidates. (4) G = 1 count-row straggler: one core sends its row at 39.1k vs the median 25.5k on 8x512 dram_interleaved.
+
+## Perf R3.3 - Fan-out perf tournament (continuation round 3 of 3)
+- Date: 2026-11-05
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off, model L1 occupancy). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD c278c3d0de8)
+Whole op 24.1 us (warm call); 9-call medians 23.6 / 24.0 us. Zone dumps: `perf_experiments/zones_8x512_r33_before.txt`, `zones_8x512_r33_ablate_push_writes.txt`, `zones_8x512_r33_ablate_push.txt`, `zones_8x512_r33_final.txt`; scripts in `perf_experiments/r33_breakdown/` (`prof.sh` one profiled row + zones, `many.sh` 10-call medians, `guard.sh` all 28 rows).
+Path in cycles (p50): W lands 3.3k; matmul math ends 4.94k, pack 5.79k; partials ready 6.83k; softmax ends 10.5k; select ends 11.75k / 12.07k; count rows sent 12.62k; table lands 13.64k; assign 13.67k -> 14.50k (821 cycles); push 14.63k -> 26.4k p50 / 29.5k max; tilize ends 32.1k max.
+Ablation (cumulative): push writes stubbed 19.5 us; whole push stubbed 14.7 us. `SKIP_COMPUTE` does not stub this op's raw matmul / softmax, so the compute half was not ablated whole-op (the subagents ablated it locally, below).
+Per core: on 8x512 (G = 3, k = 2) the 32 member-1 cores push only pads (push ends ~17.0k); the slowest pushers are the reader RISCs of (2,3) and (2,6) (29.3-29.5k vs <= 28.6k elsewhere).
+Ranked: push 12-15k (~90% of its R3.2 replay floor, NoC bound), select end -> push start 2.56k (serial, not NoC bound), math end -> partials ready 1.9k (serial), softmax + select 5.2k (tried twice before), tail ~2.5-3k. `noc_estimate` is not built in this tree; the push gate is the R3.2 replay floor.
+
+### Portfolio and verdicts (perf_experiments/r33_<idea>/; whole-op ns against the production op in the same session)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r33_short_noc_push`: each pushing RISC issues each write on the NoC with fewer torus hops (cross-NoC writes on the other NIU's cmd buf 2, per-NIU in-flight accounting shared by both RISCs), re-floated because pushes are posted since R3.2 | REGRESSION | own-NoC control 24090 -> short 24653 / 24530 (`cap=0`); `cap=1` 25570; `short8` 24907 | mean hops 13.1 -> 8.6 and 49% of writes move NoC, but push p50 +0.4..0.7k cycles; the shared-NIU bookkeeping alone costs 0.7-1.1k. 2x512 +6.1%. Also incorrect under the shared cmd-buf contract on interleaved-input rows (the W-sender / coordinator reader uses all 4 cmd bufs) |
+| `r33_member_share`: give the idle member 1 of G = 3, k = 2 a token share of the push (deferred stage gather) | REGRESSION | control 24121 / 23758 -> token share 25217 / 24956, piece share 26015 / 26069 | issue ends 2-4k earlier but owners land 1.5-2k later: the push is NoC-delivery bound with 64 pushing cores. Only 8x512 has an idle member (2x512 / 4x256 are G = 2, k = 3). DRAM out flat |
+| `r33_table_assign`: `posted` count rows counted on the coordinator's NIU slave counter; `wself` writer computes its own bases from the landed table; `split` table scan over both RISCs; `filllate` combine_weights fill after the push. Nulls: `scan4` (16 loads in flight) flat, byte-lane rows slower | WIN, graduated as `posted + wself + split + filllate` | 6-call medians 23760 -> 22587; table lands 13.64k -> 13.35k, push start 14.63k -> 14.12k | everywhere: 6x512 -2.7%, 2x512 / DRAM out / G = 1 inputs flat (G = 1 assign 1.8k -> 1.2k cycles). Scan is L1 load-latency bound (~4.5 cycles a load). The ~480-cycle table multicast latency was not attacked |
+| `r33_partials_window`: matmul one partial tile at a time in the softmax's order; writer sends each tile to every peer with a landed-tile count write (no barrier, no atomic); reader publishes a tile when every peer's count reached it | WIN, graduated (`WRITER_SENDS + FLAG_WRITE + PUMP_ALL`) | median ~24.2k -> ~23.3k; partials ready 6.74k -> 6.32k, select end 12.08k -> 10.99k, push start 14.64k -> 13.63k | everywhere; rps = 1 and G = 1 rows flat (nothing to pipeline). Ablations: the 850-cycle "pack tail" is the FPU draining HiFi4 MVMULs (pack itself ~150 cycles); the exchange costs ~600 cycles on the path. Nulls: reader-sent per-tile with barrier + atomic (no gain), exchange pumped inside the select waits (slower) |
+
+### Graduated
+- `r33_partials_window` (commit 9f5ed0bf4f5) is the only exchange path: `TileOrder` (w_layout.hpp), per-tile `matmul_block` (rt_dim = 1, same K accumulation order, bit-identical), `send_tile_partials` from the writer to every peer, per-contributor landed-tile semaphores `sem_partials0..2` polled by the reader (`rd_wait_peers`). Deleted: `send_share_partials`, the reader's east-side send, both write barriers and the `Semaphore::up` per peer, and the dead `send_partial_faces`. `cb_own_partial` / `cb_own_partial_west` grow from 1 to `rps` 16 B pages. G = 1 has no peer to send to; the writer only drains its handshake pages (not a carve-out). 8x512: 9-call medians 23989 / 23576 (base) -> 22693 / 22981.
+- `r33_table_assign` posted + wself + split + filllate (commit fa474e615b1) is the only table path. Leaders post their count row (no barrier, no atomic) and the coordinator waits on `owner_land_count()` for them, advancing `land_base` so the push landing count stays exact; a leader flushes its posted writes after the table, before `RowPusher` snapshots. The reader publishes the slot page before the table wait; a selecting writer scans the upper half of the rows (`scan_rows_packed` / `combine_scans`). Deleted: `SEM_COUNTS`, the per-row semaphore, the reader-computed writer bases (`kHeaderWriterBase`), the old full-table lambda. A reader whose writer holds no tokens scans the whole table itself (no partner RISC; not a carve-out). 8x512: 9-call medians 22.7-23.0 -> 21563 / 21569.
+- Whole op 8x512: 23.6-24.0 us -> 21.6 us (9-call medians). Path at the end (single profiled call, `zones_8x512_r33_final.txt`): pack ends 5.3k; select ends 10.5k / 10.8k; table lands 12.2k; assign ends 12.9k; push 12.9k -> 24.7k p50 / 28.3k max; tilize ends 31.0k max. The slowest pushers still set the end.
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144 after each graduation, also under `--dev`. Unit + precision baseline 21/21 (also under `--dev` after the second graduation).
+- Instrumentation: `rd_wait_peers` now covers the per-tile peer waits, `wr_wait_own_partial` / `wr_xchg_send` run per tile, `cmp_wait_partials` covers the first tile only (later tiles are waited inside `cmp_softmax`), new `rd_table_rows` (coordinator row wait), `wr_wait_table`, `wr_assign`; `rd_weights_fill` / `wr_weights_fill` moved after the push.
+
+### Guard set (all 28 perf rows, one profiled run each, pre-round c278c3d0de8 vs HEAD fa474e615b1; device ns, last call)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 23623 | 21788 | -7.8% |
+| test_perf_row[6x512_perf] | 20837 | 19681 | -5.5% |
+| test_perf_row[8x384_perf] | 20683 | 19787 | -4.3% |
+| test_perf_row[4x512_perf] | 17207 | 15420 | -10.4% |
+| test_perf_row[8x256_perf] | 16733 | 15739 | -5.9% |
+| test_perf_row[2x512_perf] | 12237 | 11748 | -4.0% |
+| test_perf_row[4x256_perf] | 12513 | 11796 | -5.7% |
+| test_perf_row_dram_out[8x512_perf] | 69292 | 68232 | -1.5% |
+| test_perf_row_dram_out[6x512_perf] | 53771 | 52563 | -2.2% |
+| test_perf_row_dram_out[8x384_perf] | 52446 | 51554 | -1.7% |
+| test_perf_row_dram_out[4x512_perf] | 39233 | 38616 | -1.6% |
+| test_perf_row_dram_out[8x256_perf] | 39673 | 38889 | -2.0% |
+| test_perf_row_dram_out[2x512_perf] | 24921 | 24018 | -3.6% |
+| test_perf_row_dram_out[4x256_perf] | 24841 | 23970 | -3.5% |
+| interleaved_in[8x512 dram_interleaved] | 46865 | 46203 | -1.4% |
+| interleaved_in[8x512 l1_interleaved] | 43934 | 44743 | +1.8% |
+| interleaved_in[6x512 dram_interleaved] | 35359 | 33895 | -4.1% |
+| interleaved_in[6x512 l1_interleaved] | 28644 | 32210 | +12.4% |
+| interleaved_in[8x384 dram_interleaved] | 34870 | 33860 | -2.9% |
+| interleaved_in[8x384 l1_interleaved] | 33913 | 33264 | -1.9% |
+| interleaved_in[4x512 dram_interleaved] | 27572 | 27464 | -0.4% |
+| interleaved_in[4x512 l1_interleaved] | 25617 | 26111 | +1.9% |
+| interleaved_in[8x256 dram_interleaved] | 25816 | 25177 | -2.5% |
+| interleaved_in[8x256 l1_interleaved] | 20527 | 22461 | +9.4% |
+| interleaved_in[2x512 dram_interleaved] | 22067 | 21936 | -0.6% |
+| interleaved_in[2x512 l1_interleaved] | 19326 | 19187 | -0.7% |
+| interleaved_in[4x256 dram_interleaved] | 19816 | 19483 | -1.7% |
+| interleaved_in[4x256 l1_interleaved] | 16880 | 16556 | -1.9% |
+
+The four l1_interleaved rows that read positive were re-measured with 9-call medians in alternating base / HEAD sessions (this placement's W delivery swings by several us call to call): 6x512 base 33769 / 34189 vs HEAD 32593 / 33122; 8x256 base 23070 / 23849 vs HEAD 22962 / 23308; 4x512 base 25681 vs HEAD 25531; 8x512 base 43030 / 44260 / 44221 vs HEAD 43943 / 44025 / 43930. All flat or faster, so no carve-out was earned. Every production row stays below its `stock_ns` (8x512: 21.6 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `Semaphore::up` / `Semaphore::wait` (count-row arrival on the coordinator) | capability | no kernel_lib helper counts posted writes landed on a receiver; the semaphore path needs a write barrier plus a non-posted atomic per row on every leader, and a separate semaphore | 23760 (whole op, 6-call median, unchanged copy 24016) | 22587 (whole op with posted + wself + split + filllate; `posted` alone 23402) | `kernels/nomic_moe_route_dispatch_reader.cpp:210` (`rd_table_rows`), count-row send in `rd_count_send` |
+| no helper covers this (multicast / collective family: streamed intra-group reduce-scatter with a per-sender landed counter) | capability | `ttnn.Mcast` / `McastArgs` is one-to-many and barriers each send; nothing sends a producer's tiles to a peer set as compute packs them, with an in-order count write per peer that the consumer polls per tile | not available (previous raw path with barrier + `Semaphore::up`: ~24.2k median) | ~23.3k median (`r33_partials_window`) | `kernels/nomic_moe_route_dispatch_push.hpp:261` (`send_tile_partials`), reader `rd_wait_peers` |
+
+- The per-tile router matmul still calls `ckernel::matmul_block` directly for the same reason as before (compact W tile indexing, output packed into a CB this thread does not produce); not a new bypass.
+- Not graduated, recorded as options: none with a precision trade (all variants were bit-exact at the fixed HiFi4 / fp32 DEST contract).
+- Observation from `r33_partials_window`: one `--dev` session of the pre-round production op hung once on 1x1000 with the subagent's harness seed (compute waiting for partials, both DM RISCs waiting for the own-partial signal; `perf_experiments/r33_partials_window/log_dev4.txt.gz`); two re-runs passed. That exchange code is now deleted, and the new path passed golden 144/144 twice (once under `--dev`), but the cause was not found.
+- Leads: (1) the push is still ~12-15k cycles and NoC-delivery bound; shortest-NoC routing and more pushing cores both measured slower, so what is left is fewer bytes on the links (none found) or a destination schedule that the R3.2 reorders did not cover. (2) The slowest pushers (readers at (2,3), (2,6)) end 1-2k after the rest; nobody has explained why those two. (3) The ~480-cycle table multicast latency and the ~1.6k softmax -> select chain remain on the pre-push path.
+
+All ideas measured: 2 graduated, 2 regressions (not graduated); 8x512 23.6-24.0 -> 21.6 us; no measured regression on the 28-row guard set.

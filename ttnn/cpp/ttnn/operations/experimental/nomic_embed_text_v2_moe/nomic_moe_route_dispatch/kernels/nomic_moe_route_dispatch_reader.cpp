@@ -7,16 +7,20 @@
 //   [W sender of an even slice: DRAM read + multicast, first] -> publish_x_block (round 1, matmul) -> zero the
 //   combine_weights tiles -> receive_weight_slice (even members; the writer receives odd ones) -> publish x (round 2,
 //   untilize; not with whole-piece push) -> exchange_partials_block -> select_block (reader's tokens; the writer
-//   selects the rest) -> leader: count row to the coordinator -> count table -> assign_rows_block -> push_rows_block
-//   (the reader's tokens; rows assigned while pushing) -> [ARRIVAL_PER_BLOCK: arrival increments on the owners] ->
-//   [global: landing increment] -> leader: write_combine_index_block -> write_combine_weights_block (the member's
-//   tiles, every other one when the writer holds tokens)
-// Every core: [coordinator: table multicast, expert_counts] -> global: [coordinator: landing barrier + go multicast]
-//   -> wait go -> publish the owned blocks of cb_gathered_rows to compute. ARRIVAL_PER_BLOCK: publish each owned
-//   block once its arrival count is complete, issuing the member's combine_weights tiles in between.
+//   selects the rest) -> leader: count row to the coordinator (posted) -> publish the slot page to the writer ->
+//   count table -> assign_rows_block (table scan split with a selecting writer) -> push_rows_block
+//   (the reader's tokens; rows assigned while pushing; posted writes) -> its combine_weights tiles' weights ->
+//   leader: write_combine_index_block ->
+//   write_combine_weights_block (the member's tiles, every other one when the writer holds tokens)
+// Every core: [coordinator: table multicast, expert_counts] -> owner_land: wait until the push writes of this core's
+//   owned blocks have landed here (posted-write slave counter, no global barrier) -> publish the owned blocks of
+//   cb_gathered_rows to compute.
 //
-// Raw NoC for the intra-group partial exchange, the count gather and the row pushes: the Mcast helper is
-// one-to-many (op_design.md, Helpers considered and rejected). select_block / assign_rows_block are scalar RISC code.
+// Raw NoC for the intra-group partial exchange, the count gather (posted rows counted on the coordinator's
+// NIU_SLV_POSTED_WR_REQ_RECEIVED: no kernel_lib helper counts landed posted writes; replacing write barrier +
+// Semaphore::up per row measured 8x512 24.0 -> 23.4 us, Perf R3.3 r33_table_assign) and the row pushes: the Mcast
+// helper is one-to-many (op_design.md, Helpers considered and rejected). select_block / assign_rows_block are scalar
+// RISC code.
 
 #include <cstdint>
 #include <string_view>
@@ -34,12 +38,6 @@
 
 using namespace dataflow_kernel_lib;
 using namespace route_dispatch;
-
-#ifdef ARRIVAL_PER_BLOCK  // host define (ARRIVAL_PER_BLOCK knob): per-owner counted arrival, no global barrier
-constexpr bool arrival_per_block = true;
-#else
-constexpr bool arrival_per_block = false;
-#endif
 
 namespace {
 
@@ -148,11 +146,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base);
     volatile tt_l1_ptr uint32_t* drain_word =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base + drain_offset);
-    Semaphore<> sem_partials(get_named_compile_time_arg_val("sem_partials"));
-    Semaphore<> sem_counts(get_named_compile_time_arg_val("sem_counts"));
-    constexpr uint32_t sem_arrived = get_named_compile_time_arg_val("sem_arrived");
-    constexpr uint32_t arrival_signals = get_named_compile_time_arg_val("arrival_signals");
     const uint32_t coordinator_coord = get_common_arg_val<uint32_t>(kCoordsArg + coordinator);
+    // Posted-write slave counts before any push lands here: pushes start only after the count table, thousands of
+    // cycles after every core's launch.
+    uint32_t land_base = owner_land_count();
 
     const bool is_coordinator = core_idx == coordinator;
     const bool is_weight_sender = core_idx <= w_sender_top && core_idx + G > w_sender_top;
@@ -161,7 +158,17 @@ void kernel_main() {
     // ---- W slice (reader-sent slices): issued before anything else ----
     if (is_weight_sender) {
         MaybeDeviceZoneScope("rd_w_send");
-        deliver_weight_slice<G, ht, w_slice_nocs, kReaderRisc>(noc, weight, weight_base, sender_slice);
+        deliver_weight_slice<G, ht, w_slice_nocs, kReaderRisc>(
+            noc, weight, weight_base, sender_slice, get_named_compile_time_arg_val("sem_w_local"));
+    }
+
+    // Zero the landed-pass counters before round 1 lets compute start: peers send code flags once our partials
+    // reached them, which the writer can do while this RISC is still sending W.
+    const uint32_t code_flags_base = CircularBuffer(get_named_compile_time_arg_val("cb_code_flags")).get_write_ptr();
+    if constexpr (G > 1) {
+        if (is_token) {
+            init_code_flags(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(code_flags_base), 2 * rps);
+        }
     }
 
     // ---- publish_x_block, round 1 (matmul) ----
@@ -204,42 +211,28 @@ void kernel_main() {
             get_named_compile_time_arg_val("table_rt_offset")>();
         if (is_coordinator) {
             MaybeDeviceZoneScope("rd_table_send");
-            sem_counts.wait(num_groups);
+            {
+                MaybeDeviceZoneScope("rd_table_rows");
+                // The count rows are the only posted writes landing here before the table goes out (pushes start
+                // after it); a leader coordinator's own row is already in place.
+                const uint32_t rows_in = num_groups - (token_core && member == 0 ? 1 : 0);
+                while (owner_land_count() - land_base < rows_in) {
+                }
+                invalidate_l1_cache();
+                land_base += rows_in;
+            }
             table_channel.sender(noc).send(scratch_base, scratch_base, num_groups * table_row_bytes);
         } else if (token_core) {
             MaybeDeviceZoneScope("rd_wait_table");
             table_channel.receiver(noc).receive();
         }
     };
-    // Totals and the slots of the groups before `group`. A packed sum is at most 2T < 65536 a half: no carry.
-    const auto scan_table = [&](uint32_t group_of, uint32_t(&totals)[kNumExperts], uint32_t(&before)[kNumExperts]) {
-        uint32_t packed_total[4] = {};
-        uint32_t packed_before[4] = {};
-        for (uint32_t g = 0; g < num_groups; ++g) {
-            const volatile tt_l1_ptr uint32_t* row = table + g * packed_row_words;
-            uint32_t words[4];
-#pragma GCC unroll 4
-            for (uint32_t word = 0; word < packed_row_words; ++word) {
-                words[word] = row[word];
-            }
-#pragma GCC unroll 4
-            for (uint32_t word = 0; word < packed_row_words; ++word) {
-                packed_total[word] += words[word];
-                if (g < group_of) {
-                    packed_before[word] += words[word];
-                }
-            }
-        }
-        for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
-            const uint32_t shift = (expert % 2) * 16;
-            totals[expert] = (packed_total[expert / 2] >> shift) & 0xFFFF;
-            before[expert] = (packed_before[expert / 2] >> shift) & 0xFFFF;
-        }
-    };
+    static_assert(packed_row_words == 4, "a count-table row is 8 u16 counts");
 
     if (is_token) {
-        // ---- combine_weights tiles (members that write them), in the W-fetch shadow: zero now, column 0 is written
-        // by select_block ----
+        const HalfSplit split = half_split(reader_tokens, core_tokens);
+        // ---- combine_weights tiles (members that write them), in the W-fetch shadow: zero now, column 0 is filled
+        // in the count-table wait ----
         if (writes_weights) {
             MaybeDeviceZoneScope("rd_consts");
             noc.async_write_zeros(weight_tiles_cb, top_k * rps * kFp32TileBytes, {.offset_bytes = 0});
@@ -254,37 +247,47 @@ void kernel_main() {
                 noc, router_weight, weight_tiles, member, is_weight_sender && sender_slice == member % w_slice_nocs);
         }
 
-        // ---- exchange_partials_block: faces 0 and 2 (expert columns 0..15) of this member's region of cb_partials
-        // (compute packed it there) to the same region on the HIGHER members, on NOC0 (east / south: short hops). The
-        // writer sends to the lower members on NOC1: a westward NOC0 write wraps the whole row ring, and with every
-        // group's members finishing together those wraps congest each other. ----
+        // ---- exchange_partials_block, receive side: the writer sends each own partial tile to every peer as compute
+        // packs it, followed by a landed-tile count on this member's counter there. A tile goes to compute (G pages of
+        // cb_partials) once it is packed here and every peer's count has reached it. ----
         {
             MaybeDeviceZoneScope("rd_wait_own_partial");
             own_partial.wait_front(1);
         }
-        // ---- publish_x_block, round 2 (untilize, after the softmax): the matmul popped round 1 ----
+        // ---- publish_x_block, round 2 (untilize, after the softmax): reserve_back waits for the whole matmul ----
         if constexpr (!push_gather) {
             x_tiles.reserve_back(shard_tiles);
             x_tiles.push_back(shard_tiles);
         }
         const uint32_t first_member_core = group * G;
         {
-            MaybeDeviceZoneScope("rd_xchg_send");
-            send_partial_faces<rps>(
-                noc, partials_base + member * rps * kFp32TileBytes, kCoordsArg + first_member_core, member + 1, G);
-            noc.async_write_barrier();
-            for (uint32_t peer = member + 1; peer < G; ++peer) {
-                const uint32_t coord = get_common_arg_val<uint32_t>(kCoordsArg + first_member_core + peer);
-                sem_partials.up(noc, coord_x(coord), coord_y(coord), 1);
-            }
-        }
-        own_partial.pop_front(1);
-        {
             MaybeDeviceZoneScope("rd_wait_peers");
-            sem_partials.wait(G - 1);
+            partials.reserve_back(G * rps);
+            for (uint32_t tile = 1; tile <= rps; ++tile) {
+                own_partial.wait_front(tile);
+                for (uint32_t contributor = 0; contributor < G; ++contributor) {
+                    if (contributor != member) {
+                        Semaphore<>(kSemPartials[contributor]).wait_min(tile);
+                    }
+                }
+                partials.push_back(G);
+            }
+            own_partial.pop_front(rps);
         }
-        partials.reserve_back(G * rps);
-        partials.push_back(G * rps);
+
+        // ---- code all-gather: this member's code passes go to the higher members and this core (the writer sends to
+        // the lower ones), from inside the select's per-half waits ----
+        CodePump<G> code_pump(
+            get_named_compile_time_arg_val("cb_code_stage"),
+            scores.get_read_ptr(),
+            code_flags_base,
+            member,
+            kCoordsArg + first_member_core,
+            member,
+            G,
+            split);
+        const volatile tt_l1_ptr uint32_t* code_flags =
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(code_flags_base);
 
         // ---- select_block: the reader's tokens here, the writer's on the writer RISC ----
         slot_rows.reserve_back(1);
@@ -294,15 +297,12 @@ void kernel_main() {
             slot_page[t] = 0;
             slot_page[tokens_per_shard + t] = 0;
         }
-        volatile tt_l1_ptr uint32_t* weight_words =
-            writes_weights ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weight_base_tiles) : nullptr;
         const uint32_t reader_hi = core_tokens < reader_tokens ? core_tokens : reader_tokens;
         const bool writer_selects = core_tokens > reader_tokens;
         if (writer_selects) {
             select_go.reserve_back(1);
             volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(select_go.get_write_ptr());
             go[kGoSlotPage] = reinterpret_cast<uint32_t>(slot_page);
-            go[kGoWeights] = reinterpret_cast<uint32_t>(weight_words);
             select_go.push_back(1);
         }
         uint64_t reader_counts;
@@ -312,14 +312,22 @@ void kernel_main() {
             reader_counts = select_tokens<rps>(
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(scores.get_read_ptr()),
                 slot_page,
-                weight_words,
                 0,
                 reader_hi,
-                [&](uint32_t tile) {
+                [&](uint32_t half) {
                     MaybeDeviceZoneScope("rd_wait_scores");
-                    scores.wait_front(tile + 1);
+                    if constexpr (G > 1) {
+                        wait_code_half<G>(noc, code_pump, code_flags, half, split);
+                    } else {
+                        scores.wait_front(half / 2 + 1);
+                    }
                 });
         }
+        if constexpr (G > 1) {
+            MaybeDeviceZoneScope("rd_code_finish");
+            code_pump.finish(noc);
+        }
+        const uint32_t code_base = scores.get_read_ptr();  // the code rows stay put after the G == 1 pop below
         uint64_t writer_counts = 0;
         if (writer_selects) {
             MaybeDeviceZoneScope("rd_wait_writer_counts");
@@ -329,55 +337,40 @@ void kernel_main() {
             writer_counts = (uint64_t{words[1]} << 32) | words[0];
             writer_counts_cb.pop_front(1);
         }
-        scores.wait_front(rps);
-        scores.pop_front(rps);
-        uint32_t counts[kNumExperts];
-        uint32_t reader_count[kNumExperts];
-        for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
-            reader_count[expert] = count_of(reader_counts, expert);
-            counts[expert] = reader_count[expert] + count_of(writer_counts, expert);
-        }
 
-        // ---- exchange_counts (gather half): the leader's row of 8 u16 counts to the coordinator ----
+        // ---- exchange_counts (gather half): the leader's row of 8 u16 counts to the coordinator, first thing after
+        // the counts: straight from the two RISCs' packed byte counts (an expert's count over a core is at most its 128
+        // tokens, so no byte lane carries) ----
         if (member == 0) {
             MaybeDeviceZoneScope("rd_count_send");
+            const uint64_t packed = reader_counts + writer_counts;
+            const uint32_t lo = static_cast<uint32_t>(packed);
+            const uint32_t hi = static_cast<uint32_t>(packed >> 32);
             volatile tt_l1_ptr uint32_t* own_row = table + group * packed_row_words;
-            for (uint32_t word = 0; word < packed_row_words; ++word) {
-                own_row[word] = counts[2 * word] | (counts[2 * word + 1] << 16);
-            }
+            own_row[0] = (lo & 0xFF) | ((lo & 0xFF00) << 8);
+            own_row[1] = ((lo >> 16) & 0xFF) | ((lo >> 24) << 16);
+            own_row[2] = (hi & 0xFF) | ((hi & 0xFF00) << 8);
+            own_row[3] = ((hi >> 16) & 0xFF) | ((hi >> 24) << 16);
             drain_stores(drain_word);
             const uint32_t row_addr = scratch_base + group * table_row_bytes;
-            noc.async_write(
-                CoreLocalMem<uint32_t>(row_addr),
-                UnicastEndpoint{},
-                table_row_bytes,
-                {},
-                {.noc_x = coord_x(coordinator_coord), .noc_y = coord_y(coordinator_coord), .addr = row_addr});
-            noc.async_write_barrier();
-            sem_counts.up(noc, coord_x(coordinator_coord), coord_y(coordinator_coord), 1);
-        }
-
-        // ---- count table: gathered on the coordinator, multicast to the grid ----
-        receive_or_send_table(true);
-
-        // ---- assign_rows_block: region starts and each RISC's first row per expert (rows assigned while pushing) ----
-        uint32_t totals[kNumExperts];
-        uint32_t before[kNumExperts];
-        uint32_t reader_base[kNumExperts];
-        volatile tt_l1_ptr uint32_t* header = slot_page + top_k * tokens_per_shard;
-        {
-            MaybeDeviceZoneScope("rd_assign");
-            scan_table(group, totals, before);
-            uint32_t region_start = 0;
-            for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
-                reader_base[expert] = region_start + before[expert];
-                header[kHeaderStarts + expert] = region_start;
-                header[kHeaderTotals + expert] = totals[expert];
-                header[kHeaderWriterBase + expert] = reader_base[expert] + reader_count[expert];
-                region_start += round_up_to_tile(totals[expert]);
+            // Posted: the coordinator counts the rows on its posted-write slave counter (no ack, no atomic).
+            if (!is_coordinator) {
+                noc.async_write<NocOptions::POSTED>(
+                    CoreLocalMem<uint32_t>(row_addr),
+                    UnicastEndpoint{},
+                    table_row_bytes,
+                    {},
+                    {.noc_x = coord_x(coordinator_coord), .noc_y = coord_y(coordinator_coord), .addr = row_addr});
             }
-            header[kHeaderEnd] = region_start;
         }
+        if constexpr (G == 1) {
+            scores.wait_front(rps);
+            scores.pop_front(rps);
+        }
+        // ---- assign_rows_block, part 1: publish the slot page before the table wait (staging address, the reader's
+        // counts, the table address), so a selecting writer scans the landed table itself; the table-landed flag
+        // follows the receive (Perf R3.3) ----
+        volatile tt_l1_ptr uint32_t* header = slot_page + top_k * tokens_per_shard;
         uint32_t staging = 0;
         if (stages) {
             MaybeDeviceZoneScope("rd_wait_xrows");
@@ -385,8 +378,38 @@ void kernel_main() {
             staging = x_rows.get_read_ptr();
         }
         header[kHeaderStaging] = staging;
+        header[kHeaderReaderCounts] = static_cast<uint32_t>(reader_counts);
+        header[kHeaderReaderCounts + 1] = static_cast<uint32_t>(reader_counts >> 32);
+        header[kHeaderTable] = scratch_base;
+        header[kHeaderTableFlag] = 0;
+        header[kHeaderScanReader + kScanFlag] = 0;
+        header[kHeaderScanWriter + kScanFlag] = 0;
         drain_stores(drain_word);
         slot_rows.push_back(1);
+        // ---- count table: gathered on the coordinator, multicast to the grid ----
+        receive_or_send_table(true);
+        header[kHeaderTableFlag] = 1;
+
+        // ---- assign_rows_block, part 2: region starts and the reader's first row per expert. With a selecting
+        // writer each RISC scans half the table rows and they swap packed partial sums (scan_rows_packed). ----
+        uint32_t reader_base[kNumExperts];
+        {
+            MaybeDeviceZoneScope("rd_assign");
+            uint32_t totals[kNumExperts];
+            uint32_t before[kNumExperts];
+            const tt_l1_ptr uint32_t* rows_words = const_cast<const tt_l1_ptr uint32_t*>(table);
+            volatile tt_l1_ptr uint32_t* mine = header + kHeaderScanReader;
+            scan_rows_packed(rows_words, 0, writer_selects ? num_groups / 2 : num_groups, group, mine);
+            if (writer_selects) {
+                mine[kScanFlag] = 1;
+                const volatile tt_l1_ptr uint32_t* theirs = header + kHeaderScanWriter;
+                wait_flag(theirs + kScanFlag);
+                combine_scans(mine, theirs, totals, before);
+            } else {
+                combine_scans(mine, static_cast<const uint32_t*>(nullptr), totals, before);
+            }
+            assign_regions(header, totals, before, 0, reader_base);
+        }
 
         // ---- push_rows_block: the reader's tokens [0, reader_tokens) ----
         // Push units: 2 * group (the reader's tokens), 2 * group + 1 (the writer's, taken here when it has none).
@@ -411,61 +434,40 @@ void kernel_main() {
                 group * push_stagger_tokens,
                 member == 0);
         }
-        if (arrival_per_block && stages) {
-            noc.async_write_barrier();
-            signal_arrivals<k, num_cores>(
+        // ---- write_combine_index_block, write_combine_weights_block: right after the pushes, in the other cores'
+        // push shadow (the owners prove landing themselves; nothing here waits on the pushes) ----
+        if (member == 0) {
+            drain_stores(drain_word);
+            // The RISC with the core's last tokens also writes the zeroed tile-padding tokens (R3).
+            write_combine_index<tokens_per_shard>(
                 noc,
-                kPushArgs,
-                kCoordsArg,
-                sem_arrived,
-                header,
-                reader_base,
-                reader_count,
-                rows,
-                2 * group,
-                writer_selects ? 1 : 2,
-                2 * num_groups,
-                reader_hi);
+                combine_index,
+                reinterpret_cast<uint32_t>(slot_page),
+                first_token,
+                0,
+                writer_selects ? reader_hi : core_tiles * kTile);
         }
-        const auto write_own_index = [&]() {
-            if (member == 0) {
-                drain_stores(drain_word);
-                // The RISC with the core's last tokens also writes the zeroed tile-padding tokens (R3).
-                write_combine_index<tokens_per_shard>(
-                    noc,
-                    combine_index,
-                    reinterpret_cast<uint32_t>(slot_page),
-                    first_token,
-                    0,
-                    writer_selects ? reader_hi : core_tiles * kTile);
-            }
-        };
-        if constexpr (arrival_per_block) {
-            write_own_index();
-        } else {
-            {
-                MaybeDeviceZoneScope("rd_push_barrier");
-                noc.async_write_barrier();
-            }
-            Semaphore<>(sem_arrived).up(noc, coord_x(coordinator_coord), coord_y(coordinator_coord), 1);
-            // ---- write_combine_index_block, write_combine_weights_block: after the landing increment, so the
-            // landing barrier waits on the L1 pushes only, not on DRAM writes queued behind other cores' ----
-            write_own_index();
-            if (weight_writes > 0) {
-                MaybeDeviceZoneScope("rd_weights_issue");
-                drain_stores(drain_word);
-                write_weight_tiles<rps, t_pad>(
-                    noc, combine_weights, weight_base_tiles, first_token, core_tiles, weights_first, weights_step);
-            }
+        // combine_weights column 0 of the reader's tiles: off the table -> push chain (Perf R3.3)
+        if (weight_writes > 0) {
+            MaybeDeviceZoneScope("rd_weights_fill");
+            fill_weight_tiles<rps>(code_base, weight_base_tiles, core_tiles, core_tokens, weights_first, weights_step);
+        }
+        if (weight_writes > 0) {
+            MaybeDeviceZoneScope("rd_weights_issue");
+            drain_stores(drain_word);
+            write_weight_tiles<rps, t_pad>(
+                noc, combine_weights, weight_base_tiles, first_token, core_tiles, weights_first, weights_step);
         }
     } else {
         receive_or_send_table(false);
     }
 
     if (is_coordinator) {
+        uint32_t sums[2 * 4];
         uint32_t totals[kNumExperts];
         uint32_t before[kNumExperts];
-        scan_table(0, totals, before);
+        scan_rows_packed(const_cast<const tt_l1_ptr uint32_t*>(table), 0, num_groups, 0, sums);
+        combine_scans(sums, static_cast<const uint32_t*>(nullptr), totals, before);
         volatile tt_l1_ptr uint32_t* staged =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base + counts_offset);
         for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
@@ -476,49 +478,18 @@ void kernel_main() {
             CoreLocalMem<uint32_t>(scratch_base + counts_offset), expert_counts, kNumExperts * 4, {}, {.page_id = 0});
     }
 
-#ifdef ARRIVAL_PER_BLOCK
-    // ---- counted arrival: each owned block goes to the tilize as soon as all its rows have landed. In between,
-    // write_combine_weights_block issues one tile at a time: its DRAM writes overlap the tail of the pushes
-    // without holding up a complete block. ----
-    if (weight_writes > 0) {
-        drain_stores(drain_word);
-    }
-    for (uint32_t block = 0, write = weights_first; block < num_blocks || write < weight_writes;) {
-        if (block < num_blocks && Semaphore<>(sem_arrived + block).value() == kTile * w) {
-            gathered.reserve_back(w);
-            gathered.push_back(w);
-            ++block;
-        } else if (write < weight_writes) {
-            write_weight_tiles<rps, t_pad>(  // one tile
-                noc,
-                combine_weights,
-                weight_base_tiles,
-                first_token,
-                core_tiles,
-                write,
-                weight_writes);
-            write += weights_step;
-        }
-    }
-#else  // the go channel is attached only for the global barrier
-    // ---- land_barrier: every pushing RISC has landed; the coordinator releases the tilize ----
-    constexpr auto go_channel =
-        McastArgs<get_named_compile_time_arg_val("go_ct_offset"), get_named_compile_time_arg_val("go_rt_offset")>();
-    {
-        MaybeDeviceZoneScope("rd_wait_go");
-        if (is_coordinator) {
-            Semaphore<>(sem_arrived).wait(arrival_signals);
-            go_channel.sender(noc).send_signal();
-        } else {
-            go_channel.receiver(noc).receive_signal();
-        }
-    }
+    // ---- owner_land: this core's blocks are complete once 32 * num_blocks push writes have landed here ----
     if (num_blocks > 0) {
+#if !defined(ABLATE_PUSH) && !defined(ABLATE_PUSH_WRITES)
+        MaybeDeviceZoneScope("rd_wait_land");
+        while (owner_land_count() - land_base < kTile * num_blocks) {
+        }
+#endif
         gathered.reserve_back(num_blocks * w);
         gathered.push_back(num_blocks * w);
     }
-#endif
     MaybeDeviceZoneScope("rd_final_barrier");
     noc.async_write_barrier();
     noc.async_atomic_barrier();
+    noc.async_writes_flushed<NocOptions::POSTED>();  // the pushes' data has left this core's L1
 }

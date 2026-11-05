@@ -5,8 +5,8 @@
 
 Kernels, all on the 11x10 grid (token work only on x's shard cores, tilize on every core):
   * reader  (RISCV_0 / NOC0): x publish, W slice fetch + multicast, partial exchange, selection, count table,
-                              metadata writes, its half of the row pushes, landing (barrier or counted arrival),
-                              gathered publish
+                              metadata writes, its half of the row pushes, owner-side landing count, gathered
+                              publish
   * writer  (RISCV_1 / NOC1): the other half of the row pushes; DRAM `dispatched` (R4): the owned blocks to DRAM
   * compute: untilize x, partial logits (matmul_block), logits sum + mask, softmax, tilize of the owned shards
              (in place into the L1 output shard, or streamed through CB_DISPATCHED to the writer for DRAM)
@@ -34,7 +34,6 @@ from .nomic_moe_route_dispatch import (
     PUSH_BYTES_IN_FLIGHT,
     PUSH_STAGGER_TOKENS,
     PUSH_CMD_BUFS,
-    ARRIVAL_PER_BLOCK,
     WEIGHTS_SPREAD,
     TILE,
     TOP_K,
@@ -62,21 +61,30 @@ CB_WEIGHT_TILES = 20  # reader scratch: the leader's combine_weights tiles (colu
 CB_STAGE_TILES = 21  # whole-piece push: the staged tile range (own + peers' tiles), untilized into cb_x_rows
 CB_OWN_PARTIAL_WEST = 22  # compute -> writer: the same signal (the writer sends to the lower members on NOC1)
 CB_W_FACES = 23  # 1 KB-page view of CB_ROUTER_WEIGHT: the matmul's in1 (faces-only tiles sit on 1 KB boundaries)
+CB_CODE_STAGE = 24  # compute -> DM, one code tile a pass (its face goes to the group's cb_scores)
+CB_CODE_FLAGS = 25  # per-member landed-pass counters + flag-write source constants
+CODE_FLAGS_BYTES = 16 * (3 + 8)  # kMaxSlices counters + up to 2 * MAX_ROWS_PER_SHARD pass constants, 16 B each
 W_FACE_BYTES = 1024
 W_CB_TILES = HIDDEN_TILES // 2  # faces 0 and 2 of every W tile
 HANDSHAKE_PAGE_BYTES = 16
 NUM_CIRCULAR_BUFFERS = 64
 
-SEM_PARTIALS = 0  # peer partials landed on this member
-SEM_COUNTS = 1  # count rows landed on the coordinator
-# ARRIVAL_PER_BLOCK: owned block b's landed 64 B row granules, semaphore SEM_ARRIVED + b; else (coordinator) the
-# pushing RISCs that have landed.
-SEM_ARRIVED = 2
+
+def max_passes(p) -> int:
+    """Softmax passes (one 16-token half each) the busiest member of a group runs."""
+    return 1 if p.hidden_split == 1 else -(-2 * p.rows_per_shard // p.hidden_split)
+
+
+# Partial tiles of contributor c landed on this member (one counter a contributor, written by c's writer)
+SEM_PARTIALS = (0, 1, 2)
+SEM_W_LOCAL = 3  # a W sender core: the RISC off the channel's NoC has read its half of the channel's DRAM reads
 MAX_SEMAPHORES = 16
 
 L1_ALIGN = 64  # scratch sections start on a DRAM-write-compatible boundary
 TABLE_ROW_BYTES = 16  # 8 u16 counts
-REGION_WORDS = 32  # slot-rows header: starts[8], totals[8], regions_end, staging address, writer bases[8]
+# slot-rows header: starts[8], totals[8], regions_end, staging address, reader counts[2], table address, table flag,
+# two table-scan blocks of 9 words (kernels: kHeader*)
+REGION_WORDS = 40
 
 READER_NOC = ttnn.NOC.NOC_0
 WRITER_NOC = ttnn.NOC.NOC_1
@@ -94,9 +102,8 @@ def _ablation_defines():
 
 
 def _dm_defines():
-    """Data-movement kernel defines: the landing mode (a define, so the global barrier's go channel args are only
-    named when that channel is attached), then the ablation scaffolding."""
-    return ([("ARRIVAL_PER_BLOCK", "1")] if ARRIVAL_PER_BLOCK else []) + _ablation_defines()
+    """Data-movement kernel defines: the ablation scaffolding."""
+    return _ablation_defines()
 
 
 def _round_up(value, multiple):
@@ -121,11 +128,13 @@ def _cb_specs(p: Plan):
     return (
         [
             (CB_ROUTER_WEIGHT, fp32, FP32_TILE_BYTES, W_CB_TILES),
-            (CB_OWN_PARTIAL, fp32, HANDSHAKE_PAGE_BYTES, 1),
-            (CB_OWN_PARTIAL_WEST, fp32, HANDSHAKE_PAGE_BYTES, 1),
+            (CB_OWN_PARTIAL, fp32, HANDSHAKE_PAGE_BYTES, rps),
+            (CB_OWN_PARTIAL_WEST, fp32, HANDSHAKE_PAGE_BYTES, rps),
             (CB_PARTIALS, fp32, FP32_TILE_BYTES, p.hidden_split * rps),
             (CB_WEIGHT_TILES, fp32, FP32_TILE_BYTES, TOP_K * rps),
             (CB_SCORES, fp32, FP32_TILE_BYTES, rps),
+            (CB_CODE_STAGE, fp32, FP32_TILE_BYTES, max_passes(p)),
+            (CB_CODE_FLAGS, ttnn.uint32, CODE_FLAGS_BYTES, 1),
             (CB_X_ROWS, bf16, BF16_TILE_BYTES, rps * p.stage_tiles),
             (CB_SLOT_ROWS, ttnn.uint32, slot_rows_bytes(p), 1),
             (CB_GATHERED_ROWS, bf16, BF16_TILE_BYTES, p.max_blocks_per_core * w),
@@ -221,11 +230,8 @@ def create_program_descriptor(
     if not p.out_dram:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_DISPATCHED, dispatched, core_ranges=grid))
 
-    arrival_sems = p.max_blocks_per_core if ARRIVAL_PER_BLOCK else 1
-    arrived = [SEM_ARRIVED + block for block in range(arrival_sems)]
     semaphores = [
-        ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0)
-        for sem in [SEM_PARTIALS, SEM_COUNTS] + arrived
+        ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0) for sem in [*SEM_PARTIALS, SEM_W_LOCAL]
     ]
 
     # ---------------- per-core roles ----------------
@@ -279,7 +285,7 @@ def create_program_descriptor(
             *push_args,
         ]
         stages = int(is_token and len(p.member_push[member][1]) > 0)
-        compute_rt[logical.x][logical.y] = [is_token, member, blocks, stages]
+        compute_rt[logical.x][logical.y] = [is_token, member, blocks, stages, reader_tokens, core_tokens]
 
     coords = _noc_coords(device)
 
@@ -307,14 +313,15 @@ def create_program_descriptor(
         ("cb_scores", CB_SCORES),
         ("cb_select_go", CB_SELECT_GO),
         ("cb_writer_counts", CB_WRITER_COUNTS),
-        ("sem_arrived", SEM_ARRIVED),
-        ("arrival_signals", 2 * p.num_token_cores),
         ("region_words", REGION_WORDS),
         ("handshake_page_bytes", HANDSHAKE_PAGE_BYTES),
         ("cb_router_weight", CB_ROUTER_WEIGHT),
         ("weight_tiles", W_CB_TILES),
         ("w_sender_top", W_SENDER_TOP),
         ("w_slice_nocs", W_SLICE_NOCS),
+        ("sem_w_local", SEM_W_LOCAL),
+        ("cb_code_stage", CB_CODE_STAGE),
+        ("cb_code_flags", CB_CODE_FLAGS),
     ]
     drain_offset, counts_offset, _ = scratch_layout(p)
     reader_named = common_named + [
@@ -329,8 +336,7 @@ def create_program_descriptor(
         ("counts_offset", counts_offset),
         ("x_interleaved", int(p.x_interleaved)),
         ("table_row_bytes", TABLE_ROW_BYTES),
-        ("sem_partials", SEM_PARTIALS),
-        ("sem_counts", SEM_COUNTS),
+        *[(f"sem_partials{c}", sem) for c, sem in enumerate(SEM_PARTIALS)],
     ]
     reader_ct = []
     for tensor in (weight, combine_index, combine_weights, expert_counts, x):
@@ -358,7 +364,8 @@ def create_program_descriptor(
         named_compile_time_args=common_named
         + [("out_dram", int(p.out_dram)), ("cb_dispatched", CB_DISPATCHED), ("hidden_tiles_total", HIDDEN_TILES)]
         + [("weights_stride", G if WEIGHTS_SPREAD else 1), ("t_pad", p.t_pad), ("cb_weight_tiles", CB_WEIGHT_TILES)]
-        + [("cb_own_partial_west", CB_OWN_PARTIAL_WEST), ("cb_partials", CB_PARTIALS), ("sem_partials", SEM_PARTIALS)],
+        + [("cb_own_partial_west", CB_OWN_PARTIAL_WEST), ("cb_partials", CB_PARTIALS)]
+        + [(f"sem_partials{c}", sem) for c, sem in enumerate(SEM_PARTIALS)],
         runtime_args=writer_rt,
         common_runtime_args=coords
         + [weight.buffer_address(), weight.buffer_page_size()]
@@ -386,6 +393,7 @@ def create_program_descriptor(
         ("cb_stage_tiles", CB_STAGE_TILES),
         ("cb_gathered_rows", CB_GATHERED_ROWS),
         ("cb_dispatched", CB_DISPATCHED),
+        ("cb_code_stage", CB_CODE_STAGE),
     ]
     approx = bool(compute_kernel_config.math_approx_mode)
     compute = ttnn.KernelDescriptor(
@@ -398,15 +406,13 @@ def create_program_descriptor(
         config=_compute_config(compute_kernel_config, approx),
     )
 
-    # ---------------- multicast channels (W slices, count table, landing go) ----------------
+    # ---------------- multicast channels (W slices, count table) ----------------
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
-    semaphore_id = SEM_ARRIVED + arrival_sems
+    semaphore_id = SEM_W_LOCAL + 1
     # (prefix, sender core, sent by the writer): one W channel a NoC, carrying every slice c with c % W_SLICE_NOCS
     # equal to its index (odd slices on the writer's NoC).
     channels = [(f"w{c}", W_SENDER_TOP - c, c % W_SLICE_NOCS == 1) for c in range(min(G, W_SLICE_NOCS))]
     channels += [("table", COORDINATOR, False)]
-    if not ARRIVAL_PER_BLOCK:
-        channels += [("go", COORDINATOR, False)]  # the global landing barrier's release
     for prefix, sender, by_writer in channels:
         # A writer-sent slice's sender must not hold tokens: its writer would wait for its own (source-excluded) multicast.
         assert not by_writer or sender not in token_core_of, "writer-sent W slice on a token core"

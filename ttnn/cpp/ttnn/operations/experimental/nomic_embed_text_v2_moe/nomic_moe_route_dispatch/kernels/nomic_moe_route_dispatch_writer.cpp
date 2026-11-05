@@ -5,10 +5,10 @@
 // RISCs at reader_tokens; the writer takes [reader_tokens, core_tokens):
 //   [whole-piece push: gather_stage_block from the group peers' x shards, on NOC1 off the W multicasts] ->
 //   [odd member: receive_weight_slice] -> select_block for its tokens (from cb_scores, after the reader's cb_select_go
-//   page) -> its per-expert counts to the reader (cb_writer_counts) -> wait cb_slot_rows (region header, untilized
-//   shard address) -> push_rows_block -> [ARRIVAL_PER_BLOCK: arrival increments on the owners] -> [global: one landing
-//   increment on the coordinator] -> leader: its combine_index segments -> its share of the member's combine_weights
-//   tiles (NOC1) -> write barrier.
+//   page) -> its per-expert counts to the reader (cb_writer_counts) -> its combine_weights tiles' weights -> wait
+//   cb_slot_rows (region header, untilized shard address) -> push_rows_block (posted writes; the owners count
+//   their landed rows) -> leader: its combine_index segments -> its share of the member's combine_weights tiles
+//   (NOC1) -> write barrier, posted-write flush.
 // Sender of an odd W slice (non-token core): DRAM read + multicast on NOC1, so two slices travel at once.
 // Every core, DRAM `dispatched` (regime R4): write_dispatched_block for each owned output block (shard
 //   core_idx + b * num_cores) as compute tilizes it into the streaming cb_dispatched, one flush per block.
@@ -23,12 +23,6 @@
 #include "nomic_moe_route_dispatch_push.hpp"
 
 using namespace route_dispatch;
-
-#ifdef ARRIVAL_PER_BLOCK  // host define (ARRIVAL_PER_BLOCK knob): per-owner counted arrival, no global barrier
-constexpr bool arrival_per_block = true;
-#else
-constexpr bool arrival_per_block = false;
-#endif
 
 void kernel_main() {
     constexpr uint32_t ht = get_named_compile_time_arg_val("hidden_tiles");
@@ -45,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t cb_slot_rows = get_named_compile_time_arg_val("cb_slot_rows");
-    constexpr uint32_t sem_arrived = get_named_compile_time_arg_val("sem_arrived");
     constexpr uint32_t cb_scores = get_named_compile_time_arg_val("cb_scores");
     constexpr uint32_t cb_select_go = get_named_compile_time_arg_val("cb_select_go");
     constexpr uint32_t cb_writer_counts = get_named_compile_time_arg_val("cb_writer_counts");
@@ -85,20 +78,20 @@ void kernel_main() {
     constexpr uint32_t kCoordsArg = 0;
     // Common runtime args: the NoC coordinates of the grid cores, then W's address and page size.
 
-    // ---- W slice (writer-sent slices, NOC1): a sender is never a token core ----
-    if constexpr (w_slice_nocs > 1) {
-        if (core_idx <= w_sender_top && core_idx + G > w_sender_top) {
-            MaybeDeviceZoneScope("wr_w_send");
-            const auto weight = TensorAccessor(
-                weight_args,
-                get_common_arg_val<uint32_t>(kCoordsArg + num_cores),
-                get_common_arg_val<uint32_t>(kCoordsArg + num_cores + 1));
-            deliver_weight_slice<G, ht, w_slice_nocs, kWriterRisc>(
-                noc,
-                weight,
-                CircularBuffer(get_named_compile_time_arg_val("cb_router_weight")).get_write_ptr(),
-                w_sender_top - core_idx);
-        }
+    // ---- W slice on a sender core: this RISC's share of the DRAM reads (NOC1); the multicast of the writer-sent
+    // slices (a writer-sent slice's sender is never a token core) ----
+    if (core_idx <= w_sender_top && core_idx + G > w_sender_top) {
+        MaybeDeviceZoneScope("wr_w_send");
+        const auto weight = TensorAccessor(
+            weight_args,
+            get_common_arg_val<uint32_t>(kCoordsArg + num_cores),
+            get_common_arg_val<uint32_t>(kCoordsArg + num_cores + 1));
+        deliver_weight_slice<G, ht, w_slice_nocs, kWriterRisc>(
+            noc,
+            weight,
+            CircularBuffer(get_named_compile_time_arg_val("cb_router_weight")).get_write_ptr(),
+            w_sender_top - core_idx,
+            get_named_compile_time_arg_val("sem_w_local"));
     }
     if (is_token) {
         const auto combine_index = TensorAccessor(combine_index_args, combine_index_addr, combine_index_page);
@@ -158,25 +151,58 @@ void kernel_main() {
             receive_member_weight();
         }
 
-        // ---- exchange_partials_block, westward half: this member's partial faces to the LOWER members on NOC1 (the
-        // reader sends to the higher ones on NOC0) ----
+        const HalfSplit split = half_split(reader_tokens, core_tokens);
+        // ---- exchange_partials_block, send side: each own partial tile to every peer as compute packs it
+        // (tile_order), then the landed-tile count i + 1 to this member's counter on the peer (send_tile_partials) ----
         {
             CircularBuffer own_partial_west(get_named_compile_time_arg_val("cb_own_partial_west"));
-            {
-                MaybeDeviceZoneScope("wr_wait_own_partial");
-                own_partial_west.wait_front(1);
+            if constexpr (G > 1) {
+                const uint32_t region = CircularBuffer(get_named_compile_time_arg_val("cb_partials")).get_write_ptr() +
+                                        member * rps * kFp32TileBytes;
+                const TileOrder<G, rps> tile_order(split);
+                const uint32_t flag_dst = get_semaphore(kSemPartials[member]);
+                const uint32_t flags_page =
+                    CircularBuffer(get_named_compile_time_arg_val("cb_code_flags")).get_write_ptr();
+                write_flag_constants(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flags_page), rps);
+                for (uint32_t rank = 0; rank < rps; ++rank) {
+                    {
+                        MaybeDeviceZoneScope("wr_wait_own_partial");
+                        own_partial_west.wait_front(rank + 1);
+                    }
+                    MaybeDeviceZoneScope("wr_xchg_send");
+                    send_tile_partials<G>(
+                        noc,
+                        region,
+                        kCoordsArg + group * G,
+                        member,
+                        split,
+                        tile_order.order[rank],
+                        flags_page + (kMaxSlices + rank) * kFlagStrideWords * 4,
+                        flag_dst);
+                }
+            } else {
+                own_partial_west.wait_front(rps);
             }
-            MaybeDeviceZoneScope("wr_xchg_send");
-            const uint32_t region = CircularBuffer(get_named_compile_time_arg_val("cb_partials")).get_write_ptr() +
-                                    member * rps * kFp32TileBytes;
-            send_partial_faces<rps>(noc, region, kCoordsArg + group * G, 0, member);
-            noc.async_write_barrier();
-            Semaphore<> sem_partials(get_named_compile_time_arg_val("sem_partials"));
-            for (uint32_t peer = 0; peer < member; ++peer) {
-                const uint32_t coord = get_common_arg_val<uint32_t>(kCoordsArg + group * G + peer);
-                sem_partials.up(noc, coord_x(coord), coord_y(coord), 1);
-            }
-            own_partial_west.pop_front(1);
+            own_partial_west.pop_front(rps);
+        }
+        // ---- code all-gather: this member's code passes go to the lower members (the reader sends to the higher
+        // ones and this core), from inside the select's per-half waits ----
+        const uint32_t code_flags_base =
+            CircularBuffer(get_named_compile_time_arg_val("cb_code_flags")).get_write_ptr();
+        CodePump<G> code_pump(
+            get_named_compile_time_arg_val("cb_code_stage"),
+            CircularBuffer(cb_scores).get_read_ptr(),
+            code_flags_base,
+            member,
+            kCoordsArg + group * G,
+            0,
+            member,
+            split);
+        const volatile tt_l1_ptr uint32_t* code_flags =
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(code_flags_base);
+        if (core_tokens <= reader_tokens) {
+            code_pump.finish(noc);
+            noc.async_write_barrier();  // no later write barrier on this path
         }
 
         volatile tt_l1_ptr uint32_t* slot_page = nullptr;
@@ -191,31 +217,39 @@ void kernel_main() {
             const volatile tt_l1_ptr uint32_t* go =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(select_go.get_read_ptr());
             volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go[kGoSlotPage]);
-            volatile tt_l1_ptr uint32_t* weight_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go[kGoWeights]);
             select_go.pop_front(1);
             uint64_t counts;
+            // The writer only peeks at cb_scores (no pop): the reader is its consumer and pops it after these counts
+            // arrive (G == 1); the code rows stay put after that pop.
+            const uint32_t code_base = CircularBuffer(cb_scores).get_read_ptr();
             {
-                // occupancy: includes the per-tile wr_wait_scores waits. The writer only peeks at cb_scores (no pop):
-                // the reader is its consumer and pops it after these counts arrive.
+                // occupancy: includes the per-tile wr_wait_scores waits
                 MaybeDeviceZoneScope("wr_select");
                 CircularBuffer scores(cb_scores);
                 counts = select_tokens<rps>(
-                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(scores.get_read_ptr()),
+                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(code_base),
                     page,
-                    weight_words,
                     reader_tokens,
                     core_tokens,
-                    [&](uint32_t tile) {
+                    [&](uint32_t half) {
                         MaybeDeviceZoneScope("wr_wait_scores");
-                        scores.wait_front(tile + 1);
+                        if constexpr (G > 1) {
+                            wait_code_half<G>(noc, code_pump, code_flags, half, split);
+                        } else {
+                            scores.wait_front(half / 2 + 1);
+                        }
                     });
+            }
+            {
+                MaybeDeviceZoneScope("wr_code_finish");
+                code_pump.finish(noc);
             }
             writer_counts.reserve_back(1);
             volatile tt_l1_ptr uint32_t* words =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_counts.get_write_ptr());
             words[0] = static_cast<uint32_t>(counts);
             words[1] = static_cast<uint32_t>(counts >> 32);
-            drain_stores(words + 2);  // slot and weight stores land before the reader reads them over the NoC
+            drain_stores(words + 2);  // the slot stores land before the reader reads them over the NoC
             writer_counts.push_back(1);
 
             // ---- push_rows_block: the writer's tokens ----
@@ -225,8 +259,26 @@ void kernel_main() {
             }
             volatile tt_l1_ptr uint32_t* header = page + 2 * tokens_per_shard;
             uint32_t base[kNumExperts];
-            for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
-                base[expert] = header[kHeaderWriterBase + expert];
+            // assign_rows_block, writer half: the reader published the page before the table landed; scan the upper
+            // half of the table rows here, in parallel with the reader's lower half (Perf R3.3).
+            {
+                MaybeDeviceZoneScope("wr_wait_table");
+                wait_flag(header + kHeaderTableFlag);
+            }
+            {
+                MaybeDeviceZoneScope("wr_assign");
+                uint32_t totals[kNumExperts];
+                uint32_t before[kNumExperts];
+                constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+                const auto* table = reinterpret_cast<const tt_l1_ptr uint32_t*>(header[kHeaderTable]);
+                volatile tt_l1_ptr uint32_t* mine = header + kHeaderScanWriter;
+                scan_rows_packed(table, num_groups / 2, num_groups, group, mine);
+                mine[kScanFlag] = 1;
+                const volatile tt_l1_ptr uint32_t* theirs = header + kHeaderScanReader;
+                wait_flag(theirs + kScanFlag);
+                combine_scans(theirs, mine, totals, before);
+                const uint64_t prior = (uint64_t{header[kHeaderReaderCounts + 1]} << 32) | header[kHeaderReaderCounts];
+                assign_regions(header, totals, before, prior, base);
             }
             const uint32_t staging = header[kHeaderStaging] + reader_tokens * stage_tiles * kTileRowBytes;
             {
@@ -250,42 +302,33 @@ void kernel_main() {
                     group * push_stagger_tokens,
                     member == 0);
             }
-            if constexpr (arrival_per_block) {
-                noc.async_write_barrier();
-                uint32_t writer_count[kNumExperts];
-                for (uint32_t expert = 0; expert < kNumExperts; ++expert) {
-                    writer_count[expert] = count_of(counts, expert);
+            // ---- combine_weights column 0 of the writer's tiles (the ones it writes below), after its push: off the
+            // table -> push chain (Perf R3.3). Those tiles also hold the reader's halves, which this RISC's select
+            // never waited for (G > 1: each face lands on its own flag), so wait for every half first (G == 1: the
+            // select waited for the last tile of cb_scores, so all earlier ones are in). ----
+            if (writes_weights) {
+                if constexpr (G > 1) {
+                    MaybeDeviceZoneScope("wr_wait_all_code");
+                    for (uint32_t half = 0; half < split.hn; ++half) {
+                        wait_code_half<G>(noc, code_pump, code_flags, half, split);
+                    }
                 }
-                signal_arrivals<k, num_cores>(
-                    noc,
-                    kPushArgs,
-                    kCoordsArg,
-                    sem_arrived,
-                    header,
-                    base,
-                    writer_count,
-                    rows,
-                    2 * group + 1,
-                    1,
-                    2 * num_groups,
-                    core_tokens - reader_tokens);
+                MaybeDeviceZoneScope("wr_weights_fill");
+                constexpr uint32_t weights_stride = get_named_compile_time_arg_val("weights_stride");
+                fill_weight_tiles<rps>(
+                    code_base,
+                    CircularBuffer(get_named_compile_time_arg_val("cb_weight_tiles")).get_write_ptr(),
+                    round_up_to_tile(core_tokens) / kTile,
+                    core_tokens,
+                    weights_stride > 1 ? member : 0,
+                    2 * weights_stride);
             }
             drain_stores(words + 2);
             slot_page = page;
-            {
-                MaybeDeviceZoneScope("wr_push_barrier");
-                noc.async_write_barrier();
-            }
             slot_rows.pop_front(1);
         }
-        if constexpr (!arrival_per_block) {  // the landing increment, also from a writer without tokens
-            const uint32_t coordinator_coord =
-                get_common_arg_val<uint32_t>(kCoordsArg + get_named_compile_time_arg_val("coordinator"));
-            Semaphore<>(sem_arrived).up(noc, coord_x(coordinator_coord), coord_y(coordinator_coord), 1);
-        }
-        // ---- write_combine_index_block, write_combine_weights_block (the writer's share, on NOC1): after the
-        // landing increment. The slot page and the weight tiles are not rewritten after the reader's single publish.
-        // ----
+        // ---- write_combine_index_block, write_combine_weights_block (the writer's share, on NOC1): right after the
+        // pushes. The slot page and the weight tiles are not rewritten after the reader's single publish. ----
         if (slot_page != nullptr) {
             if (member == 0) {
                 write_combine_index<tokens_per_shard>(
@@ -317,6 +360,7 @@ void kernel_main() {
             noc.async_write_barrier();
         }
         noc.async_atomic_barrier();
+        noc.async_writes_flushed<NocOptions::POSTED>();  // the pushes' data has left this core's L1
     }
 
     // ---- write_dispatched_block: each owned block's w tiles to their DRAM pages, one flush per block ----
