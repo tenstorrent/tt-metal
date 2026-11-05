@@ -886,12 +886,14 @@ class PerfConfig(TestConfig):
         requires_vector_ext: bool = False,
     ):
 
+        # the report keeps the columns of the templates the module passed, so a main row of the table does not change the CSV schema
+        reported_templates = templates
         templates = _true_main_templates(
             test_name, formats, dest_acc, l1_acc, templates, runtimes
         )
         # Initialize passed templates and runtimes here so we don't get variant hash issues
         # when we reasign them in run method of PerfConfig
-        self.passed_templates = templates.copy()
+        self.passed_templates = reported_templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
 
