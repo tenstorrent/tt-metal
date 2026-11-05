@@ -250,6 +250,20 @@ class ColParallelLinear(Module):
 
         self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
+    def _pad_fsdp_k(self, x: ttnn.Tensor, shard_rows: int, pad: int) -> ttnn.Tensor:
+        """x [..., fsdp * shard_rows] -> [..., fsdp * (shard_rows + pad)] with zeros after each shard's columns."""
+        fsdp = self.mesh_device.shape[self.fsdp_mesh_axis]
+        shape = list(x.shape)
+        rows = 1
+        for d in shape[:-1]:
+            rows *= d
+        layout = x.layout
+        y = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        y = ttnn.reshape(y, (1, rows, fsdp, shard_rows))
+        y = ttnn.pad(y, [(0, 0), (0, 0), (0, 0), (0, pad)], 0.0)
+        y = ttnn.reshape(y, shape[:-1] + [fsdp * (shard_rows + pad)])
+        return ttnn.to_layout(y, layout)
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
@@ -387,7 +401,18 @@ class ColParallelLinear(Module):
             dtype = resolve_output_dtype(dtype, x)
 
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            shard = self.weight.data
+            pad = -shard.shape[-2] % ttnn.TILE_SIZE
+            if pad:
+                # A shard whose row count is not a whole number of tiles sends all_gather_async down its
+                # composite path (all_broadcast, an untilize a shard, concat, tilize: ~9 ms for MiniMax-H3's
+                # adaln_proj shards of 2688 / 8 = 336 rows on a WH Galaxy, against ~1.5 ms tile-aligned).
+                # Gather zero-padded shards instead and pad x's K the same way, so the extra rows meet zero
+                # activations and the product is unchanged. (The padded shard can share the weight's buffer, since
+                # the rows fit in its tiles' padding, so it is left to the GC rather than deallocated.)
+                shard = ttnn.pad(shard, [(0, pad), (0, 0)], 0.0)
+                x = self._pad_fsdp_k(x, self.weight.data.shape[-2], pad)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(shard)
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
             )
@@ -757,9 +782,11 @@ class RowParallelLinear(Module):
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
             **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-            if use_l1_handoff
-            else self.mm_memory_config,
+            memory_config_mm=(
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+                if use_l1_handoff
+                else self.mm_memory_config
+            ),
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
