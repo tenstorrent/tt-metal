@@ -841,3 +841,59 @@ def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
     assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
     # The defining contract, stated separately: the magnitude of the result is below the modulus.
     assert torch.all(output_tensor.abs() < abs(scalar))
+
+
+def block_float_tolerance(expected, mantissa_bits):
+    width = expected.shape[-1]
+    blocks = torch.nn.functional.pad(expected, (0, -width % 16)).unflatten(-1, (-1, 16))
+    block_exp = torch.floor(torch.log2(blocks.abs().amax(-1, keepdim=True).clamp_min(2.0**-126)))
+    return 2 * torch.pow(2.0, block_exp - (mantissa_bits - 1)).expand_as(blocks).flatten(-2)[..., :width]
+
+
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 40, 72), (1, 1, 33, 65), (2, 1, 64, 100), (1, 1, 64, 96), (1, 1, 33, 64), (1, 1, 40, 48)]
+)
+@pytest.mark.parametrize("dtype, mantissa_bits", [(ttnn.bfloat8_b, 7), (ttnn.bfloat4_b, 3)])
+def test_div_block_float_unaligned_width(device, shape, dtype, mantissa_bits):
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.randn(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand(shape) + 0.5, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = ttnn.to_torch(a) / ttnn.to_torch(b)
+
+    output = ttnn.to_torch(ttnn.divide(a, b, dtype=dtype))
+
+    assert torch.all((output - expected).abs() <= block_float_tolerance(expected, mantissa_bits))
+
+
+@pytest.mark.parametrize(
+    "b_shape, input_dtype, mode",
+    [
+        ((1, 1, 1, 72), ttnn.bfloat8_b, "dtype"),
+        ((1, 1, 40, 1), ttnn.bfloat8_b, "dtype"),
+        ((1, 1, 40, 72), ttnn.bfloat16, "dtype"),
+        ((1, 1, 40, 72), ttnn.float32, "dtype"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "output_tensor"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "inplace"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "scalar_lhs"),
+    ],
+)
+def test_div_block_float_unaligned_width_variants(device, b_shape, input_dtype, mode):
+    torch.manual_seed(0)
+    a_shape = (1, 1, 40, 72)
+    a = ttnn.from_torch(torch.randn(a_shape), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand(b_shape) + 0.5, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = ttnn.to_torch(a) / ttnn.to_torch(b)
+
+    if mode == "scalar_lhs":
+        expected = 2.0 / ttnn.to_torch(b)
+        output = ttnn.divide(2.0, b, dtype=ttnn.bfloat8_b)
+    elif mode == "dtype":
+        output = ttnn.divide(a, b, dtype=ttnn.bfloat8_b)
+    elif mode == "output_tensor":
+        output = ttnn.from_torch(torch.zeros(a_shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.divide(a, b, output_tensor=output)
+    else:
+        ttnn.divide_(a, b)
+        output = a
+
+    assert torch.all((ttnn.to_torch(output) - expected).abs() <= block_float_tolerance(expected, 7))

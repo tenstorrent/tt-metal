@@ -885,3 +885,92 @@ def test_binary_relational_uint16_float_scalar(shape, low_a, high_a, scalar, ttn
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 64, 96]), torch.Size([1, 2, 64, 96])),
+        (torch.Size([1, 2, 64, 96]), torch.Size([1, 2, 1, 96])),
+        (torch.Size([1, 2, 1, 96]), torch.Size([1, 2, 64, 96])),
+        (torch.Size([1, 2, 64, 96]), torch.Size([1, 2, 64, 1])),
+        (torch.Size([1, 2, 64, 96]), torch.Size([1, 2, 1, 1])),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.add,
+        ttnn.subtract,
+        ttnn.multiply,
+        ttnn.eq,
+        ttnn.ne,
+        ttnn.gt,
+        ttnn.ge,
+        ttnn.lt,
+        ttnn.le,
+        ttnn.logical_and,
+        ttnn.logical_or,
+        ttnn.logical_xor,
+        ttnn.maximum,
+        ttnn.minimum,
+    ],
+)
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32])
+def test_binary_uint16_32bit_output_dtype(a_shape, b_shape, ttnn_op, output_dtype, device):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.randint(1000, 4000, a_shape, dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(0, 1000, b_shape, dtype=torch.int32)
+    torch_input_tensor_b.view(-1)[::3] = 0
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int64)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, dtype=output_dtype)
+
+    assert output_tensor.dtype == output_dtype
+    assert torch.equal(ttnn.to_torch(output_tensor).to(torch.int64), torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_fn, torch_fn",
+    [
+        (lambda t, **kw: ttnn.add(t, 7, **kw), lambda x: x + 7),
+        (lambda t, **kw: ttnn.add(7, t, **kw), lambda x: 7 + x),
+        (lambda t, **kw: ttnn.multiply(t, 3, **kw), lambda x: x * 3),
+        (lambda t, **kw: ttnn.gt(t, 2000, **kw), lambda x: x > 2000),
+    ],
+)
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32])
+def test_binary_uint16_scalar_32bit_output_dtype(ttnn_fn, torch_fn, output_dtype, device):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 4000, (1, 2, 64, 96), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn_fn(input_tensor, dtype=output_dtype)
+
+    assert output_tensor.dtype == output_dtype
+    assert torch.equal(ttnn.to_torch(output_tensor).to(torch.int64), torch_fn(torch_input).to(torch.int64))
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.eq, ttnn.logical_or])
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.float32])
+def test_binary_uint16_preallocated_32bit_output(ttnn_op, output_dtype, device):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.randint(1000, 4000, (1, 2, 64, 96), dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(0, 1000, (1, 2, 1, 96), dtype=torch.int32)
+    torch_input_tensor_b.view(-1)[::3] = 0
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int64)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_torch(
+        torch.zeros(torch_output_tensor.shape, dtype=torch.int32 if output_dtype == ttnn.int32 else torch.float32),
+        dtype=output_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    ttnn_op(input_tensor_a, input_tensor_b, output_tensor=output_tensor)
+
+    assert torch.equal(ttnn.to_torch(output_tensor).to(torch.int64), torch_output_tensor)
