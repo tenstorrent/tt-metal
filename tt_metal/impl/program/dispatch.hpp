@@ -203,7 +203,8 @@ void update_program_dispatch_commands(
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status);
+    ProgramBinaryStatus program_binary_status,
+    bool record_program_metadata = true);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,

@@ -84,7 +84,8 @@ private:
     // A workload's device writes, collected to fan out across dispatch_thread_pool_.
     struct ProgramWrite {
         Device* device = nullptr;
-        const ProgramCommandSequence* program_cmd_seq = nullptr;
+        ProgramCommandSequence* program_cmd_seq = nullptr;
+        tt::tt_metal::detail::ProgramImpl* program = nullptr;  // set: the worker updates program_cmd_seq first
         const vector_aligned<uint32_t>* packed = nullptr;  // nullptr: write the fragments
         uint32_t packed_size = 0;
     };
