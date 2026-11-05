@@ -639,12 +639,26 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                         program_binary_status,
                         /*record_program_metadata=*/false);
                 }
-                if (write.packed != nullptr) {
-                    manager.issue_queue_reserve(write.packed_size, id_);
-                    manager.cq_write(write.packed->data(), write.packed_size, manager.get_issue_queue_write_ptr(id_));
-                    manager.issue_queue_push_back(write.packed_size, id_);
+                const vector_aligned<uint32_t>* packed = write.packed;
+                uint32_t packed_size = write.packed_size;
+                // Pack the program this worker updated: one stream to the hugepage, not one per fragment.
+                static thread_local vector_aligned<uint32_t> worker_packed;
+                if (packed == nullptr && write.program != nullptr) {
+                    const auto size =
+                        write.program_cmd_seq->get_one_shot_fetch_size(stall_first, stall_before_program, true);
+                    if (size <= write.program_cmd_seq->ctx->dispatch_mem_map().max_prefetch_command_size()) {
+                        program_dispatch::pack_program_command_sequence(
+                            *write.program_cmd_seq, stall_first, stall_before_program, true, worker_packed);
+                        packed = &worker_packed;
+                        packed_size = size;
+                    }
+                }
+                if (packed != nullptr) {
+                    manager.issue_queue_reserve(packed_size, id_);
+                    manager.cq_write(packed->data(), packed_size, manager.get_issue_queue_write_ptr(id_));
+                    manager.issue_queue_push_back(packed_size, id_);
                     manager.fetch_queue_reserve_back(id_);
-                    manager.fetch_queue_write(write.packed_size, id_);
+                    manager.fetch_queue_write(packed_size, id_);
                 } else {
                     program_dispatch::write_program_command_sequence(
                         *write.program_cmd_seq, manager, id_, stall_first, stall_before_program);
