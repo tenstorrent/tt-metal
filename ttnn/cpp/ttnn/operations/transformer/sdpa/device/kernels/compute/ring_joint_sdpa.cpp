@@ -98,17 +98,16 @@ void kernel_main() {
     // through cb_kv_pad_derived from the reader; the compile-time values are the placeholder's.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(47) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(48) == 1;
-    // Slots 49-52, expanded K (k_expand_weight): Q / QK width DHt_qk; DHt stays the latent K's, whose no-PE part is
-    // kexp_latent_tiles tile rows. The core's head pair splits the expansion: W_UK's wuk_tiles (this core's rows of
-    // its head's W_UK) arrive in cb_wuk with the Q push and leave with the Q pop.
+    // Slots 49-52, expanded K (k_expand_weight): Q / QK width DHt_qk; DHt stays the latent K's (no-PE part
+    // kexp_latent_tiles). This core's wuk_tiles of its head's W_UK arrive in cb_wuk with Q and leave with the Q pop.
     constexpr bool k_expand = get_compile_time_arg_val(49) == 1;
     constexpr uint32_t DHt_qk = get_compile_time_arg_val(50);
     constexpr uint32_t wuk_tiles = get_compile_time_arg_val(51);
     constexpr uint32_t kexp_latent_tiles = get_compile_time_arg_val(52);
     // sdpa_expand_k_chunk's half of the no-PE rows (Q's width past the latent's PE part) over the latent's columns.
     static_assert(!k_expand || wuk_tiles == (DHt_qk - (DHt - kexp_latent_tiles)) / 2 * kexp_latent_tiles);
-    // Expanded K expands V too: this core's rows of its head's W_UV^T follow its W_UK rows in cb_wuk, and each K
-    // chunk's V columns go to cb_vexp_own for the reader to assemble into cb_v_in.
+    // Expanded V: this core's W_UV^T rows follow its W_UK rows in cb_wuk; each K chunk's V columns go to cb_vexp_own
+    // for the reader to assemble into cb_v_in.
     constexpr uint32_t cb_vexp_own = get_named_compile_time_arg_val("cb_vexp_own");
     constexpr uint32_t wkv_tiles = 2 * wuk_tiles;
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
@@ -255,8 +254,8 @@ void kernel_main() {
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
-    // Expanded-K head pairs: this core's rank, the runtime arg after the K-split band. Pairs run without the
-    // rotated split and segmented accumulation (the host refuses both).
+    // Expanded-K head pairs: this core's rank follows the K-split band. No rotated split or segmented accumulation
+    // (host-checked).
     static_assert(!k_expand || (!rotated_q_split_enabled && !seg_accum_enabled));
     // Only the streaming path expands K (sdpa_expand_k_chunk); the fp32 path reads DHt-wide K.
     static_assert(!k_expand || use_streaming_compute, "expanded K needs the streaming compute path");
@@ -957,8 +956,7 @@ void kernel_main() {
                     } else if (has_state) {
                         merge_into_prev(incoming);
                     } else {
-                        // Adopt it. This core ran no K chunk, so the unpacker and packer still have the kernel's
-                        // startup data formats (Q's and the QK intermediate's), not the K loop's.
+                        // Adopt it. No K chunk ran here, so unpack/pack still hold the startup data formats.
                         reconfig_data_format_srca(incoming.max);
                         pack_reconfig_data_format(acc_state.prev.max);
                         copy_block(incoming.max, acc_state.prev.max, Sq_chunk_t);

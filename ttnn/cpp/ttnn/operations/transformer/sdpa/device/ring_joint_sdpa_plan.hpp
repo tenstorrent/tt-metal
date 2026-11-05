@@ -62,9 +62,8 @@ struct KSplitShape {
     uint32_t writer_out_row_group_h = 0;
 };
 
-// The K split and the subblocks it depends on. A chunked call that asks for k_splits > 1 gets exactly that many
-// bands, or a TT_FATAL naming why it cannot (calls that are not chunked prefill ignore it, so one config serves every
-// chunk).
+// The K split and the subblocks it depends on. A chunked call with k_splits > 1 gets exactly that many bands or a
+// TT_FATAL; non-chunked calls ignore it, so one config serves every chunk.
 KSplitShape derive_ksplit(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
 // Why this call cannot run the K split or segmented accumulation (both need one Q chunk per core and whole output row

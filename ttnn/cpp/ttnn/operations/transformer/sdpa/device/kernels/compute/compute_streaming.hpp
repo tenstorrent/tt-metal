@@ -168,8 +168,8 @@ static __attribute__((noinline, noclone)) void sdpa_cb_pop_front_out_of_line(uin
     CircularBuffer(cb_id).pop_front(num_tiles);
 }
 
-// Per-chunk, per-ring-step and normalize CB operations go through these out-of-line copies to limit kernel size; the
-// per-subblock and per-row-group ones stay inline, where the call would cost math util.
+// Out-of-line copies for per-chunk/per-ring-step/normalize CB ops (kernel size); per-subblock and per-row-group ops
+// stay inline, where a call would cost math util.
 static __attribute__((noinline, noclone)) void sdpa_cb_wait_front_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     CircularBuffer(cb_id).wait_front(num_tiles);
 }
@@ -465,10 +465,9 @@ void blocked_matmul_and_pack(
 }
 
 /**
- * Q@K^T block for expanded K, reading each K^T row where it already sits instead of from one assembled K^T chunk:
- * the no-PE rows of this core's half from its expansion output (cb_own, slot own_slot_tiles), the peer's half from
- * the exchange landing CB (in1_cb), and the k_pe rows from the latent chunk. All three hold K^T tiles of the latent K
- * format, row d at d * KT_stride + column, so the unpacker needs no reconfiguration between them.
+ * Q@K^T block for expanded K, reading K^T rows in place: this core's no-PE half from its expansion slot (cb_own,
+ * own_slot_tiles), the peer's half from in1_cb, the k_pe rows from the latent chunk. All three share the latent K
+ * format and layout (row d at d * KT_stride + column), so the unpacker is not reconfigured between them.
  */
 template <
     uint32_t KT_stride,
@@ -1420,19 +1419,17 @@ inline bool sdpa_first_half_unmasked(
 /**
  * MLA expanded K: expand this core's half of one latent K^T chunk's no-PE rows for its head.
  *
- * cb_kt_in holds the latent [c_kv | k_pe] as plain tiles in K^T tile order (tile (d, kt) at d * Sk_chunk_t + kt; the
- * QK transposes in-tile through its in1-transpose flag). cb_wuk holds this core's half of the head's W_UK no-PE rows,
- * latent-column-major (tile (r, d) at d * rows + r). K_h no-PE tiles c_kv @ W_UK^T are packed into cb_own in the same
- * K^T tile order, rows relative to the half. The reader sends them to the head pair's peer and pops cb_own; the peer's
- * half arrives in cb_peer. The QK reads K^T rows where they sit (blocked_matmul_and_pack_kexp), so the latent chunk
- * (k_pe rows) stays in cb_kt_in until the QK pops it.
+ * cb_kt_in: latent [c_kv | k_pe] as plain tiles in K^T order (tile (d, kt) at d * Sk_chunk_t + kt; the QK transposes
+ * in-tile). cb_wuk: this core's half of the head's W_UK no-PE rows, latent-column-major (tile (r, d) at d * rows + r).
+ * c_kv @ W_UK^T is packed into cb_own in K^T order, rows relative to the half; the reader sends it to the peer and pops
+ * it, the peer's half arrives in cb_peer. The QK reads rows in place, so the latent chunk (k_pe rows) stays in cb_kt_in
+ * until the QK pops it.
  *
- * MLA expanded V: the same expansion against this core's rows of the head's W_UV^T ([dv, latent], W_UK's layout),
- * which follow its W_UK rows in cb_wuk (w_offset), into cb_vexp_own: V^T rows, so V_h tile (kt, c) of this core's
- * columns at c * Sk_chunk_t + kt. The reader assembles both cores' halves into cb_v_in in V's row-major layout.
+ * MLA expanded V: same expansion with this core's W_UV^T rows (after its W_UK rows in cb_wuk, at w_offset) into
+ * cb_vexp_own as V^T (tile (kt, c) at c * Sk_chunk_t + kt); the reader assembles both halves into cb_v_in.
  *
- * Unpack/pack formats: entered and left in the state sdpa_inner_loop_step assumes on entry (srcA cb_qkt_im, srcB
- * cb_identity_scale_in, pack cb_normalized_out). Matmul maps in0 to srcB and in1 to srcA.
+ * Entered and left in the unpack/pack state sdpa_inner_loop_step assumes (srcA cb_qkt_im, srcB cb_identity_scale_in,
+ * pack cb_normalized_out). Matmul maps in0 to srcB and in1 to srcA.
  */
 template <
     uint32_t Sk_chunk_t,
@@ -1461,10 +1458,8 @@ static void sdpa_expand_k_chunk(uint32_t w_offset, uint32_t cb_own) {
     pack_reconfig_data_format(cb_own);
     configure_single_tile_pack(cb_own);
 
-    // K_h no-PE tile (kt, r) = sum_d latent (kt, d) @ W_UK (r, d)^T, for this core's rows, a DST block of rt K tiles x
-    // ct W_UK rows per acquire. Both operands' block tiles are adjacent: the latent's K tiles of a latent row, and
-    // W_UK's rows of a latent column. Uses the SDPA's matmul helpers, so the expansion runs at the QK / PV fidelity
-    // (SDPA_MATMUL_FIDELITY) rather than the compute config's.
+    // K_h no-PE tile (kt, r) = sum_d latent (kt, d) @ W_UK (r, d)^T; one DST block of rt K tiles x ct W_UK rows per
+    // acquire, block tiles adjacent in both operands. SDPA matmul helpers, so SDPA_MATMUL_FIDELITY applies.
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t ct = own_rows < dst_size ? own_rows : dst_size;
     static_assert(own_rows % ct == 0, "W_UK rows must split into DST-sized blocks");
@@ -2101,7 +2096,7 @@ static void sdpa_inner_loop_step(
         };
 
         // A row group leaves the step: normalized on the last ring iteration, else pushed for the next K chunk.
-        // Out of line, like push_exp_max_diff and salad_correct_row: called from several branches (code size).
+        // Out of line (code size): called from several branches.
         auto finish_rows = [&](uint32_t sbh) __attribute__((noinline)) {
             if (is_last_iter) {
                 normalize_row(pushed_rows, sbh);
@@ -2682,10 +2677,9 @@ template <
     // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
     bool causal_k_skip = false,
     uint32_t kv_region_Nt = q_local_padded_Nt,
-    // MLA expanded K (k_expand_weight): Q and the QK are DHt_qk tiles wide while cb_kt_in carries the DHt-wide latent;
-    // each K chunk's no-PE rows are expanded by a head pair (sdpa_expand_k_chunk), this core's half into cb_kexp_own
-    // with its rows of the head's W_UK from cb_wuk, which is popped with Q; the peer's half arrives in
-    // cb_kexp_peer. The runtime k_expand_rank picks this core's half. Off (INVALID_CB) everywhere else.
+    // MLA expanded K (k_expand_weight): Q/QK are DHt_qk tiles wide, cb_kt_in carries the DHt-wide latent. A head pair
+    // expands each K chunk's no-PE rows: this core's half into cb_kexp_own from its W_UK rows in cb_wuk (popped with
+    // Q), the peer's half into cb_kexp_peer. Off (INVALID_CB) everywhere else.
     uint32_t DHt_qk = DHt,
     uint32_t cb_wuk = INVALID_CB,
     uint32_t k_expand_latent_rows = 0,
@@ -3025,16 +3019,15 @@ void sdpa_ring_v2(
             if (!has_sliding_window && try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 continue;
             }
-            // Expanded K: expand before the per-Q causal skip, since the head pair's peer needs this core's rows even
-            // for chunks this core's Q chunk masks out entirely. Whatever follows configures its own pack width.
+            // Expanded K: expand before the per-Q causal skip; the peer needs this core's rows even for chunks this
+            // core's Q fully masks. Whatever follows configures its own pack width.
             uint32_t k_expand_own_slot_tiles = 0;
             if constexpr (k_expand) {
-                // cb_kexp_own is double-buffered and only the reader pops it, so this core's read pointer stays at
-                // the CB base: the QK addresses this chunk's half by the slot the expansion packed it into.
+                // cb_kexp_own is double-buffered and popped only by the reader, so its read pointer stays at the CB
+                // base; the QK addresses this chunk's half by slot.
                 k_expand_own_slot_tiles = (k_expand_chunk_count++ & 1) * k_expand_own_rows * Sk_chunk_t;
-                // Expanded V: a second pass over the same latent chunk with this core's W_UV^T rows (after its W_UK
-                // rows in cb_wuk) into cb_vexp_own; the reader assembles both halves into cb_v_in for the PV. One call
-                // site keeps a single copy of the expansion in the kernel binary.
+                // Expanded V: second pass over the same latent chunk with this core's W_UV^T rows into cb_vexp_own.
+                // One call site keeps a single copy of the expansion in the binary.
                 constexpr uint32_t expand_passes = cb_vexp_own != INVALID_CB ? 2 : 1;
 #pragma GCC unroll 1
                 for (uint32_t pass = 0; pass < expand_passes; ++pass) {

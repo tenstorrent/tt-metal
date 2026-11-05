@@ -251,9 +251,8 @@ class SplitKV:
 
 
 # (prefix chunks, row offset, metadata, logical rows): first chunk, a deeper prefix on the metadata path, a prefix
-# ending inside a chip's region (rotation within the stripe), one crossing a Q slab, and a short prompt that leaves most
-# sources without valid KV, so their ring iterations go inactive (the op promises nothing for Q rows past logical_n,
-# so only the rows below it are checked).
+# ending inside a chip's region, one crossing a Q slab, and a short prompt that leaves most sources without valid KV
+# (inactive ring iterations; only rows below logical_n are checked).
 ACCURACY_CASES = [
     pytest.param(0, 0, False, None, id="first-scalar"),
     pytest.param(3, 0, True, None, id="deep-metadata"),
@@ -422,10 +421,9 @@ def test_split_kv_rejects(invalid_case, error, expect_error):
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
-# Final 50k+5k chunk of the production prefill on the 32-device Galaxy (110 SDPA cores per chip, TorusXY, production
-# fabric packets): math util as test_ring_joint_attention_chunked_expanded_k_perf_check counts it (the per-chip work
-# matches the SP ring's), +/- margin.
-# Measured 2026-11-05 on bh-glx-120-c02u02: K3 5.04 ms, K2.7 3.56 ms.
+# Final 50k+5k chunk on the 32-device Galaxy (110 SDPA cores per chip, TorusXY, production fabric packets); util
+# counted as in test_ring_joint_attention_chunked_expanded_k_perf_check, +/- margin.
+# Calibrated 2026-11-05 on bh-glx-120-c02u02: K3 5.04 ms, K2.7 3.56 ms.
 SPLIT_KV_PERF_CHECK_CONFIGS = [
     # (model_name, expected_util, margin)
     ("kimi_k3_expanded_k", 57.61, 0.05),

@@ -875,9 +875,8 @@ void kernel_main() {
         }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
-        // With no core holding two Q chunks, a K-split core holds one unit, its state in L1 until the K-split epilogue,
-        // and an idle core none: nothing to save, restore or write in the ring. Leaving that path out keeps the binary
-        // well inside the kernel config buffer.
+        // With no core holding two Q chunks there is nothing to save, restore or write in the ring (K-split state stays
+        // in L1 until the epilogue); leaving that path out keeps the binary well inside the kernel config buffer.
         if constexpr (ksplit_enabled && single_q) {
             ASSERT(ksplit_active || global_q_end == global_q_start);
             continue;

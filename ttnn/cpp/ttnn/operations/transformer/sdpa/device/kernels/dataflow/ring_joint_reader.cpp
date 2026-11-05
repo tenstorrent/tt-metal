@@ -311,25 +311,22 @@ void kernel_main() {
     // re-derive logical_nt / logical_lt / the ring masks from them.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(41) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(42) == 1;
-    // Slots 43-47, expanded K and V: Q is DHt_qk tiles wide while K (the latent) keeps DHt; the reader also pushes this
-    // core's rows of its head's W_UK and W_UV^T (kexp_nope_tiles x kexp_latent_tiles tiles per head each) into cb_wuk
-    // alongside the Q push. Without it DHt_qk == DHt.
+    // Slots 43-47, expanded K and V: Q is DHt_qk tiles wide, the latent K keeps DHt; this core's W_UK and W_UV^T rows
+    // go into cb_wuk with the Q push. Without it DHt_qk == DHt.
     constexpr bool k_expand = get_compile_time_arg_val(43) == 1;
     constexpr uint32_t DHt_qk = get_compile_time_arg_val(44);
     constexpr uint32_t wuk_tiles = get_compile_time_arg_val(45);
     constexpr uint32_t kexp_latent_tiles = get_compile_time_arg_val(46);
     constexpr uint32_t kexp_nope_tiles = get_compile_time_arg_val(47);
-    // Slots 48-49, expanded-K head pairs: the two cores of a (K-split band, head) each expand kexp_own_rows of the
-    // no-PE tile rows per K chunk; this reader sends its compute's rows to the peer's cb_kexp_peer and hands the peer's
-    // rows to its compute, synchronized by the credit and data semaphores.
+    // Slots 48-49, expanded-K head pairs: each core of a (K-split band, head) expands kexp_own_rows no-PE tile rows per
+    // K chunk; the readers swap halves into each other's cb_kexp_peer, synchronized by the credit and data semaphores.
     constexpr uint32_t kexp_credit_sem = get_compile_time_arg_val(48);
     constexpr uint32_t kexp_data_sem = get_compile_time_arg_val(49);
     constexpr uint32_t kexp_own_rows = kexp_nope_tiles / 2;
     static_assert(!k_expand || wuk_tiles == kexp_own_rows * kexp_latent_tiles);
-    // The op validates [c_kv | k_pe] latent K and [q_nope | q_pe] Q with matching PE widths, so Q has exactly
-    // kexp_nope_tiles tile rows more than the latent's PE part (compute's count).
+    // The op validates matching PE widths of [c_kv | k_pe] and [q_nope | q_pe].
     static_assert(!k_expand || DHt_qk + kexp_latent_tiles == DHt + kexp_nope_tiles, "expanded K: Q / latent K widths");
-    // Expanded K always expands V too (the device op requires v_expand_weight), so V never shares K's buffer.
+    // Expanded K always expands V too (v_expand_weight is required), so V never shares K's buffer.
     static_assert(!k_expand || !v_shares_k_buffer, "expanded K expands V in the op");
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Live joint tail in tiles; equals the compile-time value unless logical_l arrives as a tensor.
@@ -545,8 +542,8 @@ void kernel_main() {
     constexpr bool ksplit_enabled = ksplit_count > 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
-    // Expanded K: [W_UK address, rank, peer physical x, peer physical y, W_UV^T address] follow the K-split band. Head
-    // pairs never run the rotated split (the host refuses it).
+    // Expanded K: [W_UK addr, rank, peer x, peer y, W_UV^T addr] follow the K-split band. No rotated split (host
+    // refuses it).
     static_assert(!k_expand || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t wuk_arg_idx = rotated_args_base + (ksplit_enabled ? 1 : 0);
     [[maybe_unused]] const uint32_t wuk_addr = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx) : 0;
@@ -554,8 +551,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t kexp_peer_x = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
     [[maybe_unused]] const uint32_t kexp_peer_y = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
     [[maybe_unused]] uint32_t kexp_exchanged = 0;  // cumulative: semaphores count up and are reset by the launch
-    // Expanded K expands V too: the head pair also splits V's columns (as many as its W_UK rows) and this reader
-    // assembles its compute's and the peer's halves into both cores' cb_v_in entries.
+    // The head pair splits V's columns like K's no-PE rows; the reader assembles both halves into both cores' cb_v_in.
     static_assert(!k_expand || vDHt == kexp_nope_tiles, "expanded V: V's columns split like K's no-PE rows");
     constexpr uint32_t wkv_tiles = 2 * wuk_tiles;
     [[maybe_unused]] const uint32_t wuv_addr = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 4) : 0;
@@ -1390,11 +1386,9 @@ void kernel_main() {
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                     if constexpr (k_expand) {
-                        // This Q chunk's head's W_UK, kexp_nope_tiles x kexp_latent_tiles tiles: same lifetime as Q
-                        // (compute pops both together). Only this core's rows of W_UK: rows
-                        // [rank * own_rows, (rank + 1) * own_rows), stored latent-column-major (tile (r, d) at
-                        // d * own_rows + r) so the expansion's matmul block reads a latent column's W_UK rows as
-                        // adjacent tiles.
+                        // This core's rows [rank * own_rows, (rank + 1) * own_rows) of the head's W_UK, popped with
+                        // Q. Stored latent-column-major (tile (r, d) at d * own_rows + r) so the expansion's matmul
+                        // block reads a latent column's rows as adjacent tiles.
                         constexpr uint32_t wuk_tile_bytes = get_tile_size(cb_wuk);
                         const InterleavedAddrGenFast<true> wuk_gen = {
                             .bank_base_address = wuk_addr,
@@ -1405,14 +1399,13 @@ void kernel_main() {
                         for (uint32_t t = 0; t < wuk_tiles; ++t) {
                             const uint32_t r = t / kexp_latent_tiles;
                             const uint32_t d = t % kexp_latent_tiles;
-                            noc_async_read_tile(
+                            noc_async_read_page(
                                 nq * kexp_nope_tiles * kexp_latent_tiles + kexp_rank * wuk_tiles + t,
                                 wuk_gen,
                                 wuk_write_ptr + (d * kexp_own_rows + r) * wuk_tile_bytes);
                         }
                         {
-                            // Then this core's rows of W_UV^T ([dv, latent] per head, W_UK's layout), laid out the
-                            // same way after W_UK's.
+                            // Then this core's rows of W_UV^T ([dv, latent], W_UK's layout), laid out the same way.
                             const InterleavedAddrGenFast<true> wuv_gen = {
                                 .bank_base_address = wuv_addr,
                                 .page_size = wuk_tile_bytes,
@@ -1420,7 +1413,7 @@ void kernel_main() {
                             for (uint32_t t = 0; t < wuk_tiles; ++t) {
                                 const uint32_t r = t / kexp_latent_tiles;
                                 const uint32_t d = t % kexp_latent_tiles;
-                                noc_async_read_tile(
+                                noc_async_read_page(
                                     nq * kexp_nope_tiles * kexp_latent_tiles + kexp_rank * wuk_tiles + t,
                                     wuv_gen,
                                     wuk_write_ptr + (wuk_tiles + d * kexp_own_rows + r) * wuk_tile_bytes);
@@ -1522,17 +1515,15 @@ void kernel_main() {
                     }
 
                     if constexpr (k_expand) {
-                        // Exchange this K chunk's expanded rows with the peer. Both cores of the pair walk the same
-                        // K chunks and pushes / pops these CBs identically, so the peer's receive slot for this chunk
-                        // sits at the same address as this core's own. Credit first (this core's slot is free), so
-                        // neither core waits on the other in a cycle.
+                        // Exchange this K chunk's expanded rows with the peer. Both cores push / pop these CBs
+                        // identically, so the peer's receive slot is at this core's address. Credit first to avoid a
+                        // wait cycle.
                         constexpr uint32_t kexp_tiles = kexp_own_rows * Sk_chunk_t;
                         constexpr uint32_t kexp_bytes = kexp_tiles * k_tile_bytes;
                         const uint32_t credit_addr = get_semaphore(kexp_credit_sem);
                         const uint32_t data_addr = get_semaphore(kexp_data_sem);
-                        // Order matters beyond this exchange: compute's QK reads this core's half straight from
-                        // cb_kexp_own without waiting on it, and is safe only because this push of the peer's half
-                        // follows the wait for that half below (the QK waits for cb_kexp_peer).
+                        // The QK reads cb_kexp_own without waiting on it; that is safe only because the cb_kexp_peer
+                        // push (which the QK waits on) follows the cb_kexp_own wait below.
                         cb_reserve_back(cb_kexp_peer, kexp_tiles);
                         const uint32_t slot_addr = get_write_ptr(cb_kexp_peer);
                         noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, credit_addr), 1);
@@ -1550,15 +1541,13 @@ void kernel_main() {
                         ++kexp_exchanged;
                     }
                     if constexpr (k_expand) {
-                        // Assemble this K chunk's V entry from both halves of the pair, after the K exchange (the QK
-                        // waits on that; the PV, later, on this). Compute packs this core's V columns as V^T rows
-                        // (tile (c, kt) at c * Sk_chunk_t + kt); each tile goes to V's row-major entry, (kt, rank *
-                        // own_rows + c), in this core's cb_v_in and the peer's, which sits at the same address: unlike
-                        // cb_kexp_peer, cb_v_in also takes padded and phase-alignment pushes, so this needs both cores
-                        // of a pair to push it identically (one Q chunk per core, a row group skips its donated slot
-                        // together, spares pair with spares). The entry is pushed once the peer's copy has landed; the
-                        // same credit-first order as K's.
-                        // The K exchange's semaphores and count: both cores exchange K, then V, for every chunk.
+                        // Assemble this K chunk's V entry from both halves, after the K exchange. Compute packs this
+                        // core's V columns as V^T (tile (c, kt) at c * Sk_chunk_t + kt); each tile goes to row-major
+                        // (kt, rank * own_rows + c) in this core's cb_v_in and the peer's, at the same address. Unlike
+                        // cb_kexp_peer, cb_v_in also takes padded and phase-alignment pushes, so both cores must push
+                        // it identically (one Q chunk per core, a row group skips its donated slot together, spares
+                        // pair with spares). Pushed once the peer's copy lands; credit first, as for K. Shares K's
+                        // semaphores and count.
                         const uint32_t credit_addr = get_semaphore(kexp_credit_sem);
                         const uint32_t data_addr = get_semaphore(kexp_data_sem);
                         constexpr uint32_t cb_vexp_own = get_named_compile_time_arg_val("cb_vexp_own");

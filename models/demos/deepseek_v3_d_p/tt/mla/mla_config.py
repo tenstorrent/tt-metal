@@ -647,12 +647,10 @@ MLA_SDPA_CONFIG = {
     ],
 }
 
-# Dense chunked-prefill attention per model, matched by the same tags as the tuned configs above (first match wins);
-# ttMLA's expanded_k argument overrides it. A model without an entry runs ring_mla: K and V both read from the latent,
-# absorbed.
-#   expanded_k: a ring_joint SDPA expands K and V per head from the gathered latent, so QK runs at the un-absorbed
-#     head dim, PV at v_head_dim, and no wkv_b2 follows. Needs a measured head-pair schedule for the shape
-#     (ttMLA._EXPANDED_K_SDPA_CHUNKS); a shape without one runs ring_mla.
+# Dense chunked-prefill attention per model, matched like the tuned configs above (first match wins); ttMLA's
+# expanded_k argument overrides it. A model without an entry runs ring_mla (absorbed).
+#   expanded_k: ring_joint SDPA expands K and V per head from the gathered latent (no wkv_b2 after). Shapes without a
+#     measured head-pair schedule (ttMLA._EXPANDED_K_SDPA_CHUNKS) run ring_mla.
 MLA_ATTENTION_CONFIG = [
     # Kimi-K2.7 (and K2.6): 64 heads.
     {"num_heads": 64, "q_lora_rank": 1536, "chunked_only": True, "expanded_k": True},

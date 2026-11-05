@@ -110,8 +110,7 @@ struct RingJointRuntimeArgLayout {
 // The runtime args that change between dispatches of one cached program, in kernel order. The create path appends these
 // blocks and the cache-hit patch rewrites them; every core gets the same values.
 struct RingJointScalarBlocks {
-    // logical_nt, active ring-iteration mask, KV-pad Q mapping (pre-wrap start / count, post-wrap start, valid
-    // count).
+    // logical_nt, active ring-iteration mask, KV-pad Q mapping (pre-wrap start/count, post-wrap start, valid count).
     std::array<uint32_t, 6> reader;
     // logical_nt, active ring-iteration mask, single-valid-K-chunk mask.
     std::array<uint32_t, 3> writer;
@@ -1103,8 +1102,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
-    // Expanded K (k_expand_weight): Q and the QK run at Q's head dim (DHt_qk); DH is K's, the latent's, which every K
-    // data-movement path and CB keeps. Without it the two are equal.
+    // Expanded K (k_expand_weight): Q and the QK run at Q's head dim (DHt_qk); DH stays the latent K's, used by every K
+    // data-movement path and CB. Equal without k_expand.
     const bool k_expand = tensor_args.has_k_expand();
     const uint32_t DH_qk = q_shape[3];
     const uint32_t DH = k_expand ? static_cast<uint32_t>(k_shape[3]) : DH_qk;
@@ -1587,9 +1586,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
                                                               : std::min(num_cores, all_heads_num_q_chunks);
 
-    // Expanded K: W_UK is [1, NH, nope, latent] (validated in the device operation); each head-pair core holds half of
-    // its head's no-PE tile rows (wuk_tiles) in cb_wuk. Without it, a placeholder geometry keeps the kernels' unused
-    // arithmetic free of zero divisors.
+    // Expanded K: W_UK is [1, NH, nope, latent]; each head-pair core holds half its head's no-PE tile rows (wuk_tiles).
+    // Without k_expand, a placeholder geometry keeps the kernels' unused arithmetic free of zero divisors.
     const auto wuk_shape = k_expand ? tensor_args.k_expand_weight->logical_shape() : ttnn::Shape({1, 1, 64, 32});
     const uint32_t kexp_latent_tiles = wuk_shape[3] / tt::constants::TILE_WIDTH;
     const uint32_t kexp_nope_tiles = wuk_shape[2] / tt::constants::TILE_HEIGHT;
@@ -2098,11 +2096,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
-    // Expanded K: this core's rows of its head's W_UK (pushed and popped with Q), then the expanded no-PE rows of each
-    // K chunk, double-buffered: this core's own (compute -> reader -> peer) and its head-pair peer's (reader ->
-    // compute). The QK reads both in place beside the latent chunk's PE rows. cb_kexp_own holds exactly two slots:
-    // compute never pops it (the reader does, once the peer copy has landed) and addresses its half by slot parity.
-    // Without k_expand they alias live CBs so the kernels' compile-time tile-size queries stay valid.
+    // Expanded K: this core's W_UK rows (pushed/popped with Q), then each K chunk's expanded no-PE rows,
+    // double-buffered: own (compute -> reader -> peer) and peer's (reader -> compute), read in place by the QK.
+    // cb_kexp_own holds exactly two slots: only the reader pops it (after the peer copy lands), compute addresses it
+    // by slot parity. Without k_expand they alias live CBs so compile-time tile-size queries stay valid.
     const tt::DataFormat wuk_df =
         k_expand ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.k_expand_weight->dtype()) : k_df;
     // cb_wuk holds this core's rows of W_UK, then as many of W_UV^T (the V expansion).
@@ -2111,8 +2108,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
     const uint32_t cb_kexp_peer =
         k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
-    // Expanded V: this core's V columns of each K chunk (compute -> reader), which the reader copies into its own and
-    // its peer's cb_v_in entry; single-buffered, the reader frees it once both copies have landed.
+    // Expanded V: this core's V columns per K chunk (compute -> reader), copied into its own and the peer's cb_v_in;
+    // single-buffered, freed once both copies land.
     const uint32_t cb_vexp_own = k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t, k_tile_size, k_df) : cb_k_in;
 
     const std::vector<uint32_t> cb_compile_time_args = {
@@ -2595,8 +2592,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     }
 
-    // K multicast pass: one mcast chain per logical row. A row with no Q work sits out (its cores read no K and
-    // join no handshake) instead of disabling the multicast.
+    // K multicast pass: one mcast chain per logical row. A row with no Q work sits out (reads no K, joins no
+    // handshake) instead of disabling the multicast.
     bool k_mcast_enabled = false;
     std::string k_mcast_fallback_reason;
     std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
@@ -2753,8 +2750,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
         // Every core needs a complete unit to supply indices for padded reader slots.
         rotated_base_chunks >= 1;
-    // Expanded K's head pairs ride the head chains, which already exclude the rotation; the kernels' runtime arg
-    // indices assume it.
+    // Expanded K's head pairs ride the head chains, which exclude the rotation; kernel runtime arg indices assume it.
     TT_FATAL(!(k_expand && use_rotated_q_split), "RingJointSDPA k_expand_weight does not support the rotated Q split");
 
     ring_joint::RotatedQSchedule rotated_sched;
@@ -3406,8 +3402,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (ksplit_count > 1) {
             reader_args.push_back(ksplit_band(i));
         }
-        // Expanded K: W_UK's address (patched on cache hits like the other buffers), then this core's rank in its
-        // head pair and its peer's physical core.
+        // Expanded K: W_UK's address (patched on cache hits), this core's head-pair rank, its peer's physical core.
         if (k_expand) {
             const auto& peer_phys = core_work[kexp_peer[i]].physical_core;
             reader_args.push_back(tensor_args.k_expand_weight->buffer());

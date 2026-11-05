@@ -84,10 +84,8 @@ BATCH_SIZE = 1
 # kernel-config staging region grows from 69 KiB to 85 KiB on Blackhole.
 LLK_ASSERT_WORKER_L1_SIZE = 1_444_992
 # Kernel config buffer headroom guard: tests open the mesh with KERNEL_CONFIG_HEADROOM_BYTES more worker L1 than the
-# Blackhole default (LLK_ASSERT_WORKER_L1_SIZE + 16 KiB), shrinking the kernel config buffer by as much, so a program
-# within that margin of the real limit fails here. In-process perf checks open without it
-# (kernel_config_headroom_guard=False) to measure the production buffer. RING_JOINT_NO_CONFIG_HEADROOM_GUARD=1 disables
-# it.
+# Blackhole default, shrinking the kernel config buffer so a program within that margin of the limit fails here.
+# Perf checks open without it (kernel_config_headroom_guard=False); RING_JOINT_NO_CONFIG_HEADROOM_GUARD=1 disables it.
 KERNEL_CONFIG_HEADROOM_BYTES = 8 * 1024
 KERNEL_CONFIG_HEADROOM_GUARD_WORKER_L1_SIZE = LLK_ASSERT_WORKER_L1_SIZE + 16 * 1024 + KERNEL_CONFIG_HEADROOM_BYTES
 
@@ -148,12 +146,10 @@ class ModelConfig:
     nd_sharded_kv_cache: bool = False
     # Indexed ND-sharded K/V cache (slot kv_cache_batch_idx of cache_batch), as ttMLA runs it.
     indexed_kv_cache: bool = False
-    # MLA expanded K and V (k_expand_weight, v_expand_weight): Q is [q_nope | q_pe] (d_q wide) against the d_k-wide
-    # latent K, expanded per head inside the op with a W_UK of [nhq, k_expand_nope, latent], latent =
-    # d_k - (d_q - k_expand_nope); V is expanded from the same latent with W_UV^T [nhq, d_v, latent] and has no tensor.
+    # MLA expanded K/V: Q [q_nope | q_pe] (d_q wide) vs the d_k-wide latent K, expanded in-op per head with W_UK
+    # [nhq, k_expand_nope, latent] and W_UV^T [nhq, d_v, latent] (no V tensor); latent = d_k - (d_q - k_expand_nope).
     k_expand_nope: int = None
-    # The production model config whose fabric packet payload the mesh opens with (the ring gather's packet size is the
-    # fabric's), resolved when the mesh opens; None keeps the fabric default.
+    # Production model config whose fabric packet payload the mesh opens with; None keeps the fabric default.
     fabric_payload_config: type = None
 
 
@@ -2025,16 +2021,14 @@ def run_ring_joint_sdpa_chunked(
         def as_device_reads(t):
             return ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(t.dtype)
 
-        # MLA expanded K and V: the device expands the latent K per head with W_UK and V_h = c_kv @ W_UV_h (weights drawn
-        # here, after Q/K, whether or not the reference runs, so the device inputs do not depend on do_check).
+        # MLA expanded K/V weights, drawn after Q/K even without the reference, so inputs do not depend on do_check.
         w_uk_host = None
         w_uv_host = None
         w_uv_t_host = None
         if expand_kv:
             latent = d_k - (d_q - model.k_expand_nope)
             w_uk_host = as_device_reads(torch.randn(1, nhq, model.k_expand_nope, latent) * latent**-0.5)
-            # W_UV in its stored [latent, d_v] layout and bf8; the op takes W_UV^T ([d_v, latent], W_UK's layout),
-            # re-quantized to bf8 on upload.
+            # W_UV stored [latent, d_v] in bf8; the op takes W_UV^T [d_v, latent], re-quantized to bf8 on upload.
             w_uv_host = as_device_reads(torch.randn(1, nhq, latent, d_v) * latent**-0.5)
             w_uv_t_host = w_uv_host.transpose(-2, -1).contiguous()
 
@@ -2054,14 +2048,12 @@ def run_ring_joint_sdpa_chunked(
         # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
         if num_iterations == 1 and do_check:
-            # Causal attention: rows before ref_seq attend only to keys before it, so the reference stops at the end
-            # of the last checked chunk.
+            # Causal: the reference can stop at the end of the last checked chunk.
             ref_seq = total_seq if selected_chunks is None else (max(selected_chunks) + 1) * chunk_size
             q_reference = Q_full[:, :, :ref_seq, :]
             if expand_kv:
-                # The reference attends to K expanded per head from the same bf8 latent K and W_UK the device reads, so
-                # each head can be held to the per-head bar (record_chunk_accuracy), and to the exact fp32 V over that
-                # latent and the stored bf8 W_UV.
+                # K expanded from the same bf8 latent and W_UK the device reads (so each head meets the per-head bar);
+                # V exact in fp32 over that latent and the bf8 W_UV.
                 latent_reference = as_device_reads(K_full[:, :, :ref_seq, :])
                 k_reference = expand_mla_k_reference(latent_reference, w_uk_host)
                 v_reference = torch.einsum(
@@ -2342,9 +2334,8 @@ def run_ring_joint_sdpa_chunked(
             s, e = i * chunk_size, (i + 1) * chunk_size
 
             if reuse_kv_buffer and indexed_nd_sharded_kv_cache:
-                # As ttMLA calls the op: one oversized indexed cache (slot kv_cache_batch_idx; the other slots and each
-                # device's slab past the valid prefix hold garbage) with kv_actual_isl = s. The start is chunk-aligned,
-                # so the layout is the balanced growing one and the output keeps the natural row order.
+                # As ttMLA calls the op: one oversized indexed cache (garbage outside the slot's valid prefix) with
+                # kv_actual_isl = s. Chunk-aligned starts keep the balanced layout and natural output row order.
                 stable_per_dev = reuse_kv_stable_seq // sp_size
 
                 def oversized_slot_cache(full, nh, head_dim, slots, slot):
@@ -6940,11 +6931,9 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     fabric_payload_config=KimiK3Config,
 )
 
-# Kimi K3 / K2.7 production MLA chunked prefill at each model's per-chip shape (640 rows), as ttMLA runs it by default:
-# 24 / 16 heads per chip (tp=4). Q is the un-absorbed [q_nope (128) | q_pe (64)], K the indexed 576-wide bfp8 latent
-# cache, expanded per head on arrival with W_UK [heads, 128, 512]; V (d_v=128) is expanded from the same latent with
-# W_UV. K2.7 keeps its YaRN softmax scale, (192 ** -0.5) * mscale ** 2 with mscale = 0.1 * ln(64) + 1; K3 (NoPE) the
-# plain one.
+# Kimi K3 / K2.7 production MLA chunked prefill per chip (640 rows, 24 / 16 heads, tp=4), as ttMLA runs it: Q
+# [q_nope (128) | q_pe (64)], K the indexed 576-wide bfp8 latent cache expanded in-op with W_UK [heads, 128, 512], V
+# (d_v=128) expanded with W_UV. K2.7 uses the YaRN scale (192 ** -0.5) * mscale ** 2, mscale = 0.1 * ln(64) + 1.
 # Per-head PCC bar over the 55k chunked sequence (bf8 latent and weights, HiFi2); a corrupted head lands far below.
 EXPANDED_K_MIN_HEAD_PCC = 0.997
 _EXPANDED_K_KIMI = replace(
@@ -8389,8 +8378,7 @@ def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv
 )
 def test_ring_joint_attention_expanded_k_chunked_perf_impl(model_name, qk_configs, chunk_size):
     """Expanded-K/V chunked prefill without the CPU reference (profiled by
-    test_ring_joint_attention_expanded_k_create_chunked_perf_table).
-    The indexed K cache brings its own cache layout, so only the per-chunk right-sized (fresh_kv) input runs."""
+    test_ring_joint_attention_expanded_k_create_chunked_perf_table); fresh_kv input only."""
     model = EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name]
     run_ring_joint_sdpa_chunked(
         MESH_CONFIG,
@@ -8909,9 +8897,8 @@ class TracedFinalChunkRun:
 
 
 def profile_traced_final_chunk(model, q_chunk_size, k_chunk_size, k_splits):
-    """Profile the final chunk (the 50k+5k one) of the model's expanded-K/V chunked prefill on the indexed latent K
-    cache, at the given chunks and K split: compiled eagerly, captured in a trace and its warm replays
-    profiled (profile_ring_joint_traced_duration_ns), on a mesh with the model's production fabric packets."""
+    """Profile the final (50k+5k) chunk of the model's expanded-K/V chunked prefill: compiled eagerly, then warm trace
+    replays profiled (profile_ring_joint_traced_duration_ns), with production fabric packets."""
     chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
     perf_chunk = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size - 1
     runtime = open_ring_joint_sdpa_runtime(
@@ -8946,11 +8933,9 @@ def profile_traced_final_chunk(model, q_chunk_size, k_chunk_size, k_splits):
     )
 
 
-# Kimi K3 / K2.7 production attention (expanded K, head pairs, K-split bands; chunks from ttMLA): final 50k+5k chunk on
-# an 8-device SP ring (110 SDPA cores). Util counts QK at the expanded width (192), PV at 128 and the in-op per-head K
-# and V expansions (latent 512 -> 128 each); it is not comparable to the ring_mla (d_v=512) rows above. Calibrated on a
-# high-power Blackhole Galaxy (sp=8 tp=4, 2D torus, production fabric packets), +/-5%.
-# Measured 2026-11-05 on bh-glx-120-c02u02: K3 4.43 ms, K2.7 3.10 ms.
+# Kimi K3 / K2.7 production attention, final 50k+5k chunk, 8-device SP ring (110 SDPA cores). Util counts QK at 192, PV
+# at 128 and the in-op K and V expansions (512 -> 128 each); not comparable to the ring_mla (d_v=512) rows above.
+# Calibrated 2026-11-05, BH Galaxy sp=8 tp=4 2D torus, prod fabric packets, +/-5%: K3 4.43 ms, K2.7 3.10 ms.
 EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, ring_size, expected_util, margin)
     ("kimi_k3_expanded_k", 8, 65.54, 0.05),
@@ -8959,9 +8944,8 @@ EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
 
 
 def expanded_kv_expansion_utilization(model, chunk_size, perf_chunk, duration_ns, core_count):
-    """Math util of the in-op K and V expansions: each head's K_nope = c_kv . W_UK and V = c_kv . W_UV over every K row
-    of the ring, the work of the highest-ranked chip, which bounds the op (the dense causal skip drops the newest slab of
-    higher-ranked shards on the other chips before they expand)."""
+    """Math util of the in-op K and V expansions over every K row of the ring: the highest-ranked chip's work, which
+    bounds the op (the causal skip drops later slabs on other chips before they expand)."""
     latent = model.d_k - (model.d_q - model.k_expand_nope)
     k_rows = (perf_chunk + 1) * chunk_size
     flops = 2 * k_rows * (model.k_expand_nope + model.d_v) * latent * model.nhq

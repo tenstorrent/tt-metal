@@ -740,15 +740,13 @@ void bind_sdpa(nb::module_& mod) {
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
                 UINT32 contract as slot_id; requires the metadata path (slot_id / kv_actual_isl_tensor on
                 chunked-shaped prefill) and no sliding window. Defaults to None.
-            k_expand_weight (ttnn.Tensor, optional): MLA expanded K. W_UK per head, [1 x nqh x nope x latent] TILE
-                DRAM (wkv_b1 as stored, e.g. [1 x nqh x 128 x 512]). K stays the shared latent [c_kv | k_pe]; each
-                core expands K per head in the kernel, K_h = [c_kv @ W_UK_h^T | k_pe], so Q is un-absorbed
-                [q_nope | q_pe] and QK runs nope + rope wide. nope / 64 must be a power of two (whole tile rows per
-                head-pair core). Requires one shared K head and a separate per-head V or v_expand_weight.
-            v_expand_weight (ttnn.Tensor, optional): MLA expanded V, with k_expand_weight and without
-                input_tensor_v / persistent_output_buffer_v. W_UV^T per head, [1 x nqh x dv x latent] TILE DRAM
-                (k_expand_weight's shape and layout, e.g. [1 x nqh x 128 x 512]). Each core expands V per head from
-                the latent K chunk, V_h = c_kv @ W_UV_h, so the ring gathers only the latent.
+            k_expand_weight (ttnn.Tensor, optional): MLA expanded K. W_UK [1 x nqh x nope x latent], TILE DRAM
+                (wkv_b1 as stored). K stays the shared latent [c_kv | k_pe] and is expanded in-kernel to
+                K_h = [c_kv @ W_UK_h^T | k_pe]; Q is un-absorbed [q_nope | q_pe]. nope / 64 must be a power of two.
+                Requires one shared K head and a separate per-head V or v_expand_weight.
+            v_expand_weight (ttnn.Tensor, optional): MLA expanded V (with k_expand_weight, no input_tensor_v /
+                persistent_output_buffer_v). W_UV^T [1 x nqh x dv x latent], TILE DRAM. V_h = c_kv @ W_UV_h is
+                expanded in-kernel, so the ring gathers only the latent.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated

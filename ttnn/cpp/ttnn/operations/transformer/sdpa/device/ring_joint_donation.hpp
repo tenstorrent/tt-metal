@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Slot donation (kernels/ring_joint_ksplit.hpp) on the K split's dense layout: the cores that own no unit pair up as
-// spares, and every home head pair gives one slot of its ring walk to a spare pair. A row's K multicast moves at the
-// pace of its slowest core, so all homes linked through a row (their head pairs straddle rows) give the same slot and
-// skip it together; each such group takes its own slot. The last band's groups take the first slots (the local slice
-// is the smallest on most devices and the first band, without the diagonal, the slower one), so the first band gives
-// away larger slots. A spare pair walks its items in slot order, each once its slice has arrived, so spares need not
-// keep pace with the slot they serve.
+// Slot donation (kernels/ring_joint_ksplit.hpp) on the K split's dense layout: cores owning no unit pair up as spares,
+// and every home head pair gives one slot of its ring walk to a spare pair. A row's K multicast moves at its slowest
+// core's pace, so homes linked through a row (head pairs straddling rows) skip the same slot together; each such group
+// gets its own slot. The last band's groups take the first slots (usually the smallest local slice), so the slower
+// first band (no diagonal) gives away larger ones. Spares walk items in slot order as slices arrive, not in lockstep.
 
 #pragma once
 

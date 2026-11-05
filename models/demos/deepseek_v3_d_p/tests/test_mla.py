@@ -1572,9 +1572,8 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     )
 
 
-# Output, TP-sharded vs TP-replicated cache: the full-mesh ring (32 sources, each a TP stripe of a slice) and the
-# SP-axis ring (8 whole slices) merge the KV blocks' softmax states in different orders, so the two agree only to
-# rounding, for ring_mla and expanded K/V alike (measured: K2.7 ring_mla 0.99987, expanded K/V 0.99983).
+# TP-sharded vs TP-replicated cache: the full-mesh ring (32 sources) and the SP-axis ring (8 slices) merge softmax
+# states in different orders, so outputs agree only to rounding (measured K2.7: ring_mla 0.99987, expanded K/V 0.99983).
 _TP_SHARDED_MIN_PCC = 0.999
 
 
@@ -1608,10 +1607,8 @@ def _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, what):
 def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
     request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor
 ):
-    """The TP-sharded cache gives the TP-replicated (sp_only) run's output on the same inputs. With a TP-sharded cache
-    the SDPA gathers the cache over the full mesh (32 sources) instead of the SP-axis ring (8), which merges the KV
-    blocks in a different order, so the outputs match to _TP_SHARDED_MIN_PCC rather than bit for bit.
-    """
+    """The TP-sharded cache matches the TP-replicated (sp_only) output on the same inputs to _TP_SHARDED_MIN_PCC
+    (different ring merge order, so not bit for bit)."""
     if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
         pytest.skip(f"no golden MLA trace recorded for {variant.name}")
     topology = per_axis_topology(device_params["fabric_config"])
@@ -1634,10 +1631,9 @@ def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
     logger.success(f"✓ tp_sharded output matches sp_only ({len(outs[True])} user(s))")
 
 
-# A captured three-layer forward replayed with the user and prefix changed between replays, on the TP-sharded cache,
-# must equal the eager forwards bit for bit, and those must match the TP-replicated (sp_only) eager forwards (see
-# _assert_tp_sharded_matches_sp_only). Two users share each layer's cache, the user order makes the prefix go
-# long -> short -> long, and user 1's starts are rotated (not chunk-aligned).
+# A captured three-layer forward on the TP-sharded cache, replayed with user and prefix changed between replays, must
+# equal the eager forwards bit for bit, which must match the TP-replicated (sp_only) eager forwards. Two users share
+# each layer's cache; prefixes go long -> short -> long; user 1's starts are not chunk-aligned.
 _REPLAY_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (1, 7680)]
 
 
@@ -1669,8 +1665,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
     topology = per_axis_topology(device_params["fabric_config"])
 
     def layer_weights(layer):
-        # Distinct per-layer kv_b (W_UK, W_UV): a captured program that kept another layer's weight address would
-        # differ.
+        # Distinct per-layer kv_b, so a captured program that kept another layer's weight address would differ.
         return {**weights, "kv_b_proj.weight": (weights["kv_b_proj.weight"].float() * (1 + 0.25 * layer)).bfloat16()}
 
     layers = [
@@ -1756,15 +1751,14 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
 
     # Traced: one capture, replayed once per step with the inputs and metadata rewritten in place.
     cache_traced = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
-    # Allocated before the capture: anything persistent allocated while the trace is alive could land on the trace's
-    # intermediate buffers and be overwritten by a later replay.
+    # Allocated before the capture: persistent buffers allocated while the trace is alive could alias its
+    # intermediates and be overwritten by a replay.
     cache_sp = _new_layered_kv_cache(
         config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
     )
     tt_hidden = [to_device(host_hidden(0, layer)) for layer in range(num_layers)]
     set_step(*replay_steps[0])
-    # Compile the sp_only programs now too (writing step 0's rows of the replicated cache, as its pass will again), so
-    # nothing is compiled -- kernel binaries are allocated -- while the trace is alive.
+    # Compile the sp_only programs now too, so nothing compiles (allocates kernel binaries) while the trace is alive.
     for mla_layer in layers:
         mla_layer.set_tp_shard_kv(False)
     forward_all(cache_sp, tt_hidden)
@@ -1806,8 +1800,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
     try:
         replay(range(len(replay_steps)))
 
-        # The same steps eagerly on the TP-replicated cache: the TP-sharded layer and cache indexing must give the same
-        # output (see _assert_tp_sharded_matches_sp_only).
+        # The same steps eagerly on the TP-replicated cache must give the same output.
         for mla_layer in layers:
             mla_layer.set_tp_shard_kv(False)
         for step, (user, start) in enumerate(replay_steps):
@@ -1823,8 +1816,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
             for out in outs:
                 ttnn.deallocate(out)
 
-        # Back to TP-sharded after the replicated forwards: eager sharded forwards (program-cache hits with patched
-        # runtime arguments) and then the same capture replayed again must still match.
+        # Back to TP-sharded: eager forwards (cache hits, patched runtime args) and a second replay must still match.
         for mla_layer in layers:
             mla_layer.set_tp_shard_kv(True)
         for step, (user, start) in enumerate(replay_steps):
@@ -1846,9 +1838,8 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
         for mla_layer in layers:
             mla_layer.set_trace_controller(None)
 
-    # The caches themselves, un-striped to natural order: the traced, TP-sharded eager and TP-replicated eager runs must
-    # have written identical bytes into every (user, layer) slot, and every slot must hold data. Equal outputs alone
-    # would miss a cache write that ignores the layer, since every layout would read the same wrong slot.
+    # The caches (natural order) of all three runs must be identical and fully written: equal outputs alone would miss
+    # a cache write that ignores the layer, since every layout would read the same wrong slot.
     nat_eager, nat_traced, nat_sp = (
         _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len_cache)
         for cache, tp_sharded in ((cache_eager, True), (cache_traced, True), (cache_sp, False))
@@ -1871,10 +1862,9 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
 
 
 class _SdpaRecorder:
-    """Wraps ttnn.transformer.ring_joint_scaled_dot_product_attention (eager tests only) and keeps, per call, whether K
-    was expanded, the Q chunk size, the matmul fidelity, the scale, and per-device host copies of the output (and, with
-    keep_inputs, of Q, the latent K, V (None when expanded in-op), W_UK and W_UV^T). Device lists are in mesh order:
-    index sp * tp_size + tp."""
+    """Wraps ring_joint_scaled_dot_product_attention (eager tests only), recording per call: expanded K, Q chunk,
+    fidelity, scale, per-device output (with keep_inputs also Q, latent K, V or None, W_UK, W_UV^T). Device lists are
+    in mesh order: index sp * tp_size + tp."""
 
     def __init__(self, monkeypatch, keep_inputs=False, keep_device_rows=None):
         self.calls = []
@@ -1914,13 +1904,11 @@ class _SdpaRecorder:
         monkeypatch.setattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", recorded)
 
 
-# Layer output PCC floors vs the CPU reference at test_mla_expanded_kv_accuracy_floor's shape, per dense chunked
-# attention. Expanded K/V sits below ring_mla because the in-op V expansion accumulates its kv_lora_rank-term product
-# in bf16 (measured K3 0.99296 vs ring_mla 0.99805, K2.7 0.99632 vs 0.99738); a fix is pending.
+# Layer output PCC floors vs the CPU reference (test_mla_expanded_kv_accuracy_floor's shape). Expanded K/V is lower:
+# the in-op V expansion accumulates in bf16 (measured K3 0.99296 vs 0.99805, K2.7 0.99632 vs 0.99738); fix pending.
 _RING_MLA_MIN_PCC = {"kimi_k3": 0.9978, "kimi_k2_7": 0.9968}
 _EXPANDED_KV_MIN_PCC = {"kimi_k3": 0.9925, "kimi_k2_7": 0.9958}
-# Expanded K/V vs ring_mla layer outputs: the bf16 V accumulation above is the main difference between the two
-# (bf8 rounding of the expanded K and V aside).
+# Expanded K/V vs ring_mla layer outputs; mostly bounded by the bf16 V accumulation above.
 _EXPANDED_KV_MIN_PCC_VS_ABSORBED = 0.99
 
 
@@ -2239,11 +2227,9 @@ _DISTINCT_WEIGHTS_STEPS = [(0, 0, 5120), (1, 0, 2560), (0, 5120, 5120), (1, 2560
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.timeout(0)
 def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_params, variant):
-    """Expanded K/V's W_UK and W_UV^T are runtime-patched buffers. Each layer's kv_b is rotated by one head against the
-    previous layer's, so a program reading another layer's weights would use a neighbouring head's: expanded vs
-    ring_mla must agree per layer and step (expanded K/V on the TP-sharded cache, ring_mla on the replicated one,
-    metadata path). On sp_only and one cache
-    layer, layers that differ only in their weights must share every program (no new program-cache entry)."""
+    """W_UK and W_UV^T are runtime-patched buffers. Each layer's kv_b is rotated by one head, so a program reading
+    another layer's weights would use a neighbouring head's: expanded (TP-sharded) vs ring_mla (replicated) must agree
+    per layer and step. On sp_only and one cache layer, layers differing only in weights must share every program."""
     config, weights = request.getfixturevalue("random_weights")
     sp_axis, tp_axis = 0, 1
     mesh_shape = tuple(mesh_device.shape)
@@ -2347,9 +2333,8 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
             logger.info(f"step {step} layer {layer}: expanded K/V vs ring_mla PCC {pcc:.6f}")
             assert pcc >= _EXPANDED_KV_MIN_PCC_VS_ABSORBED, f"step {step} layer {layer}: expanded vs ring_mla PCC {pcc}"
 
-    # The layers really share programs: on sp_only and the same cache layer (the metadata path keys the
-    # SDPA program by cache layer), once layer 0 has compiled its programs, layers 1 and 2 -- only their weights
-    # differ -- add no program-cache entry, i.e. W_UK's and W_UV^T's addresses are patched, not hashed.
+    # On sp_only and one cache layer (the metadata path keys the SDPA program by cache layer), layers 1 and 2 add no
+    # program-cache entry after layer 0: W_UK and W_UV^T addresses are patched, not hashed.
     for mla_layer in layers:
         mla_layer.set_tp_shard_kv(False)
         mla_layer._expanded_k = True
@@ -2418,10 +2403,9 @@ def _per_head_attention_reference(call, sp, tp, t, rows, keep):
 def test_ring_joint_expanded_k_per_head_vs_reference(
     request, mesh_device, device_params, variant, tp_shard_kv, use_metadata_tensor, valid, monkeypatch
 ):
-    """The expanded K/V ring_joint SDPA output per head against fp32 attention on the device's own inputs (K and V
-    expanded from the recorded latent, Q un-absorbed), for one causal chunk at position 0 (natural token order), full
-    or partial (a partial chunk adds unwritten pad rows in the cache and buffers). PCC is checked per (query chip,
-    head): output norms fall with the row index, so one PCC over all rows would be dominated by chip 0."""
+    """Expanded K/V SDPA output per head vs fp32 attention on the device's own inputs, for one causal chunk at position
+    0, full or partial (partial adds unwritten pad rows). PCC is per (query chip, head): output norms fall with the row
+    index, so one PCC over all rows would be dominated by chip 0."""
     recorder = _SdpaRecorder(monkeypatch, keep_inputs=True)
     _run_chunked_prefill(
         request,
@@ -2473,10 +2457,9 @@ def test_ring_joint_expanded_k_per_head_vs_reference(
 def test_ring_joint_expanded_k_causal_vs_reference(
     request, mesh_device, device_params, variant, monkeypatch, expect_error
 ):
-    """The non-chunked causal expanded K/V ring_joint SDPA (Q and K one chunk each), per (query chip, head) against fp32
-    attention. It skips K chunks above the diagonal per Q chunk, so in head pairs one core of a pair skips K chunks its
-    peer needs and must still expand and exchange them. Inputs are recorded from a chunk-0 MLA forward and replayed on
-    the op directly. Also checks that the op refuses schedules without head pairs."""
+    """Non-chunked causal expanded K/V SDPA per (query chip, head) vs fp32 attention, replaying inputs recorded from a
+    chunk-0 MLA forward. Causal skipping means one core of a head pair skips K chunks its peer needs and must still
+    expand and exchange them. Also checks the op refuses schedules without head pairs."""
     sp, tp = tuple(mesh_device.shape)
     rows = 5120 // sp
     # Pin the schedule this test exists for: q320 gives two Q chunks per head (a pair), one Q chunk per core.
@@ -2542,8 +2525,8 @@ def test_ring_joint_expanded_k_causal_vs_reference(
                 worst = min(worst, pcc)
                 assert pcc >= _EXPANDED_KV_MIN_HEAD_PCC, f"TP group {t} head {h} query chip {s}: causal SDPA PCC {pcc}"
     logger.success(f"✓ non-chunked causal expanded K/V SDPA per (query chip, head) vs fp32: min PCC {worst:.6f}")
-    # Expanded K runs on head pairs only: the op refuses, before launching anything, a schedule without them (q160: four
-    # Q chunks per head; a 4x4 grid: more than one Q chunk per core) and segmented accumulation.
+    # The op refuses, before launching, schedules without head pairs (q160: four Q chunks per head; 4x4 grid: >1 Q chunk
+    # per core) and segmented accumulation.
     base = kw["program_config"]
     small = ttnn.CoreCoord(4, 4)
     for grid_size, q_chunk_size, segmented, error in (

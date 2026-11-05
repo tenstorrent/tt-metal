@@ -190,13 +190,12 @@ struct RingJointSDPAInputs {
 
     // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
     std::optional<Tensor> kv_valid_end;
-    // MLA expanded K: W_UK per head, [1, NH, nope, latent] bf8 TILE DRAM (wkv_b1 as stored). K stays the shared latent
-    // [c_kv | k_pe]; the kernels expand K_h = [c_kv @ W_UK_h^T | k_pe] per K chunk, so Q is the un-absorbed
-    // [q_nope | q_pe]. Head pairs only: each head's two Q chunks sit on two cores, which split the expansion.
+    // MLA expanded K: W_UK [1, NH, nope, latent] bf8 TILE DRAM (wkv_b1 as stored). K stays the shared latent
+    // [c_kv | k_pe], expanded per K chunk to [c_kv @ W_UK_h^T | k_pe]; Q is un-absorbed. Head pairs only: a head's two
+    // Q chunks sit on two cores that split the expansion.
     std::optional<Tensor> k_expand_weight;
-    // MLA expanded V (with k_expand_weight, no V tensor): W_UV^T per head, [1, NH, dv, latent] bf8 TILE DRAM (W_UK's
-    // layout). The kernels expand V_h = c_kv @ W_UV_h per K chunk from the latent K already in L1, so the ring gathers
-    // only the latent. The head pair splits V's dv columns like K's rows.
+    // MLA expanded V (with k_expand_weight, no V tensor): W_UV^T [1, NH, dv, latent] bf8 TILE DRAM. V_h = c_kv @ W_UV_h
+    // is expanded per K chunk from the latent in L1, so the ring gathers only the latent.
     std::optional<Tensor> v_expand_weight;
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }

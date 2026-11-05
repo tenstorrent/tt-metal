@@ -606,8 +606,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "W_UK must not be padded (the reader pages it by its logical shape), got logical {} padded {}",
             weight.logical_shape(),
             weight.padded_shape());
-        // The geometry comes from W_UK: [1, NH, nope, latent]. Each core of a head pair expands half the no-PE tile
-        // rows.
+        // Geometry from W_UK [1, NH, nope, latent]; each core of a head pair expands half the no-PE tile rows.
         const auto& w_shape = weight.logical_shape();
         TT_FATAL(
             w_shape.rank() == 4 && w_shape[0] == 1 && w_shape[1] == q_shape[1],
@@ -616,8 +615,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             w_shape);
         const uint32_t nope = w_shape[2];
         const uint32_t latent = w_shape[3];
-        // Each pair core expands own_rows no-PE tile rows in DST blocks of min(own_rows, DST) rows, which must divide
-        // own_rows (sdpa_expand_k_chunk); a power of two does for every DST size.
+        // DST blocks of min(own_rows, DST) rows must divide own_rows (sdpa_expand_k_chunk): a power of two always does.
         const uint32_t own_rows = nope / (2 * tt::constants::TILE_HEIGHT);
         TT_FATAL(
             nope % (2 * tt::constants::TILE_HEIGHT) == 0 && own_rows > 0 && (own_rows & (own_rows - 1)) == 0 &&
@@ -655,8 +653,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             weight.dtype(),
             weight.layout(),
             weight.memory_config());
-        // W_UV^T, [1, NH, dv, latent]: W_UK's layout and shape, so the same expansion serves both and each core of a
-        // head pair expands half of V's dv columns.
+        // W_UV^T [1, NH, dv, latent] matches W_UK, so the same expansion serves both (half of dv per pair core).
         TT_FATAL(
             w_shape == wuk_shape,
             "v_expand_weight must be W_UV^T, [1, NH, dv, latent] with W_UK's shape {} (dv == nope), got {}",
@@ -1400,8 +1397,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
-    // MLA expanded K: K is expanded per head inside the op (c_kv @ W_UK^T), modeled on the highest rank, which expands
-    // every ring row and bounds the op. DH above is Q's (expanded) width.
+    // MLA expanded K (c_kv @ W_UK^T per head), modeled on the highest rank, which expands every ring row and bounds the
+    // op. DH above is Q's (expanded) width.
     int k_expansion_cycles = 0;
     if (tensor_args.has_k_expand()) {
         const auto& wuk_shape = tensor_args.k_expand_weight->logical_shape();

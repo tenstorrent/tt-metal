@@ -2206,8 +2206,7 @@
   # Run every check unconditionally (so each reports numbers) but fail the step if any
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   # Split KV (Kimi expanded K/V on the TP-deduped cache) gathers KV over the full-mesh snake, so only its
-  # tests get the TorusXY descriptor (see fabric_profile): accuracy, users x layers, trace replay,
-  # determinism, rejects and the perf check.
+  # tests get the TorusXY descriptor (see fabric_profile).
   # The Gemma4 check runs only its global cases here: Gemma4's sliding layers use the Gemma4 fork,
   # so its sliding cases run in the "(Gemma4-31B-it) sliding ring SDPA perf" leg.
   cmd: |

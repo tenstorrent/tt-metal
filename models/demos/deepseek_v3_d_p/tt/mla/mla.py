@@ -597,10 +597,9 @@ class ttMLA:
         if kv_only or self._has_indexer:
             pass
         elif self.is_chunked:
-            # Chunked prefill gathers the latent kvpe cache: ring_mla reads K and V from it, expanded K expands both
-            # per head from it inside the SDPA. The single-slot gather
-            # (kv_cache_batch_idx) writes only the active cache slot into gathered slot 0, so the scratch is batch-1
-            # regardless of slot_num * layer_num.
+            # Chunked prefill gathers the latent kvpe cache (ring_mla reads K and V from it; expanded K expands both
+            # in-op). The single-slot gather (kv_cache_batch_idx) writes only the active slot into gathered slot 0, so
+            # the scratch is batch-1 regardless of slot_num * layer_num.
             self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
                 cache_batch=1,
                 seq_len=seq_len,
@@ -1114,9 +1113,8 @@ class ttMLA:
         Unified path for both rotated (kv_actual_isl mid-slab) and chunk-aligned prefill: the
         chunk-aligned case is the degenerate kv_actual_isl = n * chunk_size_global, where
         update_padded_kv_cache reduces to a uniform per-chip write and the indexed rope/SDPA reduce
-        to natural order. K is the latent kvpe cache. ring_mla also reads V from it (_ring_mla_attn); expanded K
-        expands K = c_kv @ W_UK^T and V = c_kv @ W_UV per head from it inside the SDPA, so QK runs at the un-absorbed
-        head dim, PV at v_head_dim, and no wkv_b2 follows. Returns attn_out in v_head_dim space.
+        to natural order. K is the latent kvpe cache; ring_mla also reads V from it, expanded K computes
+        K = c_kv @ W_UK^T and V = c_kv @ W_UV per head in-op (no wkv_b2 after). Returns attn_out in v_head_dim space.
         """
         assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
 
@@ -1213,9 +1211,8 @@ class ttMLA:
         ring_logical_n,
         metadata,
     ):
-        """ring_mla over the latent kvpe cache: K and V (its first kv_lora_rank columns, materialized in-op) both come
-        from it, so wkv_b2 is applied to the compact (kv_lora_rank-wide) attention output afterwards. TP-replicated
-        cache only: a TP-deduped cache runs expanded K and V (set_tp_shard_kv)."""
+        """ring_mla over the latent kvpe cache (V = its first kv_lora_rank columns), with wkv_b2 applied to the compact
+        output afterwards. TP-replicated cache only."""
         assert not self.tp_shard_kv, "ring_mla reads a TP-replicated cache; a TP-deduped one runs expanded K/V"
         if metadata is not None:
             meta_slot_kwargs = {
@@ -1262,10 +1259,9 @@ class ttMLA:
         return attn_out
 
     def _expanded_k_supported(self, required: bool) -> bool:
-        """Expanded K needs a no-PE width giving each head pair core a power-of-two count of whole tile rows (the op's
-        rule), no llama4 query scale or balanced attention, and a measured head-pair chunk schedule for this shape (the
-        absorbed chunks can overflow L1 beside the expanded K^T CB). Otherwise keeps absorbed K, or raises ValueError
-        when expanded_k=True was asked for."""
+        """Expanded K needs a power-of-two count of whole no-PE tile rows per head-pair core (the op's rule), no llama4
+        query scale or balanced attention, and a measured head-pair schedule for this shape (absorbed chunks can
+        overflow L1). Otherwise keeps absorbed K, or raises ValueError when expanded_k=True was requested."""
         heads_local = self.num_heads // self.tp_factor
         key = self._expanded_k_schedule_key(heads_local, self.active_seq_len // self.sp_factor)
         own_rows = self.qk_nope_head_dim // (2 * ttnn.TILE_SIZE)  # no-PE tile rows each core of a head pair expands
@@ -1297,10 +1293,8 @@ class ttMLA:
             return False
         return True
 
-    # Measured (Q chunk, K chunk, K splits) for expanded K, which runs on head pairs only: each head gets 2 Q chunks,
-    # one per core of the pair. k512 does not fit L1 beside the expanded K^T CB.
-    # Keyed (kvpe width, Q / expanded-K head width, local heads, local rows): a schedule fits L1 only for the expansion
-    # geometry it was measured at.
+    # Measured (Q chunk, K chunk, K splits) for expanded K: head pairs only (2 Q chunks per head); k512 does not fit L1.
+    # Keyed (kvpe width, Q head width, local heads, local rows), since L1 fit depends on the expansion geometry.
     _EXPANDED_K_SDPA_CHUNKS = {
         (576, 192, 24, 640): (320, 256, 2),
         (576, 192, 16, 640): (320, 256, 3),
@@ -2465,9 +2459,8 @@ class ttMLA:
         )
 
     def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]) -> None:
-        """Sparse always dedups (its gather has no other mode); dense opts in, with expanded K and V gathering the split
-        cache over the full mesh (split KV). Weights and buffers do not depend on it, so a built model can switch
-        layout between runs."""
+        """Sparse always dedups; dense opts in (expanded K/V gathers the split cache over the full mesh). Weights and
+        buffers do not depend on it, so a built model can switch layout between runs."""
         if tp_shard_kv is None:
             self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
         else:

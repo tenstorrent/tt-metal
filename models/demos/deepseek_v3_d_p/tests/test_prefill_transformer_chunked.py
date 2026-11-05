@@ -225,14 +225,12 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache with K and V expanded in the SDPA (full-mesh KV gather); Galaxy
-    # bh-glx-120-c02u02, 2026-11-03, medians over nine post-warmup iterations.
+    # 55k / code_debug, TP-deduped cache, expanded K/V; bh-glx-120-c02u02 2026-11-03, median of 9 warm iterations.
     (61, 11, 10): [0.349, 0.340, 0.343, 0.344, 0.372, 0.381, 0.399, 0.400, 0.422, 0.454, 0.455],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache with K and V expanded in the SDPA (full-mesh KV gather); Galaxy
-    # bh-glx-120-c02u02, 2026-11-03, medians over nine post-warmup iterations.
+    # 55k / code_debug, TP-deduped cache, expanded K/V; bh-glx-120-c02u02 2026-11-03, median of 9 warm iterations.
     (61, 11, 10): [0.400, 0.384, 0.387, 0.388, 0.415, 0.423, 0.442, 0.440, 0.467, 0.496, 0.496],
 }
 
