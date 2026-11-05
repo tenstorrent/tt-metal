@@ -232,7 +232,7 @@ TEST_F(BindingTokenTileSizeMetadata, Tf32FormatQueryStillCompiles) {
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// A TF32 scratchpad rejects a constant tile-size query because no Tile storage encoding exists.
+// A TF32 tile-size query reports an unsupported format instead of missing metadata.
 TEST_F(BindingTokenTileSizeMetadata, Tf32StorageSizeQueryFails) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(
@@ -242,7 +242,7 @@ TEST_F(BindingTokenTileSizeMetadata, Tf32StorageSizeQueryFails) {
     }
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(fixture_device(), spec); },
-        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("tile_size_metadata_not_set")));
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("tile_size_unsupported_for_format")));
 }
 
 class BindingTokenTileSizeMissing : public test_helpers::ProgramSpecTestBlackhole,
