@@ -159,7 +159,11 @@ class Qwen36ModelArgs(ModelArgs):
         self.prefill_rs_bf8 = False
         # prefill projections at S <= this use all-gather + 1D matmul instead of the fused all-gather-matmul (which has a
         # ~100 µs floor at short S); 0 = off
-        self.prefill_small_m_max = 0
+        self.prefill_small_m_max = int(os.environ.get("QWEN36_PREFILL_SMALL_M_MAX", "0"))
+        # the dense TP MLP threshold (default: prefill_small_m_max); > 0 loads the interleaved w1/w3 (no decode dshard)
+        self.prefill_small_m_mlp_max = int(
+            os.environ.get("QWEN36_PREFILL_SMALL_M_MLP_MAX", str(self.prefill_small_m_max))
+        )
         # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
         # spread work over more cores (bit-exact)
         self.kda_conv_chunk_cap = 512
