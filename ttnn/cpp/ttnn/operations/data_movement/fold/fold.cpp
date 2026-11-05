@@ -469,7 +469,7 @@ Tensor fold(
                    input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
             .at(0);
     }
-    // Shared with select_program_factory; TILE branch is untilized below before prim dispatch.
+    // Same predicate as select_program_factory; TILE branch is untilized below before prim dispatch.
     const bool fast_path_input =
         operations::data_movement::is_fast_path_input(input_tensor) ||
         (input_tensor.memory_config().is_l1() && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
@@ -530,6 +530,20 @@ Tensor fold(
         }();
         if (sub_alignment_wb_sharded_rm) {
             processed_tensor = ttnn::to_memory_config(processed_tensor, l1_interleaved, std::nullopt);
+        }
+
+        // A height-sharded RM input whose shard is wider than C (so not a fast-path input) has padded pixels. pad
+        // keeps the input's shard spec and cannot grow it, so such an input is padded in interleaved memory.
+        const bool padded_pixels = processed_tensor.layout() == Layout::ROW_MAJOR && processed_tensor.is_sharded() &&
+                                   processed_tensor.shard_spec().has_value() &&
+                                   in_ml == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   processed_tensor.shard_spec()->shape[1] != processed_tensor.logical_shape()[-1];
+        if (padded_pixels && (has_hw_padding || has_c_padding)) {
+            processed_tensor = ttnn::to_memory_config(
+                processed_tensor,
+                tt::tt_metal::MemoryConfig(
+                    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, processed_tensor.memory_config().buffer_type()),
+                std::nullopt);
         }
 
         if (has_hw_padding || has_c_padding) {

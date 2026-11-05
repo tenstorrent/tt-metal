@@ -24,7 +24,9 @@ using fold_common::kFoldSrcCbDepthPerCTile;
 using fold_common::tile_native_fold_rejection_reason;
 using fold_common::tile_native_fold_scratch_bytes;
 
-// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
+// Fast path: L1 + HS + RM + concrete shard_spec as wide as the logical channels. Shared by composite and device_op.
+// The fast-path kernel moves whole shard-width pixels, so a wider shard would put each pixel's padding into the
+// output; MultiCoreDRAMFold copies only the logical channels.
 bool is_fast_path_input(const Tensor& t);
 
 // Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
