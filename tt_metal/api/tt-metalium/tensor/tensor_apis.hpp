@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
+#include <vector>
+
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -28,6 +31,17 @@ HostTensor to_row_major_layout(const HostTensor& tensor);
 // ======================================================================================
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+
+// ======================================================================================
+//                                  GGUF weights
+// ======================================================================================
+
+// A GGUF tensor of `spec` (a GGUF dtype, shape [K, N]) from its blocks as a GGUF file stores them: N rows of
+// K / block_elems blocks. Only bits move; the pages take exactly the blocks' bytes.
+HostTensor from_gguf(ttsl::Span<const std::byte> blocks, const TensorSpec& spec);
+
+// The blocks of a GGUF tensor, the exact inverse of from_gguf.
+std::vector<std::byte> to_gguf(const HostTensor& tensor);
 
 // ======================================================================================
 //                                  .to_tensor_spec()

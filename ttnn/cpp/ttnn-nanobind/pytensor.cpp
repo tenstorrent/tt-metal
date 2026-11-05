@@ -246,6 +246,11 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
 // If `padded_output` is false, the returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
+    TT_FATAL(
+        !is_gguf(tt_tensor.dtype()),
+        "{} holds GGUF records, not values: read its blocks with ttnn.to_gguf and dequantize them with "
+        "gguf.quants.dequantize",
+        tt_tensor.dtype());
     // conversion to Host storage after
     // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
     if (is_device_tensor(tt_tensor)) {
@@ -534,6 +539,24 @@ void pytensor_module(nb::module_& mod) {
         "Create a non-owning SRAM tensor view. Metal validates coverage, alignment, SRAM bounds and padded "
         "tensor footprints within the supplied spans; the caller guarantees those spans are backed and retains "
         "storage.");
+    mod.def(
+        "from_gguf",
+        [](nb::ndarray<const uint8_t, nb::ndim<1>, nb::c_contig, nb::device::cpu> blocks, const TensorSpec& spec) {
+            return Tensor(tt::tt_metal::from_gguf(
+                ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(blocks.data()), blocks.size()), spec));
+        },
+        nb::arg("blocks"),
+        nb::arg("tensor_spec"),
+        "A host GGUF tensor of tensor_spec from its GGUF blocks (uint8, N rows of K / block-size blocks).");
+    mod.def(
+        "to_gguf",
+        [](const Tensor& tensor) {
+            auto* blocks = new std::vector<std::byte>(tt::tt_metal::to_gguf(tensor.host_tensor()));
+            nb::capsule owner(blocks, [](void* p) noexcept { delete static_cast<std::vector<std::byte>*>(p); });
+            return nb::ndarray<nb::numpy, uint8_t, nb::ndim<1>>(blocks->data(), {blocks->size()}, owner);
+        },
+        nb::arg("tensor"),
+        "The GGUF blocks of a host GGUF tensor as a uint8 array, the exact inverse of from_gguf.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
