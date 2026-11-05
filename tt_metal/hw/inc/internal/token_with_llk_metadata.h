@@ -60,8 +60,11 @@ public:
         return token.llk_metadata_.num_faces_c_dim;
     }
 
-    // Returns the tile storage size in bytes.
-    // precondition: The token has format metadata and a supported tile storage size.
+    /**
+     * Returns the tile storage size in bytes.
+     *
+     * precondition: The token has format metadata and a supported tile storage size.
+     */
     friend constexpr uint32_t get_tile_size(const TokenWithLLKMetadata& token) {
         assert_dataformat_set(token.llk_metadata_);
         if (token.llk_metadata_.tile_size_bytes == 0) {
@@ -70,32 +73,44 @@ public:
         return token.llk_metadata_.tile_size_bytes;
     }
 
-    // Returns the tile height in elements.
+    /**
+     * Returns the tile height in elements.
+     */
     friend constexpr uint32_t get_tile_r_dim(const TokenWithLLKMetadata& token) {
         return get_face_r_dim(token) * get_num_faces_r_dim(token);
     }
 
-    // Returns the tile width in elements.
+    /**
+     * Returns the tile width in elements.
+     */
     friend constexpr uint32_t get_tile_c_dim(const TokenWithLLKMetadata& token) {
         return get_face_c_dim(token) * get_num_faces_c_dim(token);
     }
 
-    // Returns the number of elements in a tile.
+    /**
+     * Returns the number of elements in a tile.
+     */
     friend constexpr uint32_t get_tile_hw(const TokenWithLLKMetadata& token) {
         return get_tile_r_dim(token) * get_tile_c_dim(token);
     }
 
-    // Returns the total number of faces in a tile.
+    /**
+     * Returns the total number of faces in a tile.
+     */
     friend constexpr uint32_t get_tile_num_faces(const TokenWithLLKMetadata& token) {
         return get_num_faces_r_dim(token) * get_num_faces_c_dim(token);
     }
 
-    // Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+    /**
+     * Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+     */
     friend constexpr uint32_t get_partial_face(const TokenWithLLKMetadata& token) {
         return static_cast<uint32_t>(get_tile_r_dim(token) < 32);
     }
 
-    // Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+    /**
+     * Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+     */
     friend constexpr uint32_t get_narrow_tile(const TokenWithLLKMetadata& token) {
         return static_cast<uint32_t>(get_tile_c_dim(token) < 32);
     }
@@ -104,7 +119,9 @@ protected:
     constexpr TokenWithLLKMetadata() noexcept = default;
     explicit constexpr TokenWithLLKMetadata(LLKMetadata metadata) noexcept : llk_metadata_(metadata) {}
 
-    // Returns the resource format, or Invalid when the host omitted format metadata.
+    /**
+     * Returns the resource format, or Invalid when the host omitted format metadata.
+     */
     constexpr DataFormat dataformat_or_invalid() const { return static_cast<DataFormat>(llk_metadata_.format); }
 
 private:
