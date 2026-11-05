@@ -31,6 +31,7 @@ BH_GALAXY_TORUS_XY=$CLUSTER_DESCS/blackhole/bh_galaxy_torus_xy_cluster_desc/bh_x
 # Mock clusters across ranks, with what binds them.
 T3K_ON_TWO_RANKS=$CLUSTER_DESCS/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml
 SPLIT_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml
+BIG_MESH_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml
 SC4_SUBTORUS=$CLUSTER_DESCS/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml
 SC4_EXPRESS_MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_quad_8x4_mesh_graph_descriptor.textproto
 
@@ -112,10 +113,16 @@ TT_METAL_FABRIC_TRIMMING_PROFILE="$T3K_TRIMMING_PROFILE" run_mock t3k_2d_trimmed
 # Multi ranks
 # ---------------------------------------------------------------------------
 
-# One T3K mesh split across two ranks: remote chips and cross-host links.
+# A T3K as two 2x2 meshes, one per rank: remote chips and cross-host links between meshes.
 run_ranks split_t3k 2 'Manifest2DFixture.*' \
     --mock-cluster-rank-binding "$T3K_ON_TWO_RANKS" \
     --rank-binding "$SPLIT_T3K_RANK_BINDINGS"
+
+# A T3K as one 2x4 mesh split across two ranks (host_topology 1x2): each rank owns one host rank's half of the mesh,
+# and the other half is remote.
+run_ranks big_mesh_t3k 2 'Manifest2DFixture.*' \
+    --mock-cluster-rank-binding "$T3K_ON_TWO_RANKS" \
+    --rank-binding "$BIG_MESH_T3K_RANK_BINDINGS"
 
 # Four Blackhole galaxies on four ranks, as four meshes joined over N/S links, with express chords: express links,
 # Blackhole multi-mesh and its idle VC1 senders on inter-mesh routers, and cross-host links.

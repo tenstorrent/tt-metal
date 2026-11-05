@@ -16,7 +16,8 @@ changes the manifest format, so it goes with a change to `fabric_manifest_schema
 3. **Writes the file** to this rank's path (`fabric_manifest_path`) under a temporary name, `<path>.tmp.<pid>`, then
    renames it into place, so a reader never sees a partial file. On a failure it removes the temporary file.
 
-Any failure is rethrown as `Failed to write fabric manifest <path> (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip)`, followed by the message starting with `Fabric manifest:` that says what went wrong.
+Any failure is rethrown as `Failed to write fabric manifest <path> (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip)`,
+followed by the message starting with `Fabric manifest:` that says what went wrong.
 
 `remove_stale_fabric_manifest` deletes this rank's file from an earlier run. Fabric init calls it whether or not
 generation is on, so a manifest on disk always belongs to the run that wrote it.
@@ -65,7 +66,7 @@ writer has nothing to look up or check. It writes the name as a string, next to 
 
 | What | Written by | Keys |
 | --- | --- | --- |
-| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type`, `cleared_by_host` |
+| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type` |
 | A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type` |
 | A core register | `make_core_registers_json` | `name`, `address`, `type` |
 | The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
@@ -78,7 +79,8 @@ A configuration enum field is different: no captured bytes hold it, so its type 
 Some keys hold one of a fixed set of names, such as a channel's `status` or a field's `category`. `vocabulary` lists
 every name each can hold, so a reader knows them all without the C++ enums.
 
-The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
+The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it
+holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
 `Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`).
 
 An enum field isn't a label key: it writes its enumerator's name next to its value (`value_name`), so its enum has no

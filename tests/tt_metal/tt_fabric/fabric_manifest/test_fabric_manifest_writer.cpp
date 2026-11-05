@@ -42,25 +42,25 @@ ManifestFacts make_facts() {
              .receivers = {{ReceiverChannel{.serviced_by = {0}, .forwards_on_by_erisc = {0}}}}},
         .intra_chip_downstream_edges = {},
         .fields_by_erisc = {{
-                Field{
-                    .key = "edm_status",
-                    .category = FieldCategory::LIFECYCLE,
-                    .content = register_l1_region<EDMStatus>(0x200)},
-                Field{
-                    .key = "retrain_sync",
-                    .category = FieldCategory::LIFECYCLE,
-                    .content =
-                        content::StreamReg{
-                            .stream_id = 30,
-                            .address = 0xffb5e000,
-                            .value_bits = 24,
-                            .type = get_manifest_type_name<CoordinatedEriscContextSwitchState>()}},
-                Field{
-                    .key = "my_direction",
-                    .category = FieldCategory::KERNEL_PARAMS,
-                    .content = content::Enum{.type = "eth_chan_directions", .value = 0, .value_name = "EAST"}},
-                Field{.key = "perf_telemetry", .category = FieldCategory::DIAGNOSTICS, .content = std::nullopt},
-            }},
+            Field{
+                .key = "edm_status",
+                .category = FieldCategory::LIFECYCLE,
+                .content = register_l1_region<EDMStatus>(0x200)},
+            Field{
+                .key = "retrain_sync",
+                .category = FieldCategory::LIFECYCLE,
+                .content =
+                    content::StreamReg{
+                        .stream_id = 30,
+                        .address = 0xffb5e000,
+                        .value_bits = 24,
+                        .type = get_manifest_type_name<CoordinatedEriscContextSwitchState>()}},
+            Field{
+                .key = "my_direction",
+                .category = FieldCategory::KERNEL_PARAMS,
+                .content = content::Enum{.type = "eth_chan_directions", .value = 0, .value_name = "EAST"}},
+            Field{.key = "perf_telemetry", .category = FieldCategory::DIAGNOSTICS, .content = std::nullopt},
+        }},
         .eriscs = {Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .physical_erisc = 0}},
         .leftover_l1 = std::nullopt,
     };
@@ -78,14 +78,16 @@ ManifestFacts make_facts() {
                 .router_channels_mask = 1},
         .routers = {router},
     };
-    Chip remote_chip{.fabric_node_id = remote_node, .mesh_coord = {0, 1}};
+    Chip remote_chip{.fabric_node_id = remote_node, .mesh_coord = {0, 1}, .host_rank = 1};
 
     return ManifestFacts{
         .run = {},
         .fabric =
             {.config = {.fabric_config = FabricConfig::FABRIC_1D},
              .packet_header = get_manifest_type_name<LowLatencyPacketHeaderT<0>>(),
-             .routing_1d_extension_words = 0},
+             .packet_header_size_bytes = sizeof(LowLatencyPacketHeaderT<0>),
+             .routing_1d_extension_words = 0,
+             .host_clears = {{.address = 0x100, .size_bytes = 4}}},
         .arch =
             {.arch = tt::ARCH::WORMHOLE_B0,
              .areas =
@@ -114,7 +116,8 @@ TEST(ManifestWriter, RemoteChipHasOnlyItsPlace) {
     const auto manifest = make_manifest_json(make_facts());
     EXPECT_EQ(
         manifest.at("meshes").at("M0").at("chips").at("C1"),
-        json::parse(R"({"mesh_coord": [0, 1], "physical_chip_id": null, "asic_id": null, "is_local": false})"));
+        json::parse(
+            R"({"mesh_coord": [0, 1], "host_rank": 1, "physical_chip_id": null, "asic_id": null, "is_local": false})"));
 }
 
 // Something the builder didn't allocate is null, and a key that doesn't apply to this run is left out.
@@ -150,21 +153,22 @@ TEST(ManifestWriter, ContentsNameTheirType) {
     const auto& fields = router_e0(manifest).at("fields").at("erisc0");
     EXPECT_EQ(
         fields.at("edm_status"),
-        json({{"category", "lifecycle"},
-              {"kind", "l1"},
-              {"address", 0x200},
-              {"num_elements", 1},
-              {"element_size", sizeof(EDMStatus)},
-              {"type", "EDMStatus"},
-              {"cleared_by_host", false}}));
+        json(
+            {{"category", "lifecycle"},
+             {"kind", "l1"},
+             {"address", 0x200},
+             {"num_elements", 1},
+             {"element_size", sizeof(EDMStatus)},
+             {"type", "EDMStatus"}}));
     EXPECT_EQ(
         fields.at("retrain_sync"),
-        json({{"category", "lifecycle"},
-              {"kind", "stream_reg"},
-              {"stream_id", 30},
-              {"address", 0xffb5e000},
-              {"value_bits", 24},
-              {"type", "CoordinatedEriscContextSwitchState"}}));
+        json(
+            {{"category", "lifecycle"},
+             {"kind", "stream_reg"},
+             {"stream_id", 30},
+             {"address", 0xffb5e000},
+             {"value_bits", 24},
+             {"type", "CoordinatedEriscContextSwitchState"}}));
     // The enum's own name isn't written: it stays in the model, for FIELDS.md and errors.
     EXPECT_EQ(
         fields.at("my_direction"),
@@ -175,6 +179,9 @@ TEST(ManifestWriter, ContentsNameTheirType) {
     EXPECT_EQ(counters.at("element_size"), sizeof(uint32_t));
     // The run's packet header, with its template argument even though it equals the default.
     EXPECT_EQ(manifest.at("fabric").at("packet_header"), "LowLatencyPacketHeaderT<0>");
+    EXPECT_EQ(manifest.at("fabric").at("packet_header_size_bytes"), sizeof(LowLatencyPacketHeaderT<0>));
+    // What fabric init zeroes, as an address and a size.
+    EXPECT_EQ(manifest.at("fabric").at("host_clears"), json::parse(R"([{"address": 256, "size_bytes": 4}])"));
     EXPECT_FALSE(manifest.contains("types"));
 }
 

@@ -166,6 +166,10 @@ protected:
 
     // Master router channel, set by choose_master_router()
     chan_id_t master_router_chan_ = 0;
+
+    // The connections the chip's routers make to each other. Only created, and so only filled, when fabric manifest
+    // generation is on for now.
+    std::shared_ptr<ConnectionRegistry> connection_registry_;
 };
 
 // ============ Build Sessions ============

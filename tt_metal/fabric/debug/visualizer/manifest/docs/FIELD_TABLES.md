@@ -1,9 +1,10 @@
 # Field tables
 
-Most of what the manifest records about a router is a value its kernel was fed: an L1 address, a stream register id,
-a flag, a count. The manifest reads each of these through a **field table** in `fabric_manifest_fields.hpp`: one entry
-per value, saying which kernel argument feeds it and how to read it. The router pass reads the tables ([ROUTER_PASS.md](ROUTER_PASS.md)). Facts that need logic beyond reading one argument (computed facts) are code in the router pass
-instead.
+Most of what the manifest records about a router is a value its kernel was fed: an L1 address, a stream register id, a
+flag, a count. The manifest reads each of these through a **field table** in `fabric_manifest_fields.hpp`: one entry per
+value, saying which kernel argument feeds it and how to read it. The router pass reads the tables
+([ROUTER_PASS.md](ROUTER_PASS.md)). Facts that need logic beyond reading one argument (computed facts) are code in the
+router pass instead.
 
 [FIELDS.md](FIELDS.md) lists every entry, generated from the tables. This doc explains what an entry says, how it's
 read, and how the tables make sure nothing the kernel is fed goes unaccounted for.
@@ -16,7 +17,7 @@ from ERISC0 of router `E0` on a T3K's chip `C0`:
 
 ```json
 "edm_status":                      { "category": "lifecycle", "kind": "l1", "address": 98624, "num_elements": 1,
-                                     "element_size": 4, "type": "EDMStatus", "cleared_by_host": false },
+                                     "element_size": 4, "type": "EDMStatus" },
 "erisc_sync":                      { "category": "lifecycle", "kind": "stream_reg", "stream_id": 31,
                                      "address": 4290113536, "value_bits": 24, "type": "unsigned int" },
 "handshake_sender":                { "category": "lifecycle", "kind": "flag", "value": true },
@@ -114,7 +115,7 @@ The field's kind, in the JSON's `kind`:
 
 | Content | `kind` | The argument is | Notes |
 | --- | --- | --- | --- |
-| `register_l1_region<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address and whether fabric init clears the region (`cleared_by_host`) |
+| `register_l1_region<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
 | `register_stream_region<T>(register)` | `stream_reg` | A stream id. The entry says which of the stream's registers holds a `T` | `null` for the unused stream id. The router pass adds the register's address and how many of its bits hold the value, from the HAL |
 | `content::Number{}` | `number` | A plain value | |
 | `content::Flag{}` | `flag` | 0 or 1 | Any other value fails |
@@ -140,7 +141,7 @@ per ERISC. For each entry:
 
 | Content | What the value becomes |
 | --- | --- |
-| L1 region | The region's address, and whether fabric init clears it (`get_fabric_router_addresses_to_clear()`). An address of 0 makes the field `null` |
+| L1 region | The region's address. An address of 0 makes the field `null` |
 | Stream register | The stream id. `describe_stream_register` works out the register's address and value width from the HAL. The unused stream id makes the field `null` |
 | Number | The value as it is |
 | Flag | `true` or `false`. Anything other than 0 or 1 fails |
@@ -165,8 +166,8 @@ channel's. Defines match exactly.
 
 The other checks:
 
-- **The router pass can't read an unlisted argument.** Every name it reads goes through `check_arg_is_listed`, which fails for a name no table
-reads and `k_router_pass_args` doesn't list, so the lists stay true to the code.
+- **The router pass can't read an unlisted argument.** It reads every name through `RouterArgs`, which fails for a
+name no table reads and `k_router_pass_args` doesn't list, so the lists stay true to the code.
 - **A read argument must exist.** `RouterArgs` fails for one the builder didn't feed: "... reads ..., but ERISC<n>
 wasn't given it".
 - **At compile time** (`static_assert` in `fabric_manifest_fields.hpp`): an argument's `{}` count matches its
