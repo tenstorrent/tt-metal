@@ -170,7 +170,7 @@ class L1Operation:
             after_commit = ""
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
-                    body += dest_sync.take(config, self, cu)
+                    body += dest_sync.take(config, cu)
                     continue
                 block = planned.block_for(cu)
                 node_body = ""
@@ -183,7 +183,7 @@ class L1Operation:
                 if not hoist:
                     node_body += cu.unpack_init(self, config, block)
                 init_body, node_body = node_body, ""
-                take = dest_sync.take(config, self, cu)
+                take = dest_sync.take(config, cu)
                 if cu.unpacker is not None:
                     node_body += planned.plan(cu, "unpack").emit_calls(
                         constants,
@@ -202,7 +202,7 @@ class L1Operation:
                     body += init_body + take + node_body
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-            body += dest_sync.takes(config, self, self.pack_nodes)
+            body += dest_sync.takes(config, self.pack_nodes)
             return body + after_commit
 
         code += self._zone_loop(
@@ -256,7 +256,7 @@ class L1Operation:
                         body += config.sentinel.configure_math(config, self, cu)
                     if not hoist:
                         body += cu.fpu_init(self, config, block)
-                body += dest_sync.take(config, self, cu)
+                body += dest_sync.take(config, cu)
                 if isinstance(cu, FpuNode):
                     body += planned.plan(cu, "math").emit_calls(
                         constants,
@@ -277,7 +277,7 @@ class L1Operation:
             if not hoist_reconfig and not config.skip_math_init:
                 body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
-            body += dest_sync.takes(config, self, self.pack_nodes)
+            body += dest_sync.takes(config, self.pack_nodes)
             return body
 
         code += self._zone_loop(
@@ -308,7 +308,7 @@ class L1Operation:
                 if isinstance(cu, SfpuNode):
                     config.sentinel.configure_sfpu(config, self, cu)
                     body += cu.sfpu_init(self, config, planned.block_for(cu))
-                body += dest_sync.take(config, self, cu)
+                body += dest_sync.take(config, cu)
                 if isinstance(cu, FpuNode):
                     config.sentinel.configure_math(config, self, cu)
                 elif isinstance(cu, SfpuNode):
@@ -320,7 +320,7 @@ class L1Operation:
                     )
                     body += cu.sfpu_uninit(self, config, block)
                     body += config.sentinel.sfpu_math_reconfig(config, restore=True)
-            body += dest_sync.takes(config, self, self.pack_nodes)
+            body += dest_sync.takes(config, self.pack_nodes)
             return body
 
         code += self._zone_loop(
@@ -362,7 +362,7 @@ class L1Operation:
             uninit_fn = lambda planned: pack_only[0].uninit(self, config)
 
         def batch_body(planned: PlannedBlock, constants):
-            body = dest_sync.takes(config, self, self.math_nodes)
+            body = dest_sync.takes(config, self.math_nodes)
             body += pack_common.packer_wait_for_math(config, self)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
@@ -384,7 +384,7 @@ class L1Operation:
                         body += config.sentinel.configure_pack(config, self, pack_node)
                     if not hoist:
                         body += pack_node.init(self, config, block)
-                    body += dest_sync.take(config, self, pack_node)
+                    body += dest_sync.take(config, pack_node)
                     body += planned.plan(pack_node, "pack").emit_calls(
                         constants,
                         partial(pack_node.pack_call, self, config, block),

@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "llk_dest_sync.h"
 #include "llk_memory_checks.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -46,6 +45,7 @@
 #define PACK(...)
 #endif
 
+#include "llk_dest_sync.h"
 #include "params.h"
 
 namespace
@@ -99,7 +99,7 @@ struct UnpackToDestOp
     static void exec([[maybe_unused]] const std::uint32_t i, [[maybe_unused]] const bool produced)
     {
         // The unpacker writes the L1 format, Float32 when dest is 32-bit, so it addresses dest like every other client.
-        ckernel::_llk_dest_sync_take_<dest_sync, CLIENT, is_fp32_dest_acc_en>();
+        ckernel::_llk_dest_sync_take_<CLIENT>();
         UNPACK((_llk_unpack_unary_operand_to_dest_tile_(i, 0 /*dest tile*/)));
     }
 };
@@ -120,7 +120,7 @@ struct DatacopyOp
 
     static void exec([[maybe_unused]] const std::uint32_t i, [[maybe_unused]] const bool produced)
     {
-        ckernel::_llk_dest_sync_take_<dest_sync, CLIENT, is_fp32_dest_acc_en>();
+        ckernel::_llk_dest_sync_take_<CLIENT>();
         UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE)));
         MATH((_llk_math_eltwise_unary_datacopy_(0 /*dest tile*/)));
     }
@@ -137,7 +137,7 @@ struct SquareOp
 
     static void exec([[maybe_unused]] const std::uint32_t i, const bool produced)
     {
-        ckernel::_llk_dest_sync_take_<dest_sync, CLIENT, is_fp32_dest_acc_en>();
+        ckernel::_llk_dest_sync_take_<CLIENT>();
         if (produced)
         {
             SFPU((SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_square, (SFPU_ITERATIONS), 0 /*dest tile*/, VectorMode::RC)));
@@ -160,7 +160,7 @@ struct PackOp
 
     static void exec([[maybe_unused]] const std::uint32_t i, [[maybe_unused]] const bool produced)
     {
-        ckernel::_llk_dest_sync_take_<dest_sync, CLIENT, is_fp32_dest_acc_en>();
+        ckernel::_llk_dest_sync_take_<CLIENT>();
         PACK((_llk_pack_(0 /*dest tile*/, i, ckernel::DEFAULT_TENSOR_SHAPE)));
     }
 };
@@ -263,6 +263,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
              tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);)
     PACK((_llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ReluConfig::none())));
 
-    _llk_dest_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_dest_sync_configure_<dest_sync, is_fp32_dest_acc_en>();
     run_schedule(TILE_CNT, ORDERS);
 }

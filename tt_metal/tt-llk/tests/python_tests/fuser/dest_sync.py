@@ -33,17 +33,15 @@ def init(config: "GlobalConfig", operation: "L1Operation") -> str:
         return ""
     if operation.stage_id != 1:
         return ""
-    return f"_llk_dest_sync_init_<{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}>();\n"
+    mode = f"ckernel::{operation.dest_sync.cpp_enum_value}"
+    return f"_llk_dest_sync_configure_<{mode}, {config.dest_acc.cpp_enum_value}>();\n"
 
 
-def take(config: "GlobalConfig", operation: "L1Operation", node) -> str:
+def take(config: "GlobalConfig", node) -> str:
     if not active(config) or config.skip_sync:
         return ""
-    return (
-        f"_llk_dest_sync_take_<{operation.dest_sync.cpp_enum_value}, DestClient::{client_of(node)}, "
-        f"{config.dest_acc.cpp_enum_value}>();\n"
-    )
+    return f"_llk_dest_sync_take_<DestClient::{client_of(node)}>();\n"
 
 
-def takes(config: "GlobalConfig", operation: "L1Operation", nodes) -> str:
-    return "".join(take(config, operation, node) for node in nodes)
+def takes(config: "GlobalConfig", nodes) -> str:
+    return "".join(take(config, node) for node in nodes)

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
@@ -65,11 +66,21 @@ constexpr std::uint32_t DONE[] = {p_stall::UNPACK0, p_stall::MATH, p_stall::WAIT
 
 constexpr std::uint32_t DRAIN_STALL = ME == PACK ? p_stall::STALL_MATH | p_stall::STALL_SYNC : p_stall::STALL_SYNC;
 
+struct Slot
+{
+    friend constexpr auto region_mode(Slot);
+};
+
 // Dest is split into two regions (one in SyncFull). Two are enough for two clients, but with a third client, for example
 // FPU, SFPU and PACK, one client always has to wait for a free region. In the future dest should hold more tensors.
 template <DstSync DST, bool EN_32BIT_DEST>
 struct DestRegion
 {
+    friend constexpr auto region_mode(Slot)
+    {
+        return DestRegion {};
+    }
+
     static_assert(DST == DstSync::SyncHalf || DST == DstSync::SyncFull, "Unknown destination synchronization mode");
 
     static constexpr std::uint32_t REGIONS = DST == DstSync::SyncHalf ? 2 : 1;
@@ -90,6 +101,9 @@ struct DestRegion
         return TT_OP_ZEROACC(REGIONS == 2 ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, index);
     }
 };
+
+template <std::uint32_t TAKER>
+using Region = decltype(region_mode(std::conditional_t<(TAKER < NONE), Slot, Slot> {}));
 
 struct State
 {
@@ -130,7 +144,7 @@ inline void program_base(const std::uint32_t row)
     }
 }
 
-template <typename Region>
+template <std::uint32_t TAKER>
 inline void retarget(State& s)
 {
     if (s.base == s.region)
@@ -138,10 +152,10 @@ inline void retarget(State& s)
         return;
     }
     s.base = s.region;
-    program_base(Region::base(s.region));
+    program_base(Region<TAKER>::base(s.region));
 }
 
-template <typename Region, std::uint32_t TAKER>
+template <std::uint32_t TAKER>
 inline void hand_over(State& s)
 {
     if (s.holder == ME)
@@ -151,26 +165,26 @@ inline void hand_over(State& s)
     }
     if constexpr (ME == TAKER && TAKER == PACK)
     {
-        retarget<Region>(s);
+        retarget<TAKER>(s);
         TTI_SEMWAIT(STALL[ME], p_stall::STALL_ON_ZERO, BANK, FULL);
     }
     if constexpr (ME == TAKER && TAKER != PACK)
     {
-        retarget<Region>(s);
+        retarget<TAKER>(s);
         take<sem(ME)>();
     }
 }
 
-template <typename Region, std::uint32_t TAKER>
+template <std::uint32_t TAKER>
 inline void open(State& s)
 {
     if (ME == PACK && s.holder == PACK)
     {
         drain();
-        TT_INSN(Region::clear_word(s.region));
+        TT_INSN(Region<TAKER>::clear_word(s.region));
         TTI_SEMGET(BANK, FULL);
     }
-    s.region           = Region::next(s.region);
+    s.region           = Region<TAKER>::next(s.region);
     const bool chained = s.last != NONE && s.last != TAKER;
     if (chained && s.last == ME)
     {
@@ -178,7 +192,7 @@ inline void open(State& s)
     }
     if constexpr (ME == TAKER)
     {
-        retarget<Region>(s);
+        retarget<TAKER>(s);
         if (chained)
         {
             take<sem(ME)>();
@@ -189,16 +203,16 @@ inline void open(State& s)
 }
 
 template <DstSync DST, bool EN_32BIT_DEST>
-inline void _llk_dest_sync_init_()
+inline decltype(void(sizeof(dst_sync::DestRegion<DST, EN_32BIT_DEST>))) _llk_dest_sync_configure_()
 {
     using namespace dst_sync;
-    using Region = DestRegion<DST, EN_32BIT_DEST>;
+    using Mode = DestRegion<DST, EN_32BIT_DEST>;
 
     if constexpr (ME == PACK)
     {
         drain();
         TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, 0);
-        TTI_SEMINIT(Region::REGIONS, 0, BANK, FULL);
+        TTI_SEMINIT(Mode::REGIONS, 0, BANK, FULL);
         TTI_SEMPOST(BANK, PRODUCERS);
     }
     else
@@ -206,14 +220,13 @@ inline void _llk_dest_sync_init_()
         take<sem(ME)>();
     }
     program_base(0);
-    state = {NONE, NONE, Region::REGIONS - 1, 0};
+    state = {NONE, NONE, Mode::REGIONS - 1, 0};
 }
 
-template <DstSync DST, DestClient CLIENT, bool EN_32BIT_DEST>
+template <DestClient CLIENT>
 NOINLINE void _llk_dest_sync_take_()
 {
     using namespace dst_sync;
-    using Region                  = DestRegion<DST, EN_32BIT_DEST>;
     constexpr std::uint32_t TAKER = to_underlying(CLIENT);
 
     if (state.holder == TAKER)
@@ -234,17 +247,17 @@ NOINLINE void _llk_dest_sync_take_()
         }
         if (opens)
         {
-            state.region = Region::next(s.region);
+            state.region = Region<TAKER>::next(s.region);
         }
         return;
     }
     if (opens)
     {
-        open<Region, TAKER>(s);
+        open<TAKER>(s);
     }
     else
     {
-        hand_over<Region, TAKER>(s);
+        hand_over<TAKER>(s);
     }
     s.holder = TAKER;
     s.last   = TAKER == PACK ? s.last : TAKER;
