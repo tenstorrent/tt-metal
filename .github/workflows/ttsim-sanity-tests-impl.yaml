@@ -130,7 +130,7 @@ jobs:
       TT_METAL_HOME: /usr/libexec/tt-metalium
     steps:
       - name: Checkout actions
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |

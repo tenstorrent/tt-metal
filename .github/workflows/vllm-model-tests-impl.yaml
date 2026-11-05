@@ -192,7 +192,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -206,7 +206,7 @@ jobs:
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
-        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@090ad9244007fd7a14fbf383414c538d146913cd
         timeout-minutes: 10
 
       - name: 🔎 Validate vllm-source
@@ -218,7 +218,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM TT plugin
         if: ${{ inputs.vllm-source != 'fork' }}
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm-tt-plugin
@@ -228,7 +228,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM fork
         if: ${{ inputs.vllm-source == 'fork' }}
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
@@ -855,14 +855,14 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
           echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@090ad9244007fd7a14fbf383414c538d146913cd
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: docker-job/output/
           prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@090ad9244007fd7a14fbf383414c538d146913cd
         if: always()
 
   ai-run-summary:

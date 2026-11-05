@@ -152,7 +152,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -223,14 +223,14 @@ jobs:
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@090ad9244007fd7a14fbf383414c538d146913cd
         timeout-minutes: 10
         if: always() && hashFiles('docker-job/generated/tt-train-metrics/**') != ''
         with:
           path: /work/generated/tt-train-metrics
           prefix: "metrics_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@090ad9244007fd7a14fbf383414c538d146913cd
         timeout-minutes: 10
         if: always() && hashFiles('docker-job/generated/test_reports/**') != ''
         with:
@@ -255,5 +255,5 @@ jobs:
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@090ad9244007fd7a14fbf383414c538d146913cd
         if: always()

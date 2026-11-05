@@ -149,7 +149,7 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
+    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@090ad9244007fd7a14fbf383414c538d146913cd
     secrets: inherit
     with:
       fetch_depth: 0

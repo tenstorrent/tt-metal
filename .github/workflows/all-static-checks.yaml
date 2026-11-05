@@ -15,7 +15,7 @@ jobs:
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@090ad9244007fd7a14fbf383414c538d146913cd
   pre-commit:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest

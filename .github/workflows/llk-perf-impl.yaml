@@ -187,7 +187,7 @@ jobs:
       options: "--rm"
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
@@ -315,7 +315,7 @@ jobs:
         if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}

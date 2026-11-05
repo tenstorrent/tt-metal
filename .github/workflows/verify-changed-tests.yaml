@@ -192,7 +192,7 @@ jobs:
         id: gate
         # Pinned to @main: a PR branch runs the current gate, not whatever
         # copy (or lack of one) happens to sit at its own head.
-        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@090ad9244007fd7a14fbf383414c538d146913cd
         with:
           event: ${{ github.event_name }}
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
@@ -370,7 +370,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           # Package tests use installed binaries and runtime files. Their minimal
@@ -562,7 +562,7 @@ jobs:
             /work/tt_metal/tt-llk/tests/python_tests/pytest-report-*.xml
 
       - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@090ad9244007fd7a14fbf383414c538d146913cd
         if: ${{ failure() }}
 
   # --- verdict --------------------------------------------------------------
