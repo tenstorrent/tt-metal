@@ -273,13 +273,6 @@ SDPAForwardChunks resolve_chunks(
             chunks.Sq_chunk_t /= 2U;
         }
     }
-    if (chunks.Sk_chunk_t == 0U) {
-        const bool single_head_with_mask = has_mask_tensor && chunks.heads_per_item == 1U;
-        chunks.Sk_chunk_t = (shape.qWt >= 4U || single_head_with_mask) ? 4U : 8U;
-        while (chunks.Sk_chunk_t > 1U && shape.St % chunks.Sk_chunk_t != 0U) {
-            chunks.Sk_chunk_t /= 2U;
-        }
-    }
     // Shrink the picked (not the pinned) knobs while cores would idle: the rows first, then the stacking.
     const bool can_pair = shape.mask_type == AttentionMaskType::Causal && shape.St % 2U == 0U;
     const auto units_for_balance = [&]() {
@@ -292,6 +285,13 @@ SDPAForwardChunks resolve_chunks(
             chunks.heads_per_item /= 2U;
         } else {
             break;
+        }
+    }
+    if (chunks.Sk_chunk_t == 0U) {
+        const bool single_head_with_mask = has_mask_tensor && chunks.heads_per_item == 1U;
+        chunks.Sk_chunk_t = (shape.qWt >= 4U || single_head_with_mask) ? 4U : 8U;
+        while (chunks.Sk_chunk_t > 1U && shape.St % chunks.Sk_chunk_t != 0U) {
+            chunks.Sk_chunk_t /= 2U;
         }
     }
     // Shrink the picked (not the pinned) knobs until the circular buffers fit: the K/V step first, then the

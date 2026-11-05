@@ -1833,6 +1833,18 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(picked_short.heads_per_item, 1U);
     EXPECT_EQ(picked_short.Sq_chunk_t, 1U);
     EXPECT_EQ(num_work_items(masked_short, picked_short), 64U);
+    EXPECT_EQ(picked_short.Sk_chunk_t, 4U);
+
+    // Balancing can remove the stacking even when the K/V group has eight query heads.
+    masked_short.kv_heads = 1U;
+    masked_short.St = 16U;
+    const auto unstacked = resolve_chunks({}, masked_short, kBudget, kCores);
+    EXPECT_EQ(unstacked.heads_per_item, 1U);
+    EXPECT_EQ(unstacked.Sq_chunk_t, 1U);
+    EXPECT_EQ(unstacked.Sk_chunk_t, 4U);
+    const auto pinned_k = resolve_chunks({.k_chunk_size = 256U}, masked_short, kBudget, kCores);
+    EXPECT_EQ(pinned_k.heads_per_item, 1U);
+    EXPECT_EQ(pinned_k.Sk_chunk_t, 8U) << "balancing must preserve the user's K/V step";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
