@@ -344,6 +344,10 @@ class Model:
             self.head = keep["head"]
         self.dec = DSV41Decoder(mesh_device, self.built, embedding, self.head, dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
+        if hasattr(
+            embedding.weight, "set_ccl"
+        ):  # DSV41_EMBED_SHARD=1: the sharded table gathers on the model CCL (tt/device_head.py)
+            embedding.weight.set_ccl(self.mc, self.ccl)
         self.dec.samp = self.samp = self._make_sampler(self.U, plain=True)
         self.prefill_model = GenPrefillModel(
             mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up

@@ -55,16 +55,37 @@ class ShardedEmbeddingTable:
             cache_file_name=_cache(f"embed_bf16_rm_dshard{cols}"),
         )
 
+    def set_ccl(self, mesh_config, ccl):
+        """the model's mesh config / CCL manager: the gather then runs as ``all_gather_async`` on the model's (lean) ping-pong semaphores (20-25 us instead of 50-80 us of the sync op)."""
+        self.mc, self.ccl = mesh_config, ccl
+
+    def lookup_rm(self, tokens):
+        """token ids [T, 1] -> the full rows [T, 1, D] bf16 ROW_MAJOR (local lookup of the D / cols slice, then one all_gather over the columns)."""
+        T = tokens.shape[0]
+        e = ttnn.embedding(tokens, self.weight, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)  # [T, 1, D / cols]
+        mc = getattr(self, "mc", None)
+        if mc is None:
+            g = ttnn.all_gather(e, dim=len(e.shape) - 1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+            return g
+        e = ttnn.reshape(e, [1, 1, T, e.shape[-1]])
+        kw = {"lean_ag": True} if getattr(mc, "_dsv41_lean", False) else {}
+        g = mc.allgather(e, self.ccl, axis=1, dim=3, **kw)
+        return ttnn.reshape(g, [T, 1, g.shape[-1]])
+
     def lookup(self, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
-        e = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=dtype)  # [T, 1, D / cols]
-        g = ttnn.all_gather(e, dim=len(e.shape) - 1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
-        if layout != ttnn.TILE_LAYOUT:
-            g = ttnn.to_layout(g, layout)
-        return g
+        g = self.lookup_rm(tokens)
+        return g if layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(g, layout)
 
 
 def embed_shard_on():
     return os.environ.get("DSV41_EMBED_SHARD", "0") == "1"
+
+
+def embed_rm_on():
+    """DSV41_EMBED_RM=1 (also implied by DSV41_EMBED_SHARD=1): DSV41DeviceEmbedding.forward builds the 4 fp32 streams from a ROW_MAJOR lookup (concat of 4 copies + one tilize) instead of the
+    tile lookup + typecast + repeat: bit-identical, 240 -> 80 us at T=16, 361 -> 112 us at T=24, 19.7 -> 6.7 ms for a 2048-token/row prefill chunk (tests/test_embedding_dshard_bench.py).
+    """
+    return os.environ.get("DSV41_EMBED_RM", "0") == "1" or embed_shard_on()
 
 
 def embed_lookup(table, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
@@ -133,6 +154,11 @@ class DSV41DeviceEmbedding:
         of a prompt take the vision encoder's rows instead of the table row of the image token id (``emb * keep + override`` is exact: keep is 0 / 1).
         """
         T = tokens.shape[0]
+        if override is None and embed_rm_on():
+            e = ttnn.reshape(
+                embed_lookup(self.weight, tokens, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), [T, 1, 1, DIM]
+            )
+            return ttnn.to_layout(ttnn.concat([e] * HC, dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32), self.pre
         emb = embed_lookup(self.weight, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,D]
         if override is not None:
             e2 = ttnn.add(ttnn.multiply(ttnn.reshape(emb, [1, 1, T, emb.shape[-1]]), keep), override)
