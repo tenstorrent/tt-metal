@@ -82,6 +82,8 @@ void bind_gather_operation(nb::module_& mod) {
         nb::arg("dim"),
         nb::arg("index"),
         nb::kw_only(),
+        // Only false is supported. Removing sparse_grad is tracked in
+        // https://github.com/tenstorrent/tt-metal/issues/64304.
         nb::arg("sparse_grad") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("out") = nb::none(),
