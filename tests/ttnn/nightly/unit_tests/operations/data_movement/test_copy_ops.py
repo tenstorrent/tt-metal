@@ -239,6 +239,37 @@ def test_experimental_typecast(N, C, H, W, memory_config, input_dtype, output_dt
     run_experimental_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, device)
 
 
+def test_experimental_typecast_uint16_to_32bit(device):
+    torch.manual_seed(0)
+    vals = torch.tensor([0, 1, 7, 15, 100, 255, 256, 1024, 65535], dtype=torch.int32)
+    n = 32 * 64
+    tiled = vals.repeat(n // 9 + 1)[:n].reshape(1, 1, 32, 64)
+    mem = ttnn.DRAM_MEMORY_CONFIG
+
+    uint16_input = ttnn.from_torch(tiled, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+
+    # uint16 -> uint32 must zero-extend (was bit-shifted before the routing fix).
+    u32 = ttnn.experimental.typecast(uint16_input, ttnn.uint32, memory_config=mem)
+    assert_integer_typecast_equal(tiled, ttnn.to_torch(u32))
+
+    # uint16 -> int32 must zero-extend.
+    i32 = ttnn.experimental.typecast(uint16_input, ttnn.int32, memory_config=mem)
+    assert_integer_typecast_equal(tiled, ttnn.to_torch(i32))
+
+    # int32 -> uint32 control: already exact through the copy path.
+    int32_input = ttnn.from_torch(tiled, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    i32_to_u32 = ttnn.experimental.typecast(int32_input, ttnn.uint32, memory_config=mem)
+    assert_integer_typecast_equal(tiled, ttnn.to_torch(i32_to_u32))
+
+    # bfloat16 -> float32 control: already exact through the copy path.
+    bf16_torch = torch.rand(1, 1, 32, 64).to(torch.bfloat16)
+    bf16_input = ttnn.from_torch(
+        bf16_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+    )
+    f32 = ttnn.experimental.typecast(bf16_input, ttnn.float32, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(f32), bf16_torch.to(torch.float32))
+
+
 def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
