@@ -170,6 +170,18 @@ TensorLayoutImpl::TensorLayoutImpl(
             CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
         TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
     }
+    if (is_gguf(dtype_) && memory_config_.is_sharded()) {
+        const uint32_t shard_height = memory_config_.shard_spec().has_value()
+                                          ? memory_config_.shard_spec()->shape[0]
+                                          : memory_config_.nd_shard_spec()->shard_shape[-2];
+        const uint32_t page_height = gguf_traits(dtype_).page_height();
+        TT_FATAL(
+            shard_height % page_height == 0,
+            "{} shard height {} must be a multiple of the page height {}",
+            dtype_,
+            shard_height,
+            page_height);
+    }
 }
 
 void TensorLayoutImpl::initialize_alignment() {

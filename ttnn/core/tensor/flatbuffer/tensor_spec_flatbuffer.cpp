@@ -34,7 +34,16 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     return flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
 }
 
+// The GGUF values share their numbers with tt::tt_metal::DataType.
+static_assert(
+    static_cast<int>(flatbuffer::DataType::GgufQ8_0) == static_cast<int>(tt::tt_metal::DataType::GGUF_Q8_0) &&
+    static_cast<int>(flatbuffer::DataType::GgufTQ1_0) == static_cast<int>(tt::tt_metal::DataType::GGUF_TQ1_0) &&
+    flatbuffer::DataType::MAX == flatbuffer::DataType::GgufTQ1_0);
+
 tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
+    if (type >= flatbuffer::DataType::GgufQ8_0) {
+        return static_cast<tt::tt_metal::DataType>(type);
+    }
     switch (type) {
         case flatbuffer::DataType::BFloat16: return tt::tt_metal::DataType::BFLOAT16;
         case flatbuffer::DataType::Float32: return tt::tt_metal::DataType::FLOAT32;
@@ -54,11 +63,15 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::MxInt4: return tt::tt_metal::DataType::MXINT4;
         case flatbuffer::DataType::MxInt2: return tt::tt_metal::DataType::MXINT2;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
+        default: break;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
 }
 
 flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
+    if (tt::tt_metal::is_gguf(type)) {
+        return static_cast<flatbuffer::DataType>(type);
+    }
     switch (type) {
         case tt::tt_metal::DataType::BFLOAT16: return flatbuffer::DataType::BFloat16;
         case tt::tt_metal::DataType::FLOAT32: return flatbuffer::DataType::Float32;
@@ -79,6 +92,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::MXINT4: return flatbuffer::DataType::MxInt4;
         case tt::tt_metal::DataType::MXINT2: return flatbuffer::DataType::MxInt2;
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
+        default: break;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
 }
