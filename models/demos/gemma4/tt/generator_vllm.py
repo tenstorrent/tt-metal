@@ -6944,6 +6944,9 @@ class MTPSession:
     dropped: int = 0
     stats: object = None
     trialed: bool = False  # the request had its one trial (or entered on its own): no second trial
+    # This proposal's verify is the row's first step after its prefill (``_mtp_prefilled_slots``): the step that
+    # releases the request's first token, which replays nothing (``_mtp_choose_record``).
+    after_prefill: bool = False
     # The all-declined proposals served without a walk that ``steps`` already counts (``_mtp_sync_session``).
     epoch: int = 0
 
@@ -7220,6 +7223,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # slot set holds host-sampled prefills until their first decode step takes over.
         self._mtp_step_host_sampled = False
         self._mtp_host_prefilled = set()
+        # Slots prefilled since their last decode step: a proposal for one of them is the row's first step after
+        # its prefill (``MTPSession.after_prefill``); an ordinary decode step takes every occupant past it.
+        self._mtp_prefilled_slots = set()
         self._mtp_host_logged = 0
         # Slots released since their last prefill: the runner proposes once more for a released request (its
         # last committed block), and that proposal nobody verifies must open no session and replay nothing.
@@ -7513,11 +7519,13 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             sessions[new] = session
         self._mtp_sessions = sessions
         self._mtp_released_slots = {moved.get(slot, slot) for slot in self._mtp_released_slots}
+        self._mtp_prefilled_slots = {moved.get(slot, slot) for slot in self._mtp_prefilled_slots}
         self._mtp_slot_epoch = {moved.get(slot, slot): epoch for slot, epoch in self._mtp_slot_epoch.items()}
 
     def _spec_release_slot(self, row):
         self._mtp_drop_session(row, "release")
         self._mtp_released_slots.add(int(row))
+        self._mtp_prefilled_slots.discard(int(row))
         self._mtp_slot_epoch.pop(int(row), None)
 
     def _spec_release_all(self):
@@ -7572,6 +7580,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             )
             for slot in empty_slots:
                 mark(int(slot))
+                self._mtp_prefilled_slots.add(int(slot))
         self._spec_note_prefill()
         return super().prefill_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
 
@@ -7627,6 +7636,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_step_bitmask = bitmask
         self._mtp_step_host_sampled = sampling is None  # the whole batch samples on the host (contract s.4h)
         self._mtp_host_prefilled.clear()  # a decode step submits every occupant: its route covers them all
+        self._mtp_prefilled_slots.clear()
         self._mtp_row_needs_logits = MTPRowNeedsLogits(self._mtp_row_verify_by_ids, sampling, bitmask, live_rows)
         if self._mtp_unread_replay_pending() and (sampling is None or self._mtp_row_needs_logits.any()):
             # A request that needs logits reaches a decode step before its own
@@ -8200,8 +8210,16 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         skipped, and when that leaves none the default serves too.
         ``overtaken``: the last proposal was never verified (an ordinary
         decode the runner had in flight committed past it, s.4d), so it does
-        not age a trial.
+        not age a trial. A batch whose rows are all at the step right after
+        their prefill (``MTPSession.after_prefill``) takes the plain step:
+        under asynchronous scheduling the runner releases a request's first
+        token when that step answers, so a reseed there (~70 ms on the 12B
+        QB2) lands in TTFT (the 128/128 c1 release point read 109 ms against
+        70 plain, 2026-11-05); the reseed waits for the next proposal, outside
+        TTFT, and the session's trial with it.
         """
+        if drafting and all(session.after_prefill for _r, session, *_ in drafting):
+            return None, None
         # The default serves when nothing else is costed, unless it drafts more than the runner's ``k``: a replay
         # it would truncate writes K/V past the ``k + 1`` rows the plugin reserved (contract s.4f), so such a step
         # is the plain decode instead.
@@ -8411,6 +8429,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._mtp_sync_session(session)
             session.steps += 1
             session.committed += n
+            session.after_prefill = r in self._mtp_prefilled_slots
+            self._mtp_prefilled_slots.discard(r)
             retained = session.retained
             if retained is not None and retained.consumed and retained.verified > 0:
                 # The count answers the verify that consumed the proposal: n - 1 of its ``verified``

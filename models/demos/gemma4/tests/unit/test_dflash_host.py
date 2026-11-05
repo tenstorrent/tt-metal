@@ -601,9 +601,13 @@ def test_a_request_prefilled_with_another_never_proposes(model, mtp):
     committed, posits = mh._committed(32, [20], [90], [2])
     proposal = mh._propose(mtp, committed, posits)
     assert int(proposal.num_valid.sum()) == 0 and 20 not in mtp._mtp_sessions
-    mh._prefill(mtp, slot=21, key=52)  # a device-sampled newcomer proposes from its prefill
+    mh._prefill(mtp, slot=21, key=52)  # a device-sampled newcomer: its first step after the prefill is plain
     committed, posits = mh._committed(32, [21], [91], [2])
-    proposal = mh._propose(mtp, committed, posits)
+    proposal = mh._propose(mtp, committed, posits)  # the step that releases its first token: no reseed in TTFT
+    assert int(proposal.num_valid.sum()) == 0 and 21 in mtp._mtp_sessions
+    mh._wire(mtp, [21], [91], [2], [52], 32, _tensor([0] * 32))
+    committed, posits = mh._committed(32, [21], [92], [3])
+    proposal = mh._propose(mtp, committed, posits)  # and it proposes from its second step
     assert int(proposal.num_valid[21]) == 5
 
 

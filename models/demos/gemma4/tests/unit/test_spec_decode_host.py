@@ -1052,6 +1052,19 @@ def test_a_default_record_wider_than_the_runners_k_declines():
     assert choose(stub, (1, 5), [], 3, None, 1) == (None, None)
 
 
+def test_a_sessions_first_proposal_takes_the_plain_step():
+    """The step after a request's prefill answers its first token (the runner holds it under asynchronous
+    scheduling), so a reseed there lands in TTFT: rows all at that step get the plain step, whatever the policy
+    or the fixed default would replay; a batch where any row is past it is left to the policy."""
+    stub = SimpleNamespace(_spec_cost_table_ready=lambda name: False)
+    choose = Gemma4MTPContractForCausalLM._mtp_choose_record
+    row = lambda after: (0, SimpleNamespace(after_prefill=after, steps=1, stats=None, trialed=False), 0, 10, 1)
+    assert choose(stub, (1, 5), [row(True)], 5, None, 1) == (None, None)
+    assert choose(stub, (1, 5), [row(False)], 5, None, 1) == ((1, 5), None)
+    assert choose(stub, (5, 3), [row(True), row(True)], 3, None, 2) == (None, None)
+    assert choose(stub, (5, 3), [row(True), row(False)], 3, None, 2) == ((5, 3), None)
+
+
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_k_is_a_set_not_a_range(drafter_snapshot):
     """A narrower K would need its own packed-verify capture, so it is refused
