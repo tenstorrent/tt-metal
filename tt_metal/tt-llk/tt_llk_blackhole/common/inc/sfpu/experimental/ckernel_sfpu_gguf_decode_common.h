@@ -90,12 +90,19 @@ sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
     return (w << static_cast<unsigned>(32 - lsb - width)) >> static_cast<unsigned>(32 - width);
 }
 
-// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b (prepare_scales).
+// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b (prepare_scales; Q4_K:
+// k4_group).
+template <int FMT>
+constexpr int pf32_idx(const int F, const int b, const int a)
+{
+    constexpr int fb = round_up(page_layout<static_cast<Format>(FMT)>().scale_rows, 4);
+    return CO + scale_row<FMT>() / 2 + 2 * (fb / 4 + 2 * F + b) + a;
+}
+
 template <int FMT>
 sfpi_inline vFloat pf32(const int F, const int b, const int a)
 {
-    constexpr int fb = round_up(page_layout<static_cast<Format>(FMT)>().scale_rows, 4);
-    return sfpi::dst_reg[CO + scale_row<FMT>() / 2 + 2 * (fb / 4 + 2 * F + b) + a];
+    return sfpi::dst_reg[pf32_idx<FMT>(F, b, a)];
 }
 
 // Byte B (0..23) of a lane's scale bytes in scratch rows base + B / 4 (rep4_to copies): field [lsb, lsb + width).
