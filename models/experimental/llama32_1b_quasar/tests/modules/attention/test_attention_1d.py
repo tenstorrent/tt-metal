@@ -986,7 +986,6 @@ def _list_test_cases() -> list[pytest.param]:
         # NOTE: Qwen2.5-7B has lower PCC for prefill+decode due to Q/K biases + RoPE interaction.
         # TTTv1's test_attention.py also shows ~0.984 min PCC. With 128-token prefill, accumulated
         # numerical error in SDPA over the larger KV cache causes further degradation.
-        # See models/common/tests/modules/attention/low_pcc_notes.md for detailed analysis
 
         # --- DeepSeek-R1-14B on N300 (1x2) ---
         pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-128-DeepSeek-R1-14B", marks=_slow),
