@@ -1059,8 +1059,8 @@ def _run_quant(
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
-    # Pinned lanes: SFPCAST SM<->2's-comp differs from plain negation only at 0x80000000.
-    # Even ones give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd ones hold INT32_MIN (int, 2's-comp only).
+    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ from each other only at 0x80000000.
+    # Even entries of `pinned` give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd entries hold INT32_MIN (int, 2's-comp only).
     pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
     neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
     neg_zero_a = (_QUANT_NEG_ZERO_PROD - zero_point) / scale[neg_zero_lanes]

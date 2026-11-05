@@ -442,7 +442,7 @@ struct p_sfpu
         constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
-    // Matches SFPI's Quasar SFPCAST_MOD1_SM32_TO_INT32 (2) and SFPCAST_MOD1_INT32_TO_SM32 (3) in sfpi_constants.h.
+    // Pinned to SFPI's Quasar SFPCAST_MOD1_SM32_TO_INT32 / SFPCAST_MOD1_INT32_TO_SM32 by static_asserts in ckernel_sfpu_quant.h.
     struct sfp_sfpcast_mod
     {
         constexpr static std::uint32_t SM32_TO_2SC  = 0x2; // sign+magnitude int32 -> 2's complement (-0 -> 0)
