@@ -18,6 +18,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "ttnn/core.hpp"
+
 namespace ttnn::global_circular_buffer {
 
 GlobalCircularBuffer create_global_circular_buffer(
@@ -26,7 +28,12 @@ GlobalCircularBuffer create_global_circular_buffer(
     uint32_t size,
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
-    return tt::tt_metal::experimental::GlobalCircularBuffer(*device, sender_receiver_core_mapping, size, buffer_type);
+    return tt::tt_metal::experimental::GlobalCircularBuffer(
+        *device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 namespace {

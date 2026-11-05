@@ -36,7 +36,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
@@ -898,8 +898,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
 // observable. A MeshDispatchFixture would hand back unit meshes (one 1x1 MeshDevice per chip),
 // collapsing every per-device loop below to a single iteration.
 // Runs under fast dispatch (MeshDeviceFixtureBase's requirement, and what CI defaults to). Nothing
-// here needs slow dispatch: pipe creation writes every config page with direct L1 writes, so they
-// have all landed by the time the factory returns and the raw L1 reads below are safe.
+// here needs slow dispatch: with no Tensor prefetcher running, the factory waits for the command
+// queue to write every config page before it returns, so the raw L1 reads below are safe.
 class PrefetcherPipeDramSenderMultiDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     PrefetcherPipeDramSenderMultiDeviceFixture() :

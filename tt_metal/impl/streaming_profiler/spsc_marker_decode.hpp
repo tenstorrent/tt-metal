@@ -74,9 +74,9 @@ inline constexpr uint32_t kSpscBorrowedDurHi = 0xFFFFFFFFu;
 struct SpscBlockResult {
     uint64_t ts_last;  // ZONE_S: the lane cursor after the block
     uint32_t n;
-    uint8_t regress;   // some record's timestamp precedes the one before it
-    uint8_t wrapped;   // ZONE_L only: some duration's high word is kSpscBorrowedDurHi
-    uint16_t stalls;   // records whose id is kSpscStallZoneId
+    uint8_t regress;  // some record's timestamp precedes the one before it
+    uint8_t wrapped;  // ZONE_L only: some duration's high word is kSpscBorrowedDurHi
+    uint16_t stalls;  // records whose id is kSpscStallZoneId
 };
 
 // Packet formats. Every packet the wire carries is one row below; word 0 of every packet is type | id27. The block

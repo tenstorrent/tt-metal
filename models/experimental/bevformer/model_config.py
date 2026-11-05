@@ -5,11 +5,12 @@
 """BEVFormer's configuration, shared by the PyTorch reference and the TTNN port.
 
 The architecture follows upstream's ``projects/configs/bevformer/bevformer_{tiny,small,base}.py``
-(fundamentalvision/BEVFormer): the reference modules take these values as their defaults. The TTNN section holds the port's precision
-and memory choices, which the reference does not see.
+(fundamentalvision/BEVFormer): the reference modules take these values as their defaults. The TTNN
+section holds the port's precision and memory choices, which the reference does not see.
 
-The ``BEVFORMER_VARIANT`` environment variable picks the variant, ``base`` by default, when this
-module is first imported; the values the variants do not share follow from it.
+The validated JSON files in ``config/`` define the supported architectures. ``BEVFORMER_VARIANT``
+picks a bundled config, ``base`` by default, when this compatibility module is first imported.
+The demo can activate a local or remote normalized config before importing this module.
 
 Sections:
 - Variant
@@ -24,9 +25,10 @@ Sections:
 """
 
 import math
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from models.experimental.bevformer.config.loader import load_builtin_config, selected_config
 
 if TYPE_CHECKING:
     import ttnn
@@ -34,83 +36,22 @@ if TYPE_CHECKING:
 # --- Variant ------------------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Variant:
-    """What one of upstream's BEVFormer configurations sets apart from the others."""
-
-    # RandomScaleImageMultiViewImage's scale of the CAMERA_IMAGE_SIZE camera images.
-    image_scale: float
-    # img_norm_cfg, per channel in the order the backbone reads them: RGB for tiny, BGR for small
-    # and base.
-    image_mean: tuple
-    image_std: tuple
-    resnet_depth: int
-    # Where a bottleneck puts its stride: on the 3x3 conv ("pytorch") or on the first 1x1 ("caffe").
-    resnet_style: str
-    # DCNv2 in layer3 and layer4.
-    with_dcn: bool
-    # The ResNet layers that feed the FPN, from 0 (layer1).
-    out_indices: tuple
-    # The FPN's levels: one per out_indices entry, then extra stride-2 convs on the last.
-    num_levels: int
-    bev_size: int
-    encoder_num_layers: int
-
-
-_CAFFE_IMAGE_NORM = dict(image_mean=(103.530, 116.280, 123.675), image_std=(1.0, 1.0, 1.0))
-VARIANTS = {
-    # ResNet50 without DCN; C5 alone feeds a single-level FPN.
-    "tiny": Variant(
-        image_scale=0.5,
-        image_mean=(123.675, 116.28, 103.53),
-        image_std=(58.395, 57.12, 57.375),
-        resnet_depth=50,
-        resnet_style="pytorch",
-        with_dcn=False,
-        out_indices=(3,),
-        num_levels=1,
-        bev_size=50,
-        encoder_num_layers=3,
-    ),
-    # base's backbone, but C5 alone feeds a single-level FPN.
-    "small": Variant(
-        image_scale=0.8,
-        **_CAFFE_IMAGE_NORM,
-        resnet_depth=101,
-        resnet_style="caffe",
-        with_dcn=True,
-        out_indices=(3,),
-        num_levels=1,
-        bev_size=150,
-        encoder_num_layers=3,
-    ),
-    "base": Variant(
-        image_scale=1.0,
-        **_CAFFE_IMAGE_NORM,
-        resnet_depth=101,
-        resnet_style="caffe",
-        with_dcn=True,
-        out_indices=(1, 2, 3),
-        num_levels=4,
-        bev_size=200,
-        encoder_num_layers=6,
-    ),
-}
-VARIANT = os.environ.get("BEVFORMER_VARIANT", "base")
-if VARIANT not in VARIANTS:
-    raise ValueError(f"BEVFORMER_VARIANT is {VARIANT!r}, expected one of {sorted(VARIANTS)}")
-_VARIANT = VARIANTS[VARIANT]
+VARIANTS = {name: load_builtin_config(name) for name in ("tiny", "small", "base")}
+_VARIANT = selected_config()
+VARIANT = _VARIANT.variant
+MODEL_CONFIG = _VARIANT
 
 # --- Cameras and images -------------------------------------------------------------------------
 
-NUM_CAMS = 6
+CAMERA_ORDER = _VARIANT.camera_order
+NUM_CAMS = _VARIANT.num_cameras
 # nuScenes' camera images, (width, height), the size their intrinsics are calibrated at.
-CAMERA_IMAGE_SIZE = (1600, 900)
+CAMERA_IMAGE_SIZE = _VARIANT.camera_image_size
 # The camera images as the variant scales them, (width, height): CAMERA_IMAGE_SIZE for base.
 RAW_IMAGE_SIZE = tuple(round(size * _VARIANT.image_scale) for size in CAMERA_IMAGE_SIZE)
 # Upstream's PadMultiViewImage pads the images at the bottom and right to a multiple of this, and
 # the images' img_shape reports the padded size.
-IMAGE_SIZE_DIVISOR = 32
+IMAGE_SIZE_DIVISOR = _VARIANT.image_size_divisor
 
 
 def padded_image_size(width, height):
@@ -124,6 +65,7 @@ IMAGE_WIDTH, IMAGE_HEIGHT = padded_image_size(*RAW_IMAGE_SIZE)
 # and base's std of 1 leaves them in pixel units.
 IMAGE_MEAN = _VARIANT.image_mean
 IMAGE_STD = _VARIANT.image_std
+IMAGE_COLOR_ORDER = _VARIANT.color_order
 
 # --- Backbone and FPN ---------------------------------------------------------------------------
 
@@ -181,18 +123,18 @@ SPATIAL_SHAPES = fpn_spatial_shapes(IMAGE_HEIGHT, IMAGE_WIDTH, FPN_KWARGS["num_o
 
 BEV_H = _VARIANT.bev_size
 BEV_W = _VARIANT.bev_size
-EMBED_DIMS = 256
+EMBED_DIMS = _VARIANT.embed_dims
 # Shared by the encoder's and the decoder's attentions and FFNs.
-NUM_HEADS = 8
-FEEDFORWARD_CHANNELS = 512
+NUM_HEADS = _VARIANT.num_heads
+FEEDFORWARD_CHANNELS = _VARIANT.feedforward_channels
 NUM_LEVELS = _VARIANT.num_levels
 # (x_min, y_min, z_min, x_max, y_max, z_max) in metres: nuScenes' range, which the BEV grid, the
 # encoder's pillars and the head's box centers share.
-PC_RANGE = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
-CAN_BUS_DIMS = 18
+PC_RANGE = _VARIANT.point_cloud_range
+CAN_BUS_DIMS = _VARIANT.can_bus_dims
 # Cell the previous BEV rotates about, (x, y): upstream's default for every grid, tiny's 50x50
 # included, where it lies outside the grid; it is not derived from the grid size.
-ROTATE_CENTER = (100, 100)
+ROTATE_CENTER = _VARIANT.rotate_center
 
 # --- Encoder ------------------------------------------------------------------------------------
 
@@ -200,25 +142,26 @@ ROTATE_CENTER = (100, 100)
 # previous BEV.
 ENCODER_NUM_LAYERS = _VARIANT.encoder_num_layers
 # The SCA's sampling points per head and level, split over the pillar's heights.
-SCA_NUM_POINTS = 8
-NUM_POINTS_IN_PILLAR = 4
-TSA_NUM_POINTS = 4
+SCA_NUM_POINTS = _VARIANT.spatial_num_points
+NUM_POINTS_IN_PILLAR = _VARIANT.num_points_in_pillar
+TSA_NUM_POINTS = _VARIANT.temporal_num_points
 
 # --- Decoder and head ---------------------------------------------------------------------------
 
-DECODER_NUM_LAYERS = 6
-DECODER_NUM_POINTS = 4
-NUM_QUERY = 900
-NUM_CLASSES = 10
+DECODER_NUM_LAYERS = _VARIANT.decoder_num_layers
+DECODER_NUM_POINTS = _VARIANT.decoder_num_points
+NUM_QUERY = _VARIANT.num_query
+NUM_CLASSES = len(_VARIANT.class_names)
 # inverse_sigmoid's clamp, which the decoder's refinement of its reference points goes through.
 INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
-# The box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs. In the box codes, the
-# reg branches' raw output, cx, cy and cz are logit offsets, which the decoder adds to its reference
-# points' logits; in the box predictions, the head's output, they are the refined centers in metres.
-# The other channels are the same in both.
+# The reference's box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs, which the
+# CODE_* slices index. In the box codes, the reg branches' raw output, cx, cy and cz are logit
+# offsets, which the decoder adds to its reference points' logits; in the box predictions, the
+# head's output, they are the refined centers in metres. The other channels are the same in both.
+# The TTNN head's device tensors hold the channels in CENTERS_FIRST order instead (see CODE_ORDER).
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)
@@ -237,23 +180,10 @@ CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if chann
 CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 
-def _box_pred_pieces():
-    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
-    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
-    pieces = []
-    for channel in range(CODE_SIZE):
-        if channel in CODE_CENTERS:
-            source, index = "centers", CODE_CENTERS.index(channel)
-        else:
-            source, index = "codes", CENTERS_FIRST.index(channel)
-        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
-            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
-        else:
-            pieces.append((source, slice(index, index + 1)))
-    return tuple(pieces)
-
-
-BOX_PRED_PIECES = _box_pred_pieces()
+# The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
+# its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
+# order on the host (tt_head.box_preds_to_torch).
+CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
@@ -263,9 +193,9 @@ BOX_H = slice(5, 6)
 BOX_YAW = slice(6, 7)
 BOX_VELOCITY = slice(7, 9)
 # Box centers outside this range are dropped by the coder.
-POST_CENTER_RANGE = (-61.2, -61.2, -10.0, 61.2, 61.2, 10.0)
+POST_CENTER_RANGE = _VARIANT.post_center_range
 # Boxes the coder keeps per sample, by score.
-MAX_NUM = 300
+MAX_NUM = _VARIANT.max_detections
 
 # --- Deformable attention -----------------------------------------------------------------------
 
@@ -311,10 +241,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
-# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
-# suffice, the rest is margin.
-CODER_BISECTION_STEPS = 22
+# Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32, a tile row of
+# thresholds: four take it down to one float32 value, the fifth is margin.
+CODER_SEARCH_ROUNDS = 5
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and

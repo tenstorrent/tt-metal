@@ -14,11 +14,16 @@
 
       texts
         tokenize             -> input_ids, attention_mask
-        the backbone         -> (B, 1, S, H)
-        mean_pool            -> (B, 1, 1, H)   fp32, padding excluded
-        matryoshka_truncate  -> (B, 1, 1, dim) optional
-        l2_normalize         -> (B, 1, 1, dim) unit norm
-        to_torch             -> (B, dim)
+        embed(), for each length-sorted chunk cut to its longest text:
+          the backbone          -> (b, 1, s, H)
+          mean_pool             -> (b, 1, 1, H)   fp32, padding excluded
+          matryoshka_truncate   -> (b, 1, 1, dim) optional
+          l2_normalize          -> (b, 1, 1, dim) unit norm
+        to_torch, input order   -> (B, dim)
+
+Large inputs run in chunks of whole sequences (tt/chunking.py): the backbone splits a batch past
+tt_config.max_chunk_tokens computed tokens into contiguous chunks and joins their outputs, and embed()
+sorts the texts by length so that each chunk also drops the padding its longest text did not need.
 
 The split is the reference's: the model is the backbone and nothing else, and the pooling stages
 are called directly by the one driver rather than wrapped in a method of their own. Anyone
@@ -53,6 +58,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
     tokenize,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
+from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     LayerNormParameters,
     RotaryTables,
@@ -102,7 +108,11 @@ class TtNomicBertModel(LightweightModule):
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Embed the tokens and run the encoder stack.
+        """Embed the tokens and run the encoder stack, in chunks of whole sequences when the batch is large.
+
+        Past tt_config.max_chunk_tokens computed tokens the batch runs as contiguous chunks
+        (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined in DRAM.
+        Each sequence's output is what the backbone computes for it in its own chunk.
 
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
@@ -128,6 +138,20 @@ class TtNomicBertModel(LightweightModule):
                 "zeros; the token-type row is folded into the word embedding table at load"
             )
 
+        batch, seqlen = input_ids.shape
+        outputs = []
+        for chunk in plan_chunks(batch, seqlen, self.tt_config.max_chunk_tokens):
+            rows = slice(chunk.start, chunk.start + chunk.count)
+            outputs.append(self.backbone(input_ids[rows], None if attention_mask is None else attention_mask[rows]))
+        if len(outputs) == 1:
+            return outputs[0]
+        out = ttnn.concat(outputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for piece in outputs:
+            ttnn.deallocate(piece)
+        return out
+
+    def backbone(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H); see forward."""
         seqlen = input_ids.shape[-1]
         hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
         weight, bias = self.emb_ln.for_input(hidden)
@@ -187,19 +211,63 @@ def encode(
         torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm, back on the host.
     """
     encoded = tokenize(tokenizer, apply_prompt(texts, prompt_prefix), max_length=max_length)
-    attention_mask = encoded["attention_mask"]
+    return embed(model, encoded["input_ids"], encoded["attention_mask"], matryoshka_dim)
+
+
+def embed(
+    model: TtNomicBertModel,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    matryoshka_dim: Optional[int] = None,
+) -> torch.Tensor:
+    """Token ids to normalized embeddings, in length-sorted chunks each cut to its longest sequence.
+
+    The sequences are sorted longest first and split into chunks of at most tt_config.max_chunk_tokens
+    computed tokens (tt.chunking.plan_sorted_chunks). Each chunk runs at its own longest sequence's length,
+    so a short text no longer computes the padding its batch's longest text set, and each is pooled and
+    normalized on its own; the rows come back in input order. All chunks are queued before the first is
+    read back.
+
+    Args:
+        model: A constructed TtNomicBertModel.
+        input_ids: (B, S) int64 token ids, right-padded as reference.preprocessing.tokenize returns them;
+            with any other padding every chunk keeps the full S.
+        attention_mask: (B, S) int64, 1 for real tokens and 0 for padding; None for no padding.
+        matryoshka_dim: Target embedding width, at most 768, or None for the full 768.
+
+    Returns:
+        torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm.
+    """
+    batch, seqlen = input_ids.shape
+    if attention_mask is None:
+        attention_mask = torch.ones((batch, seqlen), dtype=torch.long)
     kernel_config = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
-
-    hidden = model(encoded["input_ids"], attention_mask)
-
-    # Pooling needs a mask even where the backbone did not: padded positions must not enter the
-    # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
-    # text's embedding depend on how long its batch-mates are.
-    pooled = pooling.mean_pool(hidden, pooling_mask(attention_mask, model.device), compute_kernel_config=kernel_config)
-    ttnn.deallocate(hidden)
-
-    embeddings = pooling.l2_normalize(
-        pooling.matryoshka_truncate(pooled, matryoshka_dim), compute_kernel_config=kernel_config
-    )
-
-    return ttnn.to_torch(embeddings).float().reshape(len(texts), -1)
+    lengths = attention_mask.sum(dim=-1).long()
+    # Cutting a chunk to its longest sequence assumes right padding; any other mask keeps the full width.
+    if not torch.equal(attention_mask.bool(), torch.arange(seqlen) < lengths[:, None]):
+        lengths = torch.full_like(lengths, seqlen)
+    order = torch.argsort(lengths, descending=True, stable=True)
+    chunks = plan_sorted_chunks(lengths[order].tolist(), model.tt_config.max_chunk_tokens)
+    pieces = []
+    for chunk in chunks:
+        rows = order[chunk.start : chunk.start + chunk.count]
+        # At least one token a row: a fully padded row pools to zeros either way.
+        width = max(chunk.seqlen, 1)
+        chunk_mask = attention_mask[rows, :width]
+        hidden = model(input_ids[rows, :width], chunk_mask)
+        # Pooling needs a mask even where the backbone did not: padded positions must not enter the
+        # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
+        # text's embedding depend on how long its batch-mates are.
+        pooled = pooling.mean_pool(hidden, pooling_mask(chunk_mask, model.device), compute_kernel_config=kernel_config)
+        ttnn.deallocate(hidden)
+        pieces.append(
+            pooling.l2_normalize(
+                pooling.matryoshka_truncate(pooled, matryoshka_dim), compute_kernel_config=kernel_config
+            )
+        )
+        ttnn.deallocate(pooled)
+    out = torch.empty((batch, pieces[0].shape[-1]), dtype=torch.float32)
+    for chunk, piece in zip(chunks, pieces):
+        out[order[chunk.start : chunk.start + chunk.count]] = ttnn.to_torch(piece).float().reshape(chunk.count, -1)
+        ttnn.deallocate(piece)
+    return out

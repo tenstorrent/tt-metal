@@ -20,6 +20,7 @@ target_sources(
             tt_stl/fmt.hpp
             tt_stl/indestructible.hpp
             tt_stl/move_only_function.hpp
+            tt_stl/joined_tasks.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp

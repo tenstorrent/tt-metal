@@ -12,7 +12,7 @@ The model's own configuration, for the variant ``BEVFORMER_VARIANT`` selects, is
 import math
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -26,6 +26,7 @@ from models.experimental.bevformer.model_config import (
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
+    CAMERA_ORDER,
     CAMERA_IMAGE_SIZE,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
@@ -77,6 +78,14 @@ from models.experimental.bevformer.reference.perception_transformer import Perce
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.reference.spatial_cross_attention import MSDeformableAttention3D
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
+from models.experimental.bevformer.tests.fixtures.camera_rigs import (
+    CameraSpec,
+    NUSCENES_CAMERA_ORDER,
+    NUSCENES_CAMERA_RIG,
+    build_lidar2img,
+    ring_camera_rig,
+)
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
 logger.info(f"BEVFormer variant {VARIANT}")
@@ -90,148 +99,14 @@ logger.info(f"BEVFormer variant {VARIANT}")
 # ``point_sampling_3d_2d`` treats row 2 of the composed matrix as depth and normalizes rows 0 and 1
 # by the image width and height, so the matrix is ``K @ [R | -R t]`` with ``K`` in pixels.
 
-# The five narrow nuScenes cameras share one nominal intrinsic. Real per-camera
-# calibration differs by well under 1% in focal length and by tens of pixels in
-# the principal point, which leaves max_len unchanged and per-camera coverage
-# within 1%, so the spread is not modelled.
-NUSCENES_NARROW_FOCAL_PX = 1266.4
-NUSCENES_NARROW_PRINCIPAL_PX = (816.3, 491.5)
-
-# CAM_BACK is a different, wider-FOV unit; its ~89 degree horizontal field is what
-# closes the 360 degree ring and it sets max_len.
-NUSCENES_WIDE_FOCAL_PX = 809.2
-NUSCENES_WIDE_PRINCIPAL_PX = (829.2, 481.8)
-
-
-@dataclass(frozen=True)
-class CameraSpec:
-    """One camera's mounting and pixel intrinsics.
-
-    Intrinsics are stored together with the ``reference_size`` they were measured
-    at so a rig can be reused at a resized input resolution.
-    """
-
-    name: str
-    yaw_deg: float
-    focal_px: Tuple[float, float]
-    principal_px: Tuple[float, float]
-    reference_size: Tuple[int, int]
-    pitch_deg: float = 0.0
-    translation_m: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-
-
-def _narrow(name: str, yaw_deg: float) -> CameraSpec:
-    return CameraSpec(
-        name=name,
-        yaw_deg=yaw_deg,
-        focal_px=(NUSCENES_NARROW_FOCAL_PX, NUSCENES_NARROW_FOCAL_PX),
-        principal_px=NUSCENES_NARROW_PRINCIPAL_PX,
-        reference_size=CAMERA_IMAGE_SIZE,
-    )
-
-
-# Nominal nuScenes mounting yaws. Pitch and translation stay zero: the cameras sit
-# within about a metre of LIDAR_TOP and are near-horizontal, which is under a
-# degree of angular error over the +-51.2 m BEV range.
-NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
-    _narrow("CAM_FRONT", 0.0),
-    _narrow("CAM_FRONT_LEFT", 55.0),
-    _narrow("CAM_FRONT_RIGHT", -55.0),
-    _narrow("CAM_BACK_LEFT", 110.0),
-    _narrow("CAM_BACK_RIGHT", -110.0),
-    CameraSpec(
-        name="CAM_BACK",
-        yaw_deg=180.0,
-        focal_px=(NUSCENES_WIDE_FOCAL_PX, NUSCENES_WIDE_FOCAL_PX),
-        principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
-        reference_size=CAMERA_IMAGE_SIZE,
-    ),
-)
-
-
-def ring_camera_rig(
-    num_cams: int,
-    input_size: Tuple[int, int],
-    overlap: float = 1.25,
-) -> Tuple[CameraSpec, ...]:
-    """Synthesize an evenly spaced ring rig covering 360 degrees.
-
-    Used for datasets with no calibration recorded here. Focal length is solved
-    from the horizontal field of view each camera must cover, widened by
-    ``overlap`` so adjacent frusta intersect the way a real rig's do. This is a
-    plausible geometry, not any vehicle's calibration.
-    """
-    if num_cams < 1:
-        raise ValueError(f"num_cams must be positive, got {num_cams}")
-    width, height = input_size
-    fov = math.radians(360.0 / num_cams) * overlap
-    if fov >= math.pi:
-        raise ValueError(f"{num_cams} cameras at overlap {overlap} need a >=180 degree field of view")
-    focal = (width / 2.0) / math.tan(fov / 2.0)
-    return tuple(
-        CameraSpec(
-            name=f"CAM_{index}",
-            yaw_deg=index * 360.0 / num_cams,
-            focal_px=(focal, focal),
-            principal_px=(width / 2.0, height / 2.0),
-            reference_size=(width, height),
-        )
-        for index in range(num_cams)
-    )
-
-
-def _intrinsic_matrix(spec: CameraSpec, input_size: Tuple[int, int], dtype: torch.dtype) -> torch.Tensor:
-    width, height = input_size
-    reference_width, reference_height = spec.reference_size
-    scale_x = width / reference_width
-    scale_y = height / reference_height
-    matrix = torch.eye(4, dtype=dtype)
-    matrix[0, 0] = spec.focal_px[0] * scale_x
-    matrix[1, 1] = spec.focal_px[1] * scale_y
-    matrix[0, 2] = spec.principal_px[0] * scale_x
-    matrix[1, 2] = spec.principal_px[1] * scale_y
-    return matrix
-
-
-def _extrinsic_matrix(spec: CameraSpec, dtype: torch.dtype) -> torch.Tensor:
-    yaw = math.radians(spec.yaw_deg)
-    pitch = math.radians(spec.pitch_deg)
-    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
-    cos_pitch, sin_pitch = math.cos(pitch), math.sin(pitch)
-
-    forward = torch.tensor([cos_yaw * cos_pitch, sin_yaw * cos_pitch, -sin_pitch], dtype=dtype)
-    right = torch.tensor([sin_yaw, -cos_yaw, 0.0], dtype=dtype)
-    down = torch.linalg.cross(forward, right)
-
-    rotation = torch.stack((right, down, forward))
-    translation = torch.tensor(spec.translation_m, dtype=dtype)
-    matrix = torch.eye(4, dtype=dtype)
-    matrix[:3, :3] = rotation
-    matrix[:3, 3] = -rotation @ translation
-    return matrix
-
-
-def build_lidar2img(
-    specs: Sequence[CameraSpec],
-    input_size: Tuple[int, int],
-    dtype: torch.dtype = torch.float32,
-) -> torch.Tensor:
-    """Compose ``K @ [R | -R t]`` for each camera.
-
-    Args:
-        specs: Camera mountings and intrinsics.
-        input_size: Actual ``(width, height)`` of the images being projected into.
-        dtype: Output dtype.
-
-    Returns:
-        Tensor of shape ``[len(specs), 4, 4]``.
-    """
-    return torch.stack([_intrinsic_matrix(spec, input_size, dtype) @ _extrinsic_matrix(spec, dtype) for spec in specs])
-
 
 def camera_rig_for_dataset(dataset_config) -> Tuple[CameraSpec, ...]:
     """nuScenes' rig for a nuScenes dataset, else a synthetic ring."""
-    if dataset_config.name.startswith("nuscenes") and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG):
+    if (
+        dataset_config.name.startswith("nuscenes")
+        and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG)
+        and CAMERA_ORDER == NUSCENES_CAMERA_ORDER
+    ):
         return NUSCENES_CAMERA_RIG
     return ring_camera_rig(dataset_config.num_cams, dataset_config.input_size)
 
@@ -260,6 +135,44 @@ def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = 
     ]
 
 
+def turn_rig(lidar2img, degrees: float) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of the rig turned by ``degrees`` about the vertical axis."""
+    yaw = math.radians(degrees)
+    turn = torch.eye(4)
+    turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
+    return torch.as_tensor(lidar2img, dtype=torch.float32) @ turn
+
+
+def zoom_cameras(lidar2img, scale: float, image_size) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of cameras whose ``(width, height)`` images are scaled by ``scale``
+    about their centre, as a resize and centre crop would: above 1 narrows every field of view,
+    below 1 widens it."""
+    width, height = image_size
+    zoom = torch.tensor(
+        [
+            [scale, 0.0, (1.0 - scale) * width / 2, 0.0],
+            [0.0, scale, (1.0 - scale) * height / 2, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    return zoom @ torch.as_tensor(lidar2img, dtype=torch.float32)
+
+
+def rig_sequence_metas(dataset_config, steps, batch_size: int = 1) -> List[List[dict]]:
+    """One frame's ``img_metas`` per ``(yaw_deg, zoom)`` step: the dataset's rig turned and zoomed
+    (:func:`turn_rig`, :func:`zoom_cameras`). Each camera's visible BEV cells change from frame to
+    frame while every projection stays a valid camera's."""
+    frames = []
+    for yaw_deg, zoom in steps:
+        metas = img_metas_for_dataset(dataset_config, batch_size)
+        for meta in metas:
+            lidar2img = zoom_cameras(turn_rig(meta["lidar2img"], yaw_deg), zoom, dataset_config.input_size)
+            meta["lidar2img"] = lidar2img.tolist()
+        frames.append(metas)
+    return frames
+
+
 # --- Dataset presets --------------------------------------------------------------------------
 
 
@@ -275,6 +188,8 @@ class DatasetPreset:
         embed_dims, num_heads, num_levels, num_points: The spatial cross-attention's deformable
             attention sizes. Every BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
         tsa_num_points: The temporal self-attention's points per head.
+        first_stride: The first feature level's stride in image pixels: 8 for an FPN over C3-C5,
+            32 for one over C5 alone.
     """
 
     name: str
@@ -286,12 +201,13 @@ class DatasetPreset:
     num_levels: int
     num_points: int
     tsa_num_points: int
+    first_stride: int = 8
 
     @property
     def spatial_shapes(self):
         """The preset's feature levels, each as (h, w), as ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return list(fpn_spatial_shapes(height, width, self.num_levels))
+        return list(fpn_spatial_shapes(height, width, self.num_levels, self.first_stride))
 
     @property
     def z_cfg(self):
@@ -312,6 +228,21 @@ _BASE = dict(
     tsa_num_points=TSA_NUM_POINTS,
 )
 
+
+def _upstream_preset(variant):
+    """An upstream variant's encoder attention, whichever variant is selected: base's sizes over the
+    variant's camera levels and images."""
+    v = VARIANTS[variant]
+    size = tuple(round(side * v.image_scale) for side in CAMERA_IMAGE_SIZE)
+    return DatasetPreset(
+        "nuscenes_v1.0_full_{}x{}".format(*size),
+        PC_RANGE,
+        NUM_CAMS,
+        size,
+        **dict(_BASE, num_levels=v.num_levels, first_stride=4 << v.out_indices[0]),
+    )
+
+
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
     "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
@@ -330,6 +261,8 @@ PRESETS = {
         num_points=SCA_NUM_POINTS,
         tsa_num_points=TSA_NUM_POINTS,
     ),
+    "nuscenes_small_upstream": _upstream_preset("small"),
+    "nuscenes_tiny_upstream": _upstream_preset("tiny"),
 }
 
 
@@ -437,16 +370,23 @@ IMAGE_BATCH_STD = IMAGE_PIXEL_STD / (sum(IMAGE_STD) / len(IMAGE_STD))
 
 
 # The references only run forward; without autograd they keep no activations for backward.
-def build_reference_backbone():
-    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_BATCH_STD).requires_grad_(False)
+def build_reference_backbone(seed=0):
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), seed=seed, input_std=IMAGE_BATCH_STD).requires_grad_(
+        False
+    )
 
 
-def build_reference_fpn():
-    return init_dummy_fpn_weights(FPN(**FPN_KWARGS)).requires_grad_(False)
+def build_reference_fpn(seed=0):
+    return init_dummy_fpn_weights(FPN(**FPN_KWARGS), seed=seed).requires_grad_(False)
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
-    """NCHW torch tensor -> (1, 1, N*H*W, C) device tensor, the layout conv2d reads and writes."""
+    """NCHW torch tensor -> (1, 1, N*H*W, C) ttnn tensor, the layout conv2d reads and writes
+    (``device`` None keeps it on the host)."""
+    if dtype == ttnn.bfloat16:
+        # torch rounds float32 to bfloat16 bit for bit as from_torch does, several times faster, and
+        # the permute then moves half the bytes.
+        nchw = nchw.to(torch.bfloat16)
     n, c, h, w = nchw.shape
     nhwc = nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
@@ -474,7 +414,7 @@ def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
-def random_image_batch():
+def random_image_batch(generator=None):
     """Random camera images in the range BEVFormer's normalized images take: smooth random
     structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
     as pixels are, normalized by ``IMAGE_MEAN`` and ``IMAGE_STD``. Backbone error depends on the
@@ -482,11 +422,11 @@ def random_image_batch():
     mean = torch.tensor(IMAGE_MEAN).view(1, 3, 1, 1)
     images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
-        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1) - 0.5
+        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1, generator=generator) - 0.5
         images += amplitude * F.interpolate(
             coarse, size=(IMAGE_HEIGHT, IMAGE_WIDTH), mode="bilinear", align_corners=False
         )
-    images += IMAGE_PIXEL_NOISE * torch.randn(images.shape)
+    images += IMAGE_PIXEL_NOISE * torch.randn(images.shape, generator=generator)
     return (images.clamp(0, 255) - mean) / torch.tensor(IMAGE_STD).view(1, 3, 1, 1)
 
 
@@ -597,10 +537,7 @@ def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     the samples' cameras see different BEV cells."""
     metas = img_metas_for_dataset(PRESETS[preset], batch_size)
     for b, meta in enumerate(metas):
-        yaw = math.radians(b * yaw_step_deg)
-        turn = torch.eye(4)
-        turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
-        meta["lidar2img"] = (torch.tensor(meta["lidar2img"]) @ turn).tolist()
+        meta["lidar2img"] = turn_rig(meta["lidar2img"], b * yaw_step_deg).tolist()
     return metas
 
 
@@ -841,8 +778,11 @@ def check_head_outputs(expected, actual):
     finite, the centers within ``assert_centers_close``'s bounds, and the logits and the boxes over
     all layers, then the last alone, which the coder reads and where the bfloat16 error has built up
     most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
-    102.4 m against z's 8 m and the other channels' O(1)."""
-    actual = tuple(ttnn.to_torch(t).float() for t in actual)
+    102.4 m against z's 8 m and the other channels' O(1). A single-layer ``actual``, a head without
+    ``all_layers``, is the last layer's."""
+    actual = (ttnn.to_torch(actual[0]).float(), box_preds_to_torch(actual[1]).float())
+    if actual[0].shape[0] == 1:
+        expected = tuple(t[-1:] for t in expected)
     for name, tensor in zip(("class logits", "box predictions"), actual):
         assert_finite(f"the head {name}", tensor)
     assert_centers_close(expected[1], actual[1])
@@ -895,8 +835,9 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
     where the error carried from the BEV lowers the PCC further.
 
     ``cls_scores`` and ``bbox_preds`` are the reference's last-layer ``(bs, num_query, *)``
-    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, ``tt_topk``
-    ``TTNMSFreeCoder.topk``'s outputs as torch tensors, or ``TTBEVFormer.detect``'s first four with
+    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, the boxes in the
+    reference's code order (``box_preds_to_torch``), ``tt_topk`` ``TTNMSFreeCoder.topk``'s outputs
+    as torch tensors, or ``TTBEVFormer.detect``'s first four with
     ``bottom_center``, whose boxes have z at the bottom face. The device's logits differ from the
     reference's slightly, so near-equal scores may rank in a different order and the two top-k
     sets differ at their tail. The scores are compared by their error, not PCC: the top-k's span
@@ -951,14 +892,14 @@ def build_reference_transformer(num_layers, seed=0):
     return PerceptionTransformer(build_reference_encoder(num_layers, seed)).eval().requires_grad_(False)
 
 
-def build_reference_bevformer(bev_shape):
+def build_reference_bevformer(bev_shape, seed=0):
     """The detector over a ``(bev_h, bev_w)`` grid from the dummy-weight parts above."""
     bev_h, bev_w = bev_shape
     model = BEVFormer(
-        build_reference_backbone(),
-        build_reference_fpn(),
-        build_reference_transformer(ENCODER_NUM_LAYERS),
-        build_reference_head(bev_shape),
+        build_reference_backbone(seed=seed),
+        build_reference_fpn(seed=seed),
+        build_reference_transformer(ENCODER_NUM_LAYERS, seed=seed),
+        build_reference_head(bev_shape, seed=seed),
         bev_h,
         bev_w,
     )
@@ -978,10 +919,10 @@ LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 def check_detector_outputs(expected, actual, pcc):
     """The TT detector's class logits, box predictions, BEV and ``TTBEVFormer.detect``'s first four
-    outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
-    BEV, the last layer's logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at
-    ``LOW_PRECISION_BOX_CODE_PCC``), and the detections by ``assert_topk_close``.
-    Logs the box center error."""
+    outputs, as torch tensors, the boxes in the reference's code order (``box_preds_to_torch``),
+    against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the BEV, the last layer's
+    logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at ``LOW_PRECISION_BOX_CODE_PCC``),
+    and the detections by ``assert_topk_close``. Logs the box center error."""
     cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
     for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
