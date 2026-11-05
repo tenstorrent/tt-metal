@@ -83,12 +83,24 @@ def test_gdn_state_must_fit_the_attention_page():
     qwen36_kv_cache_spec(TEXT_CONFIG, 4, 1024, kv_bf8=False)  # bf16 page: 1 MiB
 
 
-@pytest.mark.parametrize("tp, block, kv_bf8", [(8, 1024, True), (8, 2048, True), (8, 1024, False), (4, 2048, True)])
+@pytest.mark.parametrize(
+    "tp, block, kv_bf8, mamba_block",
+    [
+        (8, 1024, True, None),
+        (8, 2048, True, None),
+        (8, 1024, False, None),
+        (4, 2048, True, None),
+        (4, 2048, False, 8192),
+    ],
+)
 @pytest.mark.parametrize("spec_blocks", [0, K], ids=["no_mtp", "mtp_k3"])
-def test_vllm_groups_and_pool(vllm_config, tp, block, kv_bf8, spec_blocks):
+def test_vllm_groups_and_pool(vllm_config, tp, block, kv_bf8, mamba_block, spec_blocks):
     """vLLM makes 1 attention group and 3 GDN groups of 16 layers with one page size, and lays layer j of every group
-    at the same byte, so block id b names the same page in the attention layer and in its three GDN layers."""
-    specs = qwen36_kv_cache_spec(TEXT_CONFIG, tp, block, kv_bf8=kv_bf8, num_speculative_blocks=spec_blocks)
+    at the same byte, so block id b names the same page in the attention layer and in its three GDN layers. The last
+    case is the mode-none prototype layout: bf16 KV, GDN block = max_model_len."""
+    specs = qwen36_kv_cache_spec(
+        TEXT_CONFIG, tp, block, kv_bf8=kv_bf8, num_speculative_blocks=spec_blocks, mamba_block_size=mamba_block
+    )
     page = next(s for s in specs.values() if isinstance(s, FullAttentionSpec)).page_size_bytes
 
     groups = kv_cache_utils.get_kv_cache_groups(vllm_config, specs)
@@ -97,7 +109,8 @@ def test_vllm_groups_and_pool(vllm_config, tp, block, kv_bf8, spec_blocks):
     assert len(groups) == 4 and len(attn_groups) == 1 and len(gdn_groups) == 3
     assert [len(g.layer_names) for g in groups] == [16] * 4
     assert {g.kv_cache_spec.page_size_bytes for g in groups} == {page}
-    assert {g.kv_cache_spec.block_size for g in groups} == {block}
+    assert {g.kv_cache_spec.block_size for g in attn_groups} == {block}
+    assert {g.kv_cache_spec.block_size for g in gdn_groups} == {mamba_block or block}
 
     bytes_per_block = kv_cache_utils._pool_bytes_per_block(groups)
     assert bytes_per_block == 16 * page

@@ -38,7 +38,9 @@ def qwen36_layer_names(text_config):
     return attn, gdn
 
 
-def qwen36_kv_cache_spec(text_config, tp, block_size, kv_bf8=True, num_speculative_blocks=0, mamba_cache_mode="none"):
+def qwen36_kv_cache_spec(
+    text_config, tp, block_size, kv_bf8=True, num_speculative_blocks=0, mamba_cache_mode="none", mamba_block_size=None
+):
     """dict[layer name, KVCacheSpec] for vLLM's hybrid KV cache manager. All sizes are per device at ``tp`` devices.
 
     Attention: ``num_kv_heads`` is the model total (the plugin divides it by the device count for the cache shape);
@@ -47,7 +49,8 @@ def qwen36_kv_cache_spec(text_config, tp, block_size, kv_bf8=True, num_speculati
     torch dtype.
     GDN: conv history (kernel - 1, conv_dim / tp) bf16 and recurrent state (value_heads / tp, key_dim, value_dim) fp32,
     padded to the attention page. ``num_speculative_blocks`` = the MTP draft length K (state blocks per request
-    beyond the running one)."""
+    beyond the running one). ``mamba_block_size`` (default ``block_size``): tokens per GDN state block; mode "none"
+    needs at least max_model_len so a request holds one state block per group."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
@@ -81,7 +84,7 @@ def qwen36_kv_cache_spec(text_config, tp, block_size, kv_bf8=True, num_speculati
             f"(block_size={block_size}, tp={tp}, kv_bf8={kv_bf8}); use a larger block"
         )
     gdn = MambaSpec(
-        block_size=int(block_size),
+        block_size=int(block_size if mamba_block_size is None else mamba_block_size),
         shapes=((kconv - 1, conv_dim_tp), (nv // tp, dk, dv)),
         dtypes=(torch.bfloat16, torch.float32),
         page_size_padded=attn.page_size_bytes,

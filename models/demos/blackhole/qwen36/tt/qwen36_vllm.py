@@ -273,13 +273,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         tc = vllm_config.model_config.hf_config
         tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
         cc = vllm_config.cache_config
+        mode = getattr(cc, "mamba_cache_mode", "none")
+        bs = int(cc.block_size)
+        # Mode none: one state block per request and group, as upstream resolves mamba_block_size = max_model_len.
+        max_len = int(vllm_config.model_config.max_model_len)
         return qwen36_kv_cache_spec(
             tc,
             _mesh_tp(),
-            cc.block_size,
+            bs,
             kv_bf8=kv_cache_bf8_enabled(),
             num_speculative_blocks=cls._SPEC_K if cls._ENABLE_MTP else 0,
-            mamba_cache_mode=getattr(cc, "mamba_cache_mode", "none"),
+            mamba_cache_mode=mode,
+            mamba_block_size=-(-max_len // bs) * bs if mode == "none" else bs,
         )
 
     @classmethod
@@ -443,6 +448,35 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         batch_size = self.model[0].args.max_batch_size
         return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """vllm-tt-plugin per-layer allocation: one [K, V] pair per attention entry, all of one shape. MambaSpec entries
+        (QWEN36_MAMBA_SPEC=1) put each GDN layer's state into its layer slot's KV buffers (gdn_block_state). Without
+        them this is the plugin's legacy adapter around allocate_kv_cache."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import GdnBlockState, is_mamba_entry
+
+        attn = [e for e in per_layer_specs if not is_mamba_entry(e)]
+        shape, dtype, _ = attn[0]
+        if any((tuple(s), d) != (tuple(shape), dtype) for s, d, _ in attn[1:]):
+            raise NotImplementedError("qwen36 allocates one KV shape for every attention layer")
+        kv = self.allocate_kv_cache(shape, dtype, len(attn))
+        self._gdn_blocks = None
+        if len(attn) < len(per_layer_specs):
+            model = self.model[0]
+            if model.num_devices <= 1 or model.args.max_batch_size <= 1 or not _ns_slotmap_enabled():
+                raise NotImplementedError(
+                    "QWEN36_MAMBA_SPEC needs the batched TP path (max_num_seqs > 1) with QWEN36_NS_SLOTMAP=1: the "
+                    "packed conv history of a block is written for its device row's parity, so a request must not "
+                    "change rows"
+                )
+            self._gdn_blocks = GdnBlockState(model, per_layer_specs, kv)
+        return kv
+
+    def zero_kv_cache_blocks(self, kv_cache=None, block_ids=()):
+        """vllm-tt-plugin block hook: zero the listed blocks in every K and V buffer."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
+
+        zero_kv_blocks(self.model[0], [int(b) for b in block_ids])
+
     @staticmethod
     def _has_visual(kwargs, pixel_key, u=0):
         """True only when user `u` carries REAL visual data for this modality. vLLM attaches an empty pixel_values
@@ -526,6 +560,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # the next decode must be a commanded reload (_decode_forward_resident refuses a steady step).
         self._decode_bucket_last = None
         model = self.model[0]
+        state_block_ids = None
+        if getattr(self, "_gdn_blocks", None) is not None:
+            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)
+            if state_block_ids is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
+            kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched prefill into decode slots; multimodal users get their vision tokens lazily, per user.
             kwargs.pop("rope_deltas_all_users", None)  # per-slot M-RoPE deltas are model-owned (set at prefill)
@@ -537,6 +577,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 kwargs.get("empty_slots"),
                 start_pos=kwargs.get("start_pos"),
                 visual_kwargs=kwargs,
+                state_block_ids=state_block_ids,
             )
         # Prefix caching (start_pos > 0) is only exploited by the batched slot path above. The B=1 TP path and the
         # single-device path ignore start_pos and recompute the whole prompt from position 0: correct (the cached KV
@@ -602,7 +643,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return logits, torch.zeros(1, dtype=torch.long)
 
     def _prefill_forward_tp_batched(
-        self, model, tokens, page_table, prompt_lens, empty_slots, start_pos=None, visual_kwargs=None
+        self,
+        model,
+        tokens,
+        page_table,
+        prompt_lens,
+        empty_slots,
+        start_pos=None,
+        visual_kwargs=None,
+        state_block_ids=None,
     ):
         """TP batched (max_num_seqs>1) prefill: prefill each request in this step into its decode slot.
 
@@ -618,6 +667,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                      still the FULL prompt / page-table row). Resumed from the model's GDN snapshots when available.
         visual_kwargs: the vLLM kwargs carrying per-request pixel_values[u] / image_grid_thw[u] (and the *_videos
                      variants); a user with real visual data is prefilled multimodally (prefix cache bypassed).
+        state_block_ids: QWEN36_MAMBA_SPEC: the plugin's state_block_ids_per_layer; each user's GDN state is copied
+                     from its decode row into its block after the prefill.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — the M-RoPE delta is kept model-side per slot).
         """
         N = tokens.shape[0]
@@ -634,6 +685,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if start_pos is not None:
             start_pos = [int(x) for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)]
             assert len(start_pos) == N, "one start_pos per request"
+            if state_block_ids is not None and any(start_pos):
+                raise NotImplementedError("QWEN36_MAMBA_SPEC supports mamba_cache_mode none only (start_pos 0)")
         vision_list = None
         if visual_kwargs is not None:
             vl = []
@@ -645,6 +698,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         host_logits = model.prefill_paged_slots(
             token_ids_list, pt, empty_slots, valid_lens=plens, start_positions=start_pos, vision_tokens_list=vision_list
         )
+        if state_block_ids is not None:
+            self._gdn_blocks.write_prefill_rows(state_block_ids, empty_slots)
         if ns_commit is not None:
             self._ns_phys, self._ns_owned = ns_commit
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
@@ -803,6 +858,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if tokens is None:
             raise TypeError("decode_forward requires tokens")
         start_pos = kwargs.get("start_pos")
+        state_block_ids = None
+        if getattr(self, "_gdn_blocks", None) is not None:
+            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)  # None in warmup: rows keep block 0
+            kwargs.pop("page_tables_per_layer", None)
         ns_phys = None
         if _ns_slotmap_enabled():
             # Host slot map: no device remap. Scatter every per-row input to device-row order (the plugin's runner
@@ -850,6 +909,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             )
 
         model = self.model[0]
+        if state_block_ids is not None:
+            self._gdn_blocks.set_decode_blocks(state_block_ids, row_of=ns_phys)
         # Batched fused GDN decode: make the conv state of this width class valid FIRST (in-place sync when the width
         # class changed since the last call; no-op otherwise / when the fused path is off). After this the conv tag is
         # the single needed format, so the remap below gathers only that one (both ops are row-wise: order-free).
@@ -893,6 +954,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return result
 
     def _decode_forward_legacy(self, *args, **kwargs):
+        if getattr(self, "_gdn_blocks", None) is not None:
+            raise NotImplementedError("QWEN36_MAMBA_SPEC needs the resident decode (QWEN36_SERVE_DEVICE_DECODE=1)")
         args = list(args)
 
         def _read(name, pos):
