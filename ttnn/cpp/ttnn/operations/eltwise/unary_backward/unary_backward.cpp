@@ -882,6 +882,18 @@ std::vector<Tensor> square_bw(
 
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input_tensor, output_mem_config) &&
+        std::bit_cast<uint32_t>(lambd) == 0x3f000000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW,
+            grad,
+            input_tensor,
+            input_tensor.dtype(),
+            output_mem_config.value_or(input_tensor.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
     Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
