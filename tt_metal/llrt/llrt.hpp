@@ -127,10 +127,6 @@ std::string format_eth_fw_stage_slots(
     const std::vector<uint32_t>& slots,
     std::string_view separator = ", ");
 
-// True when TT_METAL_QUASAR_MOCK_JIT is set. A Quasar Mock device then builds its firmware and JIT-compiles
-// program kernels; otherwise Mock skips both for Quasar. Read once per process; safe to call concurrently.
-bool quasar_mock_jit_enabled();
-
 namespace internal_ {
 
 void wait_until_cores_done(
