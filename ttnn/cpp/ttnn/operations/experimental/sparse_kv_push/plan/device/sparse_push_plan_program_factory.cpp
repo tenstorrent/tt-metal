@@ -36,7 +36,7 @@ constexpr uint32_t kArgIndices = 0, kArgTable = 1, kArgCompact = 2, kArgSplit = 
 
 tt::tt_metal::KernelDescriptor plan_kernel(
     const char* source,
-    const CoreRangeSet& cores,
+    const tt::tt_metal::CoreRangeSet& cores,
     std::vector<uint32_t> compile_args,
     tt::tt_metal::KernelDescriptor::ConfigDescriptor config) {
     constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/plan/device/kernels/";
@@ -71,9 +71,11 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
 
     // The whole worker grid, one multicast rectangle.
     const auto grid = device->compute_with_storage_grid_size();
-    const std::vector<CoreCoord> core_list = tt::tt_metal::grid_to_cores(plan_cores(device), grid.x, grid.y, true);
+    const std::vector<tt::tt_metal::CoreCoord> core_list =
+        tt::tt_metal::grid_to_cores(plan_cores(device), grid.x, grid.y, true);
     const uint32_t cores = core_list.size();
-    const CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
+    const tt::tt_metal::CoreRangeSet all_cores(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     const uint32_t total_idx = rows * topk;
     const uint32_t per_core = tt::round_up(tt::div_up(total_idx, cores), kPlanIdxAlign);
     const uint32_t chunks = layout.bitmap_words / kChunkWords;
