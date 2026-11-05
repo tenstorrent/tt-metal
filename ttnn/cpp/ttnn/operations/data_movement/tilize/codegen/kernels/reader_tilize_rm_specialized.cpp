@@ -10,11 +10,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(3);
-    constexpr auto src_tensor_args = TensorAccessorArgs<4>();
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t stick_bytes = get_named_compile_time_arg_val("stick_bytes");
+    constexpr uint32_t num_tiles_per_block = get_named_compile_time_arg_val("tiles_per_row");
+    constexpr auto src_tensor_args = TensorAccessorArgs<0>();
 
     const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
@@ -24,9 +24,6 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
 
-    // Keep the per-tile-row reads in a lambda that takes the stick id by value. Written inline, the
-    // compiler reloads the accessor from the stack and updates the issued-read counter in L1 on every
-    // stick, which is significant overhead on these short reads.
     auto read_tile_row = [&](uint32_t stick_id) {
         cb_in0.reserve_back(num_tiles_per_block);
         uint32_t l1_write_addr = cb_in0.get_write_ptr();

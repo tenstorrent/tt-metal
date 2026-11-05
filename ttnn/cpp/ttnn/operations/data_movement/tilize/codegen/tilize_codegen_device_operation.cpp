@@ -22,22 +22,21 @@ namespace codegen = ttnn::operations::data_movement::tilize_codegen;
 void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    codegen::require_allocated_device_input(input);
     TT_FATAL(
         codegen::supported_by_codegen(input, operation_attributes.output_mem_config, operation_attributes.output_dtype),
         "TilizeCodegenDeviceOperation invoked for a case not supported by the codegen implementation");
 
     // The factory and kernels trust the plan; these are the properties they rely on.
     const auto& plan = operation_attributes.plan;
-    const auto geometry = codegen::tilize_geometry(input, operation_attributes.output_dtype);
+    const auto geometry = codegen::tilize_geometry(input);
     TT_FATAL(
         plan.chunk_wt > 0 && plan.chunk_wt * plan.num_col_chunks == geometry.block_wt,
         "Tilize codegen plan: {} chunks of {} tiles do not cover the {}-tile column block",
         plan.num_col_chunks,
         plan.chunk_wt,
         geometry.block_wt);
-    // Readers, compute and the typecast stage move whole chunks as contiguous page runs from the FIFO pointer, so a
-    // chunk must never straddle the end of a CB.
+    // Readers and compute move whole chunks as contiguous page runs from the FIFO pointer, so a chunk must never
+    // straddle the end of a CB.
     TT_FATAL(
         plan.cb_in_depth >= plan.chunk_wt && plan.cb_in_depth % plan.chunk_wt == 0 &&
             plan.cb_out_depth >= plan.chunk_wt && plan.cb_out_depth % plan.chunk_wt == 0,
@@ -53,7 +52,8 @@ void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
         const bool one_row_per_core = geometry.route == codegen::TilizeRoute::Column2D ||
                                       geometry.tile_rows <= static_cast<uint32_t>(grid.x * grid.y);
         const bool single_block_fits = one_row_per_core && plan.cb_out_depth >= geometry.block_wt;
-        const bool aligned_batches = plan.chunk_wt % plan.write_batch == 0 && plan.cb_out_depth == 2 * plan.chunk_wt;
+        const bool aligned_batches =
+            plan.chunk_wt % plan.write_batch == 0 && plan.cb_out_depth == codegen::kDoubleBuffered * plan.chunk_wt;
         TT_FATAL(
             single_block_fits || aligned_batches,
             "Tilize codegen plan: write batch {} needs one tile row per core with an output CB of at least {} tiles, "
@@ -86,6 +86,7 @@ Tensor tilize_codegen(
     tt::tt_metal::MemoryConfig output_mem_config,
     tt::tt_metal::DataType output_dtype,
     const codegen::TilizeCodegenPlan& plan) {
+    // Here rather than in validate: launch builds the output tensor from the input's device before it validates.
     codegen::require_allocated_device_input(input);
     return ttnn::device_operation::launch<TilizeCodegenDeviceOperation>(
         TilizeCodegenOperationAttributes{

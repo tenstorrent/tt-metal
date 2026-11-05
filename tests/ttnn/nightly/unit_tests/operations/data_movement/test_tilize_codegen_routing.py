@@ -2,20 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# --- BEGIN GENERATED (agentic_port phase 8) ---
 # Contracts: (1) every case the codegen gate rejects falls back to native; (2) an accepted case
 # dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) no
-# case is perf-demoted, so small inputs are asserted to stay on codegen in the small-cases section.
-# This block is emitted from the port's coverage ledger and is regenerated on every port update;
-# hand-add off-grid regressions after its END line.
-# Contract (4), for the cache-transition legs: earlier tensors stay alive across later calls, and
+# case is perf-demoted, so small inputs are asserted to stay on codegen in the small-cases section;
+# (4) for the cache-transition legs, earlier tensors stay alive across later calls, and
 # program-cache entries are counted around the op call alone.
+
+import contextlib
 
 import pytest
 import torch
 
 import ttnn
+from tests.ttnn.unit_tests.operations.data_movement.test_pad import skip_unless_dm_codegen_arch
 from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 # `ttnn.tilize` takes no implementation argument -- it routes on its own. The forced legs below are
 # the verification-only entries in the private module; see tilize_force.hpp.
@@ -25,10 +26,8 @@ _force_codegen = ttnn._ttnn.operations.data_movement.tilize_force_codegen
 
 @pytest.fixture(autouse=True)
 def _require_codegen_arch(device):
-    # Codegen serves calls only on these architectures; elsewhere every call is native and the
-    # codegen legs have nothing to exercise.
-    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
-        pytest.skip("tilize codegen runs only on Wormhole and Blackhole")
+    # Elsewhere every call is native and the codegen legs have nothing to exercise.
+    skip_unless_dm_codegen_arch(device)
 
 
 def _make_input(shape, dtype):
@@ -39,29 +38,9 @@ def _make_input(shape, dtype):
     return (torch.rand(shape, dtype=torch.bfloat16) - 0.5) * 200
 
 
-def _reference(host, **kwargs):
-    # Codegen's int32 conversion, which forced codegen legs check against; auto keeps a conversion
-    # on native, whose result differs. Truncation toward zero in float64 (exact for bf16/fp32),
-    # +/-Inf and out-of-range values clamp to the int32 limits, NaN saturates by its sign bit
-    # (+NaN -> INT32_MAX, -NaN -> INT32_MIN).
-    dtype = kwargs.get("dtype")
-    if dtype is None or host.dtype == torch.int32:
-        return None
-    name = getattr(dtype, "name", None) or str(dtype)
-    if name.rsplit(".", 1)[-1].upper() != "INT32":
-        return None
-    int32_min, int32_max = -(2**31), 2**31 - 1
-    wide = host.to(torch.float64)
-    out = torch.trunc(wide).clamp(int32_min, int32_max)
-    out = torch.where(torch.isnan(wide), torch.where(torch.signbit(wide), int32_min, int32_max), out)
-    return out.to(torch.int32)
-
-
 def _golden(tensor, **kwargs):
-    # Native runs either way, so the program cache holds what a native golden would leave in it.
-    native = ttnn.to_torch(_force_native(tensor, **kwargs))
-    reference = _reference(ttnn.to_torch(tensor), **kwargs)
-    return native if reference is None else reference
+    # A native golden, so the program cache holds what native leaves in it on every leg.
+    return ttnn.to_torch(_force_native(tensor, **kwargs))
 
 
 def _codegen_addrs(tensors):
@@ -160,14 +139,14 @@ def test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, 
 _SEQ_FRESH = [
     (
         [1, 1, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     ),
 ]
 _SEQ_FRESH_IDS = [
-    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major",
+    "[1, 1, 32, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
 ]
 
 
@@ -193,7 +172,7 @@ def test_tilize_codegen_cache_hit_on_fresh_buffers(device, shape, kwargs, dtype,
 _SEQ_SWITCH = [
     (
         [1, 1, 32, 32],
-        {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32},
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
         [64, 32],
         {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
         ttnn.bfloat16,
@@ -202,7 +181,7 @@ _SEQ_SWITCH = [
     ),
 ]
 _SEQ_SWITCH_IDS = [
-    "[1, 1, 32, 32]|dtype=DataType.INT32&memory_config=BufferType.DRAM|bfloat16|row_major->[64, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
+    "[1, 1, 32, 32]|memory_config=BufferType.DRAM|bfloat16|row_major->[64, 32]|memory_config=BufferType.DRAM|bfloat16|row_major",
 ]
 
 
@@ -237,15 +216,6 @@ def test_tilize_codegen_cache_survives_a_program_switch(
     assert_equal(a_first_golden, ttnn.to_torch(a_first_out))
 
 
-# --- END GENERATED ---
-
-
-# --- Off-grid regressions (hand-added; edit here, not the emitter) ---
-
-
-# --- Hand-written cases ---
-
-
 def _native_route(device, xt, **kwargs):
     # The forced native call builds native's program, so a routed call that lands on native is a
     # cache hit; one that lands on codegen adds an entry.
@@ -262,7 +232,8 @@ def _height_sharded_l1(shape, num_cores):
 
 
 # (shape, input placement, input dtype, tilize kwargs): each case is outside the codegen scope for one reason.
-_SUB_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+_SUB_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))})
+_TRANSPOSED_TILE = ttnn.Tile([32, 32], transpose_tile=True)
 _FALLBACK = {
     "sharded_input": (
         [1, 1, 64, 64],
@@ -275,8 +246,12 @@ _FALLBACK = {
     "sub_core_grids": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"sub_core_grids": _SUB_GRID}),
     "use_low_perf": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"use_low_perf": True}),
     "tile_16x32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"tile": ttnn.Tile([16, 32])}),
+    "tile_transposed_32x32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"tile": _TRANSPOSED_TILE}),
     "float32_to_int32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.float32, {"dtype": ttnn.int32}),
+    "bfloat16_to_int32": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, {"dtype": ttnn.int32}),
 }
+# Only the route is asserted for these: native's answer to them is not checked by this file.
+_ROUTE_ONLY = {"tile_transposed_32x32", "bfloat16_to_int32"}
 _TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
 
 
@@ -289,13 +264,16 @@ def test_tilize_out_of_scope_case_falls_back_to_native(device, case):
     golden, out, added = _native_route(device, xt, **kwargs)
     assert added == 0, "auto built a new program for an out-of-scope case; expected native's cached program"
     assert out.layout == ttnn.TILE_LAYOUT
+    if case in _ROUTE_ONLY:
+        return
     assert_equal(golden, ttnn.to_torch(out))
     if "dtype" not in kwargs:
         assert_equal(host, ttnn.to_torch(out))
 
 
-# The forced codegen entry raises instead of falling back to native.
-@pytest.mark.parametrize("case", ["sharded_input", "block_float_output"])
+# The forced codegen entry raises instead of falling back to native. It takes no tile argument, and a row-major
+# input does not keep a non-default tile, so the tile cases are covered by the auto test above only.
+@pytest.mark.parametrize("case", ["sharded_input", "block_float_output", "float32_to_int32", "bfloat16_to_int32"])
 def test_tilize_force_codegen_raises_out_of_scope(device, case, expect_error):
     shape, placement, in_dtype, kwargs = _FALLBACK[case]
     host = torch.rand(shape, dtype=_TORCH_DTYPE[in_dtype])
@@ -328,10 +306,29 @@ def test_tilize_codegen_column2d_program_cache_hit(device, shape, kwargs, dtype,
     test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, placement)
 
 
-# Auto keeps a dtype conversion on native, so ttnn.tilize returns native's conversion whatever the live L1;
-# the forced codegen entry still converts, with its own semantics. Only the route is asserted for the auto
-# call: native's BFLOAT16 to INT32 output carries the float bit pattern with low bits that differ between
-# identical dispatches, so it is no reference for another native call.
+# More tile rows than any Wormhole or Blackhole grid has cores, 16 tiles wide: the row route on the chunked
+# stick reader, which binds its input buffer separately from the other readers.
+_CACHE_HIT_CHUNKED = [
+    (
+        [1, 1, 32 * 144, 32 * 16],
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ),
+]
+_CACHE_HIT_CHUNKED_IDS = ["chunked_bfloat16"]
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT_CHUNKED, ids=_CACHE_HIT_CHUNKED_IDS)
+def test_tilize_codegen_chunked_program_cache_hit(device, shape, kwargs, dtype, layout, placement):
+    grid = device.compute_with_storage_grid_size()
+    assert shape[-2] // 32 > grid.x * grid.y, "the case must keep more tile rows than cores"
+    test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, placement)
+
+
+# Codegen does not convert dtypes, so a conversion on any route's shape stays on native under auto and the forced
+# entry refuses it. Only the route is asserted for the auto call.
 _CONVERSION_SHAPES = {
     "row": [1, 1, 2 * 32, 32],
     "column2d": [1, 1, 32, 1024],
@@ -340,7 +337,7 @@ _CONVERSION_SHAPES = {
 
 
 @pytest.mark.parametrize("shape", list(_CONVERSION_SHAPES.values()), ids=list(_CONVERSION_SHAPES))
-def test_tilize_auto_keeps_conversion_on_native(device, shape):
+def test_tilize_auto_keeps_conversion_on_native(device, shape, expect_error):
     kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32}
     torch.manual_seed(0)
     host = _make_input(shape, ttnn.bfloat16)
@@ -351,7 +348,8 @@ def test_tilize_auto_keeps_conversion_on_native(device, shape):
     _, out, added = _native_route(device, xt, **kwargs)
     assert added == 0, "auto built a new program for a dtype conversion; expected native's cached program"
     assert out.dtype == ttnn.int32 and out.layout == ttnn.TILE_LAYOUT
-    assert_equal(_reference(host, **kwargs), ttnn.to_torch(_force_codegen(xt, **kwargs)))
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)
 
 
 # --- Live-L1 CB plan ---
@@ -391,8 +389,7 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
     torch.manual_seed(0)
     host = _make_input(_PLAN_SHAPE, ttnn.bfloat16)
     xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    reference = _reference(host, **kwargs)
-    expected = host if reference is None else reference
+    expected = host
     device.clear_program_cache()
 
     out, added = _codegen_added(device, lambda: ttnn.tilize(xt, **kwargs))
@@ -420,6 +417,150 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
     ), "releasing the pin did not return to the cached plan"
 
 
+# Below one input and one output tile of free L1 no codegen plan fits: auto must not build a codegen program and
+# the forced entry refuses. Native needs at least as much L1 as one codegen chunk, so it may refuse too; only
+# its route is asserted.
+def test_tilize_codegen_below_one_tile_floor_stays_off_codegen(device, expect_error):
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    torch.manual_seed(0)
+    host = _make_input([1, 1, 64, 64], ttnn.bfloat16)
+    xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    device.clear_program_cache()
+    # Primes the native program, so only a route to codegen grows the cache on the auto call.
+    _force_native(xt, **kwargs)
+    entries = device.num_program_cache_entries()
+
+    resident, headroom = _pin_l1_headroom(device, _BF16_TILE_BYTES // 2)
+    try:
+        assert headroom < 2 * _BF16_TILE_BYTES, f"pinned headroom {headroom} B still holds a one-tile plan"
+        with expect_error(RuntimeError, "does not fit the L1 free now"):
+            _force_codegen(xt, **kwargs)
+        try:
+            out = ttnn.tilize(xt, **kwargs)
+        except RuntimeError as error:
+            assert "circular buffers" not in str(error), f"auto dispatched codegen without a plan: {error}"
+        else:
+            assert_equal(host, ttnn.to_torch(out))
+        assert device.num_program_cache_entries() == entries, "auto built a codegen program below the one-tile floor"
+    finally:
+        ttnn.deallocate(resident)
+
+
+# --- Trace capture ---
+# Trace capture compiles nothing, so the plan it needs must already be cached. The plan follows the
+# free L1, hence the capture only finds it when warm-up ran under the same L1 pressure.
+_TRACE_DEVICE_PARAMS = {"trace_region_size": 4 * 1024 * 1024}
+
+
+def _best_effort(action):
+    try:
+        action()
+    except RuntimeError:
+        pass
+
+
+@contextlib.contextmanager
+def _capturing(device):
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        yield trace_id
+    finally:
+        _best_effort(lambda: ttnn.end_trace_capture(device, trace_id, cq_id=0))
+
+
+@pytest.mark.parametrize(
+    "pin_before_warmup",
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.xfail(
+                reason="https://github.com/tenstorrent/tt-metal/issues/46533: a live-L1-derived plan "
+                "misses the cache when the free L1 changes between warm-up and capture, and a capture "
+                "cannot compile the plan it then needs",
+            ),
+        ),
+    ],
+    ids=["warm_under_pressure", "warm_then_pressure"],
+)
+@pytest.mark.parametrize("device_params", [_TRACE_DEVICE_PARAMS], indirect=True)
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
+def test_tilize_codegen_trace_capture_under_pressure(device, pin_before_warmup):
+    # A plan cached by an earlier test would let the capture succeed without warm-up having compiled it.
+    device.clear_program_cache()
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    torch.manual_seed(0)
+    host = _make_input(_PLAN_SHAPE, ttnn.bfloat16)
+    swapped = _make_input(_PLAN_SHAPE, ttnn.bfloat16)
+    xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    trace_id = None
+    resident = None
+    try:
+        if pin_before_warmup:
+            resident, _ = _pin_l1_headroom(device, _PIN_HEADROOM)
+        warm = _force_codegen(xt, **kwargs)
+        assert_equal(host, ttnn.to_torch(warm))
+        ttnn.deallocate(warm)
+        entries_after_warmup = device.num_program_cache_entries()
+        if not pin_before_warmup:
+            resident, _ = _pin_l1_headroom(device, _PIN_HEADROOM)
+
+        with _capturing(device) as trace_id:
+            output = _force_codegen(xt, **kwargs)
+        ttnn.synchronize_device(device)
+        assert (
+            device.num_program_cache_entries() == entries_after_warmup
+        ), "capture needed a plan warm-up had not cached"
+
+        # Replace the input in place, so a replay that never reached the device would differ.
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(swapped, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), xt)
+        ttnn.synchronize_device(device)
+        ttnn.execute_trace(device, trace_id, blocking=True)
+        ttnn.synchronize_device(device)
+        assert_equal(swapped, ttnn.to_torch(output))
+    finally:
+        if trace_id is not None:
+            _best_effort(lambda: ttnn.release_trace(device, trace_id))
+        if resident is not None:
+            ttnn.deallocate(resident)
+
+
+# --- Large inputs ---
+# One per codegen path the small cases stay off: several tile rows per core on the compact reader
+# (8x3x224x224), the chunked reader with grouped tile writes (4096x4096, 1024x4096, 512x32768), and one wide
+# tile row split across cores (32x32768).
+@pytest.mark.parametrize(
+    "shape,dtype,in_buffer",
+    [
+        ((8, 3, 224, 224), ttnn.bfloat16, ttnn.BufferType.L1),
+        ((8, 3, 224, 224), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 4096, 4096), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 1024, 4096), ttnn.float32, ttnn.BufferType.DRAM),
+        ((1, 1, 512, 32768), ttnn.bfloat16, ttnn.BufferType.DRAM),
+        ((1, 1, 32, 32768), ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ],
+    ids=[
+        "8x3x224x224_bf16_l1",
+        "8x3x224x224_bf16_dram",
+        "4096x4096_bf16",
+        "1024x4096_fp32",
+        "512x32768_bf16",
+        "32x32768_bf16",
+    ],
+)
+def test_tilize_codegen_forced_large(device, shape, dtype, in_buffer):
+    torch.manual_seed(0)
+    host = torch.randn(shape, dtype=_TORCH_DTYPE[dtype])
+    placement = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, in_buffer)
+    x = ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
+
+    out = _force_codegen(x)
+
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert_equal(ttnn.to_torch(x), ttnn.to_torch(out))
+
+
 # --- Small cases stay on codegen ---
 # Nothing is demoted: the smallest in-scope inputs (one tile column, one or two tile rows, integer or
 # bf16) route to codegen under auto.
@@ -439,9 +580,7 @@ def test_tilize_codegen_small_cases_stay_on_codegen(device, shape, in_dtype, kwa
     host = _make_input(shape, in_dtype)
     xt = ttnn.from_torch(host, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     # The device copy, not host: an integer input dtype truncates the fractional bf16 draw on upload.
-    stored = ttnn.to_torch(xt)
-    reference = _reference(stored, **kwargs)
-    expected = stored if reference is None else reference
+    expected = ttnn.to_torch(xt)
     device.clear_program_cache()
     # Primes the native program, so only a route to codegen grows the cache on the auto call.
     _force_native(xt, **kwargs)

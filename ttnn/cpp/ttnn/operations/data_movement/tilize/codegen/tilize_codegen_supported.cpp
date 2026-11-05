@@ -6,11 +6,9 @@
 
 #include <algorithm>
 #include <optional>
-#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -33,11 +31,9 @@ bool is_default_tile(const tt::tt_metal::Tile& tile) {
            !tile.get_transpose_of_faces();
 }
 
-constexpr int kWidthAxis = -1;
 constexpr int kHeightAxis = -2;
 constexpr size_t kMinRank = 2;
 
-constexpr uint32_t kDoubleBuffered = 2;
 constexpr uint32_t kSingleBuffered = 1;
 constexpr uint32_t kMinColumnBlocks = 2;
 
@@ -74,11 +70,12 @@ std::optional<uint32_t> row_major_element_size(DataType dtype) {
     }
 }
 
+// Codegen tilizes without converting, so the output dtype must match the input.
 bool supported_dtype_pair(DataType input, DataType output) {
-    return row_major_element_size(input).has_value() &&
-           (output == input || (input == DataType::BFLOAT16 && output == DataType::INT32));
+    return output == input && row_major_element_size(input).has_value();
 }
 
+// Largest divisor of n in [2, limit], or 1 when there is none.
 uint32_t largest_divisor_at_most(uint32_t n, uint32_t limit) {
     for (uint32_t d = std::min(n, limit); d > 1; --d) {
         if (n % d == 0) {
@@ -88,31 +85,20 @@ uint32_t largest_divisor_at_most(uint32_t n, uint32_t limit) {
     return 1;
 }
 
-// Largest divisor of wt in [kMinColumnBlocks, max_blocks], or 1 when there is none.
-uint32_t column_blocks(uint32_t wt, uint32_t max_blocks) {
-    for (uint32_t d = std::min(wt, max_blocks); d >= kMinColumnBlocks; --d) {
-        if (wt % d == 0) {
-            return d;
-        }
-    }
-    return 1;
-}
-
 // Narrow DRAM fragments read inefficiently, so a few-row DRAM tensor gets wide blocks on few cores. A cut onto
-// fewer than kMinSplitCores cores keeps the full grid; L1 input or a conversion is bounded only by the grid.
+// fewer than kMinSplitCores cores keeps the full grid; L1 input is bounded only by the grid.
 uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t grid_cores, bool fragment_limited) {
     const uint32_t grid_blocks = grid_cores / g.tile_rows;
     if (!fragment_limited) {
         return grid_blocks;
     }
+    // A tile-wide fragment (64 or 128 B) is a multiple of the DRAM alignment, so blocks are counted in whole tiles.
     const uint32_t fragment_bytes = tt::constants::TILE_WIDTH * elem_size;
-    const uint32_t align_tiles = std::max(1u, tt::tt_metal::hal::get_dram_alignment() / fragment_bytes);
-    const uint32_t col_units = tt::div_up(g.wt, align_tiles);
-    const uint32_t min_units = tt::div_up(kMinCoreColBytes / fragment_bytes, align_tiles);
-    const uint32_t wide_blocks = std::max(1u, col_units / min_units);
+    const uint32_t min_block_tiles = kMinCoreColBytes / fragment_bytes;
+    const uint32_t wide_blocks = std::max(1u, g.wt / min_block_tiles);
     const uint32_t row_bytes = g.wt * fragment_bytes;
     const uint32_t fragment_blocks =
-        std::min(col_units, std::max(1u, row_bytes / std::max(kMinFragmentBytes, align_tiles * fragment_bytes)));
+        std::min(g.wt, std::max(1u, row_bytes / std::max(kMinFragmentBytes, fragment_bytes)));
     const uint32_t few_row_blocks = std::min(fragment_blocks, tt::div_up(kTargetCores, g.tile_rows));
     const uint32_t capped = std::min(grid_blocks, std::max(wide_blocks, few_row_blocks));
     return g.tile_rows * capped < kMinSplitCores ? grid_blocks : capped;
@@ -120,8 +106,7 @@ uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t
 
 struct Geometry : TilizeGeometry {
     uint32_t row_cores = 0;
-    uint32_t in_tile_bytes = 0;
-    uint32_t out_tile_bytes = 0;
+    uint32_t tile_bytes = 0;  // input and output alike
     uint32_t pending_l1_output_bytes = 0;
 };
 
@@ -131,6 +116,16 @@ std::optional<Geometry> analyze(
     using namespace tt::constants;
 
     if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated() || input.device() == nullptr) {
+        return std::nullopt;
+    }
+    // Shared by routing and the forced and primitive entries, so none of them runs the kernels on an unsupported
+    // architecture.
+    if (!codegen_supported_on_arch(input)) {
+        return std::nullopt;
+    }
+    // The L1 planning below reads the local allocator, which a mesh with no local device does not have; the
+    // launcher short-circuits such a mesh, so only the gate has to keep it on the native path.
+    if (input.device()->is_remote_only()) {
         return std::nullopt;
     }
     if (input.layout() != Layout::ROW_MAJOR || input.is_sharded() || output_mem_config.is_sharded()) {
@@ -158,13 +153,14 @@ std::optional<Geometry> analyze(
     const auto grid = input.device()->compute_with_storage_grid_size();
 
     Geometry g;
-    static_cast<TilizeGeometry&>(g) = tilize_geometry(input, output_dtype);
-    g.in_tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    g.out_tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+    static_cast<TilizeGeometry&>(g) = tilize_geometry(input);
+    g.tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
     g.pending_l1_output_bytes = get_pending_l1_output_reservation(
         input, shape, output_mem_config, output_dtype, Layout::TILE, /*require_constructible=*/true);
 
-    g.row_cores = std::get<0>(tt::tt_metal::split_work_to_cores(grid, g.tile_rows, /*row_wise=*/true));
+    const auto [row_cores, all_cores, core_group_1, core_group_2, rows_per_core_1, rows_per_core_2] =
+        tt::tt_metal::split_work_to_cores(grid, g.tile_rows, /*row_wise=*/true);
+    g.row_cores = row_cores;
     return g;
 }
 
@@ -172,12 +168,10 @@ std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usa
     const uint64_t budget = usable_l1 > g.pending_l1_output_bytes ? usable_l1 - g.pending_l1_output_bytes : 0;
 
     auto cb_bytes = [&](uint64_t chunk, uint64_t depth, uint64_t out_depth_tiles) {
-        return depth * chunk * g.in_tile_bytes + out_depth_tiles * g.out_tile_bytes +
-               (g.convert ? chunk * g.in_tile_bytes : 0);
+        return (depth * chunk + out_depth_tiles) * g.tile_bytes;
     };
     // Largest chunk (a divisor of the block width) whose CBs fit at the given depth, or 0 if none does.
-    const uint64_t per_tile =
-        static_cast<uint64_t>(g.in_tile_bytes) + g.out_tile_bytes + (g.convert ? g.in_tile_bytes : 0);
+    const uint64_t per_tile = 2 * static_cast<uint64_t>(g.tile_bytes);  // one input and one output tile
     auto largest_chunk = [&](uint32_t depth) -> uint32_t {
         const uint64_t max_chunk = std::min<uint64_t>(budget / (per_tile * depth), g.block_wt);
         return max_chunk == 0 ? 0 : largest_divisor_at_most(g.block_wt, static_cast<uint32_t>(max_chunk));
@@ -239,7 +233,7 @@ void require_allocated_device_input(const Tensor& input) {
     TT_FATAL(input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
 }
 
-TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
+TilizeGeometry tilize_geometry(const Tensor& input) {
     using namespace tt::constants;
 
     const uint32_t width = input.padded_shape()[kWidthAxis];
@@ -249,12 +243,10 @@ TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
     TilizeGeometry g;
     g.wt = width / TILE_WIDTH;
     g.tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
-    g.convert = output_dtype != input.dtype();
     if (g.tile_rows < grid_cores && g.wt >= kColumn2DMinWt) {
-        const bool fragment_limited =
-            !g.convert && input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
+        const bool fragment_limited = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
         const uint32_t blocks =
-            column_blocks(g.wt, max_column_blocks(g, input.element_size(), grid_cores, fragment_limited));
+            largest_divisor_at_most(g.wt, max_column_blocks(g, input.element_size(), grid_cores, fragment_limited));
         if (blocks >= kMinColumnBlocks) {
             g.route = TilizeRoute::Column2D;
             g.num_col_blocks = blocks;
@@ -283,35 +275,14 @@ bool supported_by_codegen(
     return geometry.has_value() && plan_for_budget(*geometry, get_static_l1_space(input)).has_value();
 }
 
-std::optional<std::string_view> unsupported_execution_control(
-    bool use_multicore,
-    bool use_low_perf,
-    const tt::tt_metal::Tile& tile,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (!use_multicore) {
-        return "use_multicore=False";
-    }
-    if (use_low_perf) {
-        return "use_low_perf=True";
-    }
-    if (sub_core_grids.has_value()) {
-        return "sub_core_grids";
-    }
-    if (!is_default_tile(tile)) {
-        return "tile";
-    }
-    return std::nullopt;
-}
-
 bool supported_execution_controls(
     bool use_multicore,
     bool use_low_perf,
     const tt::tt_metal::Tile& tile,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
+    return use_multicore && !use_low_perf && !sub_core_grids.has_value() && is_default_tile(tile);
 }
 
-// Every in-scope case, down to a single tile, routes to codegen.
 bool is_demoted(const Tensor& /*input*/, DataType /*output_dtype*/) { return false; }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

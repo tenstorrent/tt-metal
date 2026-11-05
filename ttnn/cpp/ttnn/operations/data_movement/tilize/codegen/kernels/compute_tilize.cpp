@@ -9,10 +9,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(1);
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t num_col_chunks = get_named_compile_time_arg_val("num_col_chunks");
+    constexpr uint32_t chunk_Wt = get_named_compile_time_arg_val("chunk_wt");
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 

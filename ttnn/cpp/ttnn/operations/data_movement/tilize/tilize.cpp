@@ -173,10 +173,6 @@ ttnn::Tensor tilize_force_codegen(
     // prim as the squeezed 4D tensor rather than the raw one.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         tilize_codegen::require_allocated_device_input(normalized_input);
-        TT_FATAL(
-            codegen_supported_on_arch(normalized_input),
-            "tilize_force_codegen: the codegen implementation runs only on Wormhole and Blackhole. This entry never "
-            "falls back to native.");
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
         TT_FATAL(
@@ -222,14 +218,11 @@ ttnn::Tensor tilize(
 
     // Route on the normalized (squeezed to 4D) tensor, the one native would see. The plan is sized against
     // the L1 free now, so nullopt (out of scope or no room for the CBs) falls back to native.
-    // The two implementations convert BFLOAT16 to INT32 differently, so a dtype conversion stays on native to keep
-    // ttnn::tilize results independent of the route.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
-        if (dtype == normalized_input.dtype() &&
-            ttnn::operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
-            supported_by_codegen(normalized_input, output_mem_config, dtype) && !is_demoted(normalized_input, dtype)) {
+        if (controls_ok && supported_by_codegen(normalized_input, output_mem_config, dtype) &&
+            !is_demoted(normalized_input, dtype)) {
             if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype); plan.has_value()) {
                 return ttnn::prim::tilize_codegen(normalized_input, output_mem_config, dtype, *plan);
             }
