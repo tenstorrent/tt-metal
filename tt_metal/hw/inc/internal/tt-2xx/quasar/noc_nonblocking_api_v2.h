@@ -799,9 +799,14 @@ template <
     bool update_val = false,
     bool posted = false,
     bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // as on Wormhole and Blackhole; the simple command buffer has no ready wait here
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val = 0,
+    uint64_t dest_addr = 0,
+    [[maybe_unused]] uint32_t dst_noc_addr = 0) {  // as on Wormhole and Blackhole (both halves: unsupported here)
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
 
@@ -1262,7 +1267,8 @@ template <
     enum CQNocSend send = CQ_NOC_SEND,
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
-    bool posted = false>
+    bool posted = false,
+    bool update_addr_mid = true>  // accepted (unused) so callers written for Blackhole compile
 inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");

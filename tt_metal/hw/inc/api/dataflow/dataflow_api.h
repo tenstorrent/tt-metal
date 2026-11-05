@@ -2320,7 +2320,8 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  * Initiates an inline write of a 32-bit value to a NOC destination.
  * This function must be preceded by a call to \a noc_inline_dw_write_set_state.
  * This function is used to issue the actual write request after the state has been set up.
- * The 32-bit value and part of the destination address can also be set in this API (Only either hi or lo address should be getting updated).
+ * The 32-bit value and part of the destination address can also be set in this API: the low address (update_addr_lo),
+ * the node (update_addr_hi, from addr), or both (from addr and dst_noc_addr).
  * \a noc_inline_dw_write can be used instead if the state preservation is not
  * needed. Also, see \a noc_async_write_barrier.
  *
@@ -2337,6 +2338,7 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
  * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
  * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
+ * | dst_noc_addr                               | The node coordinate, when both halves are updated      | uint32_t  | (noc_addr >> NOC_ADDR_COORD_SHIFT) | False |
  * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
  * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
  * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
@@ -2351,9 +2353,14 @@ template <
     bool posted = false,
     bool update_addr_hi = false,
     bool update_val = false,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 FORCE_INLINE void noc_inline_dw_write_with_state(
-    uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    uint32_t val,
+    uint32_t addr = 0,
+    uint8_t cmd_buf = write_at_cmd_buf,
+    uint8_t noc = noc_index,
+    uint32_t dst_noc_addr = 0) {
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
     // workaround for avoiding hangs in fabric router, as counters will be checked inside the
@@ -2371,7 +2378,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_val,
         posted,
         update_counter_in_callee,
-        dst_type>(noc, cmd_buf, val, addr);
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr, dst_noc_addr);
     WAYPOINT("NWID");
 }
 

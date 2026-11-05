@@ -23,6 +23,14 @@ using routing_plane_id_t = std::uint8_t;
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
+// Every FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS main-loop iterations, the fabric router writes
+// FABRIC_KERNEL_HEARTBEAT_MAGIC | (16-bit iteration count) to a word owned by the base ethernet firmware.
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE = 0x1F80;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE = 0x7CC70;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
@@ -274,14 +282,13 @@ struct Routing2DCodec {
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
-    // Y row while it still holds an action, X row once it is spent. Independent of facing.
+    // Y row while it still holds an action, X row once it is spent. Independent of facing. Both bytes are read up
+    // front, so the X load does not wait on the Y test.
     static std::uint8_t decode_action_y_first(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         const std::uint8_t action_y = route_buffer[local_y];
-        if (action_y != 0) {
-            return action_y;
-        }
-        return route_buffer[y_size + local_x];
+        const std::uint8_t action_x = route_buffer[y_size + local_x];
+        return action_y != 0 ? action_y : action_x;
     }
 
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]

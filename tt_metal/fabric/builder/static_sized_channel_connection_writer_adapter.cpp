@@ -67,6 +67,16 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             adapter_spec.buffer_index_semaphore_id;
     }
 
+    // The router keeps one downstream forwarding ring size per VC (router_downstream.hpp, DownstreamTraits::num_slots):
+    // every sender channel this VC forwards into must have the same slot count.
+    const size_t ring_slots = this->downstream_sender_channels_num_buffers.at(inbound_vc_idx);
+    TT_FATAL(
+        ring_slots == 0 || ring_slots == adapter_spec.num_buffers_per_channel,
+        "VC{} forwards into downstream sender channels of {} and {} slots, but the router keeps one downstream ring "
+        "size per VC: every forwarding channel of a VC must have the same slot count",
+        inbound_vc_idx,
+        ring_slots,
+        adapter_spec.num_buffers_per_channel);
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
 }

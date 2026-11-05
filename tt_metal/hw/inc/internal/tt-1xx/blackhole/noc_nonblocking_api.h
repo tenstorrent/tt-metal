@@ -1403,9 +1403,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
  * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
  */
 // clang-format on
+// skip_cmdbuf_chk: the caller has already seen the command buffer ready (and issued nothing on it since).
+template <bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
 
@@ -1834,10 +1838,10 @@ template <
     bool update_val = false,
     bool posted = false,
     bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
-    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0, uint32_t dst_noc_addr = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1847,13 +1851,19 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
         if constexpr (dst_type != InlineWriteDst::REG) {
             uint32_t be32 = 0xF << (dest_addr & (NOC_WORD_BYTES - 1));
             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+        }
+        if constexpr (update_addr_hi) {
+            // Both halves: the node comes as its own argument (dst_noc_addr), as noc_wwrite_with_state takes it.
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dst_noc_addr);
         }
     } else if constexpr (update_addr_hi) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
@@ -2217,6 +2227,8 @@ inline __attribute__((always_inline)) void noc_write_with_state(
 /**
  * Similar to above except takes additional argument, \a  dst_noc_addr, to free up \a dst_addr to be 64 bits
  *
+ * \a update_addr_mid (default true) writes NOC_RET_ADDR_MID from the upper half of \a dst_addr. False leaves it as the
+ * set_state call left it: for on-chip destinations, whose upper half is 0, it saves a register write per transaction.
  */
 template <
     uint8_t noc_mode = DM_DEDICATED_NOC,
@@ -2225,13 +2237,16 @@ template <
     enum CQNocSend send = CQ_NOC_SEND,
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
-    bool posted = false>
+    bool posted = false,
+    bool update_addr_mid = true>
 inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     noc_common_write_with_state<noc_mode, cmd_buf, flags, wait, update_counter, posted>(noc, src_addr, size, ndests);
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+        if constexpr (update_addr_mid) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+        }
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
         // Handles writing to PCIe
