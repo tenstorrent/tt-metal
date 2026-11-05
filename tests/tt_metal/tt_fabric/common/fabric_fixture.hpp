@@ -22,7 +22,10 @@
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
+#include "impl/kernels/kernel.hpp"
 
+#include <algorithm>
+#include <tuple>
 #include <unordered_map>
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -63,6 +66,15 @@ struct WorkerMemMap {
     uint32_t target_address;
     uint32_t notification_mailbox_address;
     uint32_t test_results_size_bytes;
+    // The addresses above are the kernel's view: the L1 offset plus this. The host reads and writes the offset.
+    uint32_t kernel_view_offset = 0;
+};
+
+// Where a fabric data-movement test runs a worker kernel. See BaseFabricFixture::get_fabric_test_worker().
+struct FabricTestWorker {
+    tt::tt_metal::CoreCoord logical;
+    CoreType core_type;                   // WORKER or ETH: for CreateSemaphore and L1 reads
+    tt::tt_metal::CoreCoord noc_core;     // the coordinate other cores address it at
 };
 
 class BaseFabricFixture : public ::testing::Test {
@@ -161,15 +173,87 @@ public:
         pending_async_workloads_.erase(device.get());
     }
 
-    // Utility function reused across tests to get address params
+    // Whether `device` has no Tensix cores, so fabric test workers run on its idle Ethernet cores (Keraunos CCEs):
+    // the Keraunos test chips in tests/tt_metal/tt_fabric/keraunos/.
+    static bool workers_on_ethernet_cores(const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        return cluster.get_soc_desc(device->get_device_ids()[0]).get_cores(CoreType::TENSIX, tt::CoordSystem::NOC0).empty();
+    }
+
+    // Where a fabric data-movement test runs a worker kernel on `device`: the Tensix core at `tensix_logical`, or, on a
+    // chip whose workers run on Ethernet cores, its first idle Ethernet core in logical order. Fatal when that chip has
+    // no idle Ethernet core.
+    static FabricTestWorker get_fabric_test_worker(
+        const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, tt_metal::CoreCoord tensix_logical) {
+        if (!workers_on_ethernet_cores(device)) {
+            return {tensix_logical, CoreType::WORKER, device->worker_core_from_logical_core(tensix_logical)};
+        }
+        const ChipId chip = device->get_device_ids()[0];
+        const auto idle = tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip);
+        TT_FATAL(!idle.empty(), "Chip {} has no idle Ethernet core for a fabric test worker", chip);
+        const tt_metal::CoreCoord logical = *std::ranges::min_element(
+            idle, [](const auto& a, const auto& b) { return std::tie(a.y, a.x) < std::tie(b.y, b.x); });
+        return {logical, CoreType::ETH, device->virtual_core_from_logical_core(logical, CoreType::ETH)};
+    }
+
+    // A data-movement kernel on `worker`: DataMovementConfig on RISCV_0 for a Tensix core, EthernetConfig on DM0 of
+    // an idle Ethernet core.
+    static tt_metal::KernelHandle create_fabric_test_worker_kernel(
+        tt_metal::Program& program,
+        const std::string& file_name,
+        const FabricTestWorker& worker,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines = {}) {
+        if (worker.core_type == CoreType::ETH) {
+            return tt_metal::CreateKernel(
+                program,
+                file_name,
+                worker.logical,
+                tt_metal::EthernetConfig{
+                    .eth_mode = tt_metal::Eth::IDLE,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .compile_args = compile_args,
+                    .defines = defines});
+        }
+        return tt_metal::CreateKernel(
+            program,
+            file_name,
+            worker.logical,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = compile_args,
+                .defines = defines});
+    }
+
+    // Utility function reused across tests to get address params. On a chip whose workers run on Ethernet cores the
+    // map starts at the idle Ethernet core's unreserved L1, and the kernel's view is the CCE's uncached alias
+    // (MEM_IERISC_UNCACHED_BASE): the worker's stores must reach SRAM, where the iDMA and the host read them.
     static WorkerMemMap generate_worker_mem_map(
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
         constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
         constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
         constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
+        constexpr uint32_t KERAUNOS_CCE_UNCACHED_ALIAS = 0x800000;
 
-        uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
+        uint32_t base_addr = 0;
+        uint32_t kernel_view_offset = 0;
+        if (workers_on_ethernet_cores(device)) {
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            base_addr = hal.get_dev_addr(
+                tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+            const uint32_t size =
+                hal.get_dev_size(tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+            TT_FATAL(
+                PACKET_HEADER_RESERVED_BYTES + DATA_SPACE_RESERVED_BYTES + 2 * TEST_RESULTS_SIZE_BYTES <= size,
+                "Idle Ethernet unreserved L1 ({} B) cannot hold the fabric test worker map",
+                size);
+            kernel_view_offset = KERAUNOS_CCE_UNCACHED_ALIAS;
+        } else {
+            base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        }
+        uint32_t source_l1_buffer_address = base_addr + kernel_view_offset + PACKET_HEADER_RESERVED_BYTES;
         uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
         uint32_t target_address = source_l1_buffer_address;
         uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
@@ -182,7 +266,8 @@ public:
             test_results_address,
             target_address,
             notification_mailbox_address,
-            TEST_RESULTS_SIZE_BYTES};
+            TEST_RESULTS_SIZE_BYTES,
+            kernel_view_offset};
     }
 };
 
