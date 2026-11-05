@@ -792,7 +792,8 @@ def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, mem
         topology=topology,
         epsilon=eps,
         weight=weight,
-        dtype=x.dtype,
+        # QWEN36_FUSED_NORM_BF8=1: emit bf8 (every prefill consumer -- the bf8 AGMM / all-gather -- casts to it anyway)
+        dtype=ttnn.bfloat8_b if os.environ.get("QWEN36_FUSED_NORM_BF8", "0") == "1" else x.dtype,
         persistent_output_buffer=stats,
         num_preferred_links=FUSED_NORM_LINKS,
         memory_config=memory_config,
