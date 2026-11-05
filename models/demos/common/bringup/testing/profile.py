@@ -37,7 +37,7 @@ from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge
 from models.demos.common.bringup.testing import e2e_limits as E
 from models.demos.common.bringup.testing import profiler
-from models.demos.common.bringup.testing.harness import begin_chunk
+from models.demos.common.bringup.testing.harness import begin_chunk, chunk_last
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 from models.demos.common.bringup.testing.ladder import check_states, rel
 
@@ -414,7 +414,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     backend = profiler.backend(s)  # F155: "rt" unless the spec / BRINGUP_PROFILER asks for the device profiler
     pos = position()
     if pos is not None:  # F230: one chunk at a position, timing only; every metric carries _p<pos>
-        os.environ[metrics.SUFFIX_ENV] = f"_p{pos}"
+        role = {None: "", True: "_last", False: "_nonlast"}[chunk_last()]  # F249: BRINGUP_CHUNK_LAST, else they collide
+        os.environ[metrics.SUFFIX_ENV] = f"_p{pos}{role}"
         chunk = int(s.get("target.chunk"))
         rung_name, rung = f"pos{pos}", {"name": f"pos{pos}", "seq": pos + chunk, "chunk": chunk}
         g = PositionGolden(s, pos, chunk)

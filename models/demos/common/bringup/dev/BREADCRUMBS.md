@@ -2564,3 +2564,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   ttnn.get_fabric_config() (MetalContext -> UMD cluster: opens every PCIe chip).
 - Fix: the test stubs fork_capture._device (selftests never touch the device). Found by a full run with saved output
   on the idle box (2026-11-04: 680 passed; the one failure is xing40's server_rules.py:393 fixed threshold, open).
+
+## F249: a position profile names its chunk role (DeepSeek-V4.1 P.32, 2026-11-05)
+- Problem: P.32's gate times one position as a last chunk (replay128) and as a non-last chunk (exact); both wrote
+  *_p<pos> metrics, the second overwrote the first.
+- Fix: profile.py's position suffix is _p<pos>, _p<pos>_last or _p<pos>_nonlast after BRINGUP_CHUNK_LAST (F248's
+  harness.chunk_last); the A/B's p<pos>_nonlast item already strips "_" + its name.
+- Selftest: test_perf_ab.py::test_a_position_profile_names_its_chunk_role.
