@@ -23,13 +23,13 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
-from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
+from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
+from models.demos.blackhole.qwen36.tt.tp_common import GDN_SNAP_SLOTS
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size, kv_cache_bf8_enabled, kv_write_masked_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
-    GDN_SNAP_SLOTS,
     pack_u32_rows,
     prefill_intrace_snap_enabled,
     prefill_intrace_snap_min_rows,
@@ -39,10 +39,10 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
+    spec_vfy_outs_prealloc_enabled,
     verify_attn_lean_enabled,
     verify_dar_enabled,
     verify_device_topk_m,
-    spec_vfy_outs_prealloc_enabled,
 )
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -113,7 +113,9 @@ class _VfyBucket:
         self.standins = []  # tensors freed once the bucket is captured
         # QWEN36_ATTN_KV_SPLIT gate: a split variant of width b (b == B allowed), not a row bucket
         self.kv_split = False
-        self.pre = {}  # QWEN36_SPEC_VFY_OUTS_PREALLOC: "normed" / "logits_rm" -> pre-capture destination (kept warm output)
+        self.pre = (
+            {}
+        )  # QWEN36_SPEC_VFY_OUTS_PREALLOC: "normed" / "logits_rm" -> pre-capture destination (kept warm output)
 
 
 class _ShortPrefillTrace:
@@ -260,6 +262,22 @@ def _page_table_rows(page_tables):
     """int32 contiguous [B, nb] torch rows from a tensor or array-like (1-D is one user's row)."""
     pt = torch.as_tensor(page_tables)
     return (pt.reshape(1, -1) if pt.dim() == 1 else pt).to(torch.int32).contiguous()
+
+
+def spec_sdpa_read_table(pt):
+    """The fused spec SDPA's page table from the verify write table ``pt`` (int32 [B, nb]): every null entry after a
+    row's last real block repeats that block; an all-null row stays null.
+
+    The fused spec SDPA streams a candidate group's K/V up to the group's last candidate position, so a padded
+    candidate past the row's last real block (verify_write_table nulls those entries) makes it read the null block
+    under the masked rows. The null block holds whatever padding rows wrote there, which with QWEN36_MAMBA_SPEC
+    includes fp32 GDN state bytes; read as K/V they can be inf, nan or large enough that the causal mask does not
+    cancel them (0 * inf = nan), so the group's real candidates, which mask those positions, come out wrong. The
+    row's own last block holds K/V written by the model or zeroed by vLLM."""
+    pt = torch.as_tensor(pt).to(torch.int32)
+    col = torch.arange(pt.shape[1]).expand_as(pt)
+    last = torch.where(pt != 0, col, torch.full_like(col, -1)).cummax(dim=1).values
+    return torch.where(last >= 0, torch.gather(pt, 1, last.clamp(min=0)), pt).contiguous()
 
 
 class Qwen36Model:
@@ -885,14 +903,18 @@ class Qwen36Model:
         if weight is None or weight is self.lm_head_weight or not _tpc.draft_head_dshard_enabled():
             return False
         if getattr(self, "_lm_head_dshard", None) is None:
-            logger.warning(f"{_tpc.DRAFT_HEAD_DSHARD_ENV} ignored: QWEN36_LMHEAD_DSHARD is off or the head is not vocab-sharded")
+            logger.warning(
+                f"{_tpc.DRAFT_HEAD_DSHARD_ENV} ignored: QWEN36_LMHEAD_DSHARD is off or the head is not vocab-sharded"
+            )
             return False
         if getattr(self, "_lm_head_dshard_extra", None) is None:
             self._lm_head_dshard_extra = {}
         mode = _tpc.lm_head_dshard_mode()
         d = _tpc.LMHeadDShard(weight, self.mesh_device, mode, _tpc.lm_head_dshard_readers(mode))
         self._lm_head_dshard_extra[id(weight)] = (weight, d)  # holds the weight: its id stays unique
-        logger.info(f"{_tpc.DRAFT_HEAD_DSHARD_ENV}: drafter head copy {list(weight.shape)} {weight.dtype} DRAM-sharded ({mode})")
+        logger.info(
+            f"{_tpc.DRAFT_HEAD_DSHARD_ENV}: drafter head copy {list(weight.shape)} {weight.dtype} DRAM-sharded ({mode})"
+        )
         return True
 
     def _lm_head(self, x, out_dtype=None, gather=True, weight=None):
@@ -3355,14 +3377,15 @@ class Qwen36Model:
           (TPAttention._write_kv_aliased).
         * per-group [spec_sdpa_groups, nb]: one row per candidate group, for the fused spec SDPA
           (spec_multi_pos_tiles), which splits each user's T candidates across spec_sdpa_groups(T, B)/B
-          batch rows and wants one aliased page-table row per group. The per-row KV write must not
+          batch rows and wants one aliased page-table row per group; built from spec_sdpa_read_table(pt),
+          as nothing writes through it. The per-row KV write must not
           slice a narrower table full-span (a full-span ttnn.slice aliases its input), so both
           row-count forms are kept.
         """
         T, B, G = self._vfy_T, self._vfy_B, self._vfy_spec_groups
         pt = pt.to(torch.int32)
         if G >= B and G % B == 0:
-            pt1 = pt.repeat_interleave(G // B, dim=0)
+            pt1 = spec_sdpa_read_table(pt).repeat_interleave(G // B, dim=0)
         else:
             pt1 = pt[:1].repeat(G, 1)  # fused path off: the buffer exists but is unread
         return pt.repeat_interleave(T, dim=0).contiguous(), pt.contiguous(), pt1.contiguous()
@@ -3373,7 +3396,7 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
 
         _h = ttnn.from_torch(
-            own_page_table_host(pt, self.num_devices, self._vfy_kvpt_own_gpu),
+            own_page_table_host(spec_sdpa_read_table(pt), self.num_devices, self._vfy_kvpt_own_gpu),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None,
@@ -3456,7 +3479,9 @@ class Qwen36Model:
             for t in bk.standins:
                 ttnn.deallocate(t)
             bk.standins, bk.handoff = [], {}
-            for t in bk.pre.values():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: warmed, never captured (captured ones are {} here)
+            for (
+                t
+            ) in bk.pre.values():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: warmed, never captured (captured ones are {} here)
                 ttnn.deallocate(t)
             bk.pre = {}
             if bk.dl is not None:
@@ -3628,7 +3653,7 @@ class Qwen36Model:
             from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
 
             self._vfy_kvpt_own = ttnn.from_torch(
-                own_page_table_host(pt, self.num_devices, self._vfy_kvpt_own_gpu),
+                own_page_table_host(spec_sdpa_read_table(pt), self.num_devices, self._vfy_kvpt_own_gpu),
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=dev,
@@ -4016,7 +4041,9 @@ class Qwen36Model:
         _lg = self._forward_verify_logits_body(bk)
         bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
         bk.pre = {}
-        if spec_vfy_outs_prealloc_enabled():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
+        if (
+            spec_vfy_outs_prealloc_enabled()
+        ):  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
             self._vfy_pre_keep(bk.pre, "logits_rm", _lg[1])
             self._vfy_pre_keep(bk.pre, "normed", bk.normed)
             self._vfy_pre_warm(bk.pre)
@@ -5246,7 +5273,9 @@ class Qwen36Model:
         for bucket in buckets:
             assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
             nb = -(-bucket // block_size)
-            assert page_table.shape[-1] >= nb, f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {nb}"
+            assert (
+                page_table.shape[-1] >= nb
+            ), f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {nb}"
         n_hist = None
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -7887,7 +7916,8 @@ class Qwen36Model:
         first, then the rest the 2048 one; same rows covered, so the tail is unchanged. self._last_chunk names the last
         replayed chunk (output, rows) for callers that read its output.
 
-        snap: QWEN36_PREFILL_INTRACE_SNAP in-replay snapshots of the replayed chunks (see _replay_chunks); None = none."""
+        snap: QWEN36_PREFILL_INTRACE_SNAP in-replay snapshots of the replayed chunks (see _replay_chunks); None = none.
+        """
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).

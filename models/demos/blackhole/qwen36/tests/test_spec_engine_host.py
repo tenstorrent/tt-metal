@@ -19,7 +19,7 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model, spec_kv_write_conflicts
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model, spec_kv_write_conflicts, spec_sdpa_read_table
 from models.demos.blackhole.qwen36.tt.spec_engine import (
     PLACEHOLDER_TOKEN_ID,
     MTPSpecEngine,
@@ -721,6 +721,24 @@ def test_verify_write_table():
     assert pt[0, 1].item() == 9  # input untouched
     full = torch.cat([torch.arange(1, 65), torch.zeros(1)]).to(torch.int32).reshape(1, 65)
     assert torch.equal(verify_write_table(full, [4094], [0], 64), full)
+
+
+def test_spec_sdpa_read_table_keeps_the_null_block_out_of_the_fused_sdpa():
+    # row 0: a 0-draft row at 2045 of block 2048 (its padded candidate 2048 lies in column 1, nulled by the write
+    # table); row 1: a real block in column 1; row 2: a padding row
+    pt = torch.tensor([[5, 9, 7], [3, 4, 8], [0, 0, 0]], dtype=torch.int32)
+    write = verify_write_table(pt, [2045, 2046, 0], [0, 3, 0], 2048)
+    assert write.tolist() == [[5, 0, 0], [3, 4, 0], [0, 0, 0]]
+    assert spec_sdpa_read_table(write).tolist() == [[5, 5, 5], [3, 4, 4], [0, 0, 0]]
+    assert write.tolist() == [[5, 0, 0], [3, 4, 0], [0, 0, 0]]  # input untouched
+
+
+def test_vfy_page_table_host_reads_the_fused_sdpa_table_without_null_blocks():
+    m = types.SimpleNamespace(_vfy_T=4, _vfy_B=2, _vfy_spec_groups=2)
+    write = torch.tensor([[5, 0, 0], [3, 4, 0]], dtype=torch.int32)
+    rows, users, groups = Qwen36Model._vfy_page_table_host(m, write)
+    assert torch.equal(users, write) and torch.equal(rows, write.repeat_interleave(4, dim=0))
+    assert groups.tolist() == [[5, 5, 5], [3, 4, 4]]
 
 
 @pytest.mark.parametrize(
