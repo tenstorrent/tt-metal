@@ -209,10 +209,13 @@ def test_block_copies_keep_the_state(device, geo_block_layout):
     torch.manual_seed(11)
     rec = torch.randn(1, g.Nv, 128, 128)
     carry = torch.randn(1, 3, g.C).bfloat16()
+    rec_dev = ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     with sbs._PageTables(st) as pts:
-        st._write_rec(dn, 7, ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), pts)
+        st._write_rec(dn, 7, rec_dev, pts)
         rm = ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         st._write_carry(dn, 7, rm, pts)
+    # the source is the bound prefill scratch in the model: the write must leave it allocated (k_only: one pool)
+    assert rec_dev.is_allocated() and torch.equal(ttnn.to_torch(rec_dev).reshape(rec.shape).float(), rec)
     for dst in (9, 10, 13, 20):
         st.copy_blocks([(7, dst)])
         got = ttnn.to_torch(st._read_rec(dn, dst)).reshape(1, g.Nv, 128, 128).float()

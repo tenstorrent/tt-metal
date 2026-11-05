@@ -950,13 +950,20 @@ class SpecGdnBlockState:
             if h1 <= h0:
                 continue
             n = h1 - h0
-            part = ttnn.slice(rec, (0, h0, 0, 0), (1, h1, dn.Dk, dn.Dv), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # every head in one pool (k_only): a whole-tensor slice returns rec's own buffer, which must survive
+            whole = h0 == 0 and h1 == int(rec.shape[1])
+            part = (
+                rec
+                if whole
+                else ttnn.slice(rec, (0, h0, 0, 0), (1, h1, dn.Dk, dn.Dv), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
             src = ttnn.reshape(part, (1, 1, n * dn.Dk, dn.Dv))
             first = int(pages[h0]) - off
             if first % HALF_PAGES:
                 raise ValueError(f"block {b}: head {h0} starts at page {first}, not a multiple of {HALF_PAGES}")
             ttnn.experimental.paged_fill_cache(view, src, pts(first // HALF_PAGES, 2 * n), batch_idx=0)
-            ttnn.deallocate(part)
+            if not whole:
+                ttnn.deallocate(part)
 
     def _read_rec(self, dn, b):
         """Block b's recurrent state as a new [1, Nv, Dk, Dv] fp32 TILE tensor."""
