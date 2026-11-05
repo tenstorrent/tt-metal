@@ -1230,7 +1230,9 @@ _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 
 
 @run_for_blackhole("Blackhole Galaxy 4x4 cylinder perf requires Blackhole")
-@pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy 4x4 cylinder perf requires MESH_DEVICE=TG")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy 4x4 cylinder perf requires MESH_DEVICE=TG"
+)
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
