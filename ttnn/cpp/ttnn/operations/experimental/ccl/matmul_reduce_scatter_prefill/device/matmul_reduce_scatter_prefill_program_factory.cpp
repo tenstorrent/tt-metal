@@ -415,7 +415,14 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const uint32_t x0 = 0;
     const uint32_t y0 = gd.strip == detail::Strip::Row ? 1 : 0;
     const bool m_on_x = gd.orient == detail::Orient::MOnX;
+    // folded: the grid's one line (gn for FoldedN, gm for FoldedM) folds row-major into the rectangle
+    const bool folded = gd.flow != detail::Flow::Grid2D;
+    const bool fold_m = gd.flow == detail::Flow::FoldedM;
     auto mm_core = [&](uint32_t gm, uint32_t gn) {
+        if (folded) {
+            const uint32_t g = fold_m ? gm : gn;
+            return CoreCoord(x0 + g % gd.fold_cols, y0 + g / gd.fold_cols);
+        }
         return m_on_x ? CoreCoord(x0 + gm, y0 + gn) : CoreCoord(x0 + gn, y0 + gm);
     };
     struct MmCore {
@@ -521,19 +528,25 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::A_SPLIT] = a_split;
     reader_ct[args::reader_ct::W_SPLIT] = w_split;
     reader_ct[args::reader_ct::PREFETCH_STEPS] = detail::kPrefetchSteps;
-    reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = resident ? 1 : 0;
-    reader_ct[args::reader_ct::A_READ_NOC] = 0;
-    // A resident plan scattering on N streams W through every entry while A is read once, so on a thin grid W is
+    // Folded: the multicast operand moves through one group, so nothing competes with every core's own reads (W for
+    // FoldedN, A for FoldedM) for the fill; those are a DRAM stream, read ahead before the barrier and alternately on
+    // both NoCs (decode rows, measured: W on NoC1 alone 1.3-1.8x slower)
+    reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = (resident && !folded) ? 1 : 0;
+    reader_ct[args::reader_ct::A_READ_NOC] = fold_m ? args::read_noc::ALTERNATE : args::read_noc::NOC0;
+    // A resident 2D plan scattering on N streams W through every entry while A is read once, so on a thin grid W is
     // nearly all the DRAM traffic. With N along x (>= 10 columns, M on <= 4 rows) W reads on NoC0: NoC1 ran it 1.4-3x
     // slower (QB2 1x4 ring, traced, M=32/64 K=3584: N=2560-7168 at 0.33-0.72x the NoC1 time; Kimi K2.7 o_proj
-    // decode 181 -> 62 us). With N along y (the planner's M-on-x grids, N=1024-3072 on 6-8 lines) NoC1 stays faster
-    // (NoC0 1.01-1.59x slower), and on taller grids, where A's reads are as heavy, the NoC split is neutral: both keep
-    // NoC1. N along x on fewer than 10 columns is unmeasured and keeps NoC1.
+    // decode forced 2D 181 -> 62 us). With N along y (the planner's M-on-x grids, N=1024-3072 on 6-8 lines) NoC1 stays
+    // faster (NoC0 1.01-1.59x slower), and on taller grids, where A's reads are as heavy, the NoC split is neutral:
+    // both keep NoC1. N along x on fewer than 10 columns is unmeasured and keeps NoC1.
     // The row (<= 4) and column (>= 10) bounds are empirical: the envelope of the shapes measured so far, not a
     // derived rule (the likely mechanism, each NoC's dimension order funnelling the DRAM responses into the W senders'
     // rows or columns, is unverified). Subject to change as more grid shapes are measured.
-    const bool w_noc0_thin_wide = resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
-    reader_ct[args::reader_ct::W_READ_NOC] = (resident && !w_noc0_thin_wide) ? 1 : 0;
+    const bool w_noc0_thin_wide =
+        !folded && resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
+    reader_ct[args::reader_ct::W_READ_NOC] =
+        folded ? (fold_m ? args::read_noc::NOC0 : args::read_noc::ALTERNATE)
+               : ((resident && !w_noc0_thin_wide) ? args::read_noc::NOC1 : args::read_noc::NOC0);
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
@@ -760,9 +773,13 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
             ttnn::kernel_lib::host::attach_absent_mcast(reader, fam.prefix);
             continue;
         }
-        // One group per grid line, ordered along the line; Staggered advances the sender by one per line.
+        // One group per grid line, ordered along the line; Staggered advances the sender by one per line. Folded: the
+        // grid's single line is the whole rectangle (A's for FoldedN, W's for FoldedM), every core its own other line.
         const bool per_row = fam.shape == McastLine::PerRow;
-        const uint32_t line_len = per_row ? mm_box.grid_size().x : mm_box.grid_size().y;
+        uint32_t line_len = per_row ? mm_box.grid_size().x : mm_box.grid_size().y;
+        if (folded) {
+            line_len = (fam.prefix[0] == 'a') != fold_m ? n_cores : 1;
+        }
         const McastFixedSenderConfig sender{.sender_index = *fam.start, .placement = McastSenderPlacement::Staggered};
         const std::array kernels{std::ref(reader)};
         Mcast(*mesh, mc_cfg, mm_crs, line_len, sender, per_row ? McastCoreOrder::RowMajor : McastCoreOrder::ColumnMajor)

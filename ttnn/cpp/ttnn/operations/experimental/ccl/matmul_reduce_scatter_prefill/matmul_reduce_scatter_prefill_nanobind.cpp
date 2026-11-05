@@ -49,6 +49,10 @@ nb::dict last_plan_dict() {
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
     out["orient"] = plan.grid.orient == detail::Orient::MOnX ? "m_on_x" : "m_on_y";
+    out["flow"] = plan.grid.flow == detail::Flow::FoldedN   ? "folded_n"
+                  : plan.grid.flow == detail::Flow::FoldedM ? "folded_m"
+                                                            : "grid_2d";
+    out["fold"] = nb::make_tuple(plan.grid.fold_rows, plan.grid.fold_cols);
     out["half_split"] = half_split_name(plan.half_split);
     out["waves"] = plan.waves.n;
     out["chunks"] = nb::make_tuple(plan.n_m, plan.n_n);
@@ -67,6 +71,21 @@ nb::dict last_plan_dict() {
 namespace ttnn::operations::experimental::ccl {
 
 void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
+    using ttnn::experimental::MatmulReduceScatterPrefillGrid;
+    nb::enum_<MatmulReduceScatterPrefillGrid>(
+        mod,
+        "MatmulReduceScatterPrefillGrid",
+        "The matmul grid of a matmul_reduce_scatter_prefill call (the caller's choice).")
+        .value("GRID_2D", MatmulReduceScatterPrefillGrid::GRID_2D, "M and N split over a 2D grid of matmul cores")
+        .value(
+            "FOLDED_N",
+            MatmulReduceScatterPrefillGrid::FOLDED_N,
+            "one line of cores along N, folded into a rectangle: every core holds all the block's rows")
+        .value(
+            "FOLDED_M",
+            MatmulReduceScatterPrefillGrid::FOLDED_M,
+            "one line of cores along M, folded into a rectangle: every core holds all the block's columns");
+
     ttnn::bind_function<"matmul_reduce_scatter_prefill", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -96,6 +115,10 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 The plan also stays below every L1 tensor live at the call (L1 operands, resident tensors) and leaves
                 room for an L1 output it allocates.
 
+            grid (ttnn.MatmulReduceScatterPrefillGrid, optional): the matmul grid every plan the planner weighs
+                uses (GRID_2D, FOLDED_N or FOLDED_M); a shape that cannot take it is refused. The op never picks
+                one: a caller that wants a fold (e.g. FOLDED_N for decode rows) asks for it. Defaults to GRID_2D.
+
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
 
@@ -114,7 +137,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("l1_headroom") = nb::none());
+        nb::arg("l1_headroom") = nb::none(),
+        nb::arg("grid") = ttnn::experimental::MatmulReduceScatterPrefillGrid::GRID_2D);
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",
