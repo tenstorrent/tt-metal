@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/span.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>

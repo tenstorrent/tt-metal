@@ -564,8 +564,13 @@ targets:
               # Scheduled runs 10-20..11-02 on f10cs06 / f10cs08 / f10cs09: prefill_t/s 434.8-559.7 (median 487),
               # prefill_time_to_token 0.1554-0.2001 s (median 0.1785). The old 430.5 / 0.2021 matched the slowest
               # host (f10cs09) only, so f10cs08 failed as "much better than expected" (10-27, 11-02).
-              prefill_t/s: 490.0
-              prefill_time_to_token: 0.18
+              # #62806's fp32-accumulating prefill linears (HiFi2) add ~4 % TTFT on the slowest host (f10cs09:
+              # 419.7 tok/s, 0.2073 s in run 41694520470, vs 0.2001 s there before), so both prefill rows sit between
+              # the hosts with a +/-20 % band (the precedent is compile_prefill below and the QB2 decode row).
+              prefill_t/s: 480.0
+              prefill_t_s_tolerance: 0.20
+              prefill_time_to_token: 0.185
+              prefill_time_to_token_tolerance: 0.20
               compile_decode: 33.7187
               # Cold JIT compile on the WH perf runners swings between runs: 39.15 s (earlier), 32.89 s
               # (run 40213776008), 38.57 s (run 40227270371); centred between the last two and widened to

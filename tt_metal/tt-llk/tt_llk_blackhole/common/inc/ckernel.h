@@ -669,6 +669,8 @@ inline void enable_gathering()
 // replay buffer, and LEN is the number of instructions to record
 // (should match the expansion of CALLABLE). CALLABLE is a callable,
 // to which ARGS are forwarded.
+// Every record goes through here, never a raw lltt::record / TTI_REPLAY: loading the replay
+// buffer is incompatible with Blackhole instruction gathering, which this disables around it.
 // When we move to c++23 we can use 'using enum lltt::ExecBool;'
 enum ExecBool : bool
 {
@@ -677,7 +679,7 @@ enum ExecBool : bool
 };
 
 // The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ recorded for as long as no other code on this thread records into it: every
-// recording on the pack thread goes through this function, ckernel::record_replay or one of the raw TTI_REPLAY sites, which clear the flag.
+// recording goes through load_replay_buf, which clears the flag.
 // Only the pack thread tracks it; with internal linkage its stores vanish unless the fast block init, the only reader, is compiled in.
 [[maybe_unused]] static bool pack_fast_replay_valid = false;
 #if defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
@@ -685,13 +687,6 @@ enum ExecBool : bool
 #else
 #define LLK_PACK_REPLAY_WRITTEN() ((void)0)
 #endif
-
-template <lltt::ExecBool Exec>
-[[gnu::always_inline]] inline void record_replay(std::uint32_t start, std::uint32_t len)
-{
-    LLK_PACK_REPLAY_WRITTEN();
-    lltt::record<Exec>(start, len);
-}
 
 template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 [[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)

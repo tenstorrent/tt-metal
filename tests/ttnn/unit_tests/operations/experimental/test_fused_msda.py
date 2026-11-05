@@ -1093,6 +1093,89 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, alig
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99)
 
 
+# BEVFormer's spatial cross-attention (L*P*2 = 64 values, 128 B per head) and temporal
+# self-attention with its two BEV maps as two levels in "level" mode (L*P*2 = 16 values, 32 B per
+# head: below Blackhole's 64 B DRAM alignment, so L1).
+@pytest.mark.parametrize(
+    "H, L, P, R, spatial_shapes, reference_mode, memory",
+    [
+        (8, 4, 8, 4, [(29, 50), (15, 25), (8, 13), (4, 7)], "pillar", "dram"),
+        (8, 4, 8, 4, [(29, 50), (15, 25), (8, 13), (4, 7)], "pillar", "l1"),
+        (8, 2, 4, 2, [(50, 50), (50, 50)], "level", "l1"),
+    ],
+    ids=["sca_dram", "sca_l1", "tsa_l1"],
+)
+def test_fused_msda_v2_heads_packed_offsets(device, H, L, P, R, spatial_shapes, reference_mode, memory):
+    """(B, Q, H*L*P*2) offsets, a Linear's output as is, must match (B, Q, H, L*P*2) exactly."""
+    B, Q, D = 1, 96, 32
+    S = sum(h * w for h, w in spatial_shapes)
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, S, H * D))
+    ref_pts = _bf16(torch.rand(B, Q, R, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L * P * 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1))
+
+    def run(offsets_t):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                _to_device(value, device),
+                _to_device(ref_pts, device),
+                offsets_t,
+                _to_device(attn, device),
+                spatial_shapes,
+                reference_mode=reference_mode,
+            )
+        )
+
+    per_head = run(_to_device_in(offsets, device, memory))
+    heads_packed = run(_to_device_in(offsets.reshape(B, Q, H * L * P * 2), device, memory))
+    torch.testing.assert_close(per_head, heads_packed, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+def test_fused_msda_v1_heads_packed_locations(device, memory):
+    """V1 shares the staging: (B, Q, H*L*P*2) locations must match (B, Q, H, L*P*2) exactly, and each
+    form keeps a program cache entry of its own."""
+    spatial_shapes = [(29, 50), (15, 25), (8, 13), (4, 7)]
+    B, Q, H, L, P, D = 2, 64, 8, 4, 8, 32
+    S = sum(h * w for h, w in spatial_shapes)
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, S, H * D))
+    loc = _bf16(torch.rand(B, Q, H, L * P * 2))
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1))
+
+    def run(loc_t):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda(_to_device(value, device), loc_t, _to_device(attn, device), spatial_shapes)
+        )
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    per_head = run(_to_device_in(loc, device, memory))
+    entries = device.num_program_cache_entries()
+    heads_packed = run(_to_device_in(loc.reshape(B, Q, H * L * P * 2), device, memory))
+    torch.testing.assert_close(per_head, heads_packed, rtol=0, atol=0)
+    assert device.num_program_cache_entries() == entries + 1
+    entries = device.num_program_cache_entries()
+    torch.testing.assert_close(run(_to_device_in(loc.reshape(B, Q, H * L * P * 2), device, memory)), heads_packed)
+    assert device.num_program_cache_entries() == entries
+
+
+def test_fused_msda_v2_heads_packed_offsets_rejects_unaligned_heads(device, expect_error):
+    """16 B per head is below DRAM's alignment: the reader could not address a head's stick."""
+    B, Q, H, L, P, D = 1, 32, 16, 1, 4, 32
+    spatial_shapes = [(50, 50)]
+    with expect_error(RuntimeError, "heads-packed sampling_offsets"):
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(torch.zeros(B, 2500, H * D), device),
+            _to_device(torch.zeros(B, Q, 1, 2), device),
+            _to_device_in(torch.zeros(B, Q, H * L * P * 2), device, "dram"),
+            _to_device(torch.zeros(B, Q, H, L * P), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+
+
 def test_fused_msda_v2_bevformer_pillar_shape(device):
     """BEVFormer spatial cross-attention in pillar mode: 4 z-anchors per BEV query."""
     spatial_shapes = [(29, 50), (15, 25), (8, 13), (4, 7)]

@@ -759,17 +759,22 @@ inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const st
     const std::uint32_t row      = pacr_word(face_r_dim, ADDR_MOD_0, 0);
     const std::uint32_t face     = pacr_word(face_r_dim, ADDR_MOD_2, 0);
 
-    lltt::record<lltt::NoExec>(REPLAY_START, pacrs + 2);
-    for (std::uint32_t f = 0; f < num_faces; f++)
-    {
-        for (std::uint32_t r = 1; r < per_face; r++)
+    load_replay_buf(
+        REPLAY_START,
+        pacrs + 2,
+        [&]
         {
-            TT_INSN(row);
-        }
-        TT_INSN(face);
-    }
-    TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+            for (std::uint32_t f = 0; f < num_faces; f++)
+            {
+                for (std::uint32_t r = 1; r < per_face; r++)
+                {
+                    TT_INSN(row);
+                }
+                TT_INSN(face);
+            }
+            TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
+            TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+        });
 }
 
 /**

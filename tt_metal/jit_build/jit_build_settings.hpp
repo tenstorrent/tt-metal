@@ -83,7 +83,8 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
 // buffer then. It sits BEFORE varargs so each binding's absolute CRTA offset is fixed at codegen
 // time (varargs are open-ended / runtime-counted, so a section after them would not be).
 struct KernelCrtaLayout {
-    // Section 1 size, in words. Equals the number of user-named CRTAs.
+    // Section 1 size, in words. The user-named CRTAs: one word per scalar, then the CRTA arrays
+    // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
     uint32_t binding_section_words = 0;
@@ -99,12 +100,36 @@ struct KernelCrtaLayout {
 //   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
 // Section 2 holds one base-address word per per-node tensor binding.
 struct KernelRtaLayout {
-    // Section 1 size, in words. Equals the number of user-named RTAs.
+    // Section 1 size, in words. The user-named RTAs: one word per scalar, then the RTA arrays
+    // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the number of per-node tensor bindings.
     uint32_t binding_section_words = 0;
     // Start offset of section 3 (varargs), in words.
     uint32_t vararg_section_offset = 0;
+};
+
+// Metal 2.0: one RTA or CRTA array, placed in section 1 of its dispatch buffer.
+struct ArrayArgLayout {
+    std::string name;
+    uint32_t word_offset = 0;  // offset of element 0 in the buffer, in words
+    uint32_t size = 0;         // number of elements (one word each)
+};
+
+// Metal 2.0: a kernel's array arguments, as emitted into kernel_args_generated.h.
+//
+// Terminology: section 1 of each layout (the "named section", num_named_words) holds the user's named
+// args, the scalars and then the arrays. On its own, "named RTA" / "named CRTA" means a scalar.
+struct KernelArrayArgs {
+    // RTA / CRTA arrays, in declaration order. They follow the scalars in section 1 of the
+    // KernelRtaLayout / KernelCrtaLayout.
+    std::vector<ArrayArgLayout> runtime;
+    std::vector<ArrayArgLayout> common_runtime;
+    // CTA arrays: name -> values. (std::map: emitted and hashed in name order, so the generated
+    // header is deterministic for the JIT build cache.)
+    std::map<std::string, std::vector<uint32_t>> compile_time;
+
+    bool empty() const { return runtime.empty() && common_runtime.empty() && compile_time.empty(); }
 };
 
 ////////////////////////////////////////////////////////////
@@ -241,6 +266,12 @@ public:
     }
     virtual const std::vector<std::string>& get_common_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
+        return k_empty;
+    }
+
+    // Metal 2.0: array arguments (RTA, CRTA and CTA). Default: none.
+    virtual const KernelArrayArgs& get_array_args() const {
+        static const KernelArrayArgs k_empty;
         return k_empty;
     }
 

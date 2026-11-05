@@ -39,7 +39,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramReservesOneSlotPerAccessorGr
 
     const auto* binding = impl.get_prefetcher_pipe_parameter(pipe_param_name.get());
     ASSERT_NE(binding, nullptr);
-    EXPECT_EQ(binding->bound_pipe, nullptr);
+    EXPECT_FALSE(binding->is_bound());
     EXPECT_EQ(binding->receivers.num_cores(), 3u);
     EXPECT_EQ(binding->ring_size, pipe_ring_size);
     ASSERT_EQ(binding->slots.size(), 2u);
@@ -66,7 +66,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramReservesOneSlotPerAccessorGr
         for (const CoreCoord& core : corerange_to_cores(slot_cores.cores)) {
             const auto* participant = ParticipantOn(program, core, slot_cores.prefetcher_pipe_id);
             ASSERT_NE(participant, nullptr);
-            EXPECT_EQ(participant->pipe, nullptr);
+            EXPECT_FALSE(participant->is_bound());
             EXPECT_EQ(participant->entry_size, pipe_entry_size);
         }
     }
