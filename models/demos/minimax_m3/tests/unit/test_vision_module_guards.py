@@ -73,13 +73,18 @@ def test_vision_attention_rejects_other_out_proj(expect_error):
 
 def test_vision_model_rejects_other_merge_size(expect_error):
     """M3VLVisionModel raises ValueError for a config whose spatial_merge_size is not image_input.MERGE_SIZE (2), with
-    which the input checks and num_tokens count the vision tokens."""
-    with expect_error(ValueError, "spatial_merge_size must be 2, as image_input counts tokens with it, got 3"):
+    which the input checks and num_tokens count the vision tokens, and so does from_state_dict before it checks the
+    weights: here it has none."""
+    config = MiniMaxM3VisionConfig(spatial_merge_size=3)
+    message = "spatial_merge_size must be 2, as image_input counts tokens with it, got 3"
+    with expect_error(ValueError, message):
         M3VLVisionModel(
             None,
-            MiniMaxM3VisionConfig(spatial_merge_size=3),
+            config,
             padded_head_dim=96,
             patch_embed=None,
             pre_layrnorm=None,
             blocks=[],
         )
+    with expect_error(ValueError, message):
+        M3VLVisionModel.from_state_dict(None, {}, config)

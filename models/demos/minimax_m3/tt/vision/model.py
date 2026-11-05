@@ -10,7 +10,7 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
     pixel_values (L, 1176) host
         -> patch_embed       (Conv3d-as-Linear 1176 -> 1280)          device
         -> pre_layrnorm
-        -> encoder blocks, one per reference layer (32 in the checkpoint)
+        -> encoder blocks, one per layer of the config (32 in the checkpoint)
               (LN1 -> attn(3D RoPE, full SDPA) -> residual; LN2 -> MLP -> residual)
         -> [tower output (L, 1280)]
         -> projector         (per-patch MLP -> merge 4 patches -> merge MLP)
@@ -20,25 +20,27 @@ There is NO post-encoder LayerNorm and NO attention windowing: the tower
 attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
 computed on host and pushed to DRAM with the first image of a grid, then
 kept for the next images of that grid; each forward copies them to L1 once
-for all blocks. Weights come from the Torch reference (reference/vision.py):
-seeded random weights in the unit tests, the checkpoint's through
-loader.build_reference.
+for all blocks. from_state_dict builds the model from weights under
+transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict
+reads the checkpoint's and the unit tests draw seeded random ones.
 """
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import nearest_32
+from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
 from models.demos.minimax_m3.tt.vision.common import to_device
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
+from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
 from models.demos.minimax_m3.tt.vision.rope import rope_tensors
@@ -48,13 +50,95 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 # patches), take 0.88 MB of DRAM, so 14 MB for 16 such grids.
 ROPE_CACHE_GRIDS = 16
 
+# Weight names: transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict gives them.
+_TOWER = "vision_tower."
+_PROJECTOR = "multi_modal_projector."
+_LAYERS = _TOWER + "layers."
+_PATCH_EMBED = _TOWER + "embeddings.proj.weight"
+_ATTENTION_PROJECTIONS = ("q_proj", "k_proj", "v_proj", "out_proj")
+
+
+def _weight_shapes(config: MiniMaxM3VisionConfig, with_projector: bool) -> Dict[str, Tuple[int, ...]]:
+    """{name: shape} of the weights that from_state_dict reads: the tower's patch embedding (a Conv3d without bias),
+    pre_layrnorm and each layer's LayerNorms, attention projections and MLP, and with_projector the projector's two
+    MLPs. Every other weight has a bias; the linears' weights are [out, in]."""
+    c = config
+    shapes = {_PATCH_EMBED: (c.hidden_size, c.num_channels, c.temporal_patch_size, c.patch_size, c.patch_size)}
+
+    def add(name: str, *weight_shape: int):
+        shapes[f"{name}.weight"] = weight_shape
+        shapes[f"{name}.bias"] = weight_shape[:1]
+
+    add(_TOWER + "pre_layrnorm", c.hidden_size)
+    for i in range(c.num_hidden_layers):
+        layer = f"{_LAYERS}{i}."
+        add(layer + "layer_norm1", c.hidden_size)
+        for projection in _ATTENTION_PROJECTIONS:
+            add(f"{layer}self_attn.{projection}", c.hidden_size, c.hidden_size)
+        add(layer + "layer_norm2", c.hidden_size)
+        add(layer + "mlp.fc1", c.intermediate_size, c.hidden_size)
+        add(layer + "mlp.fc2", c.hidden_size, c.intermediate_size)
+    if with_projector:
+        add(_PROJECTOR + "linear_1", c.projector_hidden_size, c.hidden_size)
+        add(_PROJECTOR + "linear_2", c.text_hidden_size, c.projector_hidden_size)
+        add(_PROJECTOR + "merge_linear_1", c.projector_hidden_size, c.merged_hidden_size)
+        add(_PROJECTOR + "merge_linear_2", c.text_hidden_size, c.projector_hidden_size)
+    return shapes
+
+
+def _checked_weights(
+    state_dict: Mapping[str, torch.Tensor], config: MiniMaxM3VisionConfig, with_projector: bool
+) -> Dict[str, torch.Tensor]:
+    """The weights of _weight_shapes(config, with_projector) from state_dict, each value read once, a patch embedding
+    flattened to [hidden, patch_dim] in its Conv3d layout. No other value is read.
+
+    Raises ValueError, before it reads a value, for a key under vision_tower., or with_projector under
+    multi_modal_projector., that the model has no place for (the keys of the layers past num_hidden_layers are skipped)
+    and for a weight that state_dict lacks; then for a weight of another shape than config's.
+    """
+    shapes = _weight_shapes(config, with_projector)
+    keys = list(state_dict)  # the keys only: `in` on a Mapping reads the value
+    vision = (_TOWER, _PROJECTOR) if with_projector else (_TOWER,)
+
+    def skipped(key: str) -> bool:
+        index = key[len(_LAYERS) :].split(".", 1)[0] if key.startswith(_LAYERS) else ""
+        return index.isdigit() and int(index) >= config.num_hidden_layers
+
+    unknown = sorted(key for key in keys if key.startswith(vision) and key not in shapes and not skipped(key))
+    if unknown:
+        raise ValueError(f"state_dict has vision weights that the model has no place for: {', '.join(unknown)}")
+    missing = sorted(shapes.keys() - set(keys))
+    if missing:
+        raise ValueError(f"state_dict lacks weights that the model needs: {', '.join(missing)}")
+    weights = {name: state_dict[name] for name in shapes}
+    if tuple(weights[_PATCH_EMBED].shape) == (config.hidden_size, config.patch_dim):
+        weights[_PATCH_EMBED] = weights[_PATCH_EMBED].reshape(shapes[_PATCH_EMBED])
+    wrong = [
+        f"{name} {tuple(value.shape)}, not {shapes[name]}"
+        for name, value in weights.items()
+        if tuple(value.shape) != shapes[name]
+    ]
+    if wrong:
+        raise ValueError(f"state_dict has weights of other shapes than the config's: {', '.join(wrong)}")
+    return weights
+
+
+def _check_merge_size(config: MiniMaxM3VisionConfig) -> None:
+    """Raises ValueError for a config whose spatial_merge_size is not image_input.MERGE_SIZE: the input checks and
+    num_tokens count tokens with MERGE_SIZE, while the RoPE positions and the projector's fold use the config's."""
+    if config.spatial_merge_size != MERGE_SIZE:
+        raise ValueError(
+            f"config spatial_merge_size must be {MERGE_SIZE}, as image_input counts tokens with it,"
+            f" got {config.spatial_merge_size}"
+        )
+
 
 class M3VLVisionModel(LightweightModule):
     """Full M3-VL vision tower + optional multimodal projector.
 
-    from_torch's dtype is the dtype of the weights; only bfloat16 weights have run on a device. The pixel values go to
-    the device as bf16 whatever it is, so the activations are bf16, the only dtype the RoPE op (rotary_embedding_llama)
-    takes.
+    from_state_dict's dtype is the dtype of the weights on the device; only bfloat16 weights have run on a device. The
+    pixel values go to the device as bf16 whatever it is, so the activations are bf16, the only dtype the RoPE op
+    (rotary_embedding_llama) takes.
     """
 
     def __init__(
@@ -68,13 +152,7 @@ class M3VLVisionModel(LightweightModule):
         projector: Optional[M3VLProjector] = None,
     ):
         super().__init__()
-        # The input checks and num_tokens count tokens with image_input.MERGE_SIZE; the RoPE positions and the
-        # projector's fold use the config's merge size.
-        if config.spatial_merge_size != MERGE_SIZE:
-            raise ValueError(
-                f"config spatial_merge_size must be {MERGE_SIZE}, as image_input counts tokens with it,"
-                f" got {config.spatial_merge_size}"
-            )
+        _check_merge_size(config)
         self.device = mesh_device
         self.config = config
         self.padded_head_dim = padded_head_dim
@@ -83,6 +161,74 @@ class M3VLVisionModel(LightweightModule):
         self.blocks = blocks
         self.projector = projector
         self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        mesh_device,
+        state_dict: Mapping[str, torch.Tensor],
+        config: MiniMaxM3VisionConfig,
+        with_projector: bool = True,
+        dtype=ttnn.bfloat16,
+    ) -> "M3VLVisionModel":
+        """The model of config with the weights of state_dict, under transformers 5.12's MiniMaxM3VLModel names
+        (vision_tower.*, multi_modal_projector.*) as loader.load_vision_state_dict reads the checkpoint's, in any float
+        dtype: each goes to the device as dtype, rounded to bf16 on the host first (common.to_device). It builds no
+        torch module.
+
+        state_dict may hold other weights, a language model's for example, and may be a lazy mapping: only the values of
+        the model's weights are read, once each, so neither those of the layers past config.num_hidden_layers nor,
+        without the projector, the projector's. Raises ValueError, before any upload, for a config whose
+        spatial_merge_size is not image_input.MERGE_SIZE, for a key under vision_tower., or with the projector under
+        multi_modal_projector., that the model has no place for, for a missing weight and for a weight of another shape
+        than config's; a patch embedding flattened to [hidden, patch_dim] is taken as the Conv3d's.
+        """
+        _check_merge_size(config)
+        weights = _checked_weights(state_dict, config, with_projector)
+        # q, k and v heads padded to whole tiles on device (80 -> 96), in the weights and the RoPE tables.
+        padded_head_dim = nearest_32(config.head_dim)
+
+        def weight_bias(name: str) -> Tuple[torch.Tensor, torch.Tensor]:
+            return weights[f"{name}.weight"], weights[f"{name}.bias"]
+
+        def layer_norm(name: str) -> M3VLLayerNorm:
+            return M3VLLayerNorm(
+                mesh_device, config.hidden_size, *weight_bias(name), dtype=dtype, eps=config.layer_norm_eps
+            )
+
+        def mlp(fc1: str, fc2: str) -> M3VLMLP:
+            return M3VLMLP(mesh_device, *weight_bias(fc1), *weight_bias(fc2), dtype=dtype)
+
+        def block(layer: str) -> M3VLBlock:
+            projections = [weight_bias(f"{layer}self_attn.{projection}") for projection in _ATTENTION_PROJECTIONS]
+            return M3VLBlock(
+                layer_norm1=layer_norm(layer + "layer_norm1"),
+                attention=M3VLAttention.from_projections(
+                    mesh_device, projections, config.head_dim, padded_head_dim, dtype=dtype
+                ),
+                layer_norm2=layer_norm(layer + "layer_norm2"),
+                mlp=mlp(layer + "mlp.fc1", layer + "mlp.fc2"),
+            )
+
+        patch_embed = M3VLPatchEmbed(mesh_device, weights[_PATCH_EMBED], dtype=dtype)
+        pre_layrnorm = layer_norm(_TOWER + "pre_layrnorm")
+        blocks = [block(f"{_LAYERS}{i}.") for i in range(config.num_hidden_layers)]
+        projector = None
+        if with_projector:
+            projector = M3VLProjector(
+                mlp=mlp(_PROJECTOR + "linear_1", _PROJECTOR + "linear_2"),
+                merge_mlp=mlp(_PROJECTOR + "merge_linear_1", _PROJECTOR + "merge_linear_2"),
+                spatial_merge_size=config.spatial_merge_size,
+            )
+        return cls(
+            mesh_device=mesh_device,
+            config=config,
+            padded_head_dim=padded_head_dim,
+            patch_embed=patch_embed,
+            pre_layrnorm=pre_layrnorm,
+            blocks=blocks,
+            projector=projector,
+        )
 
     @classmethod
     def from_torch(

@@ -49,10 +49,11 @@ def _checkpoint_dir(snapshot_dir: str) -> str:
     return snapshot_dir
 
 
-def load_vision_state_dict(snapshot_dir: str) -> Dict[str, torch.Tensor]:
-    """Return {v5.12 key: fp32 tensor} for the vision tower and projector, remapped from the checkpoint. Raises
-    ValueError if the checkpoint's index lists no vision tensor."""
-    weights = SafetensorsWeights(_checkpoint_dir(snapshot_dir), prefix="")
+def load_vision_state_dict(snapshot_dir: str, dtype: torch.dtype = torch.float32) -> Dict[str, torch.Tensor]:
+    """Return {v5.12 key: tensor of dtype} for the vision tower and projector, remapped from the checkpoint: fp32 keeps
+    every stored value, bf16 holds them as the chip does, in half the memory. Raises ValueError if the checkpoint's
+    index lists no vision tensor."""
+    weights = SafetensorsWeights(_checkpoint_dir(snapshot_dir), prefix="", dtype=dtype)
     keys = [plain_key(key) for key in weights.weight_map if key.startswith(_WANT) and not is_aux_key(key)]
     if not keys:
         index_path = os.path.join(snapshot_dir, "model.safetensors.index.json")

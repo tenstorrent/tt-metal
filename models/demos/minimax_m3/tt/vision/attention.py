@@ -34,7 +34,7 @@ pass-through and pad lanes.
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -151,33 +151,32 @@ class M3VLAttention(LightweightModule):
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLAttention":
-        """head_dim is ref_attn's, the head count follows from q_proj, and q, k and v heads are padded to
-        padded_head_dim lanes (module docstring)."""
-        head_dim = ref_attn.head_dim
-        num_heads = ref_attn.q_proj.weight.shape[0] // head_dim
-        wqkv = _pack_wqkv_weight(
-            ref_attn.q_proj.weight.data,
-            ref_attn.k_proj.weight.data,
-            ref_attn.v_proj.weight.data,
-            num_heads,
-            head_dim,
-            padded_head_dim,
-        )
-        has_bias = ref_attn.q_proj.bias is not None
-        wqkv_bias = (
-            _pack_wqkv_bias(
-                ref_attn.q_proj.bias.data,
-                ref_attn.k_proj.bias.data,
-                ref_attn.v_proj.bias.data,
-                num_heads,
-                head_dim,
-                padded_head_dim,
-            )
-            if has_bias
-            else None
-        )
-        wo = _pad_wo_weight(ref_attn.out_proj.weight.data, num_heads, head_dim, padded_head_dim)
-        wo_bias = ref_attn.out_proj.bias.data if ref_attn.out_proj.bias is not None else None
+        """from_projections of ref_attn's projections, with its head_dim."""
+        projections = [
+            (proj.weight.data, None if proj.bias is None else proj.bias.data)
+            for proj in (ref_attn.q_proj, ref_attn.k_proj, ref_attn.v_proj, ref_attn.out_proj)
+        ]
+        return cls.from_projections(mesh_device, projections, ref_attn.head_dim, padded_head_dim, dtype=dtype)
+
+    @classmethod
+    def from_projections(
+        cls,
+        mesh_device,
+        projections: Sequence[Tuple[torch.Tensor, Optional[torch.Tensor]]],
+        head_dim: int,
+        padded_head_dim: int,
+        dtype=ttnn.bfloat16,
+    ) -> "M3VLAttention":
+        """From the (weight, bias) of the q, k, v and output projections, in that order, as nn.Linear holds them
+        ([out, in] and [out]; a bias None for none). The head count follows from q's weight, and q, k and v heads are
+        padded to padded_head_dim lanes (module docstring)."""
+        (q_weight, q_bias), (k_weight, k_bias), (v_weight, v_bias), (out_weight, out_bias) = projections
+        num_heads = q_weight.shape[0] // head_dim
+        wqkv = _pack_wqkv_weight(q_weight, k_weight, v_weight, num_heads, head_dim, padded_head_dim)
+        wqkv_bias = None
+        if q_bias is not None:
+            wqkv_bias = _pack_wqkv_bias(q_bias, k_bias, v_bias, num_heads, head_dim, padded_head_dim)
+        wo = _pad_wo_weight(out_weight, num_heads, head_dim, padded_head_dim)
         return cls(
             mesh_device=mesh_device,
             num_heads=num_heads,
@@ -185,7 +184,7 @@ class M3VLAttention(LightweightModule):
             wqkv_weight=wqkv,
             wo_weight=wo,
             wqkv_bias=wqkv_bias,
-            wo_bias=wo_bias,
+            wo_bias=out_bias,
             dtype=dtype,
         )
 

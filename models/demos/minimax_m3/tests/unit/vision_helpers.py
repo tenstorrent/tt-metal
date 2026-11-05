@@ -4,12 +4,14 @@
 """Shared parts of the vision encoder unit tests: for the device tests (test_vision_*_vs_ref.py) the image grids, the
 host to device copies and the comparison with the reference, and for the host tests a stand-in for the mesh device
 (grid_device). The reference model and its activations are fixtures in tests/conftest.py.
+hf_vision_modules builds Hugging Face's vision tower and projector holding given weights.
 tests/perf/test_vision_encoder_timing.py also uses VISION_GRIDS and to_host."""
 
 from __future__ import annotations
 
 import os
 from types import SimpleNamespace
+from typing import Mapping
 
 import pytest
 import torch
@@ -18,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.minimax_m3.tt.vision import common
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from tests.ttnn.utils_for_testing import comp_relative_frobenius
 
 # Patch grid (t, h, w) of one image: its size in pixels divided by the 14 pixel patch. The ids name the grid in
@@ -98,6 +101,55 @@ def rows_to_device(x: torch.Tensor, mesh_device) -> ttnn.Tensor:
 def grid_device(x: int, y: int):
     """Stands in for a mesh device in host tests: the program configs only ask it for its compute grid, x by y cores."""
     return SimpleNamespace(compute_with_storage_grid_size=lambda: ttnn.CoreCoord(x, y))
+
+
+def hf_vision_modules(config: MiniMaxM3VisionConfig, weights: Mapping[str, torch.Tensor]) -> tuple:
+    """Hugging Face's MiniMaxM3VLVisionModel and MiniMaxM3VLMultiModalProjector of config, fp32 and in eval mode,
+    holding the vision_tower.* and multi_modal_projector.* weights of weights, which are under transformers 5.12's
+    names (vision_checkpoint.random_vision_weights) with the patch embedding in its Conv3d layout. The tower runs eager
+    attention, the plain softmax(q k^T / sqrt(head_dim)) v that the device tests' bounds were measured against.
+
+    The modules are built on the meta device and take the weights without a copy (fp32 ones share their storage). The
+    weights of the layers past config.num_hidden_layers are left out and the load is strict otherwise, so a missing
+    weight, one that the modules have no place for and one of another shape raise. Needs transformers with
+    minimax_m3_vl (tt-metal pins 5.12.1)."""
+    from transformers.models.minimax_m3_vl import modeling_minimax_m3_vl as hf
+
+    c = config
+    hf_config = hf.MiniMaxM3VLConfig(
+        vision_config=dict(
+            hidden_size=c.hidden_size,
+            intermediate_size=c.intermediate_size,
+            num_hidden_layers=c.num_hidden_layers,
+            num_attention_heads=c.num_attention_heads,
+            num_channels=c.num_channels,
+            patch_size=c.patch_size,
+            temporal_patch_size=c.temporal_patch_size,
+            spatial_merge_size=c.spatial_merge_size,
+            layer_norm_eps=c.layer_norm_eps,
+            rope_parameters={"rope_type": "default", "rope_theta": c.rope_theta},
+        ),
+        text_config=dict(hidden_size=c.text_hidden_size),
+        projector_hidden_size=c.projector_hidden_size,
+    )
+    read_back = MiniMaxM3VisionConfig.from_hf_config(hf_config.to_dict())
+    assert read_back == config, f"transformers' config reads back as {read_back}, not {config}"
+
+    def own(prefix: str) -> dict:
+        """The weights under prefix, without it and in fp32, but those of the layers past the config's."""
+        out = {name[len(prefix) :]: value.float() for name, value in weights.items() if name.startswith(prefix)}
+        past = [name for name in out if name.startswith("layers.") and int(name.split(".")[1]) >= c.num_hidden_layers]
+        for name in past:
+            del out[name]
+        return out
+
+    with torch.device("meta"):
+        tower = hf.MiniMaxM3VLVisionModel(hf_config.vision_config)
+        projector = hf.MiniMaxM3VLMultiModalProjector(hf_config)
+    tower.set_attn_implementation("eager")
+    tower.load_state_dict(own("vision_tower."), strict=True, assign=True)
+    projector.load_state_dict(own("multi_modal_projector."), strict=True, assign=True)
+    return tower.eval(), projector.eval()
 
 
 def to_host(x: ttnn.Tensor, mesh_device, shape) -> torch.Tensor:

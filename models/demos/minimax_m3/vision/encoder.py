@@ -52,16 +52,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, num_tokens
 from models.demos.minimax_m3.tt.vision.loader import CHECKPOINT_PREFIXES, load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import NUM_CHANNELS, PATCH_SIZE, TEMPORAL_PATCH_SIZE, patch_rows
-
-# Name prefixes of the weights that MiniMaxM3VisionEncoder.load_hf_state_dict loads, or rejects as having no place in
-# the reference.
-_VISION_PREFIXES = ("vision_tower.", "multi_modal_projector.")
 
 
 def vision_config(config) -> MiniMaxM3VisionConfig:
@@ -119,9 +114,11 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
 
         state_dict: the vision tower and projector weights under transformers 5.12's MiniMaxM3VLModel names
         (vision_tower.*, multi_modal_projector.*), as load_vision_state_dict(weights_path) returns them for the
-        checkpoint, which stores them under older names. Other keys, a language model's for example, are ignored and
-        their values never read, so state_dict may be a lazy mapping over a whole checkpoint; layers past the config's
-        num_hidden_layers are ignored too. Weights under the checkpoint's own names raise ValueError.
+        checkpoint, which stores them under older names, in any float dtype: the chip holds them in bf16. Other keys, a
+        language model's for example, and those of the layers past the config's num_hidden_layers are ignored and their
+        values never read, so state_dict may be a lazy mapping over a whole checkpoint. Weights under the checkpoint's
+        own names raise ValueError, and so do a missing weight, one of another shape than the config's and a vision
+        weight that the model has no place for (M3VLVisionModel.from_state_dict), before any upload.
         config: see vision_config; the service's Hugging Face config of the checkpoint will do. Its patch geometry must
         be the image code's (ValueError otherwise).
         """
@@ -133,25 +130,25 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
                 f"state_dict has {len(stored)} weights under the checkpoint's own names, such as {stored[0]}: read"
                 " them with load_vision_state_dict(weights_path), which renames them"
             )
-        vision = {key: state_dict[key] for key in state_dict if key.startswith(_VISION_PREFIXES)}
-        reference = MiniMaxM3VisionEncoder(self.config).load_hf_state_dict(vision).eval()
         self.mesh_device = mesh_device
         self.out_dim = self.config.text_hidden_size
-        self.model = M3VLVisionModel.from_torch(mesh_device, reference, with_projector=True, dtype=ttnn.bfloat16)
+        self.model = M3VLVisionModel.from_state_dict(
+            mesh_device, state_dict, self.config, with_projector=True, dtype=ttnn.bfloat16
+        )
 
     @classmethod
     def from_weights_path(cls, mesh_device, weights_path: str, config=None) -> "TtMiniMaxM3VisionEncoder":
         """The encoder with the vision weights of the MiniMax-M3 checkpoint in weights_path: only the safetensors shards
-        that its model.safetensors.index.json lists for the vision tower and projector are read. config: as for
-        __init__; None reads the checkpoint's config.json. The config and the mesh are checked before any weight is
-        read."""
+        that its model.safetensors.index.json lists for the vision tower and projector are read, as bf16, the dtype
+        the chip holds them in. config: as for __init__; None reads the checkpoint's config.json. The config and the
+        mesh are checked before any weight is read."""
         if not weights_path:
             raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
         if config is None:
             with open(os.path.join(weights_path, "config.json")) as f:
                 config = json.load(f)
         config = _checked_config(mesh_device, config)
-        return cls(mesh_device, load_vision_state_dict(weights_path), config)
+        return cls(mesh_device, load_vision_state_dict(weights_path, dtype=torch.bfloat16), config)
 
     def forward(self, pixels: np.ndarray) -> ttnn.Tensor:
         """The vision tokens of one resized image on the chip: bf16 [n_tokens, out_dim] (out_dim 6144 for MiniMax-M3),

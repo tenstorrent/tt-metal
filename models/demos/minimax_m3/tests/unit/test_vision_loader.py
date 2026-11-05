@@ -6,8 +6,8 @@ layout of the MiniMax-M3 checkpoint, with a config.json whose vision dimensions 
 defaults. As in the checkpoint:
   - the names, shards and dtypes of vision_checkpoint.write_checkpoint;
   - config.json has the merge and temporal sizes under img_token_compression_config.
-It also checks that the loader rejects an index with no vision tensor and that the vision config rejects an activation
-other than the exact GELU. No device and no checkpoint.
+It also checks that the loader reads the weights as fp32 or bf16, that it rejects an index with no vision tensor and
+that the vision config rejects an activation other than the exact GELU. No device and no checkpoint.
 
 These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import json
 
+import pytest
 import torch
 
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
@@ -30,7 +31,7 @@ from models.demos.minimax_m3.tt.vision.loader import (
     load_vision_state_dict,
 )
 
-from .vision_checkpoint import TEXT_SHARD, write_checkpoint
+from .vision_checkpoint import TEXT_SHARD, random_vision_weights, write_checkpoint
 
 COMPRESSION = {"image_token_compression_method": "patch_merge", "spatial_merge_size": 3, "temporal_patch_size": 1}
 CONFIG_JSON = {
@@ -73,7 +74,7 @@ def test_vision_build_reference(tmp_path):
     default = MiniMaxM3VisionConfig()
     assert all(getattr(CONFIG, f.name) != getattr(default, f.name) for f in dataclasses.fields(CONFIG))
     source = MiniMaxM3VisionEncoder(CONFIG).init_random_weights(seed=0)
-    write_checkpoint(tmp_path, source, CONFIG_JSON)
+    write_checkpoint(tmp_path, source.hf_state_dict(), CONFIG_JSON)
 
     assert load_vision_state_dict(tmp_path).keys() == source.hf_state_dict().keys()
     reference = build_reference(tmp_path)
@@ -83,6 +84,19 @@ def test_vision_build_reference(tmp_path):
     for name, value in source.state_dict().items():
         want = value if name == "patch_embed.weight" else value.bfloat16().float()
         assert loaded[name].dtype == torch.float32 and torch.equal(loaded[name], want), name
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
+def test_vision_load_state_dict_dtype(tmp_path, dtype):
+    """load_vision_state_dict returns the checkpoint's vision weights as dtype: fp32 keeps them as stored (bf16, the
+    patch embedding fp32), and bf16 rounds the patch embedding, as the chip holds it."""
+    weights = random_vision_weights(CONFIG)
+    write_checkpoint(tmp_path, weights, CONFIG_JSON)
+    loaded = load_vision_state_dict(tmp_path, dtype=dtype)
+    assert loaded.keys() == weights.keys()
+    for name, value in weights.items():
+        stored = value if name == "vision_tower.embeddings.proj.weight" else value.bfloat16()
+        assert loaded[name].dtype == dtype and torch.equal(loaded[name], stored.to(dtype)), name
 
 
 def test_vision_build_reference_reads_config_first(tmp_path, expect_error):
