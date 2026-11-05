@@ -178,7 +178,7 @@ FdsProgramResult run_fds_program(distributed::MeshDevice& mesh_device, FdsProgra
     std::vector<uint32_t> cleared_dispatch(spec.num_dispatch_slots, 0);
     std::vector<uint32_t> cleared_worker(spec.num_worker_slots, 0);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     for (const CoreCoord& core : spec.dispatch_cores) {
         slow_dispatch::WriteToL1(mesh_device, core, dispatch_l1, cleared_dispatch, CoreType::DISPATCH);
         detail::CreateDispatchEngineKernel(

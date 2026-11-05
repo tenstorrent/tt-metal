@@ -267,22 +267,8 @@ def _is_fuser_perf_test(tree) -> bool:
     )
 
 
-def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
-    """Emitted param fields from every templates=/runtimes= list in a file.
-
-    Covers the three shapes the tests use to pass those lists:
-      * inline in the call:      PerfConfig(templates=[...], runtimes=[...])
-      * a named variable:        templates = [...]; PerfConfig(**cfg)
-      * a dict entry:            cfg = {"templates": [...], "runtimes": [...]}
-    """
-    fields = set()
-
-    def add_list(list_node):
-        for elt in list_node.elts:
-            if isinstance(elt, ast.Call):
-                fields.update(emitted_fields(elt, specs, helpers, post_init))
-
-    for node in ast.walk(tree):
+def _param_lists(root):
+    for node in ast.walk(root):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if (
@@ -290,7 +276,7 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
                     and target.id in LIST_KWARGS
                     and isinstance(node.value, (ast.List, ast.Tuple, ast.Set))
                 ):
-                    add_list(node.value)
+                    yield node.value
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -300,7 +286,7 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
                 if kw.arg in LIST_KWARGS and isinstance(
                     kw.value, (ast.List, ast.Tuple, ast.Set)
                 ):
-                    add_list(kw.value)
+                    yield kw.value
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 if (
@@ -308,7 +294,22 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
                     and key.value in LIST_KWARGS
                     and isinstance(value, (ast.List, ast.Tuple, ast.Set))
                 ):
-                    add_list(value)
+                    yield value
+
+
+def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
+    """Emitted param fields from every templates=/runtimes= list in a file.
+
+    Covers the three shapes the tests use to pass those lists:
+      * inline in the call:      PerfConfig(templates=[...], runtimes=[...])
+      * a named variable:        templates = [...]; PerfConfig(**cfg)
+      * a dict entry:            cfg = {"templates": [...], "runtimes": [...]}
+    """
+    fields = set()
+    for list_node in _param_lists(tree):
+        for elt in list_node.elts:
+            if isinstance(elt, ast.Call):
+                fields.update(emitted_fields(elt, specs, helpers, post_init))
     return fields
 
 
@@ -316,11 +317,12 @@ def _perf_test_sources(quasar: bool):
     """Yield (catalog_key, source_path) for each perf test.
 
     WH/BH: perf_*.py at the python_tests root, derived from itself unless the
-    sibling test_*.py or a runner imported by that sibling holds
-    create_test_or_perf_config and the wrapper does not.
+    wrapper does not hold create_test_or_perf_config and the sibling test_*.py, or a
+    local module the sibling or wrapper imports from, does.
     Quasar: quasar/perf_*_quasar.py wrappers, derived from the sibling
-    test_*_quasar.py (perf_ -> test_) that actually calls PerfConfig and holds the
-    templates/runtimes lists. Keyed by the wrapper name a developer runs.
+    test_*_quasar.py (perf_ -> test_), or the runner module it imports, whichever
+    calls PerfConfig and holds the templates/runtimes lists. Keyed by the wrapper
+    name a developer runs.
     """
 
     def imported_runner_source(tree):
@@ -329,9 +331,7 @@ def _perf_test_sources(quasar: bool):
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
-            if not any(
-                alias.name.startswith(("run_", "_run_")) for alias in node.names
-            ):
+            if node.module.startswith("helpers"):
                 continue
             candidate = ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
             if not candidate.exists():
@@ -347,28 +347,35 @@ def _perf_test_sources(quasar: bool):
     if quasar:
         for wrapper in sorted(ROOT.glob(f"{QUASAR_DIR}/perf_*_quasar.py")):
             sibling = wrapper.parent / wrapper.name.replace("perf_", "test_", 1)
-            if _is_fuser_perf_test(ast.parse(wrapper.read_text())):
+            wrapper_tree = ast.parse(wrapper.read_text())
+            if _is_fuser_perf_test(wrapper_tree):
                 yield wrapper.stem, wrapper
             elif sibling.exists():
-                yield wrapper.stem, sibling
+                sibling_tree = ast.parse(sibling.read_text())
+                if _has_perfconfig(sibling_tree):
+                    yield wrapper.stem, sibling
+                else:
+                    yield wrapper.stem, (
+                        imported_runner_source(sibling_tree)
+                        or imported_runner_source(wrapper_tree)
+                        or sibling
+                    )
     else:
         for path in sorted(ROOT.glob("perf_*.py")):
             sibling = path.parent / path.name.replace("perf_", "test_", 1)
+            try:
+                perf_tree = ast.parse(path.read_text())
+                sibling_tree = (
+                    ast.parse(sibling.read_text()) if sibling.exists() else None
+                )
+            except SyntaxError:
+                yield path.stem, path
+                continue
             source = path
-            if sibling.exists():
-                try:
-                    sibling_tree = ast.parse(sibling.read_text())
-                    perf_tree = ast.parse(path.read_text())
-                except SyntaxError:
-                    sibling_tree = None
-                    perf_tree = None
-                if (
-                    sibling_tree
-                    and _has_perfconfig(sibling_tree)
-                    and (not perf_tree or not _has_perfconfig(perf_tree))
-                ):
+            if not _has_perfconfig(perf_tree):
+                if sibling_tree and _has_perfconfig(sibling_tree):
                     source = sibling
-                elif not perf_tree or not _has_perfconfig(perf_tree):
+                else:
                     source = (
                         imported_runner_source(sibling_tree)
                         or imported_runner_source(perf_tree)
@@ -412,6 +419,98 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
         fields = _param_fields_in_tree(tree, specs, helpers, post_init)
         schemas[key] = sorted(set(fixed) | fields | {MARKER_COLUMN})
     return schemas
+
+
+def _config_functions(tree):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node
+        elif isinstance(node, ast.ClassDef):
+            yield from (
+                n
+                for n in node.body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+
+
+def _is_functional_only(fn) -> bool:
+    calls = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id in PERF_CONFIG_BUILDERS
+    ]
+    return bool(calls) and all(
+        any(
+            kw.arg == "is_perf"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is False
+            for kw in call.keywords
+        )
+        for call in calls
+    )
+
+
+def _kernel_source(fn):
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "test_name"
+                    and isinstance(value, ast.Constant)
+                ):
+                    return value.value
+    return None
+
+
+def _function_param_fields(fn, specs, helpers, post_init):
+    fields = set()
+    for list_node in _param_lists(fn):
+        for elt in list_node.elts:
+            for call in (
+                (elt.body, elt.orelse) if isinstance(elt, ast.IfExp) else (elt,)
+            ):
+                if not (
+                    isinstance(call, ast.Call)
+                    and (_call_name(call) in specs or _call_name(call) in helpers)
+                ):
+                    return None
+                fields.update(emitted_fields(call, specs, helpers, post_init))
+    return fields
+
+
+def column_sets_in_tree(tree, specs, helpers, post_init) -> dict:
+    groups: dict = {}
+    for fn in _config_functions(tree):
+        if _is_functional_only(fn):
+            continue
+        fields = _function_param_fields(fn, specs, helpers, post_init)
+        if not fields:
+            continue
+        kernel = _kernel_source(fn)
+        label = f"{kernel} ({fn.name})" if kernel else fn.name
+        groups.setdefault(frozenset(fields), []).append(label)
+    return {cols: sorted(labels) for cols, labels in groups.items()}
+
+
+def derive_perf_test_column_sets(quasar: bool = False) -> dict:
+    specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    post_init = class_post_init_copies()
+    out: dict[str, dict] = {}
+    for key, path in _perf_test_sources(quasar):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        if _is_fuser_perf_test(tree) or not _has_perfconfig(tree):
+            continue
+        groups = column_sets_in_tree(tree, specs, helpers, post_init)
+        if groups:
+            out[key] = groups
+    return out
 
 
 def enum_member_names(module_filename: str, enum_name: str) -> set:

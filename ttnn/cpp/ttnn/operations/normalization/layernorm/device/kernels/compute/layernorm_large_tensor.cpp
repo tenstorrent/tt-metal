@@ -56,14 +56,23 @@ constexpr bool fused_activation_enabled = true;
 constexpr bool fused_activation_enabled = false;
 #endif
 
+// Quasar: pack_reconfig_data_format and the ckl output stages reprogram only the packer's format,
+// not its L1 destination ring, which pack_init sets. Retarget the packer whenever the output
+// buffer changes, or pack_tile keeps writing into the previous buffer.
+ALWI void retarget_packer([[maybe_unused]] uint32_t dfb_id) {
+#ifdef ARCH_QUASAR
+    pack_init(dfb_id);
+#endif
+}
+
 void kernel_main() {
     const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
     constexpr auto do_beta = get_arg(args::do_beta);
-    constexpr bool activate_after_normalize = fused_activation_enabled && !do_gamma && !do_beta;
-    constexpr bool activate_after_gamma = fused_activation_enabled && !do_beta;
+    constexpr bool activate_after_normalize = fused_activation_enabled && do_gamma == 0 && do_beta == 0;
+    constexpr bool activate_after_gamma = fused_activation_enabled && do_beta == 0;
     // Fused activation runs after the last enabled affine stage: after beta, otherwise after
     // gamma, otherwise immediately after normalization.
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
@@ -281,6 +290,7 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_obj.reserve_back(onetile);
                 pack_reconfig_data_format(pack_id);
+                retarget_packer(pack_id);
                 pack_tile(dst0, pack_id);
                 tile_regs_release();
                 pack_obj.push_back(onetile);
@@ -311,6 +321,7 @@ void kernel_main() {
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 #endif
+            retarget_packer(dfb_xmm2_id);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::Optional<
@@ -339,7 +350,7 @@ void kernel_main() {
                 copy_tile(dfb_accumulate_id, 0, dst0);
                 dfb_accumulate.pop_front(onetile);
             }
-            dfb_xmm2.wait_front(block.full_block_size());
+            dfb_xmm2.wait_front(static_cast<uint16_t>(block.full_block_size()));
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(dfb_scaler_id, dfb_xmm2_id);
@@ -350,7 +361,7 @@ void kernel_main() {
                     dfb_xmm2_id, dfb_scaler_id, i, static_cast<uint32_t>(scaler_tile_idx), dst0);
             }
 
-            dfb_xmm2.pop_front(block.full_block_size());
+            dfb_xmm2.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
             const auto final_iter = block.last() == Wt;
             const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
@@ -367,6 +378,7 @@ void kernel_main() {
 
             pack_dfb_obj.reserve_back(onetile);
             pack_reconfig_data_format(pack_dfb_id);
+            retarget_packer(pack_dfb_id);
             pack_tile(dst0, pack_dfb_id);
             tile_regs_release();
             pack_dfb_obj.push_back(onetile);
@@ -382,6 +394,7 @@ void kernel_main() {
         //                     1
         //  dfb_ex2pe =   -------------
         //               √(Var(X) + ε)
+        retarget_packer(dfb_ex2pe_id);
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
@@ -418,6 +431,7 @@ void kernel_main() {
 #ifndef RMSNORM
             dfb_ex.wait_front(1);
 #endif
+            retarget_packer(dfb_xmm_id);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::Optional<
@@ -441,6 +455,7 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
                     dfb_xmm});
 
+            retarget_packer(dfb_im_or_out_id);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
@@ -452,8 +467,9 @@ void kernel_main() {
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
 
             if constexpr (do_gamma == 1) {
-                constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
-                auto& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
+                constexpr auto dfb_gamma_out_id = do_beta != 0 ? dfb_fusion_id : dfb_out_id;
+                auto& dfb_gamma_out = do_beta != 0 ? dfb_fusion : dfb_out;
+                retarget_packer(dfb_gamma_out_id);
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{dfb_fusion, dfb_gamma},
@@ -463,6 +479,7 @@ void kernel_main() {
                         dfb_gamma_out});
             }
             if constexpr (do_beta == 1) {
+                retarget_packer(dfb_out_id);
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{dfb_fusion, dfb_beta},

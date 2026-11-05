@@ -10,6 +10,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <mutex>
+
 namespace ttnn::experimental {
 
 ttnn::Tensor reduce_scatter_minimal_async(
@@ -70,13 +72,11 @@ ttnn::Tensor reduce_scatter_minimal_async(
             resolved_compute_kernel_config);
     }
 
-    bool using_persistent_buffers = persistent_output_buffers.has_value();
-
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_penult_intermediate_tensor = std::nullopt;
 
-    if (using_persistent_buffers) {
+    if (persistent_output_buffers.has_value()) {
         const auto& buffers = persistent_output_buffers.value();
         if (!buffers.empty()) {
             optional_intermediate_tensor = buffers[0];
@@ -87,6 +87,32 @@ ttnn::Tensor reduce_scatter_minimal_async(
         if (buffers.size() >= 3) {
             optional_penult_intermediate_tensor = buffers[2];
         }
+    }
+
+    // Skip the start barrier only when the op allocates none of its buffers. Allocation runs in lockstep across the
+    // mesh, so a buffer allocated here takes the same address on every chip, where a slower neighbour's earlier ops
+    // may still be using it. The op writes into its neighbour's intermediate and, depending on the path, output or
+    // penult intermediate; the barrier holds those writes until the neighbour has reached this op.
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor,
+        optional_intermediate_tensor,
+        usable_topology,
+        scatter_dim,
+        num_devices,
+        ttnn::get_fp32_dest_acc_en(resolved_compute_kernel_config));
+    const bool using_persistent_buffers = optional_intermediate_tensor.has_value() &&
+                                          optional_output_tensor.has_value() &&
+                                          (optional_penult_intermediate_tensor.has_value() || !use_contiguous_interm);
+    if (!using_persistent_buffers && !barrier_semaphore.has_value()) {
+        static std::once_flag no_barrier_warned;
+        std::call_once(no_barrier_warned, [] {
+            log_warning(
+                tt::LogOp,
+                "reduce_scatter_minimal_async: no barrier_semaphore, but the op allocates some of its buffers. It "
+                "writes into them on its neighbours without waiting, which is only safe if every device is idle when "
+                "it starts (e.g. after ttnn.synchronize_device). Pass a barrier_semaphore, or persistent intermediate, "
+                "output and (contiguous ring path) penult intermediate buffers.");
+        });
     }
 
     // Call the prim operation

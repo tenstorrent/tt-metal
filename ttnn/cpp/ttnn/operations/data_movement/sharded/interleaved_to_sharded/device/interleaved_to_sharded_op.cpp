@@ -19,7 +19,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
@@ -61,7 +61,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         if (output_tensor.storage_type() != StorageType::DEVICE) {
             return {false, "Operands to shard need to be on device!"};
         }
-        if (output_tensor.buffer() == nullptr) {
+        if (!output_tensor.is_allocated()) {
             return {false, "Operands to shard need to be allocated in buffers on device!"};
         }
         if (output_tensor.device() != input_tensor.device()) {
