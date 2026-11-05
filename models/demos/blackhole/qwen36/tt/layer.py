@@ -6,6 +6,8 @@ Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
 
+import os
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -343,19 +345,32 @@ class Qwen36DecoderLayer:
         x8 = x
         if os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1":
             x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
+        # QWEN36_TOKPAR_MLP_L1=1: gate / up / hidden in L1 (interleaved); QWEN36_TOKPAR_SILU_MUL=1: SiLU applied by the
+        # multiply (input activation) instead of the gate matmul's packer
+        act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_MLP_L1", "0") == "1" else dram
+        silu_mul = os.environ.get("QWEN36_TOKPAR_SILU_MUL", "0") == "1"
         gate = ttnn.linear(
             x8,
             w["w1"],
             compute_kernel_config=ck,
-            memory_config=dram,
-            program_config=_tokpar_pc(M, K, F, 8, act=ttnn.UnaryOpType.SILU),
+            memory_config=act_mc,
+            program_config=_tokpar_pc(M, K, F, 8, act=None if silu_mul else ttnn.UnaryOpType.SILU),
         )
         up = ttnn.linear(
-            x8, w["w3"], compute_kernel_config=ck, memory_config=dram, program_config=_tokpar_pc(M, K, F, 8)
+            x8, w["w3"], compute_kernel_config=ck, memory_config=act_mc, program_config=_tokpar_pc(M, K, F, 8)
         )
         if x8 is not x:
             ttnn.deallocate(x8)
-        hidden = ttnn.mul(gate, up, memory_config=dram, dtype=ttnn.bfloat8_b)
+        if silu_mul:
+            hidden = ttnn.mul(
+                gate,
+                up,
+                memory_config=act_mc,
+                dtype=ttnn.bfloat8_b,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            )
+        else:
+            hidden = ttnn.mul(gate, up, memory_config=act_mc, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
         pc_d = tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
@@ -425,17 +440,23 @@ class Qwen36DecoderLayer:
             at = ttnn.linear(
                 a8,
                 self._tokpar["wo"],
-                compute_kernel_config=tpc.COMPUTE_HIFI2,
+                compute_kernel_config=(
+                    tpc.COMPUTE_LOFI if os.environ.get("QWEN36_TOKPAR_OUT_LOFI", "0") == "1" else tpc.COMPUTE_HIFI2
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], 8),
             )
             ttnn.deallocate(a8)
-        h = ttnn.add(x, at, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # QWEN36_TOKPAR_RES_L1=1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
+        res_mc = (
+            ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_RES_L1", "0") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        )
+        h = ttnn.add(x, at, memory_config=res_mc)
         ttnn.deallocate(at)
         ff = self._tokpar_norm(h, self.ffn_norm)
         f = self._tokpar_mlp(ff)
         ttnn.deallocate(ff)
-        out = ttnn.add(h, f, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.add(h, f, memory_config=res_mc)
         ttnn.deallocate(h)
         ttnn.deallocate(f)
         return out
