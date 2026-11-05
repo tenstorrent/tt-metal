@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t DST = 4;
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_24);
     for (uint32_t blk = 0; blk < n; ++blk) {
-        copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+        copy_init(tt::CBIndex::c_0);
         pack_reconfig_data_format(tt::CBIndex::c_24);
         cb_reserve_back(tt::CBIndex::c_24, 32);
         for (uint32_t i = 0; i < N; ++i) {

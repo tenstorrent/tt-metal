@@ -218,3 +218,10 @@ imported, unchanged.
 - Results (Galaxy 8x4): tests/unit/test_fabric_payload.py 2 / 2.
 - Needed by: deepseek_v41_flash_d_p
 - Files: sparse_combine_rf.py, README.md
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.
+- Also (#61503): `ttnn.get_forwarding_link_indices(mesh_device, ...)` in `fabric_all_gather_py.py` and
+  `sparse_all_gather_2d.py` (committed with the Python callers).

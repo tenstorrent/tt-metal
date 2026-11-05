@@ -335,7 +335,7 @@ void kernel_main() {
 #ifdef L2D_RES
         // DST starts from the residual's tiles (unpack srcA: W's format -> bf16, then the matmul state again)
         reconfig_data_format_srca(1, 5);
-        copy_tile_to_dst_init_short(5);
+        copy_init(5);
         tile_regs_acquire();
         cb_wait_front(5, (p + 1) * PNP);
         for (uint32_t t = 0; t < PNP; ++t) copy_tile(5, p * PNP + t, t);

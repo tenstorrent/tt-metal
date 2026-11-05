@@ -45,3 +45,8 @@ Tests: `tests/unit/test_moe_ag_ops.py` (the source branch's nightly op test, `te
 - Why: the kernels of `moe_ag_add_rows` and `moe_ag_sum_rows_tiled` (2 blocks) no longer compiled.
 - Needed by: rebase 2026-10-27
 - Files: `device/kernels/add_compute.cpp`, `device/kernels/addt_compute.cpp`
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.

@@ -53,6 +53,7 @@ _COMPUTE = r"""
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_clamped_silu_glu.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -60,8 +61,8 @@ _COMPUTE = r"""
 constexpr uint32_t CW = get_compile_time_arg_val(0);
 void kernel_main() {
     const uint32_t n = get_arg_val<uint32_t>(0);
-    init_sfpu(0, 16);
-    copy_tile_init(0);
+    compute_kernel_hw_startup(0, 16);
+    copy_init(0);
     MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
     for (uint32_t u = 0; u < n; ++u) {
         cb_wait_front(0, 2 * CW);

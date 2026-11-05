@@ -195,7 +195,7 @@ ALWI void transform_in_place(uint32_t cb, Transform t) {
     tile_regs_acquire();
     reconfig_data_format_srca(cb);
     pack_reconfig_data_format(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, 0, 0);
     t(0);
     tile_regs_commit();
@@ -1901,7 +1901,7 @@ void kernel_main() {
                 cb_reserve_back(cb_row_stat, 1);
                 reconfig_data_format_srca(CB_RAW);
                 pack_reconfig_data_format(cb_row_stat);
-                copy_tile_to_dst_init_short(CB_RAW);
+                copy_init(CB_RAW);
                 // MANDATORY here for the same reason it is inside `combine_fold`:
                 // rms_stat_rsqrt_body reads the persistent SFPU PROGRAM registers
                 // sfpu::rsqrt_init programs.

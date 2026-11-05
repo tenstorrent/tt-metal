@@ -309,3 +309,8 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Files: `device/rms_norm_split_device_operation.{hpp,cpp}`, `kernels/rms_norm_split_compute.cpp`,
   `kernels/rms_norm_split_writer.cpp`, `rms_norm_ttnn.{hpp,cpp}`, `rms_norm_ttnn_nanobind.cpp`,
   `tests/unit/test_rms_norm_ttnn_twin.py`
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.

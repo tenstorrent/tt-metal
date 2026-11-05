@@ -298,3 +298,8 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
 - Files: device/mhc_engram_pack_device_operation.{hpp,cpp}, device/mhc_engram_pack_program_factory.cpp,
   kernels/mhc_engram_pack_compute.cpp, kernels/mhc_engram_pack_writer.cpp, mhc_pre_xing.{hpp,cpp},
   mhc_pre_ttnn_nanobind.cpp, tests/unit/test_engram_pack.py
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.

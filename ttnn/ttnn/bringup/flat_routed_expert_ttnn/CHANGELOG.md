@@ -542,3 +542,8 @@ shapes, mesh, row-major y).
 - Files: device/flat_routed_expert_plan.{hpp,cpp}, device/flat_routed_expert_program_factory.cpp,
   device/kernels/se9_rdown.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp, flat_expert.py, README.md,
   tests/unit/test_down_bf4.py
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.

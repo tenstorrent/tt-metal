@@ -777,7 +777,7 @@ ALWI void combine_block() {
     cb_reserve_back(cb_combined, slot_tiles);
     reconfig_data_format_srca(cb_gathered);
     pack_reconfig_data_format(cb_combined);
-    copy_tile_to_dst_init_short(cb_gathered);
+    copy_init(cb_gathered);
     add_binary_tile_init();
     for (uint32_t j = 0; j < slot_tiles; ++j) {
         tile_regs_acquire();
@@ -807,7 +807,7 @@ ALWI void w_split_range(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
     static_assert(w_chunk_tiles % tiles_per_window == 0, "a DEST window must not straddle a W chunk");
     reconfig_data_format_srca(cb_weight);
     pack_reconfig_data_format(cb_weight_split);
-    copy_tile_to_dst_init_short(cb_weight);
+    copy_init(cb_weight);
     custom_sfpu_init();
     for (uint32_t k0 = p0; k0 < p1; k0 += tiles_per_window) {
         const uint32_t nt = (p1 - k0) < tiles_per_window ? (p1 - k0) : tiles_per_window;
@@ -959,7 +959,7 @@ ALWI void stats_pass(uint32_t base, uint32_t count) {
     cb_reserve_back(cb_max_lanes, 1);
     reconfig_data_format_srca(cb_src);
     pack_reconfig_data_format(cb_max_lanes);  // cb_sq_acc: same (fp32) format
-    copy_tile_to_dst_init_short(cb_src);
+    copy_init(cb_src);
     custom_sfpu_init();
     tile_regs_acquire();
     for (uint32_t k0 = 0; k0 < count; k0 += per_round) {
@@ -1027,7 +1027,7 @@ ALWI void w_grid_split_block(uint32_t core_k_tiles) {
     cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
     reconfig_data_format_srca(cb_weight);
     pack_reconfig_data_format(cb_weight_split);
-    copy_tile_to_dst_init_short(cb_weight);  // cb_grid: same fp32 UnpackToDestFp32 format
+    copy_init(cb_weight);  // cb_grid: same fp32 UnpackToDestFp32 format
     custom_sfpu_init();
     for (uint32_t k = 0; k < core_k_tiles; ++k) {
         tile_regs_acquire();
@@ -1064,7 +1064,7 @@ ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, u
     cb_reserve_back(cb_x_pieces, x_window_pages);
     reconfig_data_format_srca(cb_x_fp32);
     pack_reconfig_data_format(cb_x_pieces);
-    copy_tile_to_dst_init_short(cb_x_fp32);  // cb_grid: same fp32 UnpackToDestFp32 format
+    copy_init(cb_x_fp32);  // cb_grid: same fp32 UnpackToDestFp32 format
     custom_sfpu_init();
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t kk = 0; kk < kc; ++kk) {
@@ -1108,7 +1108,7 @@ ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t s
             if (!first) {
                 cb_wait_front(cb_mix_run, x_piece_rows);
                 reconfig_data_format_srca(cb_mix_run);
-                copy_tile_to_dst_init_short(cb_mix_run);
+                copy_init(cb_mix_run);
                 for (uint32_t r = 0; r < sb_h; ++r) {
                     copy_tile(cb_mix_run, r, r);
                 }
@@ -1179,7 +1179,7 @@ ALWI void load_coef_major(uint32_t t, const CoefScalars& c) {
     transpose_init(cb_coef_in);
     transpose_tile(cb_coef_in, t, mhc_t_mix);
     transpose_tile(cb_coef_in, block_token_tiles + t, mhc_t_sq);
-    copy_tile_to_dst_init_short(cb_bias_coef);
+    copy_init(cb_bias_coef);
     copy_tile(cb_bias_coef, 0, 1);
     custom_sfpu_init();
 #ifndef MHC_ABLATE_COEF
@@ -1243,7 +1243,7 @@ ALWI void project_sumsq_streamed(uint32_t extent, uint32_t core_k_tiles, XView v
                 if (!first) {
                     cb_wait_front(cb_mix_run, 1);
                     reconfig_data_format_srca(cb_mix_run);
-                    copy_tile_to_dst_init_short(cb_mix_run);
+                    copy_init(cb_mix_run);
                     copy_tile(cb_mix_run, 0, 0);
                 }
                 reconfig_data_format(cb_w_matmul, cb_x_resident);  // matmul: srca = in1, srcb = in0
@@ -1494,7 +1494,7 @@ void kernel_main() {
             tile_regs_acquire();
             if (owned) {
                 reconfig_data_format_srca(cb_coef_keep);
-                copy_tile_to_dst_init_short(cb_coef_keep);
+                copy_init(cb_coef_keep);
                 copy_tile(cb_coef_keep, 0, 0);
                 custom_sfpu_init();
             } else {
