@@ -98,7 +98,11 @@ class TPMlaShard(TPM.TPMla):
         # rev 60: the token lanes' index cores (t > 4), after the stream lanes (t <= 4 builds: no lane cores, the same
         # placement as rev 59); every lane holds the 2 LINE merge helpers
         self.ix_lane_cores = []
-        if max(self.stream_ts) > MK.DSA_T_MAX:
+        # GLM53_DSA_SHARD_LANES_T4=1 (2026-11-05): lane cores for the t <= 4 streams too, so att_lanes' LANES_T4 rule
+        # applies on the shard (1 M probes, layers 0-7: B = 8 native 10.45 ms vs B = 4 16.16 -- the one-lane t <= 4
+        # build runs the users' select / merge / tree chains in series)
+        lanes_t4 = os.environ.get("GLM53_DSA_SHARD_LANES_T4", "0") == "1" and max(self.stream_ts) > 1
+        if max(self.stream_ts) > MK.DSA_T_MAX or lanes_t4:
             rest = [v for v in free if tuple(v) not in {tuple(e) for e in ex}]
             self.ix_lane_cores = self.mk.reserve_lane_cores(rest, 2 * self.L)
         for t in self.stream_ts:

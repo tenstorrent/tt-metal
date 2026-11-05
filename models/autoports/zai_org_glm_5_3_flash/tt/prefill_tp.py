@@ -740,6 +740,13 @@ class MlaPrefill:
         return out
 
 
+def _mfs_interleaved() -> bool:
+    """whether this tree's moe_fused_swiglu takes ``gate_up_interleaved`` (the reference's op; tenstorrent/tt-metal's
+    rejects the keyword -> EpMoe runs the EP layers through the xffn kernels)"""
+    op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "moe_fused_swiglu", None)
+    return op is not None and "gate_up_interleaved" in (getattr(op, "__doc__", None) or "")
+
+
 def sdpa_config(mesh, attn, spec=None):
     """(program, compute config) of the prefill SDPA: spec (default GLM53_PF_SDPA) = "q,k,fidelity[,exp_approx]" (P3
     tuning, tests/s16/jobs/sdpa_bench.py; chunk starts must be multiples of q), empty: the decoder's q 64 / k 64 HiFi4
@@ -2082,14 +2089,21 @@ class TPPrefill:
     def ep_bounds(self):
         """per-chip [lo, hi) of the chip's routed experts as fp32 [1, 1, 1, 1] mesh tensors (contiguous EP)"""
         if self._ep is None:
+            from models.autoports.zai_org_glm_5_3_flash.tt.ep_experts import xsl_group
+
             e_all = int(self.cfg.n_routed_experts)
-            e_loc = e_all // self.ndev
+            # GLM53_TP_XSL_GROUP = g (the hybrid experts, tt/ep_experts.py): chip r holds (a slice of) its GROUP's
+            # experts [e_loc (r // g), + e_loc), e_loc = E / (ndev / g) -- the EP local mask follows the group (the
+            # per-rank bounds here zeroed most of a chip's experts in the xffn combine: W1 MoE-stage ids, 2026-11-05)
+            grp = xsl_group(self.ndev)
+            e_loc = e_all // (self.ndev // grp) if grp else e_all // self.ndev
+            base = lambda r: e_loc * (r // grp if grp else r)  # noqa: E731
             mk = lambda vals: ttnn.from_torch(  # noqa: E731
                 torch.tensor(vals, dtype=torch.float32).reshape(self.ndev, 1, 1, 1), dtype=FP32,
                 layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=DRAM,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0) if self.ndev > 1 else None)  # fmt: skip
-            self._ep = (mk([e_loc * r - 0.5 for r in range(self.ndev)]),
-                        mk([e_loc * (r + 1) - 0.5 for r in range(self.ndev)]), e_loc)  # fmt: skip
+            self._ep = (mk([base(r) - 0.5 for r in range(self.ndev)]),
+                        mk([base(r) + e_loc - 0.5 for r in range(self.ndev)]), e_loc)  # fmt: skip
         return self._ep
 
     def chunk_inputs(self, c: int) -> ChunkInputs:
@@ -4517,7 +4531,10 @@ class EpMoe:
         # TP2 served-config TF checked with xffn forced); wider slices (TP2 / TP4) re-read weights per tile row -> mfs
         # (the hybrid's per-chip tensors are 8-tile slices too: the XSL geometry, EP over the groups -> xffn + rm)
         narrow = (self.xsl or getattr(self, "group", 0)) and int(self.down[0].shape[-2]) <= 8 * TILE
-        self.ffn = os.environ.get("GLM53_PF_MOE_FFN", "") or ("xffn" if narrow else "mfs")
+        # this tree's moe_fused_swiglu (ttnn.experimental.deepseek_prefill) has no gate_up_interleaved (the reference's
+        # op): EP layers take the xffn kernels in EP mode (the 2026-11-05 TP32 check: ids = the decode-program's)
+        mfs_ok = _mfs_interleaved()
+        self.ffn = os.environ.get("GLM53_PF_MOE_FFN", "") or ("xffn" if (narrow or not mfs_ok) else "mfs")
         self.xffn_mg = int(os.environ.get("GLM53_PF_MOE_XFFN_MG", "4"))
         self.xffn_xsplit = os.environ.get("GLM53_PF_MOE_XFFN_XSPLIT", "0") == "1"
         self.xffn_snake = os.environ.get("GLM53_PF_MOE_XFFN_SNAKE", "0") == "1"
@@ -4525,8 +4542,8 @@ class EpMoe:
         if self.ffn == "xffn":
             if self.xsl:
                 self.combine = "rm"
-            elif os.environ.get("GLM53_PF_MOE_XFFN_EP", "0") == "1" or getattr(
-                self, "group", 0
+            elif (
+                os.environ.get("GLM53_PF_MOE_XFFN_EP", "0") == "1" or getattr(self, "group", 0) or not mfs_ok
             ):  # the L3 accuracy fix candidate (2026-10-24): EP through
                 # xffn too -- moe_fused_swiglu inflates every expert row by ~1.04; other-chip pairs weigh 0 in the rm
                 # combine (w x local) and the expert rows are zero-filled first (no unwritten row can carry a NaN)
