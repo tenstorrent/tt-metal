@@ -24,6 +24,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tt_py_test_utils_common.utility_functions import is_watcher_enabled
 
@@ -355,11 +356,27 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 
 # Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
 # tile-aligned-uneven and non-tile-aligned widths).
+_RMS_UNEVEN_MERGE_GATE = {
+    (200, 3, ttnn.bfloat16),  # w200_c3_nonaligned
+    (72, 2, ttnn.float32),  # w72_c2_nonaligned
+    (224, 3, ttnn.bfloat8_b),  # w224_c3
+}
+
+
+_RMS_UNEVEN_PARAMS = [
+    ((w, cores, dtype), f"{width_id}-{dtype_id}")
+    for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
+    for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
+]
+
+
 @pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
-)
-@pytest.mark.parametrize(
-    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
+    "w, num_cores_w, dtype",
+    merge_gate_subset(
+        (case for case, _ in _RMS_UNEVEN_PARAMS),
+        keep=_RMS_UNEVEN_MERGE_GATE,
+        ids=[param_id for _, param_id in _RMS_UNEVEN_PARAMS],
+    ),
 )
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)

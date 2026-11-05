@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from itertools import product
+
 import torch
 import ttnn
 
@@ -28,7 +30,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
-from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH
+from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH, merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -206,10 +208,28 @@ def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     )
 
 
-@pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("two_stage", [True, False])
-@pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+# random input: every two_stage/use_welford pair in bf16, plus both on in fp32.
+_LAYER_NORM_RESIDUAL_MERGE_GATE = {
+    (True, True, "random", torch.bfloat16),
+    (True, False, "random", torch.bfloat16),
+    (False, True, "random", torch.bfloat16),
+    (False, False, "random", torch.bfloat16),
+    (True, True, "random", torch.float32),
+}
+
+
+@pytest.mark.parametrize(
+    "use_welford, two_stage, tensor_type, dtype",
+    merge_gate_subset(
+        product(
+            [True, False],
+            [True, False],
+            ["ascending_values_repeated_rows", "random"],
+            [torch.bfloat16, torch.float32],
+        ),
+        keep=_LAYER_NORM_RESIDUAL_MERGE_GATE,
+    ),
+)
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
     torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
@@ -587,12 +607,30 @@ def test_layer_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orienta
 
 # Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
 # tile-aligned-uneven and non-tile-aligned widths). Covers both the legacy path and Welford.
+_LAYER_NORM_UNEVEN_MERGE_GATE = {
+    (72, 2, False, ttnn.bfloat16),  # w72_c2_nonaligned legacy
+    (72, 2, True, ttnn.bfloat16),  # w72_c2_nonaligned welford
+    (200, 3, False, ttnn.bfloat16),  # w200_c3_nonaligned legacy
+    (200, 3, True, ttnn.float32),  # w200_c3_nonaligned welford
+    (224, 3, True, ttnn.bfloat8_b),  # w224_c3 welford
+}
+
+
+_LAYER_NORM_UNEVEN_PARAMS = [
+    ((w, cores, use_welford, dtype), f"{width_id}-{backend_id}-{dtype_id}")
+    for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
+    for use_welford, backend_id in ((False, "legacy"), (True, "welford"))
+    for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
+]
+
+
 @pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
-)
-@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
-@pytest.mark.parametrize(
-    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
+    "w, num_cores_w, use_welford, dtype",
+    merge_gate_subset(
+        (case for case, _ in _LAYER_NORM_UNEVEN_PARAMS),
+        keep=_LAYER_NORM_UNEVEN_MERGE_GATE,
+        ids=[param_id for _, param_id in _LAYER_NORM_UNEVEN_PARAMS],
+    ),
 )
 def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
     run_sharded_norm_logical_width_multicore(

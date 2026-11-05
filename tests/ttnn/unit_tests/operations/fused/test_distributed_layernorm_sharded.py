@@ -15,6 +15,8 @@ import ttnn
 import torch
 import pytest
 import math
+from itertools import product
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import (
@@ -315,11 +317,19 @@ def run_pre_allgather_layernorm(
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
+# Seed 0, 4 devices, bf16. Both RMS and both residual.
+_PRE_ALLGATHER_MERGE_GATE = (0, 4, ttnn.bfloat16)
+
+
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "seed, num_devices, input_df",
+    merge_gate_subset(
+        product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16]),
+        keep=[_PRE_ALLGATHER_MERGE_GATE],
+    ),
+)
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])

@@ -195,3 +195,19 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
 
 def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
+
+
+def merge_gate_subset(cases, keep, ids=None):
+    """Wrap cases as pytest params and mark the tuples in keep with merge_gate.
+
+    keep is a collection of argument tuples; wrap a single tuple in a list.
+    ids, if given, is a list of pytest ids aligned with cases.
+    """
+    cases = [tuple(case) for case in cases]
+    chosen = {tuple(case) for case in keep}
+    assert chosen <= set(cases), f"merge_gate rows not in cases: {chosen - set(cases)}"
+    ids = ids or [None] * len(cases)
+    return [
+        pytest.param(*case, id=param_id, marks=pytest.mark.merge_gate if case in chosen else ())
+        for case, param_id in zip(cases, ids, strict=True)
+    ]

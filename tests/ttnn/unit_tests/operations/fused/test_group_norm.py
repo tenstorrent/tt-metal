@@ -1660,6 +1660,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
 def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
@@ -1747,6 +1748,7 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
 def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
