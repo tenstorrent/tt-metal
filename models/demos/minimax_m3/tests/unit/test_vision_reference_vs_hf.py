@@ -11,9 +11,8 @@ rounding. Two more tests check that the reference's default dimensions are HF's 
 HF_MODEL is set) and that load_hf_state_dict maps HF's names and rejects vision weights it has no place for.
 
 No device and no checkpoint. Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1), which the hf_vision
-fixture imports: without it these tests fail, and the other tests in the directory still collect. The test does
-not import ttnn, but pytest also loads models/demos/minimax_m3/conftest.py, which does. Where ttnn is not installed,
-add --noconftest and -k "not load_hf_state_dict": that test takes the root conftest's expect_error fixture.
+fixture imports: without it these tests fail, and the other tests in the directory still collect. It also needs
+ttnn, which the reference imports through tt/vision/rope.py.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_reference_vs_hf.py
@@ -28,7 +27,8 @@ import os
 import pytest
 import torch
 
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 
 # Small configs with the checkpoint's patch geometry. head_dim 80 is the checkpoint's (78 dims rotated,
 # 2 pass through); head_dim 64 checks the general split of the rotary dims over T, H and W (60 and 4).

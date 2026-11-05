@@ -34,9 +34,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import nearest_32
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
 from models.demos.minimax_m3.tt.vision.common import to_device
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed

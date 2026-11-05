@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import torch
 
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.attention import _pad_wo_weight
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel

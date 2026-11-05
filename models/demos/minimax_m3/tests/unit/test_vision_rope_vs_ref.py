@@ -35,8 +35,9 @@ from models.demos.minimax_m3.tt.vision.attention import (
     _pad_wo_weight,
     _rope_head_order,
 )
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.model import ROPE_CACHE_GRIDS, M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin, rope_cos_sin_padded
 
 HEAD_DIM, PADDED_HEAD_DIM, NUM_HEADS, THETA, MERGE = 80, 96, 16, 10000.0, 2
 
@@ -72,7 +73,7 @@ def test_vision_rope_padded_vs_ref(grid_thw):
     generator = torch.Generator().manual_seed(0)
     q = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
     k = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
-    ref_q, ref_k = ref.apply_rope(q, k, *ref.rope_cos_sin(grid, HEAD_DIM, THETA, MERGE))
+    ref_q, ref_k = ref.apply_rope(q, k, *rope_cos_sin(grid, HEAD_DIM, THETA, MERGE))
 
     cos, sin = rope_cos_sin_padded(
         grid, head_dim=HEAD_DIM, padded_head_dim=PADDED_HEAD_DIM, theta=THETA, spatial_merge_size=MERGE
@@ -105,7 +106,7 @@ def test_vision_attention_layout_vs_ref(grid_thw):
     bf16-valued weights, which packing keeps exactly; its softmax runs in fp32, hence the tolerance.
     """
     num_heads = 2
-    config = ref.MiniMaxM3VisionConfig(
+    config = MiniMaxM3VisionConfig(
         hidden_size=num_heads * HEAD_DIM,
         intermediate_size=64,
         num_hidden_layers=1,
@@ -118,7 +119,7 @@ def test_vision_attention_layout_vs_ref(grid_thw):
     grid = torch.tensor(grid_thw)
     num_patches = int(grid.prod(dim=-1).sum())
     x = torch.randn(1, num_patches, config.hidden_size, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
-    cos, sin = ref.rope_cos_sin(grid, HEAD_DIM, THETA, MERGE)
+    cos, sin = rope_cos_sin(grid, HEAD_DIM, THETA, MERGE)
     expected = attn(x, cos.double(), sin.double())[0]
 
     q_proj, k_proj, v_proj = attn.q_proj, attn.k_proj, attn.v_proj
@@ -166,7 +167,7 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     monkeypatch.setattr(ttnn, "to_memory_config", to_memory_config)
     monkeypatch.setattr(ttnn, "deallocate", deallocate)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
-    config = ref.MiniMaxM3VisionConfig()
+    config = MiniMaxM3VisionConfig()
     model = M3VLVisionModel(
         None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=[block]
     )
@@ -226,7 +227,7 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
     monkeypatch.setattr(ttnn, "to_memory_config", to_memory_config)
     monkeypatch.setattr(ttnn, "deallocate", lambda tensor: calls.append(("free", tensor)))
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
-    config = ref.MiniMaxM3VisionConfig()
+    config = MiniMaxM3VisionConfig()
     blocks = [block(index) for index in range(3)]
     model = M3VLVisionModel(
         None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=blocks

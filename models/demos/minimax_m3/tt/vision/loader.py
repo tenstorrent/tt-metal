@@ -19,7 +19,8 @@ from typing import Dict
 import torch
 
 from models.demos.minimax_m3.reference.model import SafetensorsWeights
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.utils.checkpoint import is_aux_key, plain_key
 
 _WANT = ("vision_tower.", "multi_modal_projector.", "patch_merge_mlp.")

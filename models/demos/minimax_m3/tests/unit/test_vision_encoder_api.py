@@ -34,7 +34,8 @@ import torch
 from safetensors.torch import save_file
 
 import ttnn
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
 from models.demos.minimax_m3.vision import encoder as encoder_module

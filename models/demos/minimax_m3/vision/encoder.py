@@ -52,7 +52,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, num_tokens
 from models.demos.minimax_m3.tt.vision.loader import CHECKPOINT_PREFIXES, load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel

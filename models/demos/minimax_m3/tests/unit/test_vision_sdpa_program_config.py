@@ -26,9 +26,9 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import nearest_32
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.common import sdpa_program_config
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 
 from .vision_helpers import grid_device
 

@@ -27,7 +27,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import num_tokens
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel

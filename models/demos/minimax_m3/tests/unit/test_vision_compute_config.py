@@ -19,7 +19,8 @@ import dataclasses
 import torch
 
 import ttnn
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded

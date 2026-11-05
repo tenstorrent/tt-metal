@@ -39,7 +39,6 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import nearest_32
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision import mlp
 from models.demos.minimax_m3.tt.vision.common import (
     LINEAR_L1_BYTES,
@@ -49,6 +48,7 @@ from models.demos.minimax_m3.tt.vision.common import (
     linear_compute_config,
     linear_program_config,
 )
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.mlp import accurate_gelu
 
 from .vision_helpers import grid_device

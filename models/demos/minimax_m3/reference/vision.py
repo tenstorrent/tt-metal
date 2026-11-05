@@ -3,8 +3,9 @@
 
 """Torch reference (CPU golden) for the MiniMax-M3 vision encoder: the vision tower and the projector.
 
-Plain PyTorch, no ttnn and no transformers. It follows Hugging Face transformers 5.12.1
-``minimax_m3_vl`` (``MiniMaxM3VLVisionModel``, then ``MiniMaxM3VLMultiModalProjector``) op for op;
+Plain PyTorch, no transformers; its config and RoPE angles are tt/vision's (``config.py``, ``rope.py``). It
+follows Hugging Face transformers 5.12.1 ``minimax_m3_vl`` (``MiniMaxM3VLVisionModel``, then
+``MiniMaxM3VLMultiModalProjector``) op for op;
 ``tests/unit/test_vision_reference_vs_hf.py`` checks that on CPU. The vision unit tests
 (``tests/unit/test_vision_*_vs_ref.py``) compare the TT modules against this reference.
 
@@ -34,118 +35,18 @@ for the checkpoint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-
-@dataclass
-class MiniMaxM3VisionConfig:
-    """Vision tower and projector dimensions. The defaults are the MiniMax-M3 checkpoint's."""
-
-    hidden_size: int = 1280
-    intermediate_size: int = 5120
-    num_hidden_layers: int = 32
-    num_attention_heads: int = 16
-    num_channels: int = 3
-    patch_size: int = 14
-    temporal_patch_size: int = 2
-    spatial_merge_size: int = 2
-    layer_norm_eps: float = 1e-5
-    rope_theta: float = 10000.0
-    projector_hidden_size: int = 6144
-    text_hidden_size: int = 6144
-
-    @property
-    def head_dim(self) -> int:
-        return self.hidden_size // self.num_attention_heads  # 80
-
-    @property
-    def patch_dim(self) -> int:
-        """Values per flattened patch: channels x frames x patch_size x patch_size (1176)."""
-        return self.num_channels * self.temporal_patch_size * self.patch_size**2
-
-    @property
-    def merged_hidden_size(self) -> int:
-        """Projector width after folding each block of spatial_merge_size**2 patches into one row (24576)."""
-        return self.text_hidden_size * self.spatial_merge_size**2
-
-    @classmethod
-    def from_hf_config(cls, config: dict, **overrides) -> "MiniMaxM3VisionConfig":
-        """Build from a config dict: the checkpoint's config.json (transformers 4.52.4 layout, with the merge and
-        temporal sizes under ``img_token_compression_config``) or ``MiniMaxM3VLConfig.to_dict()`` (transformers 5.12).
-
-        Raises ValueError for a vision ``hidden_act`` other than ``gelu``: Hugging Face's vision MLP reads it, and this
-        reference and the TT MLP run the exact (erf) GELU only.
-        """
-        vc = config["vision_config"]
-        activation = vc.get("hidden_act", "gelu")
-        if activation != "gelu":
-            raise ValueError(f"vision_config hidden_act must be 'gelu', the exact (erf) GELU, got {activation!r}")
-        compression = vc.get("img_token_compression_config") or config.get("img_token_compression_config") or {}
-        rope = vc.get("rope_parameters") or {}
-        values = dict(
-            hidden_size=vc["hidden_size"],
-            intermediate_size=vc["intermediate_size"],
-            num_hidden_layers=vc["num_hidden_layers"],
-            num_attention_heads=vc["num_attention_heads"],
-            num_channels=vc.get("num_channels", 3),
-            patch_size=vc["patch_size"],
-            temporal_patch_size=vc.get("temporal_patch_size", compression.get("temporal_patch_size", 2)),
-            spatial_merge_size=vc.get("spatial_merge_size", compression.get("spatial_merge_size", 2)),
-            layer_norm_eps=vc.get("layer_norm_eps", 1e-5),
-            rope_theta=rope.get("rope_theta", vc.get("rope_theta", 10000.0)),
-            projector_hidden_size=config["projector_hidden_size"],
-            text_hidden_size=config["text_config"]["hidden_size"],
-        )
-        values.update(overrides)
-        return cls(**values)
-
+from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin
 
 # ---------------------------------------------------------------------------------------------
-# 3D RoPE (MiniMaxM3VL3DRotaryEmbedding and apply_rotary_pos_emb_vision)
+# 3D RoPE rotation (apply_rotary_pos_emb_vision)
 # ---------------------------------------------------------------------------------------------
-
-
-def rope_axis_dim(head_dim: int) -> int:
-    """Rotary dims per axis (T, H and W): 2 * (head_dim // 2) split in three, rounded down to even (26 for 80)."""
-    return 2 * ((2 * (head_dim // 2) // 3) // 2)
-
-
-def rope_positions(grid_thw: torch.Tensor, spatial_merge_size: int) -> torch.Tensor:
-    """(num_images, 3) grid of (t, h, w) patches -> (L, 3) fp32 coordinates of every patch.
-
-    The patches are in the image processor's order, where each spatial_merge_size x spatial_merge_size
-    block of patches is consecutive.
-    """
-    m = spatial_merge_size
-    coords = []
-    for t, h, w in grid_thw.tolist():
-        hi = torch.arange(h).unsqueeze(1).expand(-1, w)
-        hi = hi.reshape(h // m, m, w // m, m).permute(0, 2, 1, 3).flatten()
-        wi = torch.arange(w).unsqueeze(0).expand(h, -1)
-        wi = wi.reshape(h // m, m, w // m, m).permute(0, 2, 1, 3).flatten()
-        ti = torch.arange(t).repeat_interleave(h * w)
-        coords.append(torch.stack([ti, hi.repeat(t), wi.repeat(t)], dim=-1))
-    return torch.cat(coords).to(torch.float32)
-
-
-def rope_cos_sin(
-    grid_thw: torch.Tensor, head_dim: int, theta: float, spatial_merge_size: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """cos and sin of the 3D RoPE, each (L, 3 * rope_axis_dim(head_dim)) in fp32 (78 columns for head_dim 80).
-
-    The columns are the T, H and W frequency bands, then the same three again, to pair with rotate_half.
-    """
-    axis_dim = rope_axis_dim(head_dim)
-    positions = rope_positions(grid_thw, spatial_merge_size)
-    inv_freq = 1.0 / (theta ** (torch.arange(0, axis_dim, 2, dtype=torch.float32) / axis_dim))
-    freqs = torch.cat([positions[:, i : i + 1] * inv_freq for i in range(3)], dim=-1)
-    emb = torch.cat([freqs, freqs], dim=-1)
-    return emb.cos(), emb.sin()
 
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:

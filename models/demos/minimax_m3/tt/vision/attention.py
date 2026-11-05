@@ -42,7 +42,6 @@ import torch.nn.functional as F
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import get_rot_transformation_mat
-from models.demos.minimax_m3.reference.vision import rope_axis_dim
 from models.demos.minimax_m3.tt.vision.common import (
     as_linear_bias,
     hifi4_compute_config,
@@ -51,6 +50,7 @@ from models.demos.minimax_m3.tt.vision.common import (
     sdpa_program_config,
     to_device,
 )
+from models.demos.minimax_m3.tt.vision.rope import rope_axis_dim
 from models.demos.minimax_m3.utils.weight_conversion import meta_partial_permute
 
 

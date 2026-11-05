@@ -38,7 +38,8 @@ def pytest_runtest_call(item):
 
 @pytest.fixture(scope="session")
 def vision_reference():
-    from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
+    from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
+    from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 
     cache = {}
 
