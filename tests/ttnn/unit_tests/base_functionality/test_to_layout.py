@@ -1792,3 +1792,38 @@ def test_to_layout_dtype_uint8_tile_to_rm(device, tensor_shape):
     t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
     got = ttnn.to_torch(ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT))
     assert torch.equal(got, x)
+
+
+_INT_PAD_CASES = [
+    (ttnn.int32, torch.int32, 7),
+    (ttnn.int32, torch.int32, 16777217),
+    (ttnn.int32, torch.int32, 2147483000),
+    (ttnn.int32, torch.int32, -2147483000),
+    (ttnn.uint32, torch.int32, 7),
+    (ttnn.uint32, torch.int32, 16777217),
+    (ttnn.uint32, torch.int32, 2147483000),
+]
+_INT_PAD_IDS = [f"{c[0].name.lower()}-{c[2]}" for c in _INT_PAD_CASES]
+
+
+@pytest.mark.parametrize("dtype,torch_dtype,value", _INT_PAD_CASES, ids=_INT_PAD_IDS)
+def test_to_layout_int_pad_value_exact(device, dtype, torch_dtype, value):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**31, (1, 1, 30, 50), dtype=torch_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_out = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT, pad_value=value)
+    out = tt_out.cpu().to_torch_with_padded_shape().to(torch.int64)
+    expected = torch.full((1, 1, 32, 64), value, dtype=torch.int64)
+    expected[:, :, :30, :50] = torch_input.to(torch.int64)
+    assert torch.equal(out, expected)
+
+
+def test_to_layout_bf16_float_pad_value_control(device):
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 30, 50), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_out = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT, pad_value=1.5)
+    out = tt_out.cpu().to_torch_with_padded_shape()
+    expected = torch.full((1, 1, 32, 64), 1.5, dtype=torch.bfloat16)
+    expected[:, :, :30, :50] = torch_input
+    assert torch.equal(out, expected)

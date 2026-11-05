@@ -1078,3 +1078,44 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+_INT_PAD_CASES = [
+    (ttnn.int32, torch.int32, 7),
+    (ttnn.int32, torch.int32, 16777217),
+    (ttnn.int32, torch.int32, 2147483000),
+    (ttnn.int32, torch.int32, -2147483000),
+    (ttnn.uint32, torch.int32, 7),
+    (ttnn.uint32, torch.int32, 16777217),
+    (ttnn.uint32, torch.int32, 2147483000),
+]
+_INT_PAD_IDS = [f"{c[0].name.lower()}-{c[2]}" for c in _INT_PAD_CASES]
+
+
+def _expected_with_padding(logical, padded_shape, value, torch_dtype):
+    expected = torch.full(padded_shape, value, dtype=torch.int64)
+    expected[tuple(slice(0, d) for d in logical.shape)] = logical.to(torch.int64)
+    return expected
+
+
+@pytest.mark.parametrize("dtype,torch_dtype,value", _INT_PAD_CASES, ids=_INT_PAD_IDS)
+def test_reshape_int_pad_value_exact(device, dtype, torch_dtype, value):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**31, (2, 3, 40, 50), dtype=torch_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.reshape(tt_input, (2, 3, 50, 40), pad_value=value)
+    out = tt_out.cpu().to_torch_with_padded_shape().to(torch.int64)
+    expected = _expected_with_padding(torch_input.reshape(2, 3, 50, 40), [2, 3, 64, 64], value, torch_dtype)
+    assert list(out.shape) == [2, 3, 64, 64]
+    assert torch.equal(out, expected)
+
+
+def test_reshape_bf16_float_pad_value_control(device):
+    torch.manual_seed(0)
+    torch_input = torch.rand((2, 3, 40, 50), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.reshape(tt_input, (2, 3, 50, 40), pad_value=1.5)
+    out = tt_out.cpu().to_torch_with_padded_shape()
+    expected = torch.full((2, 3, 64, 64), 1.5, dtype=torch.bfloat16)
+    expected[:, :, :50, :40] = torch_input.reshape(2, 3, 50, 40)
+    assert torch.equal(out, expected)

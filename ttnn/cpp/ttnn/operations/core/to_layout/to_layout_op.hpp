@@ -25,4 +25,13 @@ Tensor to_layout(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     float pad_value = 0.0f);
 
+// Exact-integer form: the uint32_t arm of `pad_value` is taken exactly for INT32 and UINT32 tensors.
+Tensor to_layout(
+    const Tensor& tensor_arg,
+    Layout layout,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const PadValue& pad_value);
+
 }  // namespace ttnn
