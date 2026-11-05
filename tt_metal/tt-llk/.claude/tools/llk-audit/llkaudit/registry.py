@@ -796,10 +796,28 @@ RISC_POLL_CALLS = ("semaphore_read",)
 # context-release idiom. An `== 0` poll released by a SEMPOST is a blind spot.
 RELEASE_SEMAPHORE_OPS = ("get",)
 _GPR_TOKEN_RE = re.compile(r"p_gpr\w*::\s*[A-Za-z_]\w*")
-_ADDR32_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*_ADDR32\b")
+# Keeps a literal word offset (`FIELD_ADDR32 + 2`), so the token resolves to the
+# word actually written; a runtime offset (`+ i`) stays outside the token.
+_ADDR32_TOKEN_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*_ADDR32\b(?:\s*[+\-]\s*(?:0[xX][0-9a-fA-F]+|\d+)\b)?"
+)
 # A register's name up to its REG index (THCON_SEC0_REG2_Out_data_format ->
 # THCON_SEC0_REG2), to relate a `FIELD_ADDR32 + i` store to the words it spans.
 _REG_PREFIX_RE = re.compile(r"^(.*?_REG_?\d+)_")
+
+
+def _norm_tok(tok: str) -> str:
+    """`F_ADDR32 + 0x2` / `F_ADDR32+2` -> `F_ADDR32+2`; `F_ADDR32 + 0` -> `F_ADDR32`."""
+    m = _WORD_OFFSET_RE.match(tok)
+    if not m or not m.group(3):
+        return tok
+    try:
+        off = int(m.group(3), 0)
+    except ValueError:
+        return re.sub(r"\s+", "", tok)
+    if off == 0:
+        return m.group(1)
+    return f"{m.group(1)}{m.group(2)}{off}"
 
 
 def ordered_write_target(fact: dict):
@@ -814,7 +832,7 @@ def ordered_write_target(fact: dict):
             return None, None
         m = _ADDR32_TOKEN_RE.search(text)
         if m:
-            return "cfg", m.group(0)
+            return "cfg", _norm_tok(m.group(0))
         a = _RMW_ALIAS_RE.search(text)
         return ("cfg", a.group(1) + "_ADDR32") if a else (None, None)
     if is_gpr_source_write(name):
@@ -823,7 +841,7 @@ def ordered_write_target(fact: dict):
     m = _ADDR32_TOKEN_RE.search(text)
     if not m:
         return None, None
-    return ("thread" if is_thread_config_write(name) else "cfg"), m.group(0)
+    return ("thread" if is_thread_config_write(name) else "cfg"), _norm_tok(m.group(0))
 
 
 def risc_store_target(pw: dict):
@@ -840,7 +858,7 @@ def risc_store_target(pw: dict):
     if kind in CFG_WRITE_KINDS:
         m = _ADDR32_TOKEN_RE.search(idx)
         return (
-            ("cfg", m.group(0), has_runtime_word_offset(idx))
+            ("cfg", _norm_tok(m.group(0)), has_runtime_word_offset(idx))
             if m
             else (None, None, False)
         )

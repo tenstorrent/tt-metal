@@ -11,19 +11,25 @@ CFGSHIFTMASK) is queued in the thread's instruction stream; a RISC `cfg[...] =`
 the store lands (held behind a STALLWAIT, a stalled SEMPOST/SEMGET, a busy unit),
 it lands LAST and overwrites the store (write-after-write). What orders them:
 
-  * `tensix_sync()` before the store (in its function, or in every caller
-    before the call): the RISC blocks until the whole thread is idle.
+  * `tensix_sync()` issued after the write and before the store (in the store's
+    function, or in every caller before the call): the RISC blocks until the
+    whole thread is idle. A write issued after the drain — in the store's
+    function or in a function it calls — is not ordered by it.
   * a RISC poll (`semaphore_read`, e.g. wait_for_idle on UNPACK_SYNC) before the
     store, where the Tensix write is issued BEFORE a SEMGET of that semaphore
-    (in its function or in every caller): the poll cannot return until that
-    SEMGET, and so the write, has executed.
+    and that SEMGET is issued BEFORE the poll: the poll cannot return until the
+    SEMGET, and so the write, has executed. A write issued after the poll
+    returned is not ordered by any later release.
 
 Per RISC store with at least one unordered same-register Tensix writer:
-  TENSIX_WRITE_SAME_FN     — the writer is earlier in the store's own function
-                             (order certain) with no drain between.
+  TENSIX_WRITE_SAME_FN     — the store's function issues the writer before the
+                             store, itself or through a function it calls
+                             (order certain), with no drain or covering
+                             release-then-poll between.
   TENSIX_WRITE_AFTER_RELEASE — the store is behind a poll, but the writer is
-                             issued after the SEMGET that releases it (the poll
-                             can return while the writer is still queued).
+                             issued after the SEMGET that releases it, or after
+                             the poll itself (the poll can return while the
+                             writer is still queued).
   TENSIX_WRITE_NO_RELEASE  — the writer sits in a function that never releases
                              the polled semaphore after it (init / reconfig /
                              uninit paths), or the store has no poll at all; it
@@ -57,8 +63,11 @@ class TensixRiscOrder(Check):
         "Call order ACROSS API calls is not known statically: a NO_RELEASE writer is "
         "a candidate until a kernel is shown to issue it and then reach the store "
         "while it is held — the skill traces that at kernel level. Coverage by a "
-        "release or a tensix_sync() is checked in the function and up to two caller "
-        "levels by name (same-name overloads are merged). RISC config READS (a "
+        "release, a poll or a tensix_sync() is checked in the function and up to two "
+        "caller levels, and a writer issued through callees up to two levels deep, "
+        "by name (same-name overloads are merged); a writer reached deeper than that "
+        "after a drain is treated as ordered by it. Whether a release that follows "
+        "a writer in a CALLER also precedes the poll is not checked. RISC config READS (a "
         "save/restore or a software read-modify-write that reads a word a queued "
         "Tensix write has not landed in yet) are not in the fact base and are not "
         "seen. Thread is inferred from the file name; cross-thread pairs belong to "
@@ -71,10 +80,16 @@ class TensixRiscOrder(Check):
         "cannot race there."
     )
 
-    CALLER_DEPTH = 2
+    CALLER_DEPTH = 2  # caller levels searched for a drain, a poll or a release
+    REACH_DEPTH = 2  # callee levels searched for a writer the store's function issues
 
     def run(self, fb: FactBase) -> list[Finding]:
         self.fb = fb
+        self._calls_cache: dict = {}
+        self._reach_cache: dict = {}
+        self.defs = defaultdict(list)  # function name -> definitions
+        for f in fb.functions:
+            self.defs[f.name].append(f)
         self.callers = defaultdict(list)  # callee name -> call facts
         for c in fb.family("call"):
             self.callers[c.get("name", "")].append(c)
@@ -125,14 +140,8 @@ class TensixRiscOrder(Check):
             fn = fb.enclosing(pw["file"], pw["off"])
             if fn is None:
                 continue
-            # A tensix_sync() orders every Tensix write issued before it; a write
-            # in this function AFTER the drain is still unordered.
-            local = self._calls_before(fn, pw["off"], ("tensix_sync",))
-            drain_off = max((c["off"] for c in local), default=None)
-            drained = drain_off is not None or self._drained_by_callers(
-                fn, self.CALLER_DEPTH
-            )
-            polls = self._polls(fn, pw["off"], self.CALLER_DEPTH)
+            windows = self._poll_windows(fn, pw["off"], self.CALLER_DEPTH)
+            polls = set(windows)
             thread = registry.thread_of_fact(pw)
             ev, best = [], None
             for wns, wtok, w in writers:
@@ -145,12 +154,9 @@ class TensixRiscOrder(Check):
                     and thread != "UNKNOWN"
                 ):
                     continue
-                in_fn_after_drain = fn.contains(w["file"], w["off"]) and (
-                    drain_off is None or w["off"] > drain_off
-                )
-                if drained and not in_fn_after_drain:
+                if self._drain_covers(w, fn, pw["off"], self.CALLER_DEPTH):
                     continue
-                cls = self._classify(w, fn, pw, polls)
+                cls = self._classify(w, fn, pw, windows)
                 if cls is None:
                     continue
                 held = self._stall_before(w)
@@ -189,15 +195,66 @@ class TensixRiscOrder(Check):
         return findings
 
     # -- helpers ---------------------------------------------------------------
+    def _calls(self, fn):
+        key = (fn.file, fn.begin_off)
+        got = self._calls_cache.get(key)
+        if got is None:
+            got = self._calls_cache[key] = self.fb.facts_in(fn, ("call",))
+        return got
+
     def _calls_before(self, fn, off, names=None):
         return [
             c
-            for c in self.fb.facts_in(fn, ("call",))
+            for c in self._calls(fn)
             if c["off"] < off and (names is None or c.get("name", "") in names)
         ]
 
-    def _drained_by_callers(self, fn, depth) -> bool:
-        """tensix_sync() before the call to fn in EVERY caller (recursively)."""
+    def _reach_offs(self, fn, target, depth) -> list:
+        """Offsets of the calls in fn that reach a function named `target`, directly
+        or through up to `depth` further call levels (by name)."""
+        key = (fn.file, fn.begin_off, target, depth)
+        got = self._reach_cache.get(key)
+        if got is not None:
+            return got
+        self._reach_cache[key] = []  # recursion guard
+        out = []
+        for c in self._calls(fn):
+            nm = c.get("name", "")
+            if nm == target or (
+                depth > 0
+                and any(
+                    self._reach_offs(d, target, depth - 1)
+                    for d in self.defs.get(nm, [])
+                    if (d.file, d.begin_off) != (fn.file, fn.begin_off)
+                )
+            ):
+                out.append(c["off"])
+        self._reach_cache[key] = out
+        return out
+
+    def _issued_at(self, w, fn, lo, hi) -> list:
+        """Offsets in fn, strictly between lo and hi, at which fn issues w: w's own
+        offset when w is in fn, else the calls in fn that reach w's function."""
+        if fn.contains(w["file"], w["off"]):
+            return [w["off"]] if lo < w["off"] < hi else []
+        wfn = self.fb.enclosing(w["file"], w["off"])
+        if wfn is None:
+            return []
+        return [
+            o for o in self._reach_offs(fn, wfn.name, self.REACH_DEPTH) if lo < o < hi
+        ]
+
+    def _drain_covers(self, w, fn, upto, depth) -> bool:
+        """True if a tensix_sync() executes after w is issued and before `upto` in
+        fn: the last drain in fn before `upto`, with w not issued (in fn or in a
+        function fn calls) between that drain and `upto`; or, when fn has no drain,
+        the same in EVERY caller before its call to fn, with w not issued in fn
+        itself. Not covered when that cannot be shown within the depth."""
+        drains = [c["off"] for c in self._calls_before(fn, upto, ("tensix_sync",))]
+        if drains:
+            return not self._issued_at(w, fn, max(drains), upto)
+        if self._issued_at(w, fn, fn.begin_off - 1, upto):
+            return False  # issued in fn: no drain of fn's callers can follow it
         if depth == 0:
             return False
         sites = self.callers.get(fn.name, [])
@@ -205,36 +262,47 @@ class TensixRiscOrder(Check):
             return False
         for c in sites:
             cf = self.fb.enclosing(c["file"], c["off"])
-            if cf is None:
-                return False
-            if not self._calls_before(
-                cf, c["off"], ("tensix_sync",)
-            ) and not self._drained_by_callers(cf, depth - 1):
+            if cf is None or not self._drain_covers(w, cf, c["off"], depth - 1):
                 return False
         return True
 
-    def _polls(self, fn, off, depth) -> set:
-        """Semaphores a RISC poll reads before `off`: in fn, or (when fn itself has
-        none) in every caller before the call."""
-        out = set()
+    def _poll_windows(self, fn, off, depth) -> dict:
+        """{semaphore: [(function, lo, hi)]} for each semaphore a RISC poll reads
+        before `off`. Code issued in function, strictly between lo and hi, is issued
+        AFTER the poll returned, so a release it is followed by cannot order it.
+        Polls in fn give the window from the last poll to `off`; when fn has none,
+        the semaphores polled in EVERY caller before its call to fn, with the whole
+        of fn up to `off` plus each caller's own windows."""
+        local = defaultdict(list)
         for c in self._calls_before(fn, off):
             nm = c.get("name", "")
-            out |= self.gate_sem.get(nm, set())
+            sids = set(self.gate_sem.get(nm, set()))
             if nm in registry.RISC_POLL_CALLS:
                 sid, param = registry.semaphore_target(c)
                 if sid and not param:
-                    out.add(sid)
-        if out or depth == 0:
-            return out
+                    sids.add(sid)
+            for s_ in sids:
+                local[s_].append(c["off"])
+        if local:
+            return {s_: [(fn, max(offs), off)] for s_, offs in local.items()}
+        if depth == 0:
+            return {}
         common = None
         for c in self.callers.get(fn.name, []):
             cf = self.fb.enclosing(c["file"], c["off"])
-            got = self._polls(cf, c["off"], depth - 1) if cf else set()
-            common = got if common is None else common & got
-        return common or set()
+            got = self._poll_windows(cf, c["off"], depth - 1) if cf else {}
+            if common is None:
+                common = {k: list(v) for k, v in got.items()}
+            else:
+                common = {k: common[k] + got[k] for k in common.keys() & got.keys()}
+        if not common:
+            return {}
+        return {s_: v + [(fn, fn.begin_off - 1, off)] for s_, v in common.items()}
 
     def _release_follows(self, w, sid, depth):
-        """True if a SEMGET of sid follows w in its function or in every caller."""
+        """True if a SEMGET of sid follows w in its function or in EVERY caller.
+        Every caller, because this CLEARS the writer: one caller without the
+        release leaves a path on which the poll does not wait for the write."""
         fn = self.fb.enclosing(w["file"], w["off"])
         if fn is None:
             return False
@@ -250,7 +318,10 @@ class TensixRiscOrder(Check):
         )
 
     def _release_precedes(self, w, sid, depth):
-        """True if a SEMGET of sid precedes w in its function or in some caller."""
+        """True if a SEMGET of sid precedes w in its function or in SOME caller.
+        Some caller, because this only picks the label for a writer that is already
+        reported: one path where the write follows the release is enough for
+        AFTER_RELEASE; otherwise it stays NO_RELEASE, which is still a finding."""
         fn = self.fb.enclosing(w["file"], w["off"])
         if fn is None:
             return False
@@ -265,21 +336,51 @@ class TensixRiscOrder(Check):
             for c in self.callers.get(fn.name, [])
         )
 
-    def _classify(self, w, fn, pw, polls):
-        if fn.contains(w["file"], w["off"]):
-            if w["off"] > pw["off"]:
-                return None  # after the store in program order
-            for s_ in polls:
+    def _after_poll(self, w, wins) -> bool:
+        """w is issued inside one of the poll windows: after the poll returned."""
+        return any(self._issued_at(w, f, lo, hi) for f, lo, hi in wins)
+
+    def _classify(self, w, fn, pw, windows):
+        if fn.contains(w["file"], w["off"]) and w["off"] > pw["off"]:
+            return None  # after the store in program order
+        here = self._issued_at(w, fn, fn.begin_off - 1, pw["off"])
+        if here:
+            # fn issues w before the store (itself or through a callee), so the
+            # order is certain. A semaphore orders it only if fn issues a SEMGET
+            # of it after w (or w's function does, after w) and THEN polls it.
+            in_fn = fn.contains(w["file"], w["off"])
+            for s_, wins in windows.items():
+                if self._after_poll(w, wins):
+                    continue
+                poll = max(
+                    (
+                        lo
+                        for f, lo, _ in wins
+                        if (f.file, f.begin_off) == (fn.file, fn.begin_off)
+                    ),
+                    default=None,
+                )
+                if poll is None:
+                    continue
                 rel = self.releases.get((fn.file, fn.begin_off, s_), [])
-                if any(w["off"] < o < pw["off"] for o in rel):
-                    # A release between them: on one path the write is ahead of
-                    # the SEMGET the poll waits for; in different branches they
-                    # meet only across calls, where that same release orders them.
+                if all(
+                    any(x < o < poll for o in rel)
+                    or (not in_fn and self._release_follows(w, s_, 0))
+                    for x in here
+                ):
+                    # In different if/else arms the writer and store meet only
+                    # across calls, where that same release orders them.
                     return None
             return "TENSIX_WRITE_SAME_FN"
-        if any(self._release_follows(w, s, self.CALLER_DEPTH) for s in polls):
-            return None  # ordered: the poll waits for a SEMGET issued after the write
-        if any(self._release_precedes(w, s, self.CALLER_DEPTH) for s in polls):
+        after_poll = False
+        for s_, wins in windows.items():
+            if self._after_poll(w, wins):
+                after_poll = True  # issued in a caller after the poll returned
+            elif self._release_follows(w, s_, self.CALLER_DEPTH):
+                return None  # the poll waits for a SEMGET issued after the write
+        if after_poll or any(
+            self._release_precedes(w, s, self.CALLER_DEPTH) for s in windows
+        ):
             return "TENSIX_WRITE_AFTER_RELEASE"
         return "TENSIX_WRITE_NO_RELEASE"
 

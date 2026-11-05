@@ -4504,6 +4504,130 @@ def test_order_runtime_offset_store_matches_same_reg():
     )
 
 
+def _helper_writer(off=950):
+    """A helper whose only body is a same-register WRCFG."""
+    return [fn("write_zstride", _FC, 940, 960), _wrcfg(off, "write_zstride")]
+
+
+@case
+def test_order_callee_write_after_drain_flagged():
+    # tensix_sync(); write_zstride(); cfg[...] = v: the helper's write is queued
+    # after the drain, so the drain does not order it.
+    sync = call(_FC, 790, "tensix_sync", func="configure_unpack_AB")
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    out = _order(_store_side(extra_before_store=[sync, helper]) + _helper_writer())
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # the same helper called BEFORE the drain is ordered by it
+    helper_early = call(_FC, 788, "write_zstride", func="configure_unpack_AB")
+    facts = _store_side(extra_before_store=[helper_early, sync]) + _helper_writer()
+    assert _order(facts) == []
+
+
+def _caller_with_drain(writer_call_off, drain_off):
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    return [
+        fn("_llk_unpack_hw_configure_", F, 60, 90),
+        call(F, writer_call_off, "write_zstride", func="_llk_unpack_hw_configure_"),
+        call(F, drain_off, "tensix_sync", func="_llk_unpack_hw_configure_"),
+        call(F, 80, "configure_unpack_AB", func="_llk_unpack_hw_configure_"),
+    ]
+
+
+@case
+def test_order_caller_drain_between_writer_call_and_store_call_is_clean():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(65, 70)
+    assert _order(facts) == []
+
+
+@case
+def test_order_caller_writer_call_after_caller_drain_flagged():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(75, 70)
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_drain_beyond_caller_depth_is_not_credited():
+    # store fn <- L1 <- L2 <- L3(tensix_sync): L3 is past CALLER_DEPTH = 2, so the
+    # writer stays a NO_RELEASE finding instead of being cleared.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = (
+        _store_side()
+        + _helper_writer()
+        + [
+            fn("l1", F, 10, 19),
+            call(F, 15, "configure_unpack_AB", func="l1"),
+            fn("l2", F, 20, 29),
+            call(F, 25, "l1", func="l2"),
+            fn("l3", F, 30, 39),
+            call(F, 32, "tensix_sync", func="l3"),
+            call(F, 35, "l2", func="l3"),
+        ]
+    )
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_release_after_poll_does_not_order():
+    # wait_for_idle(); WRCFG; t6_semaphore_get(UNPACK_SYNC); cfg[...] = v: the
+    # poll returned before the write and the release were issued.
+    get = call(
+        _FC,
+        800,
+        "t6_semaphore_get",
+        func="configure_unpack_AB",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    facts = _store_side(extra_before_store=[_wrcfg(795, "configure_unpack_AB"), get])
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_callee_write_after_poll_flagged():
+    # wait_for_idle(); write_zstride(); cfg[...] = v, where the helper releases
+    # UNPACK_SYNC after its write: that release follows the poll, so it does
+    # not order the write.
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    rel = call(
+        _FC,
+        955,
+        "t6_semaphore_get",
+        func="write_zstride",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    out = _order(_store_side(extra_before_store=[helper]) + _helper_writer() + [rel])
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # called before the poll, the helper's own release orders it
+    helper_early = call(_FC, 780, "write_zstride", func="configure_unpack_AB")
+    facts = (
+        _store_side(extra_before_store=[]) + [helper_early] + _helper_writer() + [rel]
+    )
+    assert _order(facts) == []
+
+
+@case
+def test_order_literal_word_offset_kept():
+    R = "THCON_SEC0_REG1_Row_start_section_size_ADDR32"
+    a32 = {R: 68}
+    w = macro(
+        _FC, 1, "TTI_WRCFG", f"TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, {R} + 2)"
+    )
+    ns, tok = registry.ordered_write_target(w)
+    assert (ns, tok) == ("cfg", f"{R}+2"), tok
+    assert registry.resolve_word(tok, a32)[0] == 70
+    s0 = registry.risc_store_target(pw(_FC, 2, "get_cfg_pointer", f"{R} + 0"))
+    s2 = registry.risc_store_target(pw(_FC, 3, "get_cfg_pointer", f"{R}+0x2"))
+    assert s0 == ("cfg", R, False) and s2 == ("cfg", f"{R}+2", False), (s0, s2)
+    assert not registry.same_register(tok, s0[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, {})  # equal normalized tokens
+    # a runtime offset stays outside the token
+    sr = registry.risc_store_target(pw(_FC, 4, "get_cfg_pointer", f"{R} + i"))
+    assert sr == ("cfg", R, True), sr
+
+
 def main():
     failed = 0
     for c in CASES:
