@@ -1591,3 +1591,7 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - 20:18 P.33 (cut test, test only) PASS: prefill to an even cut 128 short of the end with every chunk non-last; at the
   cut all 20 encoder windows within limits (worst share 0.56, L14 / L16), layer 20 compressed KV 0.180 / 0.323, index
   keys 0.112 / 0.312. No model change needed for the updated proposal's prefill. Accepted; resumed --until X.3.
+- 21:50 X.3's pre-pass of quick-accepted picks' full gates: P.23 PASS (re-run, code changed), P.5 PASS 3cd2c8ea0c3, P.10,
+  P.7 PASS 55b3a2bcd5e; P.2 FAIL at once, framework (its old gate's test_profile segment had BRINGUP_PROFILE_WALL=1 while
+  device_ms_total is gated: F114 / F212 refuse it). Fixed P.2's gate cmd in tasks.yaml (dropped the flag; the gate adds
+  the clean wall run itself); classified framework; resumed.
