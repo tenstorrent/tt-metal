@@ -65,3 +65,8 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Measured: 8x4 Galaxy, one 5120-token chunk (update_padded_kv_cache): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/update_padded_kv_cache_device_operation.cpp, device/update_padded_kv_cache_device_operation.hpp, update_padded_kv_cache.cpp, update_padded_kv_cache.hpp, update_padded_kv_cache_nanobind.cpp
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, is_allocated()
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). Merged clean, no conflicts. Taken (1 commit): `19da1202a49` #62567 (`tensor.buffer() != nullptr` -> `tensor.is_allocated()` in validation / asserts).
+- Behaviour: none. The fork's max_grid and ROW_MAJOR row-granular copy merged clean.
+- Files: device/update_padded_kv_cache_device_operation.cpp

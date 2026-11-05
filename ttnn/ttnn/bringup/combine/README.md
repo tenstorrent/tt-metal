@@ -2,7 +2,7 @@
 
 ## What it does
 Fork of `ttnn.experimental.deepseek_prefill.combine` (source
-`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine` @ `67ca5f3af48`, synced to `bdc576fa652`): the inverse
+`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine` @ `67ca5f3af48`, synced to `107f838f379`): the inverse
 of `dispatch`. For each valid row of each local expert's region in the expert-output buffer it reads the dispatch
 metadata (origin chip, token, top-k slot) and writes the row to `out[token, topk_slot]` on the origin chip (NoC locally,
 fabric remotely). Output `(1, 1, S, K, H)`; slots of experts outside this dispatch group stay zero (`init_zeros`) or

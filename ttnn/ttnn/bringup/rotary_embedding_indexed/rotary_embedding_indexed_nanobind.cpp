@@ -100,6 +100,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 A ROW_MAJOR [B, H, S, W] input (tilized in the op) or any chain option selects the chain program:
                 one fused op, the stock RoPE arithmetic, per-chip pre-sliced cos / sin (kv_actual_global 0, no
                 seq_subshard_axis, no concat_prefix), one program for the mesh, no per-core runtime args.
+                row_major_output (bool): write the output row-major, each row the concat_prefix channels then
+                    the rotated ones (default False: TILE). Needs concat_prefix, a bfloat16 input rotated across its
+                    whole width, and a prefix width that is a multiple of it.
 
             Returns:
                 ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
@@ -125,7 +128,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 uint32_t,
                 const std::optional<tt::tt_metal::Layout>&,
                 const std::optional<tt::tt_metal::DataType>&,
-                uint32_t>(&rotary_embedding_indexed),
+                uint32_t,
+                bool>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -144,7 +148,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("input_heads") = 0,
             nb::arg("output_layout") = std::nullopt,
             nb::arg("output_dtype") = std::nullopt,
-            nb::arg("group_heads") = 0),
+            nb::arg("group_heads") = 0,
+            nb::arg("row_major_output") = false),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -159,7 +164,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const SubshardAxis&,
                 const std::optional<uint32_t>&,
                 uint32_t,
-                const std::optional<Tensor>&>(&rotary_embedding_indexed),
+                const std::optional<Tensor>&,
+                bool>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -171,7 +177,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("seq_subshard_axis") = std::nullopt,
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
-            nb::arg("concat_prefix") = std::nullopt));
+            nb::arg("concat_prefix") = std::nullopt,
+            nb::arg("row_major_output") = false));
 }
 
 }  // namespace ttnn::operations::bringup::rotary_embedding_indexed::detail

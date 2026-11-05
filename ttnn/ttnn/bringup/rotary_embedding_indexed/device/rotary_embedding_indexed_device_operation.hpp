@@ -44,6 +44,9 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid.
         // Hashed when set.
         std::optional<CoreCoord> max_grid = std::nullopt;
+        // Write the output row-major (each row the prefix channels then the rotated ones), for a consumer that
+        // reads rows, so no untilize follows. Needs concat_prefix and a rotary region covering the whole input.
+        bool row_major_output = false;
     };
 
     struct tensor_args_t {
@@ -131,6 +134,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output = false,
     bool uniform = false,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
     std::optional<CoreCoord> max_grid = std::nullopt);

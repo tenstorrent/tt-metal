@@ -59,3 +59,8 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Taken: the hang fix, #60445's local-only path for a single-device dispatch group, the kernel include moves.
 - Conflict: the same #60445 rule as the combine fork; owner: upstream's local-only path applies only when
   experts_per_chip == num_routed_experts (dispatch.cpp); the factory keeps the fork's use_fabric neighbour gating.
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, fabric API on the MeshDevice
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). 1 file merged clean, no conflicts. Taken (1 commit): `7060deaa01f` #61503 (API): `get_forwarding_link_indices` takes the MeshDevice; `compute_per_neighbor_forwarding_links` passes it through.
+- Behaviour: none. The fork does not build without it.
+- Files: device/dispatch_program_factory.cpp; README.md (sync SHA)

@@ -65,3 +65,30 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: `device/rope_chain_device_operation.{hpp,cpp}`, `device/kernels/chain/{reader_rope_chain,writer_rope_chain,
   compute_rope_chain}.cpp`, `device/kernels/chain/chain_share.hpp`, `rotary_embedding_indexed.{hpp,cpp}`,
   `rotary_embedding_indexed_nanobind.cpp`, `CMakeLists.txt`, `tests/unit/test_chain.py`
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, row_major_output (#63498)
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork point:
+  the fork was taken @ `d2dc8639a5f`, a bring-up branch commit whose source equals `6b80daf43e3`'s; upstream = the same
+  copy @ `107f838f379`; ours = this fork). 2 files merged clean, 5 had conflicts. Taken:
+  - `c86eb2dc690` #63498 (feature, default off): `row_major_output` (bool) on both forms: `[concat_prefix | rotated]`
+    written row-major, untilized by the shared rotary_embedding_llama compute kernel under `ROW_MAJOR_OUTPUT` (reader
+    fetches the prefix tiles, writer writes 32 rows a tile row; new prefix / rows DFBs; validation: concat_prefix,
+    rotary_offset 0 over the whole width, prefix width a multiple of rotary_dim, bf16, unpadded, interleaved);
+  - `19da1202a49` #62567: `buffer() != nullptr` -> `is_allocated()` in validation;
+  - `63d3999b542` #55962 (deferred spec-factory compile): already in the fork (the source at `6b80daf43e3` had the same
+    lines), nothing to take.
+- Conflicts (5), all API-shaped (upstream appended `row_major_output` where the fork had appended its options),
+  resolved as upstream's code with the fork's options kept:
+  - `rotary_embedding_indexed.{hpp,cpp}` (scalar form) and `rotary_embedding_indexed_nanobind.cpp`: `row_major_output`
+    goes last, after the fork's `uniform, output_tensor, max_grid, input_heads, output_layout, output_dtype,
+    group_heads` (their C++ positions unchanged); keyword `row_major_output` in Python. The tensor form merged clean
+    (it has no fork options). Chain mode refuses `row_major_output` (it already refuses concat_prefix, which
+    row_major_output needs; chain mode's `output_layout=ROW_MAJOR` is the no-prefix row-major output).
+  - `device/rotary_embedding_indexed_device_operation.{hpp,cpp}`: attribute `row_major_output` after the fork's
+    `uniform` / `max_grid`; both `uniform` and `row_major_output` in the program hash; the prim takes
+    `concat_prefix, row_major_output, uniform, output_tensor, max_grid`.
+- Behaviour: none with the option off (the define ROW_MAJOR_OUTPUT=0 is new in the reader / writer / compute
+  defines; the compiled code is the same: the shared rotary_embedding_llama compute kernel reads `prefix_Wt` only
+  under it). Untested: row_major_output with the fork's `uniform` / `max_grid`.
+- Files: rotary_embedding_indexed.{hpp,cpp}, rotary_embedding_indexed_nanobind.cpp,
+  device/rotary_embedding_indexed_device_operation.{hpp,cpp}, device/kernels/dataflow/{reader_rotary_embedding_indexed_interleaved_start_id,writer_rotary_embedding_indexed}.cpp; README.md (option)

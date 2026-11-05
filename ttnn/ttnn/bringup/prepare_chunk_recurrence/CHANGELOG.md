@@ -89,3 +89,19 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/prepare_chunk_recurrence_device_operation{.hpp,.cpp,_types.hpp}, device/prepare_chunk_recurrence_program_factory.cpp,
   device/kernels/compute/prepare_chunk_recurrence.cpp, device/kernels/dataflow/{reader,writer}_prepare_chunk_recurrence.cpp,
   tests/reference.py, README.md
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): not synced, #63309 needs precise_gate_factors re-designed
+- Upstream since the last sync (`6b80daf43e3`): one commit, `263025a1d18` #63309 (perf, KDA: chunk preparation
+  -45 us a layer): compute and reader rewritten around stage batches of two work items (`work_batches.hpp`,
+  `prep_dataflow.hpp`, intermediates kept in DST, G - anchor formed in DST by `matmul_row_minus`, outputs on both
+  NoCs). The 3-way merge (base = fork_op.py's copy @ `6b80daf43e3`) conflicts in the compute kernel (3 hunks) and the
+  reader (2 hunks): exactly where `precise_gate_factors` lives (`prepare_gate_factors_precise`, the q / k normalize
+  instantiation, `fill_precise_gate_tiles`, the PRECISE_GATE_FACTORS DFBs).
+- Left at the pre-sync state (the whole fork: the clean-merging factory / device op / writer belong to the same
+  rewrite and do not work with the old kernels). Re-applying the option means a batched precise gate stage on the
+  new pipeline, checked against the kernel config buffer (the old precise compute only fit at -O2) and tested on
+  device; and a decision whether it is still needed: #63309 keeps G - anchor in DST but subtracts it through srcA
+  (TF32), so the bias precise_gate_factors removes is probably reduced, not gone. Not used by DeepSeek-V4.1
+  (glm53_flash_d_p only).
+- Behaviour: unchanged. The fork's kernels still use only what the new base keeps (`kda/device/kernels/chronology.hpp`;
+  #63309's compute API changes add template parameters with the old defaults).

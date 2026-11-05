@@ -2,7 +2,7 @@
 
 ## What it does
 Fork of `ttnn.experimental.deepseek_prefill.dispatch` (source
-`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch` @ `67ca5f3af48`, synced to `bdc576fa652`): MoE
+`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch` @ `67ca5f3af48`, synced to `107f838f379`): MoE
 token dispatch. Each token row is copied to the chip hosting each of its top-k experts, into a flat per-chip buffer
 (experts packed back to back, regions tile-aligned, positions from `offset_cumsum`), plus a metadata row
 `[linearized_mesh_coord, token_idx, topk_idx]` per copy for `combine`. Local writes over NoC, remote ones over fabric.
