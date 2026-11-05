@@ -13,13 +13,11 @@
 
 // output_c = F0_c + (FI_c - F0_c) @ seed per chunk, and this core's tile rows of final = A @ seed + B, accumulated in
 // the FP32 DST on top of the copied F0 (or B).
-// The terms buffer holds a chunk row of F(0) at tile row, and of F(I) at fi_offset further: in place, the core's
-// whole shard (core_chunks rows of F(0), then of F(I)); streamed, one chunk at a time, each formed into its
-// difference just before its product.
-template <uint32_t kt, uint32_t core_chunks, uint32_t streamed>
+// The terms buffer is the core's shard in place: core_chunks rows of F(0), then of F(I) at fi_offset further.
+template <uint32_t kt, uint32_t core_chunks>
 TT_KERNEL void compute() {
     constexpr uint32_t state_tiles = kt * kt;
-    constexpr uint32_t fi_offset = (streamed ? 1 : core_chunks) * kt;
+    constexpr uint32_t fi_offset = core_chunks * kt;
     constexpr uint32_t terms_tiles = 2 * fi_offset;
     DataflowBuffer seed_group(dfb::seed);
     DataflowBuffer seed_tail(dfb::tail);
@@ -78,7 +76,7 @@ TT_KERNEL void compute() {
     };
     // The differences first, for all of this core's chunks (they need no seed, so they run while the seeds arrive);
     // then per chunk F0's row is copied into DST and the K-sum accumulates on top of it.
-    if (!streamed && chunks != 0) {
+    if (chunks != 0) {
         terms.wait_front(terms_tiles);
         diff.reserve_back(chunks * kt);
         subtract(0, chunks * kt);
@@ -97,15 +95,7 @@ TT_KERNEL void compute() {
     for (uint32_t c = 0; c < chunks; ++c) {
         const uint32_t seed = c < group_chunks ? group_id : tail_id;
         // Tile index of this chunk's row in the terms and difference buffers.
-        const uint32_t row = streamed ? 0 : c * kt;
-        if constexpr (streamed) {
-            terms.wait_front(terms_tiles);
-            diff.reserve_back(kt);
-            subtract(0, kt);
-            diff.push_back(kt);
-            diff.wait_front(kt);
-            pack_reconfig_data_format(out_id);
-        }
+        const uint32_t row = c * kt;
         out.reserve_back(kt);
         tile_regs_acquire();
         reconfig_data_format_srca(terms_id);
@@ -125,12 +115,8 @@ TT_KERNEL void compute() {
         }
         tile_regs_release();
         out.push_back(kt);
-        if constexpr (streamed) {
-            terms.pop_front(terms_tiles);
-            diff.pop_front(kt);
-        }
     }
-    if (!streamed && chunks != 0) {
+    if (chunks != 0) {
         terms.pop_front(terms_tiles);
         diff.pop_front(chunks * kt);
     }

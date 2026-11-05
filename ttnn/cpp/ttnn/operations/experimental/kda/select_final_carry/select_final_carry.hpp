@@ -19,11 +19,11 @@ ttnn::Tensor select_final_carry(
     const ttnn::Tensor& prefix_final,
     const ttnn::Tensor& actual_start,
     uint32_t local_rows,
+    uint32_t num_links,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    uint32_t sequence_parallel_axis = 0,
-    std::optional<uint32_t> num_links = std::nullopt,
-    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores = std::nullopt,
-    const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores = std::nullopt);
+    uint32_t sequence_parallel_axis = 0);
 
 }  // namespace ttnn::experimental::kda

@@ -164,7 +164,7 @@ class _Transforms:
                 assert_matches_chain(got_final, ttnn.to_torch(local_chained_final), carry, f"final {name}")
 
 
-def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
+def _relay(mesh_device) -> RelayAffinePrefix:
     return RelayAffinePrefix(
         mesh_device,
         sequence_parallel_axis=0,
@@ -173,7 +173,6 @@ def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
         value_dim=_KEY,
         num_links=_sp_links(mesh_device, 0),
         local_rows=_ROWS,
-        cores=cores,
     )
 
 
@@ -300,7 +299,6 @@ def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
     transforms = _Transforms(mesh_device, seed=_PERF_START)
     actual_start = make_actual_start(mesh_device, _PERF_START)
     relay = _relay(mesh_device)
-    relay.entry_memory_config = ttnn.L1_MEMORY_CONFIG
 
     def call():
         outputs = relay(transforms.packed, transforms.initial_tt, actual_start)
