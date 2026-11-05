@@ -597,6 +597,9 @@ void kernel_main() {
 #endif
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
+        // PACK's SwiGLU writes Dst while MATH's matmul does. With the Dst remap left on by an earlier untilize-type
+        // kernel, a MATH Dst write in the same cycle as a PACK SFPU Dst write can be lost (Blackhole), so turn it off.
+        MATH((llk_math_reconfig_remap(false)));
     }
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
