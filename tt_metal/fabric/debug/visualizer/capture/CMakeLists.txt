@@ -7,6 +7,7 @@ add_library(fabric_capture_core STATIC)
 target_sources(
     fabric_capture_core
     PRIVATE
+        fabric_capture_files.cpp
         fabric_capture_json.cpp
         fabric_capture_manifest.cpp
         fabric_capture_reads.cpp

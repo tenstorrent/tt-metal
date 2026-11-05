@@ -25,7 +25,7 @@ namespace tt::tt_fabric::visualizer {
 inline constexpr std::string_view k_manifest_file_kind = "fabric_manifest";
 inline constexpr uint32_t k_manifest_version = 1;
 
-// A capture index's file_kind and capture_version. The version changes as the manifest's does.
+// A capture record's file_kind and capture_version. The version changes as the manifest's does.
 inline constexpr std::string_view k_capture_file_kind = "fabric_capture";
 inline constexpr uint32_t k_capture_version = 1;
 
@@ -58,6 +58,12 @@ inline std::optional<std::filesystem::path> find_latest_run_directory(
         }
     }
     return latest;
+}
+
+// One capture's file name without its file extension.
+inline std::string make_capture_file_stem(uint32_t mpi_rank, uint32_t world_size, std::string_view capture_id) {
+    return "fabric_capture_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size) + "_" +
+           std::string(capture_id);
 }
 
 }  // namespace tt::tt_fabric::visualizer

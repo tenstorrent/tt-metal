@@ -208,7 +208,10 @@ ReadRecord read_read_record(const JsonReader& record_reader, const json_pointer&
 }
 
 RouterRecord read_router_record(
-    const JsonReader& record_reader, const json_pointer& pointer, const std::string& chip_path, const std::string& key) {
+    const JsonReader& record_reader,
+    const json_pointer& pointer,
+    const std::string& chip_path,
+    const std::string& key) {
     RouterRecord router{
         .target =
             RouterTarget{

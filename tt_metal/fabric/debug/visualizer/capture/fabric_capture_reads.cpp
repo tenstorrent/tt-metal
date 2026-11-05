@@ -153,8 +153,7 @@ std::vector<std::vector<std::vector<LivenessSample>>> collect_liveness_rounds(
                 if (!chip.routers[router_index].is_read() || stopped) {
                     continue;
                 }
-                samples.push_back(
-                    sample_liveness(plan, *chip.chip, chip.routers[router_index], reader, clock, round));
+                samples.push_back(sample_liveness(plan, *chip.chip, chip.routers[router_index], reader, clock, round));
             }
         }
     }
