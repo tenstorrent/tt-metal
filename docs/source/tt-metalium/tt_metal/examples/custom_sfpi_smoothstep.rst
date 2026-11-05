@@ -49,7 +49,7 @@ Run the example:
 Program setup
 -------------
 
-The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (``src0_dram_buffer``) plus the output buffer (``dst_dram_buffer``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM tensor allocation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input tensors, smoothstep is a unary operation requiring only a single input tensor (``src0_dram_tensor``) plus the output tensor (``dst_dram_tensor``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
@@ -65,16 +65,17 @@ The host-side setup for this custom SFPI example follows the standard pattern: m
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    // Configure mesh buffers with single-tile page size
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM};
-    distributed::ReplicatedBufferConfig dram_buffer_config{
-        .size = dram_buffer_size};
+    // Configure mesh tensors with single-tile page size: each row of a row-major tensor is one page
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-    // DRAM buffers: single input + one output for unary operation
-    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    // DRAM tensors: single input + one output for unary operation
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     // Circular buffers for kernel communication
     CreateCircularBuffer(program, core, /* cb_in0 config */);
@@ -249,12 +250,12 @@ Back on the host, we set the runtime arguments for the kernels. Since this is a 
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
     SetRuntimeArgs(program, reader, core, {
-        src0_dram_buffer->address(),
+        src0_dram_tensor.address(),
         n_tiles
     });
 
     SetRuntimeArgs(program, writer, core, {
-        dst_dram_buffer->address(),
+        dst_dram_tensor.address(),
         n_tiles
     });
 
@@ -262,7 +263,7 @@ Back on the host, we set the runtime arguments for the kernels. Since this is a 
         n_tiles
     });
 
-Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.
+Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM tensor to verify correctness against the expected smoothstep function output.
 
 .. code-block:: cpp
 
@@ -274,8 +275,8 @@ Finally, we add the program to the mesh workload and enqueue it for execution, t
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
+    std::vector<bfloat16> result_vec =
+        cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     // Validation against golden smoothstep output
     for (size_t i = 0; i < result_vec.size(); ++i) {

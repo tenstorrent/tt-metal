@@ -23,24 +23,24 @@ Program setup
 
 Like the previous examples, setting up programs running on the accelerator is similar
 
-* Allocate buffers for both input and output data
+* Allocate tensors for both input and output data
 * Allocate circular buffers for communication between kernels
 * Setup both data movement and compute kernels
 
 
-First, allocate the buffers using the mesh buffer API. This uses a two-layer configuration: ``DeviceLocalBufferConfig`` for per-device properties and `ReplicatedBufferConfig` for mesh-wide distribution. Page size is set to the tile size (in bytes), which matches how the compute engine expects data. The destination buffer is not initialized as it will be filled with results later.
+First, allocate the tensors using the ``MeshTensor`` API. A ``TensorSpec`` describes the shape, data type, layout and memory placement of the tensor. Each row of a row-major tensor is one page, so a row of one tile's worth of elements sets the page size to the tile size (in bytes), which matches how the compute engine expects data. Each tensor is replicated across the mesh. The destination tensor is not initialized as it will be filled with results later.
 
 .. code-block:: cpp
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = tile_size_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM
-    };
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = n_tiles * tile_size_bytes
-    };
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     // Fill a host buffer with random data and upload to the device.
     std::mt19937 rng(std::random_device{}());
@@ -50,7 +50,8 @@ First, allocate the buffers using the mesh buffer API. This uses a two-layer con
         v = bfloat16(dist(rng));
     }
 
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
 
 Then we allocate the circular buffers. Again page size is set to tile size. There is 2 pages in each circular buffer to allow overlapping of data movement and compute operations. (data movement kernels will send/consume 1 tile at a time in this example).
 
@@ -78,7 +79,7 @@ Next, create the kernels. Nothing different from the previous examples besides b
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
@@ -86,7 +87,7 @@ Next, create the kernels. Nothing different from the previous examples besides b
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
@@ -224,8 +225,8 @@ For this program, the runtime arguments are similar to the previous examples. Th
 .. code-block:: cpp
 
     SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
-    SetRuntimeArgs(program, unary_reader_kernel_id, core, {src0_dram_buffer->address(), n_tiles});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), n_tiles});
+    SetRuntimeArgs(program, unary_reader_kernel_id, core, {src0_dram_tensor.address(), n_tiles});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_tensor.address(), n_tiles});
 
 Program execution and final check
 ---------------------------------
@@ -241,8 +242,8 @@ Finally we can run the program. The program is enqueued to the mesh command queu
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<bfloat16> result_vec =
+        cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     for(uint32_t i = 0; i < result_vec.size(); ++i) {
         float expected = bfloat16(std::exp(src0_vec[i].to_float())).to_float();

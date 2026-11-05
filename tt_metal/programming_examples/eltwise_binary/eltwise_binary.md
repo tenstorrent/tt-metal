@@ -12,7 +12,7 @@ To build and execute, you may use the following commands:
 ```
 ## New buffers
 
-In terms of DRAM buffers, We just need a new buffer for a 2nd source, because we have two source tensors (vectors).
+In terms of DRAM tensors, We just need a new tensor for a 2nd source, because we have two source tensors (vectors).
 
 ## Mesh Setup
 
@@ -30,33 +30,37 @@ Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-### DRAM buffers (replicated)
+### DRAM tensors (replicated)
 
-We allocate three DRAM-backed buffers: two inputs and one output. The `ReplicatedBufferConfig` means each device in the mesh gets its own identical allocation. On a unit mesh, this is just one device allocation. Set `page_size` to a single-tile size so NoC transfers operate tile-by-tile.
+We allocate three DRAM-backed `MeshTensor`s: two inputs and one output. Each tensor is replicated across the mesh, so each device in the mesh gets its own identical allocation. On a unit mesh, this is just one device allocation. Each row of the row-major `TensorSpec` holds one tile's worth of elements, so the page size is a single tile and NoC transfers operate tile-by-tile.
 
 ```cpp
 constexpr uint32_t n_tiles = 64;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
 constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-distributed::DeviceLocalBufferConfig dram_config{
-    .page_size = tile_size_bytes,
-    .buffer_type = BufferType::DRAM};
-distributed::ReplicatedBufferConfig buffer_config{ .size = n_tiles * tile_size_bytes };
+TensorSpec dram_tensor_spec(
+    Shape({n_tiles, elements_per_tile}),
+    TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})); // This is a DRAM tensor.
 
-auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto dst_dram_buffer  = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 ```
 
-Upload host data into the input buffers:
+Upload host data into the input tensors:
 
 ```cpp
 std::vector<bfloat16> a_data(elements_per_tile * n_tiles);
 std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(-1.0f));
 // ... fill a_data with random values ...
-distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
-distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
+HostTensor a_host_tensor = HostTensor::from_vector(a_data, dram_tensor_spec);
+HostTensor b_host_tensor = HostTensor::from_vector(b_data, dram_tensor_spec);
+cq.enqueue_write_tensor(a_host_tensor, src0_dram_tensor);
+cq.enqueue_write_tensor(b_host_tensor, src1_dram_tensor);
 ```
 
 ### Circular buffers (L1 FIFOs)
@@ -93,8 +97,8 @@ We instantiate three kernels:
 
 ```cpp
 std::vector<uint32_t> reader_args;
-TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
-TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
+TensorAccessorArgs(src0_dram_tensor).append_to(reader_args);
+TensorAccessorArgs(src1_dram_tensor).append_to(reader_args);
 auto reader = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
@@ -102,7 +106,7 @@ auto reader = CreateKernel(
     DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args });
 
 std::vector<uint32_t> writer_args;
-TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
+TensorAccessorArgs(dst_dram_tensor).append_to(writer_args);
 auto writer = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",
@@ -115,8 +119,8 @@ auto compute = CreateKernel(
     core,
     ComputeConfig{ .math_fidelity = tt::tt_metal::MathFidelity::HiFi4 });
 
-SetRuntimeArgs(program, reader,  core, { src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles });
-SetRuntimeArgs(program, writer,  core, { dst_dram_buffer->address(), n_tiles });
+SetRuntimeArgs(program, reader,  core, { src0_dram_tensor.address(), src1_dram_tensor.address(), n_tiles });
+SetRuntimeArgs(program, writer,  core, { dst_dram_tensor.address(), n_tiles });
 SetRuntimeArgs(program, compute, core, { n_tiles });
 ```
 
@@ -132,11 +136,10 @@ distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 ```
 
-Read back from the shard at mesh coordinate `{0, 0}` (on a unit mesh) and validate.
+Read back the output tensor and validate.
 
 ```cpp
-std::vector<bfloat16> result_vec;
-distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 ```
 
 In this program, we have a second source tensor. We will be adding this to the first source tensor.

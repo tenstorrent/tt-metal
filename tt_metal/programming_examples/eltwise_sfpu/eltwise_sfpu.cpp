@@ -9,6 +9,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -46,19 +48,20 @@ int main() {
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-        // Allocate DRAM buffers for the input and output data.
-        distributed::DeviceLocalBufferConfig dram_config{
-            .page_size = tile_size_bytes, .buffer_type = tt_metal::BufferType::DRAM};
-        distributed::ReplicatedBufferConfig buffer_config{
-            .size = tile_size_bytes * n_tiles};  // Replicated across the mesh (unit mesh ⇒ single device)
+        // Allocate DRAM tensors for the input and output data. Each row of a row-major tensor is one page, so a row
+        // of one tile's worth of elements gives a page size of one tile.
+        TensorSpec dram_tensor_spec(
+            Shape({n_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-        // Allocate an input and output buffer on DRAM. We will perform a unary operation on the input buffer and write
+        // Allocate an input and output tensor on DRAM. We will perform a unary operation on the input tensor and write
         // the result.
-        std::shared_ptr<distributed::MeshBuffer> src0_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-        std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-        // Each handle refers to the per-device allocation; on a 1x1 mesh it's a single device buffer.
+        MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        // Each tensor is replicated across the mesh; on a 1x1 mesh it's a single device buffer.
 
         // Allocate 2 circular buffers for input and output.
         constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -76,7 +79,7 @@ int main() {
 
         // Create the 2 data movement kernels and the compute kernel.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
@@ -87,7 +90,7 @@ int main() {
                 .compile_args = reader_compile_time_args});
 
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
@@ -113,10 +116,11 @@ int main() {
             v = bfloat16(dist(rng));
         }
 
-        // Write the data on host to the input buffer on the device.
-        // setting blocking to false allows us to overlap the data movement and following host operations (
+        // Write the data on host to the input tensor on the device.
+        // The write does not block, which allows us to overlap the data movement and following host operations (
         // setting kerenel args) in this case
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+        HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+        cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
 
         // Set up the runtime arguments for the kernels.
         SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
@@ -125,11 +129,12 @@ int main() {
             unary_reader_kernel_id,
             core,
             {
-                static_cast<uint32_t>(src0_dram_buffer->address()),
+                static_cast<uint32_t>(src0_dram_tensor.address()),
                 n_tiles,
             });
 
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {static_cast<uint32_t>(dst_dram_buffer->address()), n_tiles});
+        SetRuntimeArgs(
+            program, unary_writer_kernel_id, core, {static_cast<uint32_t>(dst_dram_tensor.address()), n_tiles});
 
         // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading results.
         workload.add_program(device_range, std::move(program));
@@ -137,8 +142,8 @@ int main() {
         distributed::Finish(cq);
 
         // Read the result (from shard at mesh coordinate {0,0} on a unit mesh) and compare to our expected result.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+        std::vector<bfloat16> result_vec =
+            cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
         // Compute the same thing on CPU for comparison
 
