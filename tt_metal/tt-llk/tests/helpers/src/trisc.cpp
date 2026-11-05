@@ -60,6 +60,13 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 
 int main(void)
 {
+#if defined(ARCH_QUASAR) && !defined(TT_METAL_TTSIM)
+    // Raise the memory-access timeout from the 65536-cycle reset value: a long wait (big MOP, long unpack) would otherwise
+    // fire it, the queued stores and Tensix pushes are dropped and the kernel computes with missing instructions. Match
+    // trisck.cc's intent with the full range (#63869). ttsim rejects values other than 0x100000 today and does not model
+    // the timeout at all, so skip it there.
+    asm volatile("csrw 0xBD0, %0" : : "r"(0xFFFFFFFFu));
+#endif
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
     mailbox_t mailbox_base = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start);
