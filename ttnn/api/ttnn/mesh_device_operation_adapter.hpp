@@ -712,7 +712,7 @@ public:
                             "{}: program cache hit on an entry built from a call that passed the same buffer in more "
                             "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
                             "tensors. Pass distinct tensors to the first call (for example a clone of the repeated "
-                            "tensor), or run this op with the program cache disabled.",
+                            "tensor).",
                             ttsl::get_type_name<DeviceOperation>());
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
