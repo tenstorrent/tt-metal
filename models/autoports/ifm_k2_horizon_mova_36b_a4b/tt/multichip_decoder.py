@@ -4,7 +4,8 @@
 
 Setup shards checkpoint weights. Runtime tensors live on a 1x4 ring mesh.
 Local attention has eight Q and two KV heads; caches are head-sharded.
-Decode uses TP active experts; larger prefill uses EP active-expert banks.
+Decode with few live rows uses TP active experts; fuller decode and larger
+prefill use EP active-expert banks.
 """
 
 import math
@@ -78,6 +79,7 @@ class MultichipDecoder(OptimizedDecoder):
             "residual_layout": "replicated",
             "prefill_group_norm": True,
             "ep_value_prefill": True,
+            "decode_ep_min_tokens": 9,
             "output_weight_dtype": "bfloat4_b",
             "prefill_norm_dtype": "bfloat16",
             "keep_down_sharded": True,
@@ -374,9 +376,12 @@ class MultichipDecoder(OptimizedDecoder):
             ),
         )
 
-    def _experts_ep_value(self, x, logits):
-        groups = x.shape[-2] // 32
+    def _experts_ep_value(self, x, logits, valid_tokens=None):
+        tokens = x.shape[-2]
+        groups = tokens // 32
         routes = self._route(logits, "self_attn.v_router", 4, 64)
+        if valid_tokens is not None and valid_tokens < tokens:
+            routes = ttnn.pad(routes[:, :, :valid_tokens, :], [(0, 0), (0, 0), (0, tokens - valid_tokens), (0, 0)], 0)
         local = self._selector(routes, self.weights["value_ep_selector"])[..., :16]
         local = ttnn.reshape(local, (1, groups, 32, 16))
         sparsity = ttnn.to_layout(ttnn.sum(local, dim=2, keepdim=True), ttnn.ROW_MAJOR_LAYOUT)
@@ -984,14 +989,25 @@ class MultichipDecoder(OptimizedDecoder):
     def _experts(self, x, *, logits, value=False, valid_tokens=None):
         if value and x.shape[-2] > 32 and valid_tokens is None and self.options["ep_value_prefill"]:
             return self._experts_ep_value(x, logits)
+        # A 32-row decode with many live rows activates nearly every expert. The TP
+        # banks then run on 8-12 cores (N is 1/4 of an expert), while EP banks hold
+        # whole local experts and spread over 24-40 cores: ~20% faster at 32 users.
+        # Few live rows keep the TP path, which is faster when few experts are hit.
+        if x.shape[-2] == 32 and (valid_tokens is None or valid_tokens >= self.options["decode_ep_min_tokens"]):
+            if value:
+                return self._experts_ep_value(x, logits, valid_tokens=valid_tokens)
+            return self._experts_ep(x, logits, valid_tokens=valid_tokens)
         if value or x.shape[-2] == 32 or valid_tokens is not None:
             return super()._experts(x, logits=logits, value=value, valid_tokens=valid_tokens)
         return self._experts_ep(x, logits)
 
-    def _experts_ep(self, x, logits):
+    def _experts_ep(self, x, logits, valid_tokens=None):
         tokens = x.shape[-2]
         groups = tokens // 32
         routes = self._route(logits, "mlp.gate", 8, 100)
+        if valid_tokens is not None and valid_tokens < tokens:
+            # Padded decode rows select no expert, as on the tensor-parallel path.
+            routes = ttnn.pad(routes[:, :, :valid_tokens, :], [(0, 0), (0, 0), (0, tokens - valid_tokens), (0, 0)], 0)
         routes = ttnn.pad(routes, [(0, 0), (0, 0), (0, 0), (0, 28)], 0)
         local_routes = self._selector(routes, self.weights["experts.ep_selector"])
         local_routes = ttnn.reshape(local_routes, (1, groups, 32, 32))
