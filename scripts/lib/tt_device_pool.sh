@@ -105,7 +105,8 @@ TTPOOL_LEGACY_DIRTY="${TTPOOL_LEGACY_DIRTY:-/tmp/tt-device.dirty}"
 TTPOOL_GALAXY_RESET="${TTPOOL_GALAXY_RESET:-recover}"   # recover | tt-smi
 TTPOOL_GALAXY_CARDS=32
 # (the helper file loads only in interactive shells: bash -ic, and sourced by name)
-TTPOOL_RECOVER_CMD="${TTPOOL_RECOVER_CMD:-source /etc/profile.d/exabox-helpers.sh && HOSTS=\$(hostname) recover-hosts}"
+# --skip-mpi-stress-test: the helper's MPI pre-check needs >= 2 ranks and aborts on the one host this resets (2026-11-05)
+TTPOOL_RECOVER_CMD="${TTPOOL_RECOVER_CMD:-source /etc/profile.d/exabox-helpers.sh && HOSTS=\$(hostname) recover-hosts --skip-mpi-stress-test}"
 _TTPOOL_DEADLINE=0
 
 _ttpool_say() { echo "${TTPOOL_LOG_PREFIX}: $*"; }
