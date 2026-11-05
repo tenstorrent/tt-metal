@@ -10,15 +10,23 @@
 // The binding and argument names below are this fork's interface: every factory that later ports
 // onto it inherits them and cannot rename them.
 //
-// BATCH_VALID_DFB gates the batch_valid dataflow buffer, through which this kernel tells the compute
-// kernel on its node which batches to skip. It is a define rather than a compile-time arg because a
-// binding that the host does not declare produces no dfb:: token at all. The host binds the buffer,
-// and sets the define, exactly when get_batch_from_reader is set.
+// BATCH_VALID_DFB (Quasar only) gates the batch_valid dataflow buffer, through which this kernel tells
+// the compute kernel on its node which batches to skip; WH/BH use the BRISC mailbox for that. It is a
+// define rather than a compile-time arg because a binding that the host does not declare produces no
+// dfb:: token at all. The host binds the buffer, and sets the define, exactly when
+// get_batch_from_reader is set on Quasar.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#ifndef ARCH_QUASAR
+// Compute(TRISC)-only headers (pull ckernel_addrmod.h -> ckernel_trisc_id.h, which #errors without
+// COMPILE_FOR_TRISC on a DM build); needed only for the batch-valid mailbox handoff. Quasar has no such
+// mailbox and uses the batch_valid dataflow buffer instead. Guard out on Quasar.
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -43,27 +51,30 @@ void kernel_main() {
     constexpr auto in0_mcast = MCAST_ARGS(in0_mcast);
     auto receiver = in0_mcast.receiver(noc);
 #ifdef BATCH_VALID_DFB
-    static_assert(get_batch_from_reader, "BATCH_VALID_DFB requires get_batch_from_reader");
     // One entry per batch to the compute kernel on this node: nonzero when the batch is valid.
     DataflowBuffer dfb_batch_valid(dfb::batch_valid);
-#else
-    static_assert(!get_batch_from_reader, "get_batch_from_reader requires the batch_valid dataflow buffer");
 #endif
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
             // This means we have unstructured sparsity.
             // The compute kernel needs to be made aware whether this batch is valid or not.
-            // We do this by passing the value to the compute kernel through the batch_valid dataflow buffer.
+            // We do this by passing the value to the compute kernel via mailbox (on Quasar, through the
+            // batch_valid dataflow buffer).
             // But first, lets wait for the sparsity data to be multicast to us.
             const auto is_batch_valid = receiver.receive_signal() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
-#ifdef BATCH_VALID_DFB
+#ifndef ARCH_QUASAR
+            // No BRISC->compute mailbox on Quasar; there the value goes through dfb::batch_valid.
+            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#elif defined(BATCH_VALID_DFB)
             dfb_batch_valid.reserve_back(1);
             {
-                // On Quasar, releasing the lock makes the store visible in SRAM before push_back hands
-                // the entry to the compute kernel. No-op on WH/BH.
+                // Releasing the lock makes the store visible in SRAM before push_back hands the entry
+                // to the compute kernel.
                 const auto batch_valid_lock = dfb_batch_valid.scoped_write_lock(1);
                 batch_valid_lock.get_ptr<volatile uint16_t>()[0] = static_cast<uint16_t>(is_batch_valid);
             }
