@@ -140,9 +140,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     auto* const device = a.device();
     const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
-    // With get_batch_from_reader, the in0 kernels tell the compute kernel per batch whether to skip it.
-    // WH/BH do that through the BRISC mailbox. Quasar has no mailbox from data movement cores to compute,
-    // so there the flags go through the batch_valid dataflow buffer.
+    // With get_batch_from_reader, the in0 kernel on each node (the sender or a receiver) tells the
+    // compute kernel on that node, batch by batch, whether to skip the batch. WH/BH do that through the
+    // BRISC mailbox. Quasar has no mailbox from data movement cores to compute, so there the flags go
+    // through the batch_valid dataflow buffer.
     const bool use_batch_valid_dfb = is_quasar && get_batch_from_reader;
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -251,17 +252,18 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // setup of the compute kernel below).
     //
     // Not on Quasar: there unpack-to-dest is a mode of the whole compute kernel (UnpackToDestEn), not
-    // of one buffer, and the matmul's SrcA/SrcB unpacks do not fit that mode. With the mode on, the
-    // packer does not zero DEST after it packs a section, so each later use of a DEST half adds onto
-    // the result left there. The partials are then reloaded through SrcA instead.
+    // of one buffer. In that mode DEST is not cleared after each pack, and matmul_block adds into DEST,
+    // so each result would add onto the previous one. On Quasar the partials are reloaded through SrcA
+    // instead.
     const bool reload_partials_to_dest =
         fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && !is_quasar;
 
     // The fused bias add reads the partials buffer as an FPU operand (SrcA), so UnpackToDest cannot be
-    // set on it directly when bias is present. In that case the cross-block FP32 reload instead copies
-    // through a second buffer aliasing the same SRAM that does carry UnpackToDest, while the bias add
-    // keeps reading the partials buffer via SrcA. The alias reaches the compute kernel as the
-    // MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
+    // set on it directly when bias is present. When the reload also unpacks to DEST
+    // (reload_partials_to_dest), the cross-block FP32 reload therefore copies through a second buffer
+    // aliasing the same SRAM that does carry UnpackToDest, while the bias add keeps reading the
+    // partials buffer via SrcA. The alias reaches the compute kernel as the MM_PARTIALS_RELOAD_ALIAS
+    // define plus its own binding.
     const bool bias_reload_alias = use_bias && reload_partials_to_dest;
 
     uint32_t in0_block_h = out_block_h;
@@ -501,11 +503,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         });
     }
     if (use_batch_valid_dfb) {
-        // One entry per batch from the in0 reader on each node (the in0 sender or an in0 receiver) to the
-        // compute kernel on that node: a 16-bit flag, nonzero when the batch is valid, so that compute
-        // skips the same batches as the readers. Compute reads the flag with read_tile_value and never
-        // unpacks it; RawUInt16 is a format Quasar supports, UInt16 is not. Two entries let a reader post
-        // the next batch's flag while compute works on the current batch.
+        // Each entry holds one 16-bit flag, nonzero when the batch is valid. Compute reads it with
+        // read_tile_value and never unpacks it, so the format only labels the bytes; Quasar supports
+        // RawUInt16 but not UInt16. Compute pops each flag before it works on that batch, so two entries
+        // let an in0 kernel run up to two batches ahead of compute, for example past a skipped batch.
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BATCH_VALID_DFB,
             .entry_size = tt::tt_metal::hal::get_l1_alignment(),
@@ -571,17 +572,16 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
 
-    // Both readers take the sparsity operand, and each one's dataflow buffer and tensor accessor are
-    // bound only because this define is set: a binding the host does not declare produces no dfb::/
+    // Both readers take the sparsity operand, and each one's scratchpad and tensor accessor are bound
+    // only because this define is set: a binding the host does not declare produces no scratch::/
     // tensor:: token at all, so the kernel's references must not reach C++ name lookup. The sparsity
     // operand is mandatory for this op and batchB >= 1 always, so the condition is constant here --
     // but the define is still required, because the shared kernels default to sparsity-off.
     mm_kernel_in0_sender_writer_defines["SPARSITY"] = "1";
     mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
 
-    // dfb::batch_valid is bound only on Quasar with get_batch_from_reader. A buffer that is not bound has
-    // no dfb:: token, so a define hides the references to it in the kernels that use it. The in0
-    // receiver gets the define next to its binding below.
+    // A buffer that is not bound has no dfb:: token, so a define hides the references to dfb::batch_valid
+    // in the kernels. The in0 receiver gets the define next to its binding below.
     if (use_batch_valid_dfb) {
         mm_kernel_in0_sender_writer_defines["BATCH_VALID_DFB"] = "1";
         mm_kernel_defines["BATCH_VALID_DFB"] = "1";
@@ -618,8 +618,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     Group<KernelSpec> kernels;
 
-    // On Quasar with get_batch_from_reader, the in0 kernel on each node (the sender or a receiver)
-    // produces the batch_valid entries and the compute kernel on that node consumes them.
     const auto batch_valid_binding = [&](DFBEndpointType endpoint_type) {
         return DFBBinding{
             .dfb_spec_name = BATCH_VALID_DFB,

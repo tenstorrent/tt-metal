@@ -24,7 +24,9 @@
 // BATCH_VALID_DFB (Quasar only) gates the batch_valid dataflow buffer, through which this kernel tells
 // the compute kernel on its node which batches to skip; WH/BH use the BRISC mailbox for that. Like
 // SPARSITY, it is a define because a binding that the host does not declare produces no dfb:: token.
-// The host binds the buffer, and sets the define, exactly when get_batch_from_reader is set on Quasar.
+// A factory that sets get_batch_from_reader on Quasar must bind the buffer and set the define for each
+// kernel that uses the buffer; this kernel rejects a Quasar build that sets get_batch_from_reader
+// without the define.
 
 #include <stdint.h>
 
@@ -200,6 +202,8 @@ void kernel_main() {
 #ifdef BATCH_VALID_DFB
     // One entry per batch to the compute kernel on this node: nonzero when the batch is valid.
     DataflowBuffer dfb_batch_valid(dfb::batch_valid);
+#elif defined(ARCH_QUASAR)
+    static_assert(!get_batch_from_reader, "get_batch_from_reader on Quasar requires BATCH_VALID_DFB");
 #endif
 
 #ifdef IN0_SHARDED
