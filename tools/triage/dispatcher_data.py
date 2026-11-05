@@ -241,6 +241,11 @@ class DispatcherData:
     def has_xip_kernel_elf(self, proc_name: str) -> bool:
         return True
 
+    def kernel_loads_as_linked(self, proc_name: str) -> bool:
+        # True when the kernel is loaded at its link address without an XIP transform, so its own ELF is what
+        # sits in L1.
+        return False
+
     def _fallback_kernel_elf_path(self, kernel, proc_name: str, block_type: BlockType | None) -> str | None:
         # When Inspector did not record the kernel ELF path, this method provides a fallback based on
         # the kernel's directory and processor name.
@@ -802,6 +807,13 @@ class DispatcherDataBlackhole(DispatcherData1xx):
                 "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
             },
         }
+
+    def has_xip_kernel_elf(self, proc_name: str) -> bool:
+        # DRISC kernels are loaded as linked (the HAL's Loading::CONTIGUOUS), so no .xip.elf is written for them.
+        return proc_name != "DRISC"
+
+    def kernel_loads_as_linked(self, proc_name: str) -> bool:
+        return proc_name == "DRISC"
 
     def kernel_load_offset(
         self,
