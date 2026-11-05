@@ -22,9 +22,12 @@ from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import Kimi
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     LOUDBOX_SHAPE,
     ON_SIMULATOR,
+    REAL_MARK,
     RING_SIZE,
     SIMULATOR_MARK,
+    SYNTHETIC_MARK,
     TEST_LAYERS,
+    WEIGHTS,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 from tests.scripts.common import get_updated_device_params
@@ -35,6 +38,20 @@ TESTS_DIR = Path(__file__).parent
 
 def pytest_configure(config):
     config.addinivalue_line("markers", f"{SIMULATOR_MARK}: sized for ttsim (`SIMULATOR` in common.py)")
+    config.addinivalue_line("markers", f"{SYNTHETIC_MARK}: runs with random weights (`SYNTHETIC` in common.py)")
+    config.addinivalue_line("markers", f"{REAL_MARK}: runs with the checkpoint's weights (`REAL` in common.py)")
+
+
+def pytest_generate_tests(metafunc):
+    """Runs a test that builds `reference` or `shallow_reference` once per weights mark it carries."""
+    if "weights" not in metafunc.fixturenames:
+        return
+    weights = [mark for mark in WEIGHTS if metafunc.definition.get_closest_marker(mark)]
+    if not weights:
+        pytest.fail(
+            f"{metafunc.definition.nodeid} builds a reference but has neither SYNTHETIC nor REAL", pytrace=False
+        )
+    metafunc.parametrize("weights", weights, scope="session")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -100,12 +117,12 @@ def build_reference(weights: str, num_layers: int | None) -> KimiK3VisionModel:
     `num_layers=None` keeps every layer of the checkpoint's (or the default) config.
     """
     path = checkpoint_path()
-    if weights == "checkpoint" and path is None:
+    if weights == REAL_MARK and path is None:
         pytest.skip(f"set ${CHECKPOINT_ENV} to a Kimi-K3 checkpoint folder")
     vision_config = load_vision_config(path, num_hidden_layers=num_layers)
     torch.manual_seed(0)
     model = KimiK3VisionModel(vision_config)
-    if weights == "checkpoint":
+    if weights == REAL_MARK:
         model.load_state_dict(load_vision_state_dict(path, vision_config.vt_num_hidden_layers))
     else:
         # RMSNorm initializes to ones, which would hide a norm weight that fails to load.
@@ -117,12 +134,12 @@ def build_reference(weights: str, num_layers: int | None) -> KimiK3VisionModel:
 
 
 @pytest.fixture(scope="session")
-def reference(request) -> KimiK3VisionModel:
+def reference(weights) -> KimiK3VisionModel:
     """Every layer; tests pick blocks from it."""
-    return build_reference(request.param, None)
+    return build_reference(weights, None)
 
 
 @pytest.fixture(scope="session")
-def shallow_reference(request) -> KimiK3VisionModel:
+def shallow_reference(weights) -> KimiK3VisionModel:
     """The first TEST_LAYERS layers, for the full-model tests that `shallow_config` describes."""
-    return build_reference(request.param, TEST_LAYERS)
+    return build_reference(weights, TEST_LAYERS)

@@ -15,9 +15,10 @@ import copy
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    SYNTHETIC,
+    REAL,
     assert_quality,
     ATTENTION_GRIDS,
-    REFERENCE,
     RING,
     random_patches,
     ring_parallel,
@@ -34,7 +35,8 @@ def build(mesh_device, sp_axis, num_links, config, reference) -> TT_MoonViT_Visi
 
 
 @RING
-@REFERENCE
+@SYNTHETIC
+@REAL
 def test_load_weights(mesh_device, sp_axis, num_links, config, reference):
     tt = build(mesh_device, sp_axis, num_links, config, reference)
     assert tt.is_loaded()
@@ -42,7 +44,8 @@ def test_load_weights(mesh_device, sp_axis, num_links, config, reference):
 
 
 @RING
-@REFERENCE
+@SYNTHETIC
+@REAL
 @ATTENTION_GRIDS
 def test_vision_model(mesh_device, sp_axis, num_links, config, reference, grid):
     tt = build(mesh_device, sp_axis, num_links, config, reference)

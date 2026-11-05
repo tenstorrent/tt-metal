@@ -12,13 +12,13 @@ import torch
 import ttnn
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    SYNTHETIC,
     assert_quality,
     device_config,
-    row_grid,
-    ROW_GRIDS,
-    REFERENCE,
+    padding_layout_grid,
+    PADDING_LAYOUT_GRIDS,
     MeshRows,
-    P150_AND_RING,
+    P150,
     SIMULATOR_GRID,
     SIMULATOR,
     random_patches,
@@ -48,14 +48,15 @@ def check_patch_embed(mesh_device, sp_axis, config, reference, grid) -> None:
     assert_quality(rows.take(golden), rows.gather(out, mesh_device), relative_rmse=0.005)
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@PADDING_LAYOUT_GRIDS
 def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, size):
-    check_patch_embed(mesh_device, sp_axis, config, reference, row_grid(size))
+    check_patch_embed(mesh_device, sp_axis, config, reference, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 def test_patch_embed_small(mesh_device, sp_axis, num_links, config, reference):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
     check_patch_embed(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)

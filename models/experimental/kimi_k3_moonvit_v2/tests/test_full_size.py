@@ -35,6 +35,8 @@ import ttnn
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests import goldens
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    REAL,
+    ALL_LAYERS,
     RING,
     RING_TRACE,
     Trace,
@@ -49,7 +51,6 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
 )
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
-    MoonViTConfig,
     compute_kernel_config,
     resolve_parallel,
 )
@@ -60,11 +61,9 @@ from models.experimental.kimi_k3_moonvit_v2.tt.vision_block import TT_Vision_Blo
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_model import TT_MoonViT_Encoder, TT_MoonViT_Vision_Model
 
 H, W, SEED = 256, 256, 0
-CHECKPOINT = pytest.mark.parametrize("reference", ["checkpoint"], indirect=True)
 # Against the fp32 outputs, over every row and over each chip's quarter. Relative RMSE is RMS error over
 # the golden's standard deviation; limits as in common.py (measured: layers <= 1.4%, encoder <= 10.5%,
 # model <= 8.4%).
-LAYERS = pytest.mark.parametrize("layer", range(MoonViTConfig().num_hidden_layers), ids=lambda i: f"layer{i}")
 TRACE_LAYER = 0
 LAYER_PCC = 0.99
 LAYER_RELATIVE_RMSE = 0.03
@@ -187,8 +186,8 @@ def check_layer(saved, out, config, parallel, layer, label=""):
 
 
 @RING
-@CHECKPOINT
-@LAYERS
+@REAL
+@ALL_LAYERS
 def test_full_size_layer(mesh_device, sp_axis, num_links, config, reference, saved, layer):
     """`blocks[layer]` on the saved input to that block against its saved output. Each layer's own
     error, without the error of the layers before it."""
@@ -197,7 +196,7 @@ def test_full_size_layer(mesh_device, sp_axis, num_links, config, reference, sav
 
 
 @RING_TRACE
-@CHECKPOINT
+@REAL
 def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, reference, saved):
     """`test_full_size_layer` traced, for `blocks[TRACE_LAYER]`. The trace runs the layer twice on the
     same input (CCL slots 0 and 1, `layer_forward(twice=True)`); the time per layer is half a replay."""
@@ -250,7 +249,7 @@ def check_encoder(saved, out, config, parallel, label=""):
 
 
 @RING
-@CHECKPOINT
+@REAL
 def test_full_size_encoder(mesh_device, sp_axis, num_links, config, reference, saved):
     """Patch embed then all 27 blocks and the final norm on the same pixels `goldens.py` used, against
     the saved patch-embed and `final_layernorm` outputs."""
@@ -271,7 +270,7 @@ def test_full_size_encoder(mesh_device, sp_axis, num_links, config, reference, s
 
 
 @RING_TRACE
-@CHECKPOINT
+@REAL
 def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, reference, saved):
     """`test_full_size_encoder` traced: patch embed and the encoder in one trace, checked on the encoder
     output only (`test_full_size_encoder` checks the patch embed)."""
@@ -318,7 +317,7 @@ def check_model(saved, out, config, parallel, label=""):
 
 
 @RING
-@CHECKPOINT
+@REAL
 def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, saved):
     """The full model (patch embed, all 27 blocks, final norm, patch merger, projector) on the pixels
     `goldens.py` used, against the saved `mm_projector` output."""
@@ -327,7 +326,7 @@ def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, sav
 
 
 @RING_TRACE
-@CHECKPOINT
+@REAL
 def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, reference, saved):
     """`test_full_size_model` traced: the device forward (patch embed through projector) in one trace.
     Host prep, the input writes and the gather stay outside it. Logs the traced device time, then one
