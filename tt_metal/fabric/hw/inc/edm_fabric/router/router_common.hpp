@@ -45,6 +45,12 @@ constexpr bool is_blackhole_arch =
 #else
     false;
 #endif
+constexpr bool is_wormhole_arch =
+#if defined(ARCH_WORMHOLE)
+    true;
+#else
+    false;
+#endif
 
 constexpr bool is_2d = is_2d_fabric != 0;
 
@@ -161,13 +167,19 @@ static_assert(
 // Ethernet TX queues
 // ---------------------------------------------------------------------------------------------------------------------
 
-// A TX queue's status, read as eth_txq_is_busy reads it (a CMD read first, BH-55), so it can be read in a group with
-// other registers; txq_busy tells from it whether a command is still going.
+// A TX queue's status, read as eth_txq_is_busy reads it, so it can be read in a group with other registers; txq_busy
+// tells from it whether a command is still going: on Blackhole STATUS's cmd-ongoing bit, read after a CMD read (BH-55),
+// on Wormhole the CMD register, nonzero while a command is going.
+#if defined(ARCH_BLACKHOLE)
 FORCE_INLINE uint32_t read_txq_status(uint8_t q) {
     (void)eth_txq_reg_read(q, ETH_TXQ_CMD);
     return eth_txq_reg_read(q, ETH_TXQ_STATUS);
 }
 FORCE_INLINE bool txq_busy(uint32_t status) { return ((status >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 1u) != 0; }
+#elif defined(ARCH_WORMHOLE)
+FORCE_INLINE uint32_t read_txq_status(uint8_t q) { return eth_txq_reg_read(q, ETH_TXQ_CMD); }
+FORCE_INLINE bool txq_busy(uint32_t status) { return status != 0; }
+#endif
 
 // Byte enables of a whole-word inline write (credit registers and words).
 constexpr uint32_t INLINE_WRITE_ALL_BYTES = 0xF;
@@ -309,7 +321,7 @@ static_assert(
 // ---------------------------------------------------------------------------------------------------------------------
 // Supported configurations
 // ---------------------------------------------------------------------------------------------------------------------
-//   - Blackhole; two ERISCs (one role each, a TX queue each) or one ERISC (both roles);
+//   - Blackhole, two ERISCs (one role each, a TX queue each) or one ERISC (both roles); Wormhole, one ERISC;
 //   - 1D and 2D: lines, meshes, rings and tori (bubble flow control; first-level acks on VC0); strict atomics;
 //   - VC0; VC1 on 2D multi-mesh fabrics (intermesh landing, crossover and exits);
 //   - VC2 on 2D routers, with or without VC1: neighbour exchange (a worker channel into a receiver channel that only

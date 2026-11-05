@@ -100,7 +100,10 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
     const bool deadlock_avoidance = arg("ENABLE_DEADLOCK_AVOIDANCE") != 0;
     const uint32_t local_tensix_connections = arg("NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS");
 
-    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "the router supports Blackhole only");
+    TT_FATAL(
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
+        "the router supports Blackhole and Wormhole only");
+    TT_FATAL(arch != tt::ARCH::WORMHOLE_B0 || num_active_eriscs == 1, "the router runs on one ERISC on Wormhole");
     // VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
     TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
     // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel

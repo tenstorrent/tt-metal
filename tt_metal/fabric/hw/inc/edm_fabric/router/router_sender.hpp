@@ -1059,15 +1059,24 @@ FORCE_INLINE void set_up_channels(const std::array<size_t, MAX_NUM_SENDER_CHANNE
 // While init waits for an upstream router, the base firmware's routing runs once per this many polls.
 constexpr uint32_t POLLS_PER_ROUTING_RUN = 100000;
 
-// Waits until an upstream router asks to connect on `connection_semaphore`, or termination. One body for every channel.
-// Cold (optimized for size): it runs only until that router connects.
+// What init's wait for an upstream router does besides polling the connect request: on Blackhole it ends on
+// termination and runs the base firmware's routing every POLLS_PER_ROUTING_RUN polls. On Wormhole it polls the connect
+// request alone, as the fabric's Wormhole routers always have; the Ethernet handshake's waits there skip the
+// termination check too (fabric_router_eth_handshake.hpp).
+constexpr bool connect_wait_checks_termination = is_blackhole_arch;
+constexpr bool connect_wait_runs_routing = is_blackhole_arch;
+
+// Waits until an upstream router asks to connect on `connection_semaphore`, or termination where the wait checks it.
+// One body for every channel. Cold (optimized for size): it runs only until that router connects.
 __attribute__((noinline, cold)) void wait_for_connect_request(volatile tt_l1_ptr uint32_t* connection_semaphore) {
     uint32_t polls = 0;
-    while (!connect_is_requested(*connection_semaphore) && !terminating()) {
+    while (!connect_is_requested(*connection_semaphore) && !(connect_wait_checks_termination && terminating())) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        if (polls++ == POLLS_PER_ROUTING_RUN) {
-            polls = 0;
-            run_routing();
+        if constexpr (connect_wait_runs_routing) {
+            if (polls++ == POLLS_PER_ROUTING_RUN) {
+                polls = 0;
+                run_routing();
+            }
         }
     }
 }

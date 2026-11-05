@@ -4,8 +4,8 @@
 
 #pragma once
 
-// The single-ERISC router (Blackhole with two-ERISC mode off; Wormhole once supported): one ERISC runs both roles. Each
-// role keeps its two-ERISC pass (sender::pass, receiver::pass) and its state; here each pass runs out of line over its
+// The single-ERISC router (Blackhole with two-ERISC mode off; Wormhole): one ERISC runs both roles. Each role
+// keeps its two-ERISC pass (sender::pass, receiver::pass) and its state; here each pass runs out of line over its
 // state in memory, so neither role's code holds the other's state in registers. The receiver's pass runs first: it
 // frees slots and sends the credits the remote sender is waiting on.
 // Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp), with no other
