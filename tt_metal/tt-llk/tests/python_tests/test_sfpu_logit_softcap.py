@@ -15,7 +15,6 @@ tanh saturates to +-1 by |x| around 5, so the test covers the linear region, the
 knee, and deep saturation.
 """
 
-import struct
 from dataclasses import dataclass
 
 import torch
@@ -23,7 +22,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -32,8 +31,9 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
     TemplateParameter,
+    fp32_bits,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
@@ -53,16 +53,6 @@ SATURATED_ABS = 6.0
 # Gemma's final logit softcap is 30.0. 1.0 is the degenerate pass-through case,
 # and 0.5 exercises a cap below 1.
 CAPS = [30.0, 1.0, 0.5]
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-def _valid_dest_acc(formats):
-    if formats.input.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
 
 
 def _logit_softcap_golden(input_tensor, cap: float, dest_acc):
@@ -90,7 +80,7 @@ def _assert_matches(golden, res, output_format, flat: bool, context: str) -> Non
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=lambda formats: _valid_dest_acc(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
     input_range=INPUT_RANGES,
     cap=CAPS,
 )
@@ -115,7 +105,7 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
         "sources/sfpu_logit_softcap_test.cpp",
         formats,
         templates=[
-            SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+            SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
         ],
         runtimes=[
             TILE_COUNT(1),
@@ -135,7 +125,7 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     # Every lane lands on the same value, either because the whole range sits
     # on one saturated side (y = sgn(x) * cap) or because x is 0 (y = 0).
@@ -193,7 +183,7 @@ def test_sfpu_logit_softcap_polynomial_rounding(cap, input_range):
             "sources/sfpu_logit_softcap_test.cpp",
             InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
             templates=[
-                SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+                SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
                 LOGIT_SOFTCAP_POLYNOMIAL(),
             ],
             runtimes=[TILE_COUNT(3)],

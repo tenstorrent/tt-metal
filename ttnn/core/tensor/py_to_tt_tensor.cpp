@@ -57,6 +57,16 @@ bool can_exec_ops_on_device(DataType type) {
             // https://github.com/tenstorrent/tt-metal/issues/50401 (tilize/untilize doesn't support int8)
         case DataType::FP8_E4M3:
             // https://github.com/tenstorrent/tt-metal/issues/43909 (typecast uses TILE, but FP8_E4M3 is RM-only)
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+            // https://github.com/tenstorrent/tt-metal/issues/58157 (typecast/tilize don't produce MX yet;
+            // MX tensors are packed on the host)
             return false;
         default: return true;
     }
@@ -360,8 +370,11 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         ttsl::unreachable();
     };
 
-    const DataType mapped_dst_type =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : dst_dtype;
+    // Block formats are packed from a plain host buffer. MX goes through FLOAT32 because the MX packers only
+    // take float, and a BFLOAT16 hop would round twice.
+    const DataType mapped_dst_type = (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)
+                                         ? DataType::BFLOAT16
+                                         : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
@@ -397,6 +410,9 @@ Tensor convert_python_tensor_to_tt_tensor(
     ZoneScoped;
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
+    }
+    if (is_mx(dst_dtype)) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for {}!", dst_dtype);
     }
     GraphTracker::instance().track_function_start(
         "ttnn::convert_python_tensor_to_tt_tensor",

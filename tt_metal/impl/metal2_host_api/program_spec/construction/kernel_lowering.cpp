@@ -15,9 +15,11 @@
 #include <variant>
 #include <vector>
 
+#include <experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -55,7 +57,12 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
 std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
-    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    named_compile_args.reserve(bindings.size());
+    for (const auto& [name, value] : bindings) {
+        named_compile_args.emplace(name, value.to_uint32());
+    }
+    return named_compile_args;
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
     return std::map<std::string, std::string>(defines.begin(), defines.end());
@@ -72,12 +79,19 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         kernel_spec.unique_id);
     const auto& gen1 = *dm_config.config_1xx;
 
+    auto defines = to_defines_map(kernel_spec.compiler_options.defines);
+    // The watcher's NoC sanitizer checks that the two kernels sharing a dedicated NOC keep to disjoint
+    // command buffers; only kernels built with this define run the check (internal/debug/sanitize.h).
+    if (gen1.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
+        defines["DEDICATED_NOC_SHARED"] = "1";
+    }
+
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .defines = std::move(defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
@@ -149,6 +163,10 @@ ComputeConfig MakeGen1ComputeConfig(
                                                   ? compute_config.config_1xx->bfp_pack_precision_mode
                                                   : Precision::Approximate;
 
+    // enable_pack_rvv is TT-1.2.x-only (Blackhole); config_12x is ignored on Wormhole.
+    const bool enable_trisc2_rvv = hal.get_arch() == tt::ARCH::BLACKHOLE && compute_config.config_12x.has_value() &&
+                                   compute_config.config_12x->enable_pack_rvv;
+
     return ComputeConfig{
         .math_fidelity = compute_config.fpu_math_fidelity,
         .fp32_dest_acc_en = compute_config.enable_32_bit_dest,
@@ -156,6 +174,7 @@ ComputeConfig MakeGen1ComputeConfig(
         .unpack_to_dest_mode = unpack_dst_modes,
         .bfp8_pack_precise = (bfp_pack_precision_mode == Precision::Precise),
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc2_rvv = enable_trisc2_rvv,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -201,6 +220,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !compute_config.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc0_rvv = compute_config.config_2xx.has_value() && compute_config.config_2xx->enable_unpack_rvv,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -283,6 +303,28 @@ void BakeComputeSemaphoreMax(
     }
 }
 
+// Place a kernel's RTA or CRTA arrays in section 1 of their dispatch buffer: after the scalars, which
+// take the first `num_scalars` words, in declaration order.
+std::vector<ArrayArgLayout> PlaceArrayArgs(const Group<ArrayArgDecl>& decls, size_t num_scalars) {
+    std::vector<ArrayArgLayout> placed;
+    placed.reserve(decls.size());
+    auto word_offset = static_cast<uint32_t>(num_scalars);
+    for (const ArrayArgDecl& decl : decls) {
+        placed.push_back(ArrayArgLayout{.name = decl.name, .word_offset = word_offset, .size = decl.size});
+        word_offset += decl.size;
+    }
+    return placed;
+}
+
+// Size of section 1 (the named args) of a dispatch buffer, in words: the scalars, then the arrays.
+size_t NamedSectionWords(size_t num_scalars, const std::vector<ArrayArgLayout>& arrays) {
+    size_t words = num_scalars;
+    for (const ArrayArgLayout& array : arrays) {
+        words += array.size;
+    }
+    return words;
+}
+
 LoweredKernel LowerKernel(
     const KernelSpec& kernel_spec,
     const ProgramSpec& spec,
@@ -299,17 +341,40 @@ LoweredKernel LowerKernel(
     const tt::tt_metal::DataflowBufferBindingHandleMap& dfb_handles = resource_bindings.dfbs;
     const tt::tt_metal::SemaphoreBindingHandleMap& semaphore_handles = resource_bindings.semaphores;
 
+    // Named args. The scalar names are passed to the Kernel ctor: they are used at JIT time to emit
+    // kernel_args_generated.h and factor into the kernel cache key. (The user CRTA list passes through
+    // unchanged; the TensorBinding address section is tracked separately, via tensor_binding_handles.)
+    //
+    // Arrays are placed before the tensor bindings are resolved: RTA/CRTA arrays follow the scalars in
+    // the named section of their dispatch buffer, and the binding sections start where it ends. CTA
+    // array values are baked into the generated header.
+    const auto& user_schema = kernel_spec.runtime_arg_schema;
+    const auto& named_rtas = user_schema.runtime_arg_names;
+    const auto& user_named_crtas = user_schema.common_runtime_arg_names;
+    KernelArrayArgs array_args{
+        .runtime = PlaceArrayArgs(user_schema.runtime_array_args, named_rtas.size()),
+        .common_runtime = PlaceArrayArgs(user_schema.common_runtime_array_args, user_named_crtas.size()),
+    };
+    for (const auto& [name, value] : kernel_spec.compile_time_array_args) {
+        std::vector<uint32_t>& values = array_args.compile_time[name];
+        values.reserve(value.size());
+        for (size_t i = 0; i < value.size(); ++i) {
+            values.push_back(value[i].to_uint32());
+        }
+    }
+
     // Resolve TensorBindings for this kernel:
     //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
     //    (after the user CTA-vararg prefix)
-    //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-    const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+    //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section),
+    //    or in each node's RTA buffer for a per-node binding (after the user-named RTAs, scalar and array)
     const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
     const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
     TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
         kernel_spec,
         resources.tensor_parameters,
-        /*base_named_crta_count=*/user_named_crtas.size(),
+        /*base_named_crta_words=*/NamedSectionWords(user_named_crtas.size(), array_args.common_runtime),
+        /*base_named_rta_words=*/NamedSectionWords(named_rtas.size(), array_args.runtime),
         /*base_cta_offset=*/vararg_cta_count);
 
     // Create TensorBindingHandles for this kernel
@@ -325,12 +390,6 @@ LoweredKernel LowerKernel(
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
-
-    // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
-    // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
-    // address section is tracked separately (via tensor_binding_handles), so we pass the user
-    // CRTA list through unchanged.
-    const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -360,7 +419,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         } else {
             auto config = MakeGen2ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
@@ -378,12 +438,18 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         }
     } else {  // gen1
         if (kernel_spec.is_data_movement_kernel()) {
             auto config = MakeGen1DataMovementConfig(kernel_spec);
             config.compile_args = std::move(compile_args);
+            // As CreateKernel: fabric routing mode and packet-header sizing, for kernels that talk to the fabric.
+            for (const auto& [name, value] :
+                 MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
+                config.defines.emplace(name, value);
+            }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
                 kernel_src,
@@ -395,7 +461,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         } else {
             auto config = MakeGen1ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
@@ -411,7 +478,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         }
     }
 
@@ -436,7 +504,10 @@ LoweredKernel LowerKernel(
     // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
     kernel->set_compile_time_vararg_count(vararg_cta_count);
 
-    // Build the RTA+CRTA schema (named lists + vararg counts) for the ProgramImpl.
+    // Array args (also part of the kernel cache key and of kernel_args_generated.h).
+    kernel->set_array_args(std::move(array_args));
+
+    // Build the RTA+CRTA schema (named lists, array slots + vararg counts) for the ProgramImpl.
     // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
     // the user-provided values at dispatch time.
     //
@@ -449,7 +520,6 @@ LoweredKernel LowerKernel(
     // An explicit override of 0 erases the scalar-default entry so run-params treats
     // that node as having no varargs (rather than requiring an "empty" value list).
     // Overlapping override entries (two entries covering the same node) are an error.
-    const auto& user_schema = kernel_spec.runtime_arg_schema;
     detail::ProgramImpl::KernelRTASchema runtime_schema;
     runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
 
@@ -466,6 +536,16 @@ LoweredKernel LowerKernel(
     }
     for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
         runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
+    }
+    // Array name -> slots, copied from the placement the kernel was given above.
+    using ArraySlots = detail::ProgramImpl::KernelRTASchema::ArraySlots;
+    for (const ArrayArgLayout& array : kernel->get_array_args().runtime) {
+        runtime_schema.runtime_array_arg_slots.emplace(
+            array.name, ArraySlots{.first_slot = array.word_offset, .size = array.size});
+    }
+    for (const ArrayArgLayout& array : kernel->get_array_args().common_runtime) {
+        runtime_schema.common_runtime_array_arg_slots.emplace(
+            array.name, ArraySlots{.first_slot = array.word_offset, .size = array.size});
     }
 
     // Varargs schema now lives on KernelAdvancedOptions.
