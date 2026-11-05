@@ -2416,13 +2416,35 @@ class TPGatedDeltaNet:
                 self._kda_actual_start,
                 emit_state=False,
             )
-            conv_new_state = ttnn.matmul(
-                masks["conv_sel"],
-                qkv,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=exact_select_cfg(),
-                dtype=ttnn.bfloat16,
-            )
+            # QWEN36_GDN_CONVSEL_TAIL=W (rows, a tile multiple): the selected rows valid_len-3..valid_len-1 are known to
+            # lie in the bucket's last W rows (the caller guarantees valid_len - 3 >= Tb - W): select from those
+            # rows only instead of a [3, Tb] x [Tb, C] one-hot matmul over the whole bucket (bit-identical).
+            _w = int(os.environ.get("QWEN36_GDN_CONVSEL_TAIL", "0"))
+            if 0 < _w < Tb:
+                _q = ttnn.slice(qkv, (0, Tb - _w, 0), (1, Tb, qkv.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _s = ttnn.slice(
+                    masks["conv_sel"],
+                    (0, 0, Tb - _w),
+                    (1, masks["conv_sel"].shape[1], Tb),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                conv_new_state = ttnn.matmul(
+                    _s,
+                    _q,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=exact_select_cfg(),
+                    dtype=ttnn.bfloat16,
+                )
+                ttnn.deallocate(_q)
+                ttnn.deallocate(_s)
+            else:
+                conv_new_state = ttnn.matmul(
+                    masks["conv_sel"],
+                    qkv,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=exact_select_cfg(),
+                    dtype=ttnn.bfloat16,
+                )
         else:
             q, k, v, conv_new_state = self._kda_conv_group(
                 qkv,
