@@ -95,9 +95,27 @@ def cmd_run(a):
     print(f"wrote {a.out}; concurrent {res['concurrent_seconds']} s; spec counters {res['spec']}")
 
 
+def _stream(url, model, prompt, max_tokens):
+    """A streamed greedy completion: seconds to the first token, and from the first token to the last (decode)."""
+    body = {"model": model, "prompt": prompt, "max_tokens": max_tokens, "temperature": 0.0, "ignore_eos": True}
+    body["stream"] = True
+    req = urllib.request.Request(
+        url.rstrip("/") + "/v1/completions", json.dumps(body).encode(), {"Content-Type": "application/json"}
+    )
+    t0 = time.time()
+    stamps = []
+    with urllib.request.urlopen(req, timeout=1800) as r:
+        for line in r:
+            line = line.decode().strip()
+            if line.startswith("data: ") and line != "data: [DONE]":
+                stamps.append(time.time())
+    return {"ttft": stamps[0] - t0, "decode": stamps[-1] - stamps[0], "stamps": stamps}
+
+
 def cmd_perf(a):
-    """Decode speed: ``n`` short prompts at once, ``max_tokens`` each, greedy. Step time = wall time of the slowest
-    request / its verify steps, steps = output tokens / mean tokens per step (vLLM's spec counters)."""
+    """Decode speed: ``n`` short prompts at once, ``max_tokens`` each, greedy, streamed. Step time = a request's decode
+    time (first to last token, mean over requests) / its verify steps, steps = (max_tokens - 1) / tokens per step
+    (vLLM's spec counters)."""
     model = a.model or _model(a.url)
     words = _words()
     prompts = [" ".join(words[97 * i : 97 * i + a.words]) + "\n\nContinue the text." for i in range(a.n)]
@@ -110,7 +128,7 @@ def cmd_perf(a):
     res = [None] * a.n
 
     def one(i):
-        res[i] = _complete(a.url, model, prompts[i], a.max_tokens)
+        res[i] = _stream(a.url, model, prompts[i], a.max_tokens)
 
     t0 = time.time()
     threads = [threading.Thread(target=one, args=(i,)) for i in range(a.n)]
@@ -120,25 +138,77 @@ def cmd_perf(a):
         t.join()
     wall = time.time() - t0
     d = {n: (None if m0[n] is None else _metric(a.url, n) - m0[n]) for n in names}
-    out_tok = sum(r["usage"]["completion_tokens"] for r in res)
     acc, drafts = d[names[0]], d[names[2]]
     per_step = None if not drafts else 1 + acc / drafts  # tokens per verify step (accepted drafts + the bonus)
-    slow = max(r["seconds"] for r in res)
-    steps = a.max_tokens / per_step if per_step else None
+    dec = sum(r["decode"] for r in res) / a.n
+    # one streamed chunk per verify step: the median chunk interval while every request is decoding is the step time
+    lo, hi = max(r["stamps"][0] for r in res), min(r["stamps"][-1] for r in res)
+    gaps = sorted(y - x for r in res for x, y in zip(r["stamps"], r["stamps"][1:]) if x >= lo and y <= hi)
     out = {
+        "step_ms_median_chunk_gap": None if not gaps else round(1000 * gaps[len(gaps) // 2], 2),
+        "chunk_gaps": len(gaps),
         "n": a.n,
         "max_tokens": a.max_tokens,
         "wall_s": round(wall, 3),
-        "output_tokens": out_tok,
-        "tok_per_s": round(out_tok / wall, 2),
         "tokens_per_step": per_step,
         "draft_acceptance": None if not d[names[1]] else acc / d[names[1]],
-        "step_ms_slowest_request": None if not steps else round(1000 * slow / steps, 2),
-        "requests_s": [r["seconds"] for r in res],
+        "decode_tok_per_s_per_user": round((a.max_tokens - 1) / dec, 2),
+        "step_ms": None if not per_step else round(1000 * dec * per_step / (a.max_tokens - 1), 2),
+        "ttft_s_max": round(max(r["ttft"] for r in res), 3),
         "spec_counters": d,
     }
     pathlib.Path(a.out).write_text(json.dumps(out, indent=1))
-    print(json.dumps({k: v for k, v in out.items() if k != "requests_s"}))
+    print(json.dumps({k: v for k, v in out.items() if k != "spec_counters"}))
+
+
+def _ids(url, model, ids, max_tokens):
+    out = _post(
+        url.rstrip("/") + "/v1/completions",
+        {
+            "model": model,
+            "prompt": ids,
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+            "ignore_eos": True,
+            "return_token_ids": True,
+        },
+    )
+    return out["choices"][0]["token_ids"], out["choices"][0]["text"]
+
+
+def cmd_followup(a):
+    """Decode-written boundary states: prompts of ``lens`` tokens decode across the block boundary ``block``; a
+    follow-up = prompt + its output up to ``block + 40`` tokens + a question then hits the boundary state decode left
+    (needs a retention that keeps decode boundaries). Records prefix-cache hit tokens and the follow-up outputs."""
+    model = a.model or _model(a.url)
+    words = " ".join(_words())
+    toks = _post(a.url.rstrip("/") + "/tokenize", {"model": model, "prompt": words})["tokens"]
+    q = _post(a.url.rstrip("/") + "/tokenize", {"model": model, "prompt": "\n\nWhat is this text about?"})["tokens"]
+    res = {}
+    for L in [int(x) for x in a.lens.split(",")]:
+        first = toks[:L]
+        out, _ = _ids(a.url, model, first, a.block + 64 - L)
+        f = first + out[: a.block + 40 - L] + q
+        h0 = _metric(a.url, "vllm:prefix_cache_hits_total")
+        fo, ft = _ids(a.url, model, f, a.max_tokens)
+        hit = None if h0 is None else _metric(a.url, "vllm:prefix_cache_hits_total") - h0
+        res[str(L)] = {"followup_ids": f, "first_out": out, "out": fo, "text": ft, "prefix_hits": hit}
+        print(f"L={L}: follow-up {len(f)} tokens, prefix hit tokens {hit}", flush=True)
+    pathlib.Path(a.out).write_text(json.dumps(res))
+
+
+def cmd_replay(a):
+    """Send the follow-ups of a ``followup`` file to this server (cold, or a reference build); compare outputs."""
+    model = a.model or _model(a.url)
+    ref = json.loads(pathlib.Path(a.src).read_text())
+    same = 0
+    for L, r in ref.items():
+        fo, _ = _ids(a.url, model, r["followup_ids"], len(r["out"]))
+        eq = fo == r["out"]
+        same += eq
+        n = next((i for i, (x, y) in enumerate(zip(fo, r["out"])) if x != y), None)
+        print(f"L={L}: {'equal' if eq else f'first different token {n}'}")
+    print(f"{same} of {len(ref)} follow-ups equal")
 
 
 def cmd_prefix(a):
@@ -214,11 +284,23 @@ def main():
     f.add_argument("--n", type=int, default=8)
     f.add_argument("--words", type=int, default=300)
     f.add_argument("--max-tokens", type=int, default=512)
+    u = sub.add_parser("followup")
+    u.add_argument("--url", default="http://localhost:8000")
+    u.add_argument("--model", default=None)
+    u.add_argument("--out", required=True)
+    u.add_argument("--block", type=int, default=2048)
+    u.add_argument("--lens", default="2040,2043,2045,2047")
+    u.add_argument("--max-tokens", type=int, default=64)
+    r2 = sub.add_parser("replay")
+    r2.add_argument("--url", default="http://localhost:8000")
+    r2.add_argument("--model", default=None)
+    r2.add_argument("src")
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
     a = ap.parse_args()
-    return {"run": cmd_run, "perf": cmd_perf, "prefix": cmd_prefix, "compare": cmd_compare}[a.cmd](a) or 0
+    cmds = {"run": cmd_run, "perf": cmd_perf, "prefix": cmd_prefix, "followup": cmd_followup, "replay": cmd_replay}
+    return {**cmds, "compare": cmd_compare}[a.cmd](a) or 0
 
 
 if __name__ == "__main__":
