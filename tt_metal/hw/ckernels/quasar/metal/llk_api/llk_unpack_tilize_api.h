@@ -53,9 +53,12 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
     if constexpr (UnpackToDestEn) {
-        LLK_ASSERT(
-            tensor_shape.total_num_faces() == NUM_FACES, "unpack-to-dest tilize supports only 32x32 tiles on Quasar");
-        const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        // A tiny tile goes through UNPACR_DEST_STRIDE, which needs the strided descriptor the SrcA path uses.
+        const std::uint8_t bfd_id =
+            tensor_shape.total_num_faces() == NUM_FACES
+                ? llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id)
+                : llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
+                      operand_id);
         _llk_unpack_tilize_to_dest_init_(bfd_id, full_ct_dim, 1 /*block_ct_dim*/, tensor_shape);
     } else if (tensor_shape.total_num_faces() == NUM_FACES) {
         const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
@@ -116,10 +119,18 @@ inline void llk_unpack_tilize_block(
         rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
 
     if constexpr (UnpackToDestEn) {
-        _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, l1_base_idx);
+        const bool small_faces = tensor_shape.total_num_faces() != NUM_FACES;
+        if (!small_faces) {
+            _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, l1_base_idx);
+        }
         for (std::uint32_t t = 0; t < block_c_tiles; t++) {
             llk_unpack_wait_for_dest_available();
-            _llk_unpack_tilize_to_dest_(t + offset, 0 /*dst_tile_idx*/);
+            if (small_faces) {
+                // The strided run carries the tile-row offset in its L1 index, as the SrcA small-faces path does.
+                _llk_unpack_tilize_to_dest_small_faces_(tensor_shape, l1_base_idx + t + offset, 0 /*dst_tile_idx*/);
+            } else {
+                _llk_unpack_tilize_to_dest_(t + offset, 0 /*dst_tile_idx*/);
+            }
             llk_unpack_dest_section_done<DST_ACCUM_MODE>();
         }
     } else if (tensor_shape.total_num_faces() == NUM_FACES) {

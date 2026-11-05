@@ -92,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Placer API under the dest-dvalid scheme set up above: the placers carry no synchronization, and the
             // bank tile offset reset to 0 keeps every section at DEST tile 0, as the bare UNP_DEST MOP had it.
             _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
         else
         {
@@ -131,7 +131,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if constexpr (unpack_to_dest)
                     {
                         // One section of tiles_in_block tiles at DEST tile 0, then the dest-dvalid hand-off to the packer.
-                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
+                        _llk_unpack_unary_operand_to_dest_block_(
+                            block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block, 1 /*l1_tile_stride*/, tensor_shape_A);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                         {
                             _llk_unpack_dest_dvalid_section_done_<dest_sync>();

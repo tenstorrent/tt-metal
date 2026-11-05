@@ -1554,6 +1554,34 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCr
     }
 }
 
+// Unpack-to-dest tilize of the tiny tiles the Quasar tilize path accepts (1x32, 2x32): 32-bit inputs straight into a
+// 32-bit DEST, every tile its own DEST section, as QuasarComputeUnpackTilizeToDest does for 32x32.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeToDestTinyTile) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}, {2, 10}};
+    std::vector<std::array<std::uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
+    for (auto& cfg : test_configs) {
+        for (auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                for (tt::DataFormat input_data_format : {tt::DataFormat::Float32, tt::DataFormat::Int32}) {
+                    run_quasar_tilize_untilize_test(
+                        this->device(),
+                        cfg[0],
+                        cfg[1],
+                        QuasarTestMode::TILIZE,
+                        dst_full_sync_en,
+                        /*fp32_dest_acc_en=*/true,
+                        input_data_format,
+                        input_data_format,
+                        /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                        /*face_r_dim=*/geo[2],
+                        /*tilize_cross_tile_rows=*/false,
+                        /*unpack_to_dest=*/true);
+                }
+            }
+        }
+    }
+}
+
 // Quasar Unpack TilizeA_B (tilize + reduce col max)
 // Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
 // Disabled due to hang: tenstorrent/tt-metal#59923
