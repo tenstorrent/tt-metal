@@ -9,8 +9,8 @@
 // eltwise_binary_sfpu_no_bcast_dfb.cpp with the RHS handling changed for a single, reused scalar tile:
 // the RHS PREPROCESS + wait_front(1) move OUT of process_sfpu_scalar_tiles (the scalar tile is produced
 // once, by the writer), the per-tile RHS copy_tile always reads tile index 0, and the RHS DFB is popped
-// once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the ARCH_QUASAR
-// copy_tile_to_dst_init_short gasket are identical to the no-broadcast kernel.
+// once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the reconfig_data_format_srca +
+// copy_init operand switch are identical to the no-broadcast kernel.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)
@@ -55,12 +55,13 @@
 
 // Process n LHS tiles against the scalar tile parked at index 0 in dfb_post_rhs.
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <typename DFBPreLhs, typename DFBPostLhs, typename DFBPostRhs, typename DFBOut>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
-    DataflowBuffer& dfb_pre_lhs,
-    DataflowBuffer& dfb_post_lhs,
-    DataflowBuffer& dfb_post_rhs,
-    DataflowBuffer& dfb_out ISCLOSE_RT_ARG_PARAMS) {
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out ISCLOSE_RT_ARG_PARAMS) {
     const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
     const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
     const uint32_t dfb_out_id = dfb_out.get_id();
@@ -153,7 +154,7 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS)
     DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
 #else
-    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+    auto& dfb_pre_lhs = dfb_post_lhs;
 #endif
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);

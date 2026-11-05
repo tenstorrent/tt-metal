@@ -148,7 +148,7 @@ void kernel_main() {
             // Compute xmm
             // x - mean and mask(optional)
             constexpr auto dfb_xmm = dfb::tmp2;
-            DataflowBuffer& dfb_xmm_obj = dfb_tmp2_obj;
+            auto& dfb_xmm_obj = dfb_tmp2_obj;
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -196,7 +196,7 @@ void kernel_main() {
 
         // Compute dyadd
         constexpr auto dfb_dyadd = dfb::tmp1;
-        DataflowBuffer& dfb_dyadd_obj = dfb_tmp1_obj;
+        auto& dfb_dyadd_obj = dfb_tmp1_obj;
         dfb_dycopy_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             if (wt == 0) {
@@ -236,9 +236,9 @@ void kernel_main() {
 
         // Compute ydy and ydyadd
         constexpr auto dfb_ydy = dfb::tmp2;
-        DataflowBuffer& dfb_ydy_obj = dfb_tmp2_obj;
+        auto& dfb_ydy_obj = dfb_tmp2_obj;
         constexpr auto dfb_ydyadd = dfb::tmp3;
-        DataflowBuffer& dfb_ydyadd_obj = dfb_tmp3_obj;
+        auto& dfb_ydyadd_obj = dfb_tmp3_obj;
         dfb_y_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute ydy
@@ -294,7 +294,7 @@ void kernel_main() {
             // Compute ndy
             // n * dy
             constexpr auto dfb_ndy = dfb::tmp1;
-            DataflowBuffer& dfb_ndy_obj = dfb_tmp1_obj;
+            auto& dfb_ndy_obj = dfb_tmp1_obj;
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -313,7 +313,7 @@ void kernel_main() {
             // ndymdysum
             // n * dy - Sum[dy]
             constexpr auto dfb_ndymdysum = dfb::tmp2;
-            DataflowBuffer& dfb_ndymdysum_obj = dfb_tmp2_obj;
+            auto& dfb_ndymdysum_obj = dfb_tmp2_obj;
             ckl::sub<
                 ckl::input(dfb_ndy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -328,7 +328,7 @@ void kernel_main() {
             // Compute yydysum
             // y * Sum[y * dy]
             constexpr auto dfb_yydysum = dfb::tmp3;
-            DataflowBuffer& dfb_yydysum_obj = dfb_tmp3_obj;
+            auto& dfb_yydysum_obj = dfb_tmp3_obj;
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<

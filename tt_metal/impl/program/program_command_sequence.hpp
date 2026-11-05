@@ -56,6 +56,9 @@ struct ProgramCommandSequence {
         CoreCoord logical_core;
         uint8_t* dst;
         uint32_t size;
+        // Sum of the DFBs' config generations when the payload was last serialized. Each generation only
+        // grows, so the sum changes exactly when one of the DFBs changed.
+        uint64_t last_config_generation;
     };
     struct CircularBufferConfigUpdate {
         CircularBufferImpl* circular_buffer;
@@ -105,7 +108,6 @@ struct ProgramCommandSequence {
     std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
-    std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr{};
 
     bool prefetcher_cache_used = false;

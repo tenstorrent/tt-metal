@@ -52,21 +52,40 @@ constexpr auto dfb_in_beta = dfb_times_gamma_out;
 constexpr auto dfb_in_beta = normed_output_dfb;
 #endif
 
-ALWI void normalize_chunk(
-    DataflowBuffer& dfb_inp,
-    DataflowBuffer& dfb_stats_reduced,
-    DataflowBuffer& dfb_x_minus_mean,
-    DataflowBuffer& dfb_recip_sqrt_var,
-    DataflowBuffer& normed_output_dfb_obj,
+template <
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4
 #ifdef FUSE_GAMMA
-    DataflowBuffer& dfb_x_normed,
-    DataflowBuffer& dfb_gamma,
-    DataflowBuffer& dfb_times_gamma_out_obj,
+    ,
+    typename DFB5,
+    typename DFB6,
+    typename DFB7
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer& dfb_in_beta_obj,
-    DataflowBuffer& dfb_beta,
-    DataflowBuffer& dfb_out,
+    ,
+    typename DFB8,
+    typename DFB9,
+    typename DFB10
+#endif
+    >
+ALWI void normalize_chunk(
+    DFB0& dfb_inp,
+    DFB1& dfb_stats_reduced,
+    DFB2& dfb_x_minus_mean,
+    DFB3& dfb_recip_sqrt_var,
+    DFB4& normed_output_dfb_obj,
+#ifdef FUSE_GAMMA
+    DFB5& dfb_x_normed,
+    DFB6& dfb_gamma,
+    DFB7& dfb_times_gamma_out_obj,
+#endif
+#ifdef FUSE_BETA
+    DFB8& dfb_in_beta_obj,
+    DFB9& dfb_beta,
+    DFB10& dfb_out,
 #endif
     const uint32_t num_tiles) {
     const auto shape = ckl::IterationShape::tiles(num_tiles).block_size(ckl::DEST_AUTO_LIMIT);
@@ -131,9 +150,9 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     DataflowBuffer dfb_x_normed(dfb::x_normed);
-    DataflowBuffer& normed_output_dfb_obj = dfb_x_normed;
+    auto& normed_output_dfb_obj = dfb_x_normed;
 #else
-    DataflowBuffer& normed_output_dfb_obj = dfb_out;
+    auto& normed_output_dfb_obj = dfb_out;
 #endif
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb::gamma);
@@ -144,12 +163,12 @@ void kernel_main() {
 #if defined(FUSE_GAMMA) && defined(FUSE_BETA)
     DataflowBuffer dfb_times_gamma_out_obj(dfb_times_gamma_out);
 #else
-    DataflowBuffer& dfb_times_gamma_out_obj = dfb_out;
+    auto& dfb_times_gamma_out_obj = dfb_out;
 #endif
 #ifdef FUSE_GAMMA
-    DataflowBuffer& dfb_in_beta_obj = dfb_times_gamma_out_obj;
+    auto& dfb_in_beta_obj = dfb_times_gamma_out_obj;
 #else
-    DataflowBuffer& dfb_in_beta_obj = normed_output_dfb_obj;
+    auto& dfb_in_beta_obj = normed_output_dfb_obj;
 #endif
 
     dfb_eps.wait_front(1);  // comes from the reader

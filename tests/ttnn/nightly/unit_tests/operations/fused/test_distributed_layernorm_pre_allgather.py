@@ -5,7 +5,7 @@
 
 import pytest
 import torch
-from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 import ttnn
 

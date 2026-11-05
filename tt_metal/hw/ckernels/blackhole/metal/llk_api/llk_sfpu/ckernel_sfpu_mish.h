@@ -12,8 +12,14 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 
+namespace ckernel::sfpu {}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_mish_bf16.h"
+
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = true;
 /**
  * Mish activation function:  mish(x) = x * tanh(softplus(x)) = x * tanh(log(1+exp(x)))
  *
@@ -35,12 +41,6 @@ namespace ckernel::sfpu {
  *
  * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
-bool bf16_dest_mish();
-template <int ITERATIONS>
-void calculate_mish_bf16();
-// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
-inline constexpr bool mish_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -51,6 +51,15 @@ inline void calculate_mish() {
     }
     constexpr float SAT_HI = 8.0f;
 
+    // The exp's constants, loaded once and kept in LRegs across the loop (sfpi (through 7.89.0) never hoists a literal
+    // out of a loop by itself); 1/ln2 is vConstFloatPrgm1 from mish_init. Only the exact fp32 arm runs the
+    // Juffa exp, and with x and u live it has LRegs for two of its three constants (p1 stays a per-row
+    // literal); the other three arms run exp_21f.
+    constexpr bool juffa_exp = !APPROXIMATION_MODE && is_fp32_dest_acc_en;
+    HoistedIf<!juffa_exp> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
+    HoistedIf<juffa_exp> neg_ln2_hi = EXP_FP32_NEG_LN2_HI, p0 = EXP_FP32_P0;
+    constexpr float p1 = EXP_FP32_P1;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -60,10 +69,10 @@ inline void calculate_mish() {
 
         v_if(x < SAT_HI) {
             sfpi::vFloat u;
-            if constexpr (APPROXIMATION_MODE) {
-                u = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(x);
+            if constexpr (juffa_exp) {
+                u = _sfpu_exp_fp32_accurate_prgm_<false /*unsafe*/>(x, neg_ln2_hi, p0, p1);
             } else {
-                u = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(x);
+                u = _sfpu_exp_21f_bf16_prgm_<is_fp32_dest_acc_en>(x, c0, c1, c2);
             }
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
@@ -100,21 +109,18 @@ inline void calculate_mish() {
     }
 }
 
-void init_mish_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void mish_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // exp does not need an init.
     // calculate_mish uses the inline sfpu_reciprocal_iter<N>, not _calculate_reciprocal_internal_
     // so the SFPLOADMACRO fast-path init is not needed. But, we need sfpu_reciprocal_init's
     // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call sfpu_reciprocal_init directly.
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // Prgm1 = 1/ln2 for the exp; the exact fp32 arm's Juffa exp reads it too (same bit pattern).
+    _init_exp_hoisted_prgm_consts_();
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
         init_mish_bf16();
     }
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_mish_bf16.h"

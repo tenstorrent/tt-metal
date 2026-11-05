@@ -39,14 +39,22 @@
 // software-fill, so it is preprocessed ONCE and reused across the row; the ROW operand (OTHER_OP) streams
 // one raw partial tile per iteration and is expanded via unary_bcast<ROW> into llk_post each iteration.
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <
+    typename DFBRawRow,
+    typename DFBLlkPost,
+    typename DFBPreLhs,
+    typename DFBPostLhs,
+    typename DFBPreRhs,
+    typename DFBPostRhs,
+    typename DFBOut>
 ALWI void process_tile(
-    DataflowBuffer& dfb_raw_row,   // ROW operand's raw reader slot (c_0 for ROW_A_COL_B, c_1 for ROW_B_COL_A)
-    DataflowBuffer& dfb_llk_post,  // expanded ROW operand (c_5 / c_6)
-    DataflowBuffer& dfb_pre_lhs,
-    DataflowBuffer& dfb_post_lhs,
-    DataflowBuffer& dfb_pre_rhs,
-    DataflowBuffer& dfb_post_rhs,
-    DataflowBuffer& dfb_out,
+    DFBRawRow& dfb_raw_row,    // ROW operand's raw reader slot (c_0 for ROW_A_COL_B, c_1 for ROW_B_COL_A)
+    DFBLlkPost& dfb_llk_post,  // expanded ROW operand (c_5 / c_6)
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPreRhs& dfb_pre_rhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
@@ -61,14 +69,14 @@ ALWI void process_tile(
     // the COL operand (reader-filled, preprocessed once) and OTHER_OP the ROW operand (streamed, expanded
     // per iteration). The COL operand feeds the binary op straight from its pre/post DFB; the ROW operand
     // feeds it from llk_post (the unary_bcast<ROW> output), so OTHER_OP's PREPROCESS reads llk_post.
-#if BCAST_INPUT                                        // ROW_A_COL_B: COL = b (RHS), ROW = a (LHS)
-    DataflowBuffer& dfb_pre_bcast = dfb_pre_rhs;       // filled COL tile (c_1)
-    DataflowBuffer& dfb_post_bcast = dfb_post_rhs;
-    DataflowBuffer& dfb_post_other = dfb_post_lhs;       // expanded ROW tile's binary-op input (llk_post / c_3)
-#else                                                    // ROW_B_COL_A: COL = a (LHS), ROW = b (RHS)
-    DataflowBuffer& dfb_pre_bcast = dfb_pre_lhs;  // filled COL tile (c_0)
-    DataflowBuffer& dfb_post_bcast = dfb_post_lhs;
-    DataflowBuffer& dfb_post_other = dfb_post_rhs;  // expanded ROW tile's binary-op input (llk_post / c_4)
+#if BCAST_INPUT                         // ROW_A_COL_B: COL = b (RHS), ROW = a (LHS)
+    auto& dfb_pre_bcast = dfb_pre_rhs;  // filled COL tile (c_1)
+    auto& dfb_post_bcast = dfb_post_rhs;
+    auto& dfb_post_other = dfb_post_lhs;  // expanded ROW tile's binary-op input (llk_post / c_3)
+#else                                     // ROW_B_COL_A: COL = a (LHS), ROW = b (RHS)
+    auto& dfb_pre_bcast = dfb_pre_lhs;  // filled COL tile (c_0)
+    auto& dfb_post_bcast = dfb_post_lhs;
+    auto& dfb_post_other = dfb_post_rhs;  // expanded ROW tile's binary-op input (llk_post / c_4)
 #endif
 
     // COL operand's activation chain runs ONCE (the reader software-filled the full tile; it is reused
@@ -191,12 +199,12 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS)
     DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
 #else
-    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+    auto& dfb_pre_lhs = dfb_post_lhs;
 #endif
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
 #else
-    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
+    auto& dfb_pre_rhs = dfb_post_rhs;
 #endif
 
     // freq/tile_start reuse loop: freq = Wt tiles per COL broadcast, tile_start is the per-core column

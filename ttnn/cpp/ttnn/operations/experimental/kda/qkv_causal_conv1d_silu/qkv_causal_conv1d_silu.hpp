@@ -5,7 +5,9 @@
 
 #include <optional>
 #include <tuple>
+#include <vector>
 
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -31,6 +33,27 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const ttnn::Tensor& predecessor_carry,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    uint32_t sequence_parallel_axis = 0);
+    uint32_t sequence_parallel_axis = 0,
+    uint32_t input_column_offset = 0);
+
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_with_carry(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& history,
+    const ttnn::Tensor& tap0,
+    const ttnn::Tensor& tap1,
+    const ttnn::Tensor& tap2,
+    const ttnn::Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    const QkvCausalConv1dSiluProgramConfig& program_config,
+    const ttnn::Tensor& actual_start,
+    const ttnn::Tensor& exchange_buffer,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& exchange_semaphores,
+    const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    uint32_t sequence_parallel_axis = 0,
+    uint32_t input_column_offset = 0);
 
 }  // namespace ttnn::experimental::kda

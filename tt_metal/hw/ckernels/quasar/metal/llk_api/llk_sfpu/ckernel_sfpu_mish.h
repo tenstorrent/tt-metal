@@ -14,6 +14,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = false;
+
 /**
  * Mish activation function:  mish(x) = x * tanh(softplus(x)) = x * tanh(log(1+exp(x)))
  *
@@ -35,9 +38,6 @@ namespace ckernel::sfpu {
  *
  * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
-// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
-inline constexpr bool mish_bf16_whole_tile = false;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
     constexpr float SAT_HI = 8.0f;

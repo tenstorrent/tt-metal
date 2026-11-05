@@ -39,7 +39,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const PCIeWriteBwConfig& test_
     auto device_id = mesh_device.get_device_ids().front();
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     L1AddressInfo master_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     uint32_t l1_base_address = master_l1_info.base_address;

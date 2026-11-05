@@ -62,7 +62,7 @@ def _forwarding_links(mesh_device, *, axis, required_links, owner):
                 dst[axis] = neighbor
                 dst_coord = ttnn.MeshCoordinate(dst)
                 dst_node = mesh_device.get_fabric_node_id(dst_coord)
-                available = tuple(ttnn.get_forwarding_link_indices(src_node, dst_node))
+                available = tuple(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 if any(link not in available for link in required_links):
                     raise RuntimeError(
                         f"{owner} requires forwarding links {required_links} on every ring edge; "

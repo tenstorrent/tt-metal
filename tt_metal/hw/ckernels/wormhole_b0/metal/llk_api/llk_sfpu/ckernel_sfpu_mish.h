@@ -12,8 +12,14 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 
+namespace ckernel::sfpu {}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_mish_bf16.h"
+
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = true;
 /**
  * Mish activation function:  mish(x) = x * tanh(softplus(x))
  *
@@ -30,11 +36,14 @@ namespace ckernel::sfpu {
  *
  * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
-// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
-inline constexpr bool mish_bf16_whole_tile = false;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_mish()) {
+            calculate_mish_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float SAT_HI = 8.0f;
 
 #pragma GCC unroll 8
@@ -85,6 +94,9 @@ inline void mish_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init
     recip_init<APPROXIMATION_MODE, false>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_mish_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
