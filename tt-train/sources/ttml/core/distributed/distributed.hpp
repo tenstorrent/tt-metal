@@ -18,9 +18,8 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 // BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train); FLOAT32 sums a narrower tensor in fp32 and
 // writes the mean back in the tensor's dtype, which keeps most of the low bits a bf16 sum rounds away at every hop. The
 // fp32 sum is not exact fp32: the FPU aligns the smaller operand to the larger one with fewer fraction bits (#62595).
-// A FLOAT32 sum over one axis of a narrower tensor with at least 2^19 elements per device, whose last or second-to-last
-// dim splits into whole-tile slices no other mesh axis already splits, takes an fp32 reduce-scatter and an all-gather
-// in the tensor's own dtype; every other sum takes an all-reduce per axis.
+// Large fp32 sums over one axis take a reduce-scatter and an all-gather instead of an all-reduce; the route rule is at
+// kFp32ReduceScatterMinElements in distributed.cpp.
 ttnn::Tensor synchronize_tensor(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
