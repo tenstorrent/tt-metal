@@ -30,6 +30,8 @@ constexpr uint32_t kNumTxqs = 4;
 constexpr uint64_t kMaxBytesInPacket = 0x1000;
 // AXI_OPT_1.src_protocol of an inline write: the source register carries the data.
 constexpr uint8_t kInlineSrcProtocol = 4;
+// An inline Ethernet write lands 8 bytes at an 8-byte-aligned address and carries 52 significant bits (CM-092).
+constexpr uint32_t kInlineValueBits = 52;
 
 // Keraunos local address of an HSIO tile's CCE SRAM: base + tile * stride + offset. The command buffer takes this
 // view on both ends (chippy metal compat, CM-001). The Keraunos-E100 spec (v1.0.9, ch. 12) says a CCE issues Grendel
@@ -37,6 +39,25 @@ constexpr uint8_t kInlineSrcProtocol = 4;
 constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
+
+// What halt() posts to the router postcode word.
+enum class HaltCode : uint32_t {
+    RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
+    RemoteRegValueTooWide = 0xCCEEF002,  // detail: the value's upper 32 bits
+};
+
+// Stops this hart on a fault that ASSERT, compiled out without watcher, would let pass: stores @p detail to the first
+// fabric scratch word and @p code to the router postcode word, where the host reads them, then asserts and spins. Not
+// a trap: the CCE firmware installs no trap vector.
+[[noreturn, gnu::cold, gnu::noinline]] inline void halt(HaltCode code, uint32_t detail) {
+    *reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(MEM_IERISC_FABRIC_SCRATCH_BASE + MEM_IERISC_UNCACHED_BASE)) = detail;
+    *reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(
+        MEM_IERISC_FABRIC_POSTCODES_BASE + MEM_IERISC_UNCACHED_BASE)) = static_cast<uint32_t>(code);
+    ASSERT(false);
+    while (true) {
+    }
+}
 
 // MEM_IERISC_FABRIC_ETH_LINK_BASE, as the host writes it.
 struct EthLink {
@@ -89,9 +110,15 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     issue_cmdbuf<kCmdBuf>();
 }
 
-// Write the 32-bit @p val to @p dest on the link peer as an inline write on TX queue @p q_num; returns once issued.
-// Assumes !txq_busy(q_num). Unverified on hardware: compat's inline Ethernet writes are 8 bytes.
-FORCE_INLINE void send_word(uint32_t q_num, uint32_t dest, uint32_t val) {
+// Write @p val to the 8-byte-aligned @p dest on the link peer as an inline write on TX queue @p q_num; returns once
+// issued. Assumes !txq_busy(q_num). Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits.
+FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
+    if (dest % sizeof(val) != 0) {
+        halt(HaltCode::RemoteRegMisaligned, dest);
+    }
+    if ((val >> kInlineValueBits) != 0) {
+        halt(HaltCode::RemoteRegValueTooWide, static_cast<uint32_t>(val >> 32));
+    }
     setup_send(q_num, dest);
     set_src_cmdbuf<kCmdBuf>(val);
     set_len_cmdbuf<kCmdBuf>(sizeof(val));
