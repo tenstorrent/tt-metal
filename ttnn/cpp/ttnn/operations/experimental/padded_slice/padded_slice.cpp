@@ -24,7 +24,7 @@ ttnn::Tensor padded_slice(
     ttsl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& /*pad_value*/) {
+    const std::optional<float>& pad_value) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -132,7 +132,8 @@ ttnn::Tensor padded_slice(
         ttnn::Shape(padded_ends),
         ttnn::Shape(modified_step),
         memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        pad_value);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
     // memory config

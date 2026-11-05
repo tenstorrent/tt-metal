@@ -116,14 +116,16 @@ ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padd
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<Tensor>& preallocated_output,
+    const std::optional<float>& pad_value) {
     using OperationType = ttnn::experimental::prim::PaddedSliceDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .padded_slice_start = padded_slice_start,
         .padded_slice_end = padded_slice_end,
         .step = step,
-        .output_mem_config = output_mem_config};
+        .output_mem_config = output_mem_config,
+        .pad_value = pad_value};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
