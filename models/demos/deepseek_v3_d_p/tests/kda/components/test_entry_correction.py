@@ -76,7 +76,7 @@ def _interval(sp_size: int, name: str) -> tuple[int, int | None]:
 class _Correction:
     """The op on the model's cores, and its inputs on device in the summary's terms layout."""
 
-    def __init__(self, mesh_device, zero, identity, final_a, final_b, entry, tail, math_fidelity):
+    def __init__(self, mesh_device, zero, identity, final_e, final_b, entry, tail, math_fidelity):
         grid = mesh_device.compute_with_storage_grid_size()
         self.mesh_device = mesh_device
         self.op = EntryCorrection(
@@ -94,7 +94,7 @@ class _Correction:
         terms = torch.stack([zero.reshape(blocks, -1, _KEY), identity.reshape(blocks, -1, _KEY)], dim=1)
         self.inputs = [
             self._replicated(terms, self.op.terms_memory_config),
-            *(self._replicated(t) for t in (final_a, final_b, entry, tail)),
+            *(self._replicated(t) for t in (final_e, final_b, entry, tail)),
         ]
 
     def _replicated(self, host, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -115,8 +115,8 @@ def _random_case(mesh_device, seed: int, math_fidelity=ttnn.MathFidelity.HiFi4):
     generator = torch.Generator().manual_seed(seed)
     zero = 0.1 * torch.randn(_HEADS, _CHUNKS, 32, _KEY, generator=generator)
     identity = 0.1 * torch.randn(_HEADS, _CHUNKS, 32, _KEY, generator=generator)
-    final_a, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
-    host = (zero, identity, final_a, final_b, entry, tail)
+    final_e, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
+    host = (zero, identity, final_e, final_b, entry, tail)
     return host, _Correction(mesh_device, *host, math_fidelity=math_fidelity)
 
 
@@ -125,7 +125,7 @@ def _random_case(mesh_device, seed: int, math_fidelity=ttnn.MathFidelity.HiFi4):
 def test_entry_correction_matches_reference(mesh_device, interval):
     sp_size, tp_size = tuple(mesh_device.shape)
     start, end = _interval(sp_size, interval)
-    (zero, identity, final_a, final_b, entry, tail), correction = _random_case(mesh_device, seed=start + (end or 0))
+    (zero, identity, final_e, final_b, entry, tail), correction = _random_case(mesh_device, seed=start + (end or 0))
     output, final = correction(
         make_actual_start(mesh_device, start), None if end is None else make_actual_start(mesh_device, end)
     )
@@ -141,7 +141,8 @@ def test_entry_correction_matches_reference(mesh_device, interval):
         expected = from_entry.clone()
         if reset:
             expected[:, reset:] = from_tail[:, reset:]
-        expected_final = final_a @ (tail if reset else entry) + final_b
+        seed = tail if reset else entry
+        expected_final = seed + (final_e @ seed + final_b)
         got = ttnn.to_torch(local_output).float()
         assert_accurate(
             expected[:, :valid], got[:, :valid], name=f"output rank={rank}", pcc_threshold=0.9999, nrmse_threshold=0.01
@@ -152,6 +153,33 @@ def test_entry_correction_matches_reference(mesh_device, interval):
             name=f"final rank={rank}",
             pcc_threshold=0.9999,
             nrmse_threshold=1e-3,
+        )
+
+
+@_MESH
+@pytest.mark.parametrize("interval", ["full", "split"])
+def test_entry_correction_keeps_a_near_identity_final_transition(mesh_device, interval):
+    """Hand-checkable final state from the complement form: E = 2^-12 I (A = (1 + 2^-12) I, which a source register's
+    10-bit mantissa rounds to I), B = 0 and seeds 3 I (entry) and 5 I (tail). The final state must be exactly
+    (1 + 2^-12) times the rank's seed: the seed is added in FP32, so E's small change survives. Forming A @ seed in a
+    matmul would return the seed itself, and reading E as A only 2^-12 times it."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    start, end = _interval(sp_size, interval)
+    eye = torch.eye(_KEY).expand(_HEADS, _KEY, _KEY)
+    terms = torch.zeros(_HEADS, _CHUNKS, 32, _KEY)
+    eps = 2.0**-12
+    correction = _Correction(
+        mesh_device, terms, terms, eps * eye, 0 * eye, 3 * eye, 5 * eye, math_fidelity=ttnn.MathFidelity.HiFi2
+    )
+    _, final = correction(
+        make_actual_start(mesh_device, start), None if end is None else make_actual_start(mesh_device, end)
+    )
+    chunks = _rank_chunks(sp_size, start, end)
+    for index, local_final in enumerate(ttnn.get_device_tensors(final)):
+        rank = index // tp_size
+        seed_scale = 5.0 if chunks[rank][1] else 3.0
+        torch.testing.assert_close(
+            ttnn.to_torch(local_final), seed_scale * (1 + eps) * eye, rtol=0, atol=0, msg=f"final rank={rank}"
         )
 
 

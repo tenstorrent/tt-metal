@@ -85,8 +85,8 @@ def _host_inputs(seed: int, chunks: int = _CHUNKS) -> tuple[torch.Tensor, ...]:
     generator = torch.Generator().manual_seed(seed)
     zero = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
     identity = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
-    final_a, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
-    return zero, identity, final_a, final_b, entry, tail
+    final_e, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
+    return zero, identity, final_e, final_b, entry, tail
 
 
 def _device_inputs(device, correction: EntryCorrection, host: tuple[torch.Tensor, ...]) -> tuple[ttnn.Tensor, ...]:
@@ -111,10 +111,11 @@ def _terms(correction: EntryCorrection, zero: torch.Tensor, identity: torch.Tens
 
 def _reference(host: tuple[torch.Tensor, ...], interval: _Interval) -> tuple[torch.Tensor, torch.Tensor, int]:
     """The valid chunk outputs and the final state, in FP64. tail_entry is never read on one rank."""
-    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
+    zero, identity, final_e, final_b, entry, _ = (tensor.double() for tensor in host)
     valid = interval.valid_chunks()
     output = zero + (identity - zero) @ entry.unsqueeze(1)
-    final = final_a @ entry + final_b
+    # The final transition in complement form, E = A - I: final = A @ entry + B = entry + (E @ entry + B).
+    final = entry + (final_e @ entry + final_b)
     return output[:, :valid].float(), final.float(), valid
 
 
@@ -177,8 +178,8 @@ def test_entry_correction_streams_terms_over_the_l1_budget(device: ttnn.Device) 
     assert correction.terms_memory_config.buffer_type == ttnn.BufferType.DRAM
     host = _host_inputs(seed=rows, chunks=rows // _CHUNK)
     inputs = _device_inputs(device, correction, host)
-    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
-    expected = (zero + (identity - zero) @ entry.unsqueeze(1)).float(), (final_a @ entry + final_b).float()
+    zero, identity, final_e, final_b, entry, _ = (tensor.double() for tensor in host)
+    expected = (zero + (identity - zero) @ entry.unsqueeze(1)).float(), (entry + (final_e @ entry + final_b)).float()
 
     results = []
     for _ in range(2):
@@ -216,11 +217,11 @@ def test_entry_correction_rejects_aliased_entry_states(
     bindings ambiguous: rejected, and a later call with distinct tensors is still correct."""
     correction = _correction(device, ttnn.MathFidelity.HiFi4)
     host = _host_inputs(seed=11)
-    terms, final_a, final_b, entry, tail = _device_inputs(device, correction, host)
+    terms, final_e, final_b, entry, tail = _device_inputs(device, correction, host)
     actual_start = make_actual_start(device, 0)
     with expect_error(RuntimeError, "entry and tail_entry must be different tensors"):
-        correction(terms, final_a, final_b, entry, entry, actual_start, None)
-    output, final = correction(terms, final_a, final_b, entry, tail, actual_start, None)
+        correction(terms, final_e, final_b, entry, entry, actual_start, None)
+    output, final = correction(terms, final_e, final_b, entry, tail, actual_start, None)
     *expected, valid = _reference(host, _INTERVALS["full"])
     got = (ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final))
     _assert_matches(expected, got, "after a rejected alias")
