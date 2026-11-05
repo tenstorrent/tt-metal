@@ -586,6 +586,9 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int, send_indices
     logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
+_TS = {}
+
+
 def _lease_wait(*boundaries: D2DBoundary) -> None:
     for boundary in boundaries:
         for service in boundary.channels():
@@ -844,6 +847,7 @@ def _compute_and_send(
                 **mtp_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
+    _TS["enq"] = time.time()
     forward_md = None
     if not runtime.config.is_last_rank:
         if sockets.send_trace is None:
@@ -872,6 +876,7 @@ def _compute_and_send(
                 ttnn.deallocate(t)
         if idx_staged is not idx_src:
             ttnn.deallocate(idx_staged)
+    _TS["send"] = time.time()
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -929,6 +934,8 @@ def run_request_loop(
         # The inbound and outbound groups never share a router, so the drain and its metadata read run
         # while the previous chunk's outbound transfer is still on the fabric; only the compute's own
         # fabric ops below must wait for both.
+        _TS.clear()
+        _TS["top"] = time.time()
         _lease_grant_inbound(inbound)
         inp = mtp_tokens = None
         mtp_id_segments = []
@@ -958,6 +965,7 @@ def run_request_loop(
                     ttnn.deallocate(mtp_tokens)
             forward_shutdown()
             raise
+        _TS["meta"] = time.time()
         _lease_wait(inbound, outbound)
         # The top-k is the inbound's last segment; what is left are the MTP ids.
         indices = mtp_id_segments.pop() if recv_indices else None
@@ -1015,6 +1023,8 @@ def run_request_loop(
         c += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
+        _TS["end"] = time.time()
+        print(f"[d2dts] r={rank} c={c - 1} " + " ".join(f"{k}={v:.6f}" for k, v in _TS.items()), flush=True)
     _drain_and_log_e2e(runtime, rank, outbound, first, c, t0)
 
 
