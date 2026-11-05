@@ -611,7 +611,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     size_t arch_index;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;
-    } else if (arch == tt::ARCH::BLACKHOLE) {
+    } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
+        // Quasar takes Blackhole's options; a Keraunos CCE region (4 MiB) holds the largest of them.
         arch_index = 1;
     } else {
         TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));

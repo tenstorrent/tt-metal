@@ -536,6 +536,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
         }
     }
+    if (this->arch == tt::ARCH::QUASAR) {
+        // A Quasar hart has two command buffers: writes and atomics share 0 (WR_CMD_BUF), reads use 1.
+        for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
+        for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+            this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
+    }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
 
