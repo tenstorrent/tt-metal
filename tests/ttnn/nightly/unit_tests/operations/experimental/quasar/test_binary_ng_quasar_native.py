@@ -1166,6 +1166,14 @@ print("OK over {} shards".format(len(SHARDS)))
 """
 
 
+def _with_walk(entry, c):
+    """`entry`, with its "walks" option, a walk per compute-thread count, replaced by the walk for `c`."""
+    if len(entry) < 6 or "walks" not in entry[5]:
+        return entry
+    opts = {key: value for key, value in entry[5].items() if key != "walks"}
+    return (*entry[:5], {**opts, "walk": entry[5]["walks"][c]})
+
+
 def _run_shard_arm(shards, expect, timeout, knobs=None):
     """Run one configuration of _SHARD_ARM_SRC in its own process.
 
@@ -1180,6 +1188,9 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
         assert _PROFILED_BATCH_1.items() <= knobs.items(), "a profiler run must pin batch 1 in every role"
     stripped = ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER") if profiling else ("TTNN_QSR_",)
     env = {k: v for k, v in os.environ.items() if not k.startswith(stripped)}
+    # A case with a walk per compute-thread count gets the walk of this configuration's count.
+    c = _resolve(knobs or {}, _NOC)[1]
+    shards = [_with_walk(entry, c) for entry in shards]
     env.update(
         {
             "TTNN_QSR_NATIVE": "1",
@@ -2069,16 +2080,19 @@ def test_native_fp32_activations_match_the_prediction(name, knobs):
 
 # Broadcast on the native path. Each operand has a mode, FULL, ROW, COL, SCALAR or VALUE (the values of A_MODE and
 # B_MODE, kernels_qsr/common/operand_walk.hpp), and an outer-dim broadcast flag. Every case names the modes that its
-# compute kernel must be built with. It names its walk too, or sits in _BCAST_WALK_BY_CONFIG. Its output must equal the
-# oracle exactly. The rule batches the FPU kernel at 8 above ring stride 1 too, and every compute batch is exact,
-# because llk_unpack_AB steps a batch by the ring stride, so no case predicts wrong tiles. Beside a broadcast operand
-# the rule runs R = C = 4; R1C4W1 sets one reader thread on four tile counters, which a held page's change and a VALUE
-# ring's entries must survive.
+# compute kernel must be built with. It names its walk too: one walk, or one per compute-thread count. Its output
+# must equal the oracle exactly. The rule batches the FPU kernel at 8 above ring stride 1 too, and every compute batch
+# is exact, because llk_unpack_AB steps a batch by the ring stride, so no case predicts wrong tiles. Beside a broadcast
+# operand the rule runs R = C = 4; R1C4W1 sets one reader thread on four tile counters, which a held page's change and
+# a VALUE ring's entries must survive.
 _MODE = {"FULL": 0, "ROW": 1, "COL": 2, "SCALAR": 3, "VALUE": 4}
 _BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1, 1, 1), "R1C4W1": _threads(1, 4, 1)}
 # The held, mixed and filled tests also run R2C4W2: each of two reader threads owns two tile counters of the input
 # rings. At R = C and at R = 1, which the four configurations above hold, every pairing of a counter agrees.
 _PAIRING_CONFIGS = {**_BCAST_CONFIGS, "R2C4W2": _threads(2, 4, 2)}
+# The held test also runs R1C4W1 at DM batch 1: the reader's dm_batch == 1 loop over four tile counters, with rings of
+# two entries. No other configuration of a broadcast test runs that loop.
+_HELD_CONFIGS = {**_PAIRING_CONFIGS, "R1C4W1-per-tile": {**_threads(1, 4, 1), **_PER_TILE}}
 
 
 def _modes(a="FULL", b="FULL", a_outer=False, b_outer=False):
@@ -2092,30 +2106,23 @@ def _walk(a=0, b=0, out=0, pads=0):
     return {"a": a, "b": b, "out": out, "pads": pads}
 
 
-# No tensor b is borrowed, so b is 0 in these walks. In the b cases b is the broadcast operand, which is never borrowed.
-# The a cases run in DRAM, where nothing is borrowed.
+# A broadcast operand is never borrowed. So b is 0 in the walks below, except _B_ANCHORED_WALK, where a is the
+# broadcast operand and an anchor borrows b and the output.
 _NOC_WALK = _walk()  # every operand moves over the NoC
 _ANCHORED_WALK = _walk(a=1, out=1)  # an anchor borrows a and the output; b moves in the anchor's tile order
 _PADDED_WALK = _walk(a=1, out=1, pads=1)  # the anchor has pad slots, which the reader skips
+_B_ANCHORED_WALK = _walk(b=1, out=1)  # an anchor borrows b and the output; a moves in the anchor's tile order
 # A tensor-scalar program binds no b tensor, which dataflow_walk reads as a borrowed b.
 _SCALAR_NOC_WALK = _walk(b=1)
 _SCALAR_ANCHORED_WALK = _walk(a=1, b=1, out=1)
+_SCALAR_PADDED_WALK = _walk(a=1, b=1, out=1, pads=1)
 # In L1 the bank walk gives a cluster 2 tiles of _OUTER_SHAPE, which 4 compute threads do not divide: these cases take
-# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk. The VALUE and tensor-scalar L1 cases
-# join them for the same reason. The held L1 cases do not: a held operand refuses an anchor with pad slots, so they
-# take the NoC path in every configuration, and declare it.
-_BCAST_WALK_BY_CONFIG = frozenset(
-    {
-        "outer_b_L1",
-        "row_b_L1",
-        "row_b_L1/multiply",
-        "value_b_L1/divide",
-        "scalar_L1/multiply",
-        *(f"outer_b/fp32/{op}" for op in _FP32_OPS),
-        *(f"value_b/fp32/{op}" for op in _FP32_OPS),
-        *(f"scalar/fp32/{op}" for op in _FP32_OPS),
-    }
-)
+# the NoC path at C = 4 and the slice anchor at C = 1, so they name a walk per compute-thread count ("walks"), and
+# _run_shard_arm passes the arm the walk of its configuration. The anchor's walk has pad slots: 60 tiles on 32 banks
+# leave 4 banks a page short. The VALUE and tensor-scalar L1 cases do the same. The held L1 cases do not: a held operand
+# refuses an anchor with pad slots, so they take the NoC path in every configuration.
+_L1_WALKS = {4: _NOC_WALK, 1: _PADDED_WALK}
+_L1_SCALAR_WALKS = {4: _SCALAR_NOC_WALK, 1: _SCALAR_PADDED_WALK}
 
 
 def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts):
@@ -2162,7 +2169,17 @@ _OUTER = [
         op="multiply",
         walk=_NOC_WALK,
     ),
-    _bcast("outer_b_L1", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), a=_IL1, b=_IL1, out=_IL1, op="divide"),
+    _bcast(
+        "outer_b_L1",
+        _OUTER_SHAPE,
+        [1, 3, 64, 160],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        walks=_L1_WALKS,
+    ),
     _bcast(
         "outer_b_shard_walk",
         [2, 1, 256, 1024],
@@ -2217,6 +2234,69 @@ _OUTER = [
         op="multiply",
         walk=_PADDED_WALK,
     ),  # w = 8: at C = 4 the step crosses a shard-row edge every 2 steps
+    # The mirror of outer_b_shard_walk: an outer-dim a beside a borrowed b, so the anchor takes b's shards and the
+    # output's.
+    _bcast(
+        "outer_a_shard_walk",
+        [1, 1, 256, 1024],
+        [2, 1, 256, 1024],
+        _modes(a_outer=True),
+        b=_B32_WALK,
+        out=_B32_WALK,
+        op="subtract",
+        walk=_B_ANCHORED_WALK,
+    ),
+    # Partial tiles in L1: 36 tiles on 32 banks, so the slice anchor at C = 1 has pad slots beside partial tiles.
+    _bcast(
+        "outer_b_partial_L1",
+        _PARTIAL_SHAPE,
+        [1, 3, 50, 70],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walks=_L1_WALKS,
+    ),
+    # 64 tiles per bank: at the rule each tile counter of the bank walk runs 2 DM batches of 8.
+    _bcast(
+        "outer_b_L1_big",
+        [2, 1, 1024, 1024],
+        [1, 1, 1024, 1024],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walk=_ANCHORED_WALK,
+    ),
+    # A b that moves from a block shard in L1, and from a DRAM width or block shard.
+    _bcast(
+        "outer_b_block_shard",
+        [2, 1, 128, 256],
+        [1, 1, 128, 256],
+        _modes(b_outer=True),
+        b=("block", [2 * 32, 2 * 32], (0, 0, 3, 1)),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "outer_b_dram_width",
+        [2, 1, 128, 512],
+        [1, 1, 128, 512],
+        _modes(b_outer=True),
+        b=("dram_width", [4 * 32, 8 * 32], None),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "outer_b_dram_block",
+        [2, 1, 128, 256],
+        [1, 1, 128, 256],
+        _modes(b_outer=True),
+        b=("dram_block", [4 * 32, 4 * 32], None),
+        walk=_NOC_WALK,
+    ),
+    # With this case, add, subtract, multiply, fast multiply and divide each run beside an outer-dim operand.
+    _bcast(
+        "outer_b/multiply_fast", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), op="multiply_fast", walk=_NOC_WALK
+    ),
 ]
 # fp32: all four ops run the SFPU kernel, in L1, at the rule's batch of 2.
 _OUTER_FP32 = [
@@ -2230,6 +2310,7 @@ _OUTER_FP32 = [
         out=_IL1,
         op=op,
         dtype="float32",
+        walks=_L1_WALKS,
     )
     for op in _FP32_OPS
 ] + [
@@ -2287,7 +2368,16 @@ _ROW = [
     ),
     _bcast("row_b/multiply", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="multiply", walk=_NOC_WALK),
     _bcast("row_a/divide", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="divide", walk=_NOC_WALK),
-    _bcast("row_b_L1", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), a=_IL1, b=_IL1, out=_IL1),
+    _bcast(
+        "row_b_L1",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walks=_L1_WALKS,
+    ),
     _bcast(
         "row_b_L1/multiply",
         _OUTER_SHAPE,
@@ -2297,6 +2387,7 @@ _ROW = [
         b=_IL1,
         out=_IL1,
         op="multiply",
+        walks=_L1_WALKS,
     ),
     _bcast(
         "row_b_shard_walk",
@@ -2588,6 +2679,24 @@ _HELD = [
         walk=_NOC_WALK,
     ),
     _bcast("col_b/minimum", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="minimum", walk=_NOC_WALK),
+    # The mirror of col_b_shard_walk: a held COL a beside a borrowed b.
+    _bcast(
+        "col_a_shard_walk",
+        [1, 1, 256, 1],
+        [2, 1, 256, 1024],
+        _modes(a="COL", a_outer=True),
+        b=_B32_WALK,
+        out=_B32_WALK,
+        op="subtract",
+        walk=_B_ANCHORED_WALK,
+    ),
+    # Partial tiles beside a held SCALAR b.
+    _bcast("scalar_b_partial", _PARTIAL_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), walk=_NOC_WALK),
+    # With these two cases, add, subtract, multiply, fast multiply and divide each run beside COL and SCALAR.
+    _bcast("col_b/divide", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="divide", walk=_NOC_WALK),
+    _bcast(
+        "scalar_b/multiply_fast", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), op="multiply_fast", walk=_NOC_WALK
+    ),
 ]
 
 # VALUE: a tensor whose every dim is 1 is one value for the whole op. The reader reads its page 0 once per tile counter
@@ -2598,7 +2707,17 @@ _VALUE = [
     _bcast("value_b", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
     _bcast("value_a", [1, 1, 1, 1], _OUTER_SHAPE, _modes(a="VALUE"), op="subtract", walk=_NOC_WALK),
     _bcast("value_b_rank2/multiply", _OUTER_SHAPE, [1, 1], _modes(b="VALUE"), op="multiply", walk=_NOC_WALK),
-    _bcast("value_b_L1/divide", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), a=_IL1, b=_IL1, out=_IL1, op="divide"),
+    _bcast(
+        "value_b_L1/divide",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        walks=_L1_WALKS,
+    ),
     _bcast("value_b_act", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), act="rhs", walk=_NOC_WALK),
     _bcast(
         "value_b_borrowed_a",
@@ -2621,6 +2740,18 @@ _VALUE = [
     ),
     _bcast("value_b_one_tile", [1, 1, 32, 32], [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
     _bcast("value_b/multiply_fast", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), op="multiply_fast", walk=_NOC_WALK),
+    # Partial tiles beside a VALUE b, and a RELU on the result beside it, on both kernels.
+    _bcast("value_b_partial", _PARTIAL_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_b/relu", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "value_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
 ]
 _VALUE_FP32 = [
     _bcast(
@@ -2633,6 +2764,7 @@ _VALUE_FP32 = [
         out=_IL1,
         op=op,
         dtype="float32",
+        walks=_L1_WALKS,
     )
     for op in _FP32_OPS
 ] + [
@@ -2643,7 +2775,7 @@ _VALUE_FP32 = [
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
+@pytest.mark.parametrize("name, knobs", list(_HELD_CONFIGS.items()), ids=list(_HELD_CONFIGS))
 def test_native_held_broadcast_matches_the_oracle(name, knobs):
     """A COL or SCALAR operand must run native on both kernels and give the oracle's bits.
 
@@ -2672,9 +2804,10 @@ def test_native_value_broadcast_matches_the_oracle(name, knobs):
 # sum only for add. The ROW operand runs as ROW does and the COL operand is held, so a mix needs no code of its own.
 # These cases run in bf16; the fp32 twins are in _FILLED. Add, subtract and fast multiply run the FPU kernel, and
 # multiply, divide, maximum and minimum run the SFPU kernel. Only ROW_A_COL_B runs in L1 and beside a sharded output;
-# ROW_B_COL_A runs in DRAM only. Two DRAM cases, row_a_col_b and row_b_col_a/subtract, broadcast outer dims on both
-# sides, and the others do not. In row_a_col_b_split the output is sharded on 2 clusters. Production does not borrow it
-# beside a ROW operand, so the native path takes no anchor and walks 15 tiles per cluster, 2.5 rows, over 32 clusters.
+# ROW_B_COL_A runs in DRAM only. Three DRAM cases, row_a_col_b, row_b_col_a/subtract and row_a_col_b_partial,
+# broadcast outer dims on both sides, and the others do not. In row_a_col_b_split the output is sharded on 2 clusters.
+# Production does not borrow it beside a ROW operand, so the native path takes no anchor and walks 15 tiles per
+# cluster, 2.5 rows, over 32 clusters.
 # The case has two twins: row_a_col_b_split/multiply_fast runs ELWMUL, the one FPU op with several fidelity phases, and
 # row_a_col_b_split/multiply runs the SFPU kernel. Across the three cases, the FPU kernel's batches of 8 at R1C1W1 and
 # the SFPU kernel's batches of 4 end early at COL changes. On the FPU kernel, a batch that crossed a multiple of 8 would
@@ -2755,6 +2888,14 @@ _MIXED_BCAST = [
     _bcast(
         "row_a_col_b/maximum", [2, 3, 1, 160], [2, 3, 64, 1], _modes(a="ROW", b="COL"), op="maximum", walk=_NOC_WALK
     ),
+    # Partial tiles beside a ROW a and a COL b.
+    _bcast(
+        "row_a_col_b_partial",
+        [2, 1, 1, 70],
+        [1, 3, 50, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        walk=_NOC_WALK,
+    ),
 ]
 
 
@@ -2781,12 +2922,36 @@ _SCALAR_OP = (
         _scalar("scalar/subtract", _OUTER_SHAPE, 0.1, op="subtract", walk=_SCALAR_NOC_WALK),
         _scalar("scalar/multiply", _OUTER_SHAPE, -1.5, op="multiply", walk=_SCALAR_NOC_WALK),
         _scalar("scalar/divide", _OUTER_SHAPE, -0.75, op="divide", walk=_SCALAR_NOC_WALK),
-        _scalar("scalar_L1/multiply", _OUTER_SHAPE, 2.5, a=_IL1, out=_IL1, op="multiply"),
+        _scalar("scalar_L1/multiply", _OUTER_SHAPE, 2.5, a=_IL1, out=_IL1, op="multiply", walks=_L1_SCALAR_WALKS),
         _scalar("scalar_borrowed_a", [2, 1, 2048, 32], 2.5, a=_H32_4, out=_H32_4, walk=_SCALAR_ANCHORED_WALK),
         _scalar("scalar_one_tile", [1, 1, 32, 32], 3.5, walk=_SCALAR_NOC_WALK),
         _scalar("scalar_lhs_act", _OUTER_SHAPE, 3.0, act="lhs", walk=_SCALAR_NOC_WALK),
+        # Partial tiles, and a RELU or a SQUARE on the result.
+        _scalar("scalar_partial", _PARTIAL_SHAPE, 3.0, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/relu", _OUTER_SHAPE, -1.5, act="relu", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/post", _OUTER_SHAPE, 0.5, act="post", walk=_SCALAR_NOC_WALK),
+        # Special scalars: zero, minus zero, inf, minus inf, NaN and a value whose products overflow, and an fp32 scalar
+        # that bf16 cannot hold. A NaN result matches a NaN, and an inf matches an inf of the same sign.
+        _scalar("scalar_zero/divide", _OUTER_SHAPE, 0.0, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_neg_zero/divide", _OUTER_SHAPE, -0.0, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_inf/add", _OUTER_SHAPE, math.inf, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_neg_inf/multiply", _OUTER_SHAPE, -math.inf, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_nan/subtract", _OUTER_SHAPE, math.nan, op="subtract", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_huge/multiply", _OUTER_SHAPE, 3.0e38, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar(
+            "scalar_inexact/fp32/multiply", _OUTER_SHAPE, 0.1, op="multiply", dtype="float32", walk=_SCALAR_NOC_WALK
+        ),
+        _scalar(
+            "scalar_inf/fp32/subtract", _OUTER_SHAPE, math.inf, op="subtract", dtype="float32", walk=_SCALAR_NOC_WALK
+        ),
+        _scalar("scalar_nan/fp32/divide", _OUTER_SHAPE, math.nan, op="divide", dtype="float32", walk=_SCALAR_NOC_WALK),
     ]
-    + [_scalar(f"scalar/fp32/{op}", _OUTER_SHAPE, -2.5, a=_IL1, out=_IL1, op=op, dtype="float32") for op in _FP32_OPS]
+    + [
+        _scalar(
+            f"scalar/fp32/{op}", _OUTER_SHAPE, -2.5, a=_IL1, out=_IL1, op=op, dtype="float32", walks=_L1_SCALAR_WALKS
+        )
+        for op in _FP32_OPS
+    ]
     + [
         _scalar("scalar/multiply_fast", _OUTER_SHAPE, -1.5, op="multiply_fast", walk=_SCALAR_NOC_WALK),
         _scalar("scalar_borrowed_a_2_shards", [1, 1, 1024, 448], 2.5, a=_H2_14, out=_H2_14, walk=_SCALAR_ANCHORED_WALK),
@@ -2813,8 +2978,7 @@ def test_native_tensor_scalar_matches_the_oracle(name, knobs):
 
 # fp32 ROW, COL, SCALAR and mixed: unary_bcast takes no 32-bit operand on Quasar, so the reader expands the tile in
 # software and the SFPU kernel, at a batch of 2, copies it. col_b_split and the _full_batches and _slabs cases have a
-# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2. The last
-# three cases run maximum and minimum beside a filled operand.
+# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2.
 _FILLED = [
     _bcast(
         f"row_b/fp32/{op}",
@@ -2962,6 +3126,46 @@ _FILLED = [
         op="minimum",
         dtype="float32",
         walk=_NOC_WALK,
+    ),
+    # Partial tiles beside a filled ROW b.
+    _bcast(
+        "row_b_partial/fp32",
+        _PARTIAL_SHAPE,
+        [1, 3, 1, 70],
+        _modes(b="ROW", b_outer=True),
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # With these four cases, add, subtract, multiply and divide each run beside every filled mode.
+    _bcast(
+        "col_b/fp32/subtract",
+        _OUTER_SHAPE,
+        [2, 3, 64, 1],
+        _modes(b="COL"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b/fp32/divide",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    *(
+        _bcast(
+            f"row_a_col_b/fp32/{op}",
+            [2, 1, 1, 160],
+            [1, 3, 64, 1],
+            _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+            op=op,
+            dtype="float32",
+            walk=_NOC_WALK,
+        )
+        for op in ("add", "subtract")
     ),
 ]
 
@@ -3230,6 +3434,23 @@ def test_native_col_operand_with_more_readers_than_computes_falls_back():
     _check_arm(p, "a full b at R=4 beside C=2")
 
 
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_value_and_scalar_with_more_readers_than_computes_fall_back():
+    """A VALUE b or a scalar beside more reader than compute threads must send the op to the fallback factory.
+
+    A VALUE operand needs each compute thread to own one tile counter of its input ring, as a held operand does, and a
+    scalar runs as VALUE. So R = 4 beside C = 2 fails the gate's R <= C check, and each op runs on the Metal 2.0
+    factory, and runs right. The entries drop their modes and their walk, which the fallback's kernels do not define.
+    """
+    picked = [
+        next(entry for entry in _VALUE if entry[0] == "value_b"),
+        next(entry for entry in _SCALAR_OP if entry[0] == "scalar/add"),
+    ]
+    entries = [(*entry[:5], {k: v for k, v in entry[5].items() if k not in ("modes", "walk")}) for entry in picked]
+    p = _run_shard_arm(entries, expect="dfb", timeout=900, knobs=_threads(4, 2, 2))
+    _check_arm(p, "a VALUE b and a scalar at R=4 beside C=2")
+
+
 # Every broadcast table, for the no-device checks below.
 _BCAST_TABLES = {
     "outer": _OUTER + _OUTER_FP32,
@@ -3246,34 +3467,31 @@ def test_native_broadcast_tables_name_their_modes_and_walks():
     """No device. Each broadcast case must name its modes and its walk, and no case name may repeat.
 
     The broadcast oracle tests pass no expectation, so they catch any wrong tile, and this test makes no prediction.
-    A case declares its walk or is named in _BCAST_WALK_BY_CONFIG, never both, and a walk has exactly the keys of
-    _NOC_WALK. A case named X_again comes after X and repeats its spec, so that the arm sees a program-cache hit.
+    A case declares one walk, or a walk for each compute-thread count that the broadcast configurations run ("walks"),
+    never both, and a walk has exactly the keys of _NOC_WALK. A case named X_again comes after X and repeats its spec,
+    so that the arm sees a program-cache hit.
     """
-    named = set()
+    counts = {_resolve(knobs, _NOC)[1] for knobs in _HELD_CONFIGS.values()}
     for table, entries in _BCAST_TABLES.items():
         names = [entry[0] for entry in entries]
         assert len(names) == len(set(names)), f"{table}: a case name repeats"
-        named.update(names)
         for entry in entries:
             assert "modes" in entry[5], f"{table}/{entry[0]}: no modes to check"
+            assert ("walk" in entry[5]) != ("walks" in entry[5]), f"{table}/{entry[0]}: needs one of walk and walks"
+            walks = entry[5].get("walks", {})
             assert (
-                "walk" in entry[5] or entry[0] in _BCAST_WALK_BY_CONFIG
-            ), f"{table}/{entry[0]}: no walk to check, and not named in _BCAST_WALK_BY_CONFIG"
-            assert not (
-                "walk" in entry[5] and entry[0] in _BCAST_WALK_BY_CONFIG
-            ), f"{table}/{entry[0]}: declares a walk and is named in _BCAST_WALK_BY_CONFIG, which holds cases with none"
-            walk = entry[5].get("walk", _NOC_WALK)
-            assert (
-                walk.keys() == _NOC_WALK.keys()
-            ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
+                not walks or walks.keys() == counts
+            ), f"{table}/{entry[0]}: walks for the counts {sorted(walks)}, the configurations run {sorted(counts)}"
+            for walk in [entry[5].get("walk", _NOC_WALK), *walks.values()]:
+                assert (
+                    walk.keys() == _NOC_WALK.keys()
+                ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
             if entry[0].endswith("_again"):
                 first = entry[0].removesuffix("_again")
                 assert first in names[: names.index(entry[0])], f"{table}/{entry[0]}: a repeat must come after {first}"
                 # The arm keys a spec by json.dumps, so a repeat must match that string, key order included.
                 first_spec = json.dumps(entries[names.index(first)][1:])
                 assert first_spec == json.dumps(entry[1:]), f"{table}/{entry[0]}: the spec differs from {first}'s"
-    stale = _BCAST_WALK_BY_CONFIG - named
-    assert not stale, f"these cases are named in _BCAST_WALK_BY_CONFIG but are in no broadcast table: {sorted(stale)}"
 
 
 def test_native_prediction_tables_cover_their_cases():

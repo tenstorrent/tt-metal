@@ -136,8 +136,15 @@ def _add_goldens(ta, tb):
 
 
 def _matches_none(got, goldens, bound=0):
-    """Per element: True where `got` is more than `bound` ULP from every golden."""
-    return torch.stack([ulp_distance(got, golden) > bound for golden in goldens]).all(dim=0)
+    """Per element: True where `got` is more than `bound` ULP from every golden. As assert_with_ulp's allow_nonfinite
+    treats them, a NaN matches a NaN whatever its payload, and an inf matches only an inf of the same sign."""
+
+    def differs(golden):
+        far = ulp_distance(got, golden) > bound
+        inf_differs = (got.isinf() | golden.isinf()) & (got != golden)
+        return (far | inf_differs) & ~(got.isnan() & golden.isnan())
+
+    return torch.stack([differs(golden) for golden in goldens]).all(dim=0)
 
 
 # Activations that keep the golden exact: RELU, and SQUARE in fp32.
