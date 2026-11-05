@@ -58,24 +58,21 @@ _MARGIN = 0.05
 # Each op's program, by the kernel directory it is built from.
 OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 
-# Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. These are not CI runs: they
-# were measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the end-to-end boundary
-# layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and scaled by 394 / 416. Replace
-# them with the first CI run's numbers; locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
+# Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is from CI run
+# 41962421284, medians of 20 synced blocks: block_stats 139.0 (19 of 20 samples within 133.5-144.9), block_mix 275.5,
+# gather_softmax 67.5 (64.4-71.7). block_mix keeps the off-pool estimate below, which that run read 0.4% under.
 #
-# An op without a reference (None) is reported and not gated. On 8x4 that is `attn_res_block_stats`, whose window
-# runs until the slowest peer's statistics land and so also times the chips' skew: without a sync per block it
-# measured 75 us in two runs and 110 us in a third, and the per-block sync that steadies it on 4x4 (three runs
-# within 5%) has no 8x4 run yet, nor has `attn_res_gather_softmax` (67-70 us over three unsynced runs).
-#
-# Local medians: SP8xTP4 block_mix 292.4 / 292.2 / 291.8 (unsynced; the op is rank-local); SP4xTP4, synced,
-# block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4.
+# SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
+# end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
+# 394 / 416. Local medians: SP8xTP4 block_mix 292.4 / 292.2 / 291.8; SP4xTP4, synced, block_stats 209.9 / 218.4 /
+# 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4. Locally, run with
+# ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
-        "attn_res_block_stats": None,
+        "attn_res_block_stats": 139.0,
         "attn_res_block_mix": round(292.2 * _CI_OVER_LOCAL, 1),
-        "attn_res_gather_softmax": None,
+        "attn_res_gather_softmax": 67.5,
     },
     "SP4xTP4": {
         "attn_res_block_stats": round(209.9 * _CI_OVER_LOCAL, 1),
