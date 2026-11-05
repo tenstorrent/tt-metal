@@ -393,6 +393,7 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
 #else
     TT_STALLWAIT(ckernel::p_stall::STALL_TDMA, wait_clear_a | wait_clear_b);
     TT_SETDVALID((set_b << 1) | set_a);
+    asm volatile("nop; nop; nop; nop" ::: "memory"); // 4 RISC NOP probe
 
 #endif
 }
@@ -412,6 +413,7 @@ inline void _perf_math_clear_valid(std::uint32_t source)
 #else
     TT_STALLWAIT(ckernel::p_stall::STALL_MATH, wait_valid_a | wait_valid_b);
     TT_CLEARDVALID((clear_b << 1) | clear_a, 0);
+    asm volatile("nop; nop; nop; nop" ::: "memory"); // 4 RISC NOP probe
 
 #endif
 }
@@ -441,6 +443,7 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 #else
         TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a | cond_clear_b);
         TTI_SETDVALID((set_b << 1) | set_a);
+        asm volatile("nop; nop; nop; nop" ::: "memory"); // 4 RISC NOP probe
 #endif
     }
 }
@@ -458,6 +461,7 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 #else
         TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, cond_valid_a | cond_valid_b);
         TTI_CLEARDVALID((clear_b << 1) | clear_a, 0);
+        asm volatile("nop; nop; nop; nop" ::: "memory"); // 4 RISC NOP probe
 #endif
     }
 }
