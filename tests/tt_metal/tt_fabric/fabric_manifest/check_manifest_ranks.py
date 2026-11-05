@@ -7,9 +7,10 @@
 
 Usage: check_manifest_ranks.py PATH [PATH ...]
 
-Each directory holding fabric_manifest_rank_*.json files under a PATH is one run. A rank describes its own chips in
-full and names other ranks' routers only by path, so a reader joins the files through those names. No single rank can
-check them, so for each run this checks that:
+Each directory holding fabric_manifest_rank_*.json files under a PATH is one run, and each tt-run sub-context in it
+(run.subcontext.id) is one fabric: sub-contexts name their meshes and chips independently. A rank describes its own
+chips in full and names other ranks' routers only by path, so a reader joins the files through those names. No single
+rank can check them, so for each fabric this checks that:
   - every chip is local in exactly one rank, so exactly one file describes it
   - every rank gives a chip the same host_rank, and each host rank of a mesh is one rank's: the ranks a mesh is split
     across each own whole host ranks
@@ -25,13 +26,16 @@ import sys
 MAX_ERRORS_SHOWN = 20
 
 
-def find_runs(args):
-    """Each directory holding manifests under args, with its manifest paths."""
-    runs = {}
+def find_fabrics(args):
+    """Each fabric under args, keyed by its directory and sub-context id (None when the job isn't split), with its
+    manifest paths."""
+    fabrics = {}
     for arg in args:
         for path in sorted(pathlib.Path(arg).rglob("fabric_manifest_rank_*.json")):
-            runs.setdefault(path.parent, []).append(path)
-    return runs
+            subcontext = json.loads(path.read_text())["run"].get("subcontext")
+            subcontext_id = subcontext["id"] if subcontext is not None else None
+            fabrics.setdefault((path.parent, subcontext_id), []).append(path)
+    return fabrics
 
 
 def find_chip_owners(manifests):
@@ -121,7 +125,7 @@ def check_cross_rank_links(paths, manifests, owners):
     return problems
 
 
-def check_run(paths):
+def check_fabric(paths):
     manifests = [json.loads(path.read_text()) for path in paths]
     owners = find_chip_owners(manifests)
     return (
@@ -132,18 +136,19 @@ def check_run(paths):
 
 
 def main(args):
-    runs = find_runs(args)
-    if not runs:
+    fabrics = find_fabrics(args)
+    if not fabrics:
         print(f"Fabric manifest: no manifests found under {' '.join(args)}")
         return 1
     failed = 0
-    for directory, paths in runs.items():
-        problems = check_run(paths)
+    for (directory, subcontext_id), paths in fabrics.items():
+        name = str(directory) if subcontext_id is None else f"{directory} sub-context {subcontext_id}"
+        problems = check_fabric(paths)
         if not problems:
-            print(f"{directory}: the {len(paths)}-rank run fits together")
+            print(f"{name}: the {len(paths)}-rank run fits together")
             continue
         failed += 1
-        print(f"Fabric manifest: the ranks in {directory} don't fit together ({len(problems)} problems)")
+        print(f"Fabric manifest: the ranks in {name} don't fit together ({len(problems)} problems)")
         for problem in problems[:MAX_ERRORS_SHOWN]:
             print(f"  {problem}")
     return 1 if failed else 0
