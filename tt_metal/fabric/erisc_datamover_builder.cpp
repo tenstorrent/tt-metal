@@ -1323,7 +1323,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["MY_ETH_CHANNEL"] = my_eth_channel_;
     named_args["MY_ERISC_ID"] = risc_id;
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
-    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = config.requires_forced_assignment_to_noc1();
+    // A Keraunos CCE serves no stateful NOC path (internal/tt-2xx/quasar/cce_noc.h), so a Quasar router stays off them.
+    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] =
+        config.requires_forced_assignment_to_noc1() || config.arch == tt::ARCH::QUASAR;
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
