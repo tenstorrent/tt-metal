@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -22,7 +23,7 @@ class FabricBuilderContext;
 namespace tt::tt_fabric::manifest {
 
 // Describes this process and the build it runs.
-RunInfo describe_run(const ControlPlane& control_plane);
+RunInfo describe_run(const ControlPlane& control_plane, const std::string& run_id);
 
 // Describes the fabric settings this run asked for, and what FabricContext derived from them.
 FabricInfo describe_fabric(const ControlPlane& control_plane);

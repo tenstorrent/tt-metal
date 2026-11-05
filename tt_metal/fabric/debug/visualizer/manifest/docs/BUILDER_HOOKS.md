@@ -24,7 +24,6 @@ each router's facts are collected during the build and kept, and the rest is add
 
 ```
 FabricFirmwareInitializer::init                         (fabric_firmware_initializer.cpp)
-├── remove_stale_fabric_manifest                           delete the last run's file, even with the option off
 ├── per device: create_and_compile_tt_fabric_program    (fabric_init.cpp)
 │   ├── FabricBuilder::create_kernels
 │   │   ├── keeps the KernelCreationContext                master router, router count, router channel mask
@@ -53,7 +52,7 @@ way.
 | `collect_manifest_router(chip_facts)` | Pure virtual on `FabricRouterBuilder`; implemented by `ComputeMeshRouterBuilder` | One `manifest::Router`. The builder gathers what only it can see into a `ManifestRouterInputs` and hands it to the router pass (`fabric_manifest_router_pass.cpp`) |
 | `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, and every router sorted by Ethernet channel |
 | `get_manifest_chips()` | `FabricBuilderContext` | The `PublishedChips` (`fabric_manifest_published_chips.hpp`) that holds each chip by physical chip id. The builder context lives in `FabricContext`, so it outlives the builders, and the topology pass reads it at write time |
-| `remove_stale_fabric_manifest`, `write_fabric_manifest` | Called from `FabricFirmwareInitializer::init`; defined in `fabric_manifest.cpp` | Nothing: they delete last run's file and write this one |
+| `write_fabric_manifest` | Called from `FabricFirmwareInitializer::init`; defined in `fabric_manifest.cpp` | Nothing: it writes this rank's manifest into the run's folder |
 
 `TT_METAL_FABRIC_GENERATE_MANIFEST` sets `RunTimeOptions::get_generate_fabric_manifest()`, which gates
 `publish_manifest_chip` and `write_fabric_manifest`.

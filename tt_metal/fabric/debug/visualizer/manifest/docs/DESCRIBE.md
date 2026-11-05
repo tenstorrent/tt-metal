@@ -6,7 +6,7 @@ fabric settings and the architecture. It also describes each mesh's credit trans
 
 | Function | Fills | Reads |
 | --- | --- | --- |
-| `describe_run(control_plane)` | `run` | The MPI context, the physical system descriptor, the clock, the build's version header |
+| `describe_run(control_plane, run_id)` | `run` | The run id the writer agreed on, the MPI context, the physical system descriptor, the clock, the build's version header |
 | `describe_fabric(control_plane)` | `fabric` | ControlPlane, FabricContext, the Metal environment |
 | `describe_arch(hal)` | `arch` | The HAL, UMD, and fabric's heartbeat constants |
 | `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's credit transport plan for the mesh |
@@ -20,6 +20,7 @@ has already decided.
 
 | Key | From |
 | --- | --- |
+| `run_id` | `write_fabric_manifest`: rank 0 makes it and broadcasts it ([WRITER.md](WRITER.md)) |
 | `mpi_rank`, `world_size` | `DistributedContext::get_world_context()`: this process and how many there are in the whole job, not just its sub-context |
 | `subcontext` | `get_current_world()` when tt-run split the job (`subcontext_id()` has a value): the sub-context's id, and this process's rank in it and its size |
 | `host_name` | `PhysicalSystemDescriptor::my_host_name()`: the name discovery gave this host, the cluster descriptor's cluster id. On a mock cluster without one, it's the mock descriptor's file name |

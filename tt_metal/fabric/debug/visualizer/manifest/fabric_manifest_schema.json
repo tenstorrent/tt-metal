@@ -46,6 +46,11 @@
       "description": "This process and the build it runs. Nothing about the fabric.",
       "type": "object",
       "properties": {
+        "run_id": {
+          "description": "The fabric run: the UTC time and 8 hex digits. Every rank of the fabric has the same one, and it names the folder the manifest is in.",
+          "type": "string",
+          "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"
+        },
         "mpi_rank": { "$ref": "#/$defs/count" },
         "world_size": { "type": "integer", "minimum": 1 },
         "subcontext": {
@@ -85,7 +90,7 @@
           "additionalProperties": false
         }
       },
-      "required": ["mpi_rank", "world_size", "host_name", "written_at", "build"],
+      "required": ["run_id", "mpi_rank", "world_size", "host_name", "written_at", "build"],
       "additionalProperties": false
     },
 

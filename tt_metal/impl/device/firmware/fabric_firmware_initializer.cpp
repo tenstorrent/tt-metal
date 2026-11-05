@@ -320,9 +320,6 @@ void FabricFirmwareInitializer::init(
         const auto fabric_manager = descriptor_->fabric_manager();
         const bool init_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC);
         const bool terminate_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
-        if (init_fabric) {
-            tt_fabric::remove_stale_fabric_manifest(rtoptions_);
-        }
         if (init_fabric || terminate_fabric) {
             compile_fabric_only();
         } else {
@@ -351,7 +348,6 @@ void FabricFirmwareInitializer::init(
             devices_.size());
 
         log_info(tt::LogMetal, "Initializing Fabric");
-        tt_fabric::remove_stale_fabric_manifest(rtoptions_);
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             if (!control_plane_.fabric_uses_flat_addressing()) {

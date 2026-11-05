@@ -14,6 +14,7 @@
 
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_topology_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -22,11 +23,16 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -77,6 +83,7 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
 // This process and the build it runs: ranks, host, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
     json out;
+    out["run_id"] = run.run_id;
     out["mpi_rank"] = run.mpi_rank;
     out["world_size"] = run.world_size;
     if (run.subcontext.has_value()) {
@@ -570,14 +577,44 @@ json make_mesh_json(const manifest::Mesh& mesh) {
     return out;
 }
 
+// A new fabric run id: the UTC time to the second, then 8 random hex digits, such as "20261105T221500Z-1a2b3c4d". It
+// sorts by time, and the digits tell apart runs started in the same second.
+std::string make_fabric_run_id() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::array<char, 32> time_text{};
+    std::strftime(time_text.data(), time_text.size(), "%Y%m%dT%H%M%SZ", &utc);
+    std::random_device random_device;
+    return fmt::format("{}-{:08x}", time_text.data(), std::uniform_int_distribution<uint32_t>()(random_device));
+}
+
+// The run id every rank of this fabric writes: rank 0 makes it and broadcasts it, so a run's files on every host share
+// one id. The current world is this fabric's ranks: a job tt-run splits into sub-contexts has a fabric, and so a run,
+// per sub-context.
+std::string share_fabric_run_id() {
+    constexpr size_t k_run_id_length = std::string_view("20261105T221500Z-1a2b3c4d").size();
+    const auto& world = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    std::array<char, k_run_id_length> run_id{};
+    if (*world->rank() == 0) {
+        const std::string made = make_fabric_run_id();
+        TT_FATAL(made.size() == run_id.size(), "Fabric manifest: run id {} isn't {} characters", made, run_id.size());
+        std::ranges::copy(made, run_id.begin());
+    }
+    world->broadcast(
+        ttsl::as_writable_bytes(ttsl::Span<char>{run_id.data(), run_id.size()}),
+        tt_metal::distributed::multihost::Rank{0});
+    return std::string(run_id.begin(), run_id.end());
+}
+
 // Writes the manifest to a temporary name and renames it into place, so a reader never sees a partial manifest.
 void serialize_fabric_manifest_to_file(
-    const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
+    const ControlPlane& control_plane, const std::string& run_id, const std::filesystem::path& output_file_path) {
     const auto& fabric_context = control_plane.get_fabric_context();
     TT_FATAL(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
     const manifest::ManifestFacts facts{
-        .run = manifest::describe_run(control_plane),
+        .run = manifest::describe_run(control_plane, run_id),
         .fabric = manifest::describe_fabric(control_plane),
         .arch = manifest::describe_arch(fabric_context.get_hal()),
         .meshes = manifest::describe_meshes(
@@ -613,8 +650,8 @@ json make_manifest_json(const manifest::ManifestFacts& facts) {
     }
 
     json out;
-    out["manifest_version"] = FABRIC_MANIFEST_VERSION;
-    out["file_kind"] = "fabric_manifest";
+    out["manifest_version"] = visualizer::k_manifest_version;
+    out["file_kind"] = std::string(visualizer::k_manifest_file_kind);
     out["run"] = make_run_json(facts.run);
     out["fabric"] = make_fabric_json(facts.fabric);
     out["arch"] = make_arch_json(facts.arch);
@@ -623,37 +660,24 @@ json make_manifest_json(const manifest::ManifestFacts& facts) {
     return out;
 }
 
-// Named by the rank in the whole job, so the ranks of a job tt-run split into sub-contexts, which share a logs
-// directory, don't write the same file.
-std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions) {
-    const auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_world_context();
-    const int rank = *distributed_context->rank();
-    const int world_size = *distributed_context->size();
-    return std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
-           ("fabric_manifest_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".json");
-}
-
-void remove_stale_fabric_manifest(const tt::llrt::RunTimeOptions& rtoptions) {
-    const auto manifest_path = fabric_manifest_path(rtoptions);
-    try {
-        if (std::filesystem::remove(manifest_path)) {
-            log_debug(tt::LogFabric, "Removed stale fabric manifest: {}", manifest_path.string());
-        }
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Failed to remove stale fabric manifest {}: {}", manifest_path.string(), e.what());
-    }
-}
-
 void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::RunTimeOptions& rtoptions) {
-    const auto manifest_path = fabric_manifest_path(rtoptions);
+    // Create and share a run id for this fabric run to all ranks in the world
+    const std::string run_id = share_fabric_run_id();
+    // Manifest file is named by the rank in the whole job so that every rank has a distinct file
+    const auto world = tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    const std::filesystem::path manifest_path =
+        visualizer::make_run_directory(rtoptions.get_logs_dir(), run_id) /
+        visualizer::make_manifest_file_name(
+            static_cast<uint32_t>(*world->rank()), static_cast<uint32_t>(*world->size()));
     try {
-        serialize_fabric_manifest_to_file(control_plane, manifest_path);
+        serialize_fabric_manifest_to_file(control_plane, run_id, manifest_path);
     } catch (const std::exception& e) {
         TT_THROW(
             "Failed to write fabric manifest {} (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip): {}",
             manifest_path.string(),
             e.what());
     }
+    log_info(tt::LogFabric, "Wrote fabric manifest {}", manifest_path.string());
 }
 
 }  // namespace tt::tt_fabric
