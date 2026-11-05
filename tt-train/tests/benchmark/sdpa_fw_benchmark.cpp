@@ -20,6 +20,23 @@
 //   llama8b_s2048_arbitrary          not timed                         6651.8         2086.9
 //   tinyllama_s2048_causal_gate        1704.1                         1714.9          941.6
 //
+// Per-chip rows on p150b with a 120-core compute grid (warmup 3, measured 20):
+//   scenario                    main's chunking   default pick   picked Q/K/H
+//   qwen3_8_tp4_s1024_causal              402.3          400.5       32/128/1
+//   qwen3_8_tp4_s8192_causal            17537.2         6120.3      128/128/1
+//   llama70b_tp8_s2048_causal             876.1          647.9       64/128/1
+//   llama70b_tp8_s8192_causal           11811.1         4463.9      128/128/1
+// All four outputs equal the pinned-main-chunk output. These are single-chip attention timings,
+// not distributed training. At 130 cores the Llama-70B 2k row stays at q32/k128/h1 too: its 128
+// two-row causal pairs cannot fill the grid. PR #62646 replaces that balance rule.
+//
+// Long-context training on the same device: NanoLlama3 char, B=1, S=8192, six blocks, Hq/Hkv=6/3,
+// D=64, AdamW, seed 5489. nano_gpt's reported median for steps 4..23: 135.8 ms with sdpa_fw pinned
+// to q32/k128/h1 at the autograd call, 119.3 ms with the default pick. All 23 logged losses match.
+// Both runs use this kernel; this is not a comparison against a build of main. Reproduce with
+// training_shakespeare_nanollama3_char.yaml: batch_size=1, max_steps=23, model_save_interval=0,
+// and nanollama3_char.yaml: max_sequence_length=8192. No other model/optimizer settings changed.
+//
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [q_chunk_size,k_chunk_size,heads_per_item ...]
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
 
@@ -38,7 +55,9 @@
 #include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "test_utils/random_data.hpp"
 #include "xtensor/generators/xbuilder.hpp"
 
@@ -59,6 +78,11 @@ struct Scenario {
 // kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor (also on the Llama-3-8B shape),
 // and the output gate.
 const std::vector<Scenario> kScenarios = {
+    // Per-chip full-attention shapes: Qwen3.8 TP4 and Llama-70B TP8.
+    {"qwen3_8_tp4_s1024_causal", 1U, 6U, 1U, 1024U, 256U, ttml::metal::AttentionMaskType::Causal},
+    {"qwen3_8_tp4_s8192_causal", 1U, 6U, 1U, 8192U, 256U, ttml::metal::AttentionMaskType::Causal},
+    {"llama70b_tp8_s2048_causal", 1U, 8U, 1U, 2048U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama70b_tp8_s8192_causal", 1U, 8U, 1U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s2048_causal", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s4096_causal", 1U, 32U, 4U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"llama8b_s2048_causal", 1U, 32U, 8U, 2048U, 128U, ttml::metal::AttentionMaskType::Causal},
@@ -160,6 +184,18 @@ void run_scenario(
         sc.mask_type == metal::AttentionMaskType::Causal      ? (sc.gate ? "causal+gate" : "causal")
         : sc.mask_type == metal::AttentionMaskType::Arbitrary ? "arbitrary"
                                                               : "none");
+    const auto grid = device.compute_with_storage_grid_size();
+    const auto picked = metal::ops::sdpa_fw::device::resolve_chunks(
+        {},
+        metal::ops::sdpa_fw::device::shape_of(query, key, value, sc.mask_type, sc.gate, true),
+        metal::available_l1_bytes(device),
+        grid.x * grid.y);
+    fmt::print(
+        "default chunks: q={} k={} h={} on {} cores\n",
+        picked.Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        picked.Sk_chunk_t * tt::constants::TILE_HEIGHT,
+        picked.heads_per_item,
+        grid.x * grid.y);
     fmt::print("this kernel at main's chunking (q=32, k=128, h=1): {:.1f} us\n", main_chunking_us);
     fmt::print("{:<20} {:>12} {:>9} {:>12}\n", "config", "device_us", "speedup", "max_abs_diff");
     for (const Row& row : rows) {
