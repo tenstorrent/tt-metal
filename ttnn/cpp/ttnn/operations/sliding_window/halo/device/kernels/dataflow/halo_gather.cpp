@@ -231,7 +231,11 @@ static inline void run_halo_gather(
                 // Pop blocks until we have the right one - this works because transfers are globally ordered by
                 // ascending block IDs
                 while (src_offset >= block_boundary_offset) {
+#if defined(HALO_FLUSH_BLOCK_WRITES)
+                    noc.async_writes_flushed();
+#else
                     noc.async_write_barrier();
+#endif
                     in_cb.pop_front(total_tiles_in_single_block);
                     in_cb.wait_front(total_tiles_in_single_block);
                     block_boundary_offset +=
