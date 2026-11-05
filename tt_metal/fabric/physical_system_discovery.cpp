@@ -70,7 +70,7 @@ std::string get_local_discovery_hostname(const tt::umd::ClusterDescriptor& clust
     }
     // Read the mock cluster descriptor path straight from the environment rather than through
     // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
-    // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
+    // rtoptions sets mock_cluster_desc_path (from
     // TT_METAL_MOCK_CLUSTER_DESC_PATH). In mock mode use the descriptor filename as this rank's hostname
     // so mock-cluster test runs get stable, matching hostnames; otherwise use the OS hostname.
     if (const char* mock_cluster_desc_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
