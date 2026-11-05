@@ -5,14 +5,16 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
-// output_c = F0_c + (FI_c - F0_c) @ seed per chunk, and this core's tile rows of final = A @ seed + B, accumulated in
-// the FP32 DST on top of the copied F0 (or B).
+// output_c = F0_c + (FI_c - F0_c) @ seed per chunk, accumulated in the FP32 DST on top of the copied F0, and this
+// core's tile rows of final = seed + (E @ seed + B) from the final transition's complement form E = A - I.
 // The terms buffer holds a chunk row of F(0) at tile row, and of F(I) at fi_offset further: in place, the core's
 // whole shard (core_chunks rows of F(0), then of F(I)); streamed, one chunk at a time, each formed into its
 // difference just before its product.
@@ -26,14 +28,16 @@ TT_KERNEL void compute() {
     DataflowBuffer terms(dfb::terms);
     DataflowBuffer diff(dfb::diff);
     DataflowBuffer out(dfb::out);
-    DataflowBuffer a(dfb::a);
+    DataflowBuffer e(dfb::e);
     DataflowBuffer b(dfb::b);
+    DataflowBuffer seed_row(dfb::seed_row);
     DataflowBuffer final_rows(dfb::final_rows);
     const uint32_t terms_id = terms.get_id();
     const uint32_t diff_id = diff.get_id();
     const uint32_t out_id = out.get_id();
-    const uint32_t a_id = a.get_id();
+    const uint32_t e_id = e.get_id();
     const uint32_t b_id = b.get_id();
+    const uint32_t seed_row_id = seed_row.get_id();
     const uint32_t final_id = final_rows.get_id();
     compute_kernel_hw_startup<SrcOrder::Reverse>(terms_id, seed_group.get_id(), out_id);
 
@@ -134,34 +138,53 @@ TT_KERNEL void compute() {
         terms.pop_front(terms_tiles);
         diff.pop_front(chunks * kt);
     }
-    // This core's tile rows of final = A @ seed + B.
+    // This core's tile rows of final = seed + (E @ seed + B). B and the seed's row unpack to DST exactly and are added
+    // on the SFPU, and E @ seed accumulates on top: only the small E @ seed term passes through the matmul's source
+    // registers, so the long-memory seed is never truncated to their precision. Each pass forms `columns` tiles of the
+    // row in DST slots [0, columns), with the seed's tiles in [columns, 2 columns).
     if (final) {
+        constexpr uint32_t dst_tiles =
+            ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+        constexpr uint32_t columns = kda::largest_divisor_at_most(kt, dst_tiles / 2);
         const uint32_t seed = final_tail ? tail_id : group_id;
         pack_reconfig_data_format(final_id);
         for (uint32_t row = first_row; row < kt; row += row_stride) {
-            a.wait_front(kt);
+            e.wait_front(kt);
             b.wait_front(kt);
+            seed_row.wait_front(kt);
             final_rows.reserve_back(kt);
-            tile_regs_acquire();
-            reconfig_data_format_srca(b_id);
-            copy_init(b_id);
-            for (uint32_t c = 0; c < kt; ++c) {
-                copy_tile(b_id, c, c);
+            for (uint32_t first_column = 0; first_column < kt; first_column += columns) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(b_id);
+                copy_init(b_id);
+                for (uint32_t c = 0; c < columns; ++c) {
+                    copy_tile(b_id, first_column + c, c);
+                }
+                reconfig_data_format_srca(seed_row_id);
+                copy_init(seed_row_id);
+                for (uint32_t c = 0; c < columns; ++c) {
+                    copy_tile(seed_row_id, first_column + c, columns + c);
+                }
+                add_binary_tile_init();
+                for (uint32_t c = 0; c < columns; ++c) {
+                    add_binary_tile(c, columns + c, c);
+                }
+                reconfig_data_format<SrcOrder::Reverse>(e_id, seed);
+                matmul_block_init(e_id, seed, false, columns, 1, kt);
+                for (uint32_t k = 0; k < kt; ++k) {
+                    matmul_block(e_id, seed, k, k * kt + first_column, 0, false, columns, 1, kt);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t c = 0; c < columns; ++c) {
+                    pack_tile(c, final_id);
+                }
+                tile_regs_release();
             }
-            reconfig_data_format<SrcOrder::Reverse>(a_id, seed);
-            matmul_block_init(a_id, seed, false, kt, 1, kt);
-            for (uint32_t k = 0; k < kt; ++k) {
-                matmul_block(a_id, seed, k, k * kt, 0, false, kt, 1, kt);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t r = 0; r < kt; ++r) {
-                pack_tile(r, final_id);
-            }
-            tile_regs_release();
             final_rows.push_back(kt);
-            a.pop_front(kt);
+            e.pop_front(kt);
             b.pop_front(kt);
+            seed_row.pop_front(kt);
         }
     }
     if (need_group) {

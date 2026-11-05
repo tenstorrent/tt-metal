@@ -28,7 +28,7 @@ struct EntryCorrectionOperation {
 
 std::tuple<Tensor, Tensor> entry_correction(
     const Tensor& terms,
-    const Tensor& final_a,
+    const Tensor& final_e,
     const Tensor& final_b,
     const Tensor& entry,
     const Tensor& tail_entry,
