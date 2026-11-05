@@ -1294,11 +1294,18 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", i)] =
             static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[i]);
     }
-    // Each sender channel's connection semaphore, the address its runtime arg also carries, so a router can read a
-    // worker's connection state without loading a pointer.
-    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args[fmt::format("SENDER_CH_{}_CONNECTION_SEMAPHORE_ADDR", i)] =
-            static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[i]);
+    // The worker channels' connection semaphores, one per VC (VC0's worker; VC2's where it is built; VC1 has none; 0
+    // without a worker). The router checks a worker's connection every pass, reading the semaphore at this
+    // compile-time address with the pass's first reads; the runtime args carry every channel's, for init.
+    {
+        const size_t vc0_worker = get_worker_connected_sender_channel();
+        const size_t vc2_worker = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        named_args["VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"] =
+            static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[vc0_worker]);
+        named_args["VC2_WORKER_CONNECTION_SEMAPHORE_ADDR"] =
+            actual_sender_channels_vc2 > 0
+                ? static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[vc2_worker])
+                : 0;
     }
 
     // --- Status pointers ---

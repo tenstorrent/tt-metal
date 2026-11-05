@@ -335,30 +335,8 @@ constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
-// Each sender channel's connection semaphore (the address its runtime arg also carries).
-constexpr size_t local_sender_channel_0_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_0_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_1_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_1_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_2_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_2_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_3_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_3_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_4_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_4_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_5_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_5_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_6_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_6_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_7_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_7_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_8_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_8_CONNECTION_SEMAPHORE_ADDR");
-constexpr size_t local_sender_channel_9_connection_semaphore_addr =
-    NAMED_CT_ARG("SENDER_CH_9_CONNECTION_SEMAPHORE_ADDR");
 // The same, by channel: each sender channel's connection info (its worker's location, the read counter a disconnected
-// worker's credits go to) and its connection semaphore (a worker channel's connection state), in L1 at compile-time
-// addresses.
+// worker's credits go to), in L1 at compile-time addresses.
 constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
     local_sender_channel_0_connection_info_addr,
     local_sender_channel_1_connection_info_addr,
@@ -370,17 +348,10 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_7_connection_info_addr,
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
-constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_semaphore_addrs = {
-    local_sender_channel_0_connection_semaphore_addr,
-    local_sender_channel_1_connection_semaphore_addr,
-    local_sender_channel_2_connection_semaphore_addr,
-    local_sender_channel_3_connection_semaphore_addr,
-    local_sender_channel_4_connection_semaphore_addr,
-    local_sender_channel_5_connection_semaphore_addr,
-    local_sender_channel_6_connection_semaphore_addr,
-    local_sender_channel_7_connection_semaphore_addr,
-    local_sender_channel_8_connection_semaphore_addr,
-    local_sender_channel_9_connection_semaphore_addr};
+// Each VC's worker channel's connection semaphore (0 where the VC has no worker: VC1 never does), at a compile-time
+// address: the router reads it every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
+constexpr std::array<size_t, MAX_NUM_VCS> worker_connection_semaphore_addrs = {
+    NAMED_CT_ARG("VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"), 0, NAMED_CT_ARG("VC2_WORKER_CONNECTION_SEMAPHORE_ADDR")};
 
 // ============================================================================
 // Status pointers

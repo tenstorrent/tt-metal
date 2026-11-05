@@ -285,7 +285,8 @@ struct SenderChannelInterfaces {
             auto* info = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
                 sender_connection_info_addrs[CH]);
             info->edm_read_counter = 0;
-            ASSERT(!worker || connection_semaphores[CH] == sender_connection_semaphore_addrs[CH]);
+            ASSERT(
+                !worker || connection_semaphores[CH] == worker_connection_semaphore_addrs[vc_of_sender_channel(CH)]);
             new (&of<CH>()) tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
                 tt::tt_fabric::worker_handshake_noc,
                 SENDER_NUM_BUFFERS_ARRAY[CH]>(
@@ -346,9 +347,9 @@ struct WorkerChannel {
     // larger count.
     static_assert(!enable_read_counter_update_noc_flush);
 
-    // Its connection semaphore (compile time; the interface holds the same address), its read counter and its credit
-    // command buffer.
-    static constexpr uint32_t connection_semaphore_addr = sender_connection_semaphore_addrs[CH];
+    // Its connection semaphore (its VC's, compile time; the interface holds the same address), its read counter and
+    // its credit command buffer.
+    static constexpr uint32_t connection_semaphore_addr = worker_connection_semaphore_addrs[SenderChannel<CH>::vc];
     static constexpr uint32_t read_counter_addr = SenderChannelInterfaces::read_counter_addr(CH);
     static constexpr uint8_t credit_cmd_buf = CommandBuffers::worker_credits[CH];
 
