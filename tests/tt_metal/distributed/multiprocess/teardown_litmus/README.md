@@ -5,9 +5,9 @@ plane's init inside `open_mesh_device`, the collectives, close and exit, plus th
 Two ranks of 8x4 on the Wormhole 6U dual-host mock descriptors, launched by tt-run, no device.
 
 The rows come from the teardown plan for tt-metal #56902 (tt-blaze `tools/teardown_probe`, lane L4, where
-every row was first measured with its log). A row that passes today in the fabric CPU-only lane is a gate. A row that fails today runs
-in report mode: `xfail(strict=True)` with the plan's error id in the reason, so the unexpected pass after the
-fix fails the job and the marker is dropped in the same PR.
+every row was first measured with its log). A row that passes today in the fabric CPU-only lane is a gate. A row that fails today is
+marked `@known("P..: ...")` with the plan's error id and fix: it fails, so the lane is red until the fix lands, and
+the failure message names the error; the marker is dropped in the PR that fixes it.
 
 | row | fault | assertion | today |
 |---|---|---|---|
@@ -19,17 +19,17 @@ fix fails the job and the marker is dropped in the same PR.
 | `test_exit_nofinalize_ends_nonzero` | rank 1 `_exit`s with the mesh open | exit non-zero, nothing left | gate |
 | `test_invalid_rank_raises` | recv from a rank that does not exist | raises at once | gate |
 | `test_use_before_init_raises` | a barrier before init | raises "not initialized" | gate |
-| `test_raise_after_open_ends` | rank 1 raises with the mesh open | the job ends non-zero | report, P1 |
-| `test_bad_shape_on_one_rank_ends` | rank 1 opens 9x9 | the job ends non-zero | report, P21 |
-| `test_conflicting_descriptor_ends` | rank 1's descriptor is a T3K | the job ends non-zero | report, P21 |
-| `test_barrier_skipped_ends` | rank 1 skips a barrier | the job ends | report, P16 |
-| `test_send_without_recv_ends` | a send nobody receives | the job ends | report, P16 |
-| `test_sigkill_before_init_ends` | rank 1 killed before MPI_Init | the job ends | report, P13 |
-| `test_dead_peer_in_open_exit_nonzero` | rank 1 killed inside open | exit non-zero | report, P17 P4 |
-| `test_ctrl_c_in_deadlock_leaves_nothing` | SIGINT at tt-run in a deadlock after open | tt-run ends, nothing left 3 s later | report, P6 (prterun is left in CI) |
-| `test_ctrl_c_in_init_leaves_nothing` | SIGINT at tt-run while a rank waits in the context init for a late peer | nothing left 3 s later | report, P6 |
-| `test_sigterm_at_ttrun_ends` | SIGTERM at tt-run in a deadlock | the job ends, nothing left | report, P7 |
-| `test_solve_rank_killed_ends` | a phase-1 rank killed | tt-run ends non-zero, nothing left | report, P18 |
+| `test_raise_after_open_ends` | rank 1 raises with the mesh open | the job ends non-zero | fails today, P1 |
+| `test_bad_shape_on_one_rank_ends` | rank 1 opens 9x9 | the job ends non-zero | fails today, P21 |
+| `test_conflicting_descriptor_ends` | rank 1's descriptor is a T3K | the job ends non-zero | fails today, P21 |
+| `test_barrier_skipped_ends` | rank 1 skips a barrier | the job ends | fails today, P16 |
+| `test_send_without_recv_ends` | a send nobody receives | the job ends | fails today, P16 |
+| `test_sigkill_before_init_ends` | rank 1 killed before MPI_Init | the job ends | fails today, P13 |
+| `test_dead_peer_in_open_exit_nonzero` | rank 1 killed inside open | exit non-zero | fails today, P17 P4 |
+| `test_ctrl_c_in_deadlock_leaves_nothing` | SIGINT at tt-run in a deadlock after open | tt-run ends, nothing left 3 s later | fails today, P6 (prterun is left in CI) |
+| `test_ctrl_c_in_init_leaves_nothing` | SIGINT at tt-run while a rank waits in the context init for a late peer | nothing left 3 s later | fails today, P6 |
+| `test_sigterm_at_ttrun_ends` | SIGTERM at tt-run in a deadlock | the job ends, nothing left | fails today, P7 |
+| `test_solve_rank_killed_ends` | a phase-1 rank killed | tt-run ends non-zero, nothing left | fails today, P18 |
 
 ## MPI only (`test_teardown_litmus_mpi.py`)
 
@@ -47,11 +47,11 @@ recompiled against it; otherwise the build's `teardown_mpi_probe` and the `mpiru
 | `test_mpi_exit_nofinalize_ends` | a rank `_exit`s, `btl self,tcp` | exit non-zero, nothing left | gate |
 | `test_mpi_hang_timeout_ends` | a rank spins, PRRTE `--timeout 20` | exit 241, nothing left | gate |
 | `test_mpi_ctrl_c_at_mpirun_leaves_nothing` | SIGINT at mpirun | the whole tree is gone | gate |
-| `test_mpi_dead_rank_exit_nonzero_ulfm` | a rank killed, `--with-ft ulfm` | exit non-zero | report, P4 |
-| `test_mpi_exit_after_error_ends` | a rank `exit(1)`s after an error | the job ends | report, P1 |
-| `test_mpi_hang_never_ends` | a rank spins, no wall clock | the job ends | report, P5 |
-| `test_mpi_wrong_interface_ends` | `btl_tcp_if_include nosuchif` | the job ends | report, P14 |
-| `test_mpi_exit_nofinalize_sm_layer_ends` | a rank `_exit`s with the shared-memory layer on | the job ends | report, P2 |
+| `test_mpi_dead_rank_exit_nonzero_ulfm` | a rank killed, `--with-ft ulfm` | exit non-zero | fails today, P4 |
+| `test_mpi_exit_after_error_ends` | a rank `exit(1)`s after an error | the job ends | fails today, P1 |
+| `test_mpi_hang_never_ends` | a rank spins, no wall clock | the job ends | fails today, P5 |
+| `test_mpi_wrong_interface_ends` | `btl_tcp_if_include nosuchif` | the job ends | fails today, P14 |
+| `test_mpi_exit_nofinalize_sm_layer_ends` | a rank `_exit`s with the shared-memory layer on | the job ends | fails today, P2 |
 
 Every row kills whatever it left (its own process group, then any launcher or probe process of this user
 that appeared during the row) before the next one starts, so a hang in one row cannot fail the next.

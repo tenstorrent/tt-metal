@@ -11,9 +11,9 @@ descriptor that disagrees, a collective with a wrong or dead peer) and the user 
 Requirements, as in the plan: a failure never becomes a hang (R1), a hang ends by itself and leaves nothing
 (R2), nobody kills processes by hand (R3), the exit code reports the failure (R4).
 
-Modes. A row that passes today is a gate. A row that fails today is marked ``xfail(strict=True)`` with the
-plan's error id in the reason: it still runs and records, and when the fix lands the unexpected pass fails
-the job, which is the signal to drop the marker. Each row has a deadline; a job that is still running at the
+Modes. A row that passes today is a gate. A row that fails today is marked ``@known("P..: ...")`` with the
+plan's error id and fix: it fails, so the job is red until the fix lands, and its failure message names the
+error; when the fix lands the row passes and the marker is dropped. Each row has a deadline; a job that is still running at the
 deadline is killed by its process group and counted as a hang.
 
 Run: pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v   (from the repository root, with a
@@ -33,6 +33,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # litmus_common lives next to this file, whatever the import mode
 from litmus_common import (
+    known,
     DEADLINE_END,
     DEADLINE_HANG,
     clean,
@@ -130,11 +131,10 @@ def test_use_before_init_raises():
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# rows that fail today: report mode. Each reason names the error of the plan; drop the marker with the fix.
+# rows that fail today. Each marker names the error of the plan and its fix; drop the marker with the fix.
 # ---------------------------------------------------------------------------------------------------------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="P1: a rank that raises leaves the others in their barrier forever; fix: abort on an uncaught exception in the DistributedContext",
+@known(
+    "P1: a rank that raises leaves the others in their barrier forever; fix: abort on an uncaught exception in the DistributedContext"
 )
 def test_raise_after_open_ends():
     r = run_case("raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE_HANG)
@@ -143,9 +143,8 @@ def test_raise_after_open_ends():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P21: a TT_FATAL inside open on one rank (a shape the descriptor cannot hold) leaves its peer in the discovery barrier forever",
+@known(
+    "P21: a TT_FATAL inside open on one rank (a shape the descriptor cannot hold) leaves its peer in the discovery barrier forever"
 )
 def test_bad_shape_on_one_rank_ends():
     r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE_HANG)
@@ -154,9 +153,8 @@ def test_bad_shape_on_one_rank_ends():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P21: a rank whose descriptor describes another machine makes the mapper TT_FATAL on one rank while the other waits forever",
+@known(
+    "P21: a rank whose descriptor describes another machine makes the mapper TT_FATAL on one rank while the other waits forever"
 )
 def test_conflicting_descriptor_ends(tmp_path):
     r = run_case("conflicting_descriptor", {}, DEADLINE_HANG, cmd=legacy_cmd(mapping=conflict_mapping(tmp_path)))
@@ -165,18 +163,15 @@ def test_conflicting_descriptor_ends(tmp_path):
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="P16: a collective on the distributed context has no timeout; a skipped barrier hangs forever"
-)
+@known("P16: a collective on the distributed context has no timeout; a skipped barrier hangs forever")
 def test_barrier_skipped_ends():
     r = run_case("barrier_skip", {"PROBE_COLL": "barrier_skip"}, DEADLINE_HANG)
     ended(r)
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P16: a send nobody receives (the ssend/irecv deadlock of the topology mapper) hangs forever without PRRTE --timeout",
+@known(
+    "P16: a send nobody receives (the ssend/irecv deadlock of the topology mapper) hangs forever without PRRTE --timeout"
 )
 def test_send_without_recv_ends():
     r = run_case("send_no_recv", {"PROBE_COLL": "send_no_recv"}, DEADLINE_HANG)
@@ -184,17 +179,14 @@ def test_send_without_recv_ends():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P13: a rank killed before MPI_Init is never noticed; the survivor waits in the context init forever",
-)
+@known("P13: a rank killed before MPI_Init is never noticed; the survivor waits in the context init forever")
 def test_sigkill_before_init_ends():
     r = run_case("sigkill_before_init", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "before_init"}, DEADLINE_HANG)
     ended(r)
     clean(r)
 
 
-@pytest.mark.xfail(strict=True, reason="P17/P4: a rank killed inside the control plane's init ends the job with exit 0")
+@known("P17/P4: a rank killed inside the control plane's init ends the job with exit 0")
 def test_dead_peer_in_open_exit_nonzero():
     r = run_case(
         "sigkill_in_open",
@@ -206,9 +198,8 @@ def test_dead_peer_in_open_exit_nonzero():
     nonzero(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P6: Ctrl-C at tt-run in the deadlock leaves prterun running (seen in CI with the wheel's tt-run; a sandbox tt-run cleaned up)",
+@known(
+    "P6: Ctrl-C at tt-run in the deadlock leaves prterun running (seen in CI with the wheel's tt-run; a sandbox tt-run cleaned up)"
 )
 def test_ctrl_c_in_deadlock_leaves_nothing():
     """SIGINT at tt-run while the ranks sit in the send/barrier deadlock: tt-run ends and nothing may be left."""
@@ -223,10 +214,7 @@ def test_ctrl_c_in_deadlock_leaves_nothing():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P6: Ctrl-C at tt-run while a rank waits in the context init SIGKILLs prterun and leaves that rank behind",
-)
+@known("P6: Ctrl-C at tt-run while a rank waits in the context init SIGKILLs prterun and leaves that rank behind")
 def test_ctrl_c_in_init_leaves_nothing():
     """SIGINT at tt-run while rank 0 waits in MPI_Init for a rank 1 that starts 75 s late: nothing may be left."""
     r = run_case(
@@ -240,9 +228,7 @@ def test_ctrl_c_in_init_leaves_nothing():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="P7: SIGTERM at tt-run is not forwarded; prterun and the ranks stay in the deadlock"
-)
+@known("P7: SIGTERM at tt-run is not forwarded; prterun and the ranks stay in the deadlock")
 def test_sigterm_at_ttrun_ends():
     r = run_case(
         "sigterm_at_ttrun",
@@ -255,9 +241,7 @@ def test_sigterm_at_ttrun_ends():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="P18: a phase-1 (solve) rank killed leaves generate_rank_bindings and prterun forever"
-)
+@known("P18: a phase-1 (solve) rank killed leaves generate_rank_bindings and prterun forever")
 def test_solve_rank_killed_ends():
     r = run_case("solve_rank_killed", {}, DEADLINE_HANG, cmd=solve_cmd(), phase1_kill=True)
     ended(r)

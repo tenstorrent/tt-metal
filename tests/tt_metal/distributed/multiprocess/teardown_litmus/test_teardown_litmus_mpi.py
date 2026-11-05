@@ -6,8 +6,8 @@
 (MPI_Init_thread MULTIPLE, atexit MPI_Finalize, a dup of WORLD with MPI_ERRORS_RETURN, blocking collectives) and
 misbehaves on one rank. These rows say which of the failures belong to the launcher and the transport, so they are
 the rows to run again when the MPI install changes: ``TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>`` picks the
-mpirun and the mpicc, and the probe is recompiled against it. Rows that fail today are ``xfail(strict=True)`` with
-the error id of the teardown plan (tt-blaze tools/teardown_probe).
+mpirun and the mpicc, and the probe is recompiled against it. Rows that fail today are marked ``@known`` with
+the error id of the teardown plan (tt-blaze tools/teardown_probe) and fail until the fix lands.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # litmus_common lives next to this file, whatever the import mode
-from litmus_common import DEADLINE_END, DEADLINE_HANG, clean, ended, mpi_cmd, nonzero, rank_reached, run_case
+from litmus_common import known, DEADLINE_END, DEADLINE_HANG, clean, ended, mpi_cmd, nonzero, rank_reached, run_case
 
 NP = {"PROBE_NP": "3"}
 
@@ -102,35 +102,28 @@ def test_mpi_ctrl_c_at_mpirun_leaves_nothing():
     clean(r)
 
 
-# ---- report rows: what the launcher and the transport do today ----------------------------------------------
-@pytest.mark.xfail(
-    strict=True, reason="P4: under --with-ft ulfm a dead rank is not a job failure; the launcher returns 0"
-)
+# ---- rows that fail today: what the launcher and the transport do ----------------------------------------------
+@known("P4: under --with-ft ulfm a dead rank is not a job failure; the launcher returns 0")
 def test_mpi_dead_rank_exit_nonzero_ulfm():
     r = run_case("mpi_dead_rank_ulfm_code", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd())
     ended(r)
     nonzero(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P1: a rank that exits after an error sits in its atexit finalize and the others wait in their barrier forever",
-)
+@known("P1: a rank that exits after an error sits in its atexit finalize and the others wait in their barrier forever")
 def test_mpi_exit_after_error_ends():
     r = run_case("mpi_exit_after_error", {**NP, "PROBE_SCENARIO": "victim_exit1"}, DEADLINE_HANG, cmd=mpi_cmd())
     ended(r)
     clean(r)
 
 
-@pytest.mark.xfail(strict=True, reason="P5: a genuine hang never ends without a wall clock")
+@known("P5: a genuine hang never ends without a wall clock")
 def test_mpi_hang_never_ends():
     r = run_case("mpi_hang", {**NP, "PROBE_SCENARIO": "victim_hang"}, DEADLINE_HANG, cmd=mpi_cmd())
     ended(r)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="P14: with a wrong TCP interface every rank dies at MPI_Init and prterun never ends the job"
-)
+@known("P14: with a wrong TCP interface every rank dies at MPI_Init and prterun never ends the job")
 def test_mpi_wrong_interface_ends():
     r = run_case(
         "mpi_wrong_interface",
@@ -142,10 +135,7 @@ def test_mpi_wrong_interface_ends():
     clean(r)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P2: with the shared-memory layer on, a rank that _exits without finalize parks the survivors in MPI_Finalize",
-)
+@known("P2: with the shared-memory layer on, a rank that _exits without finalize parks the survivors in MPI_Finalize")
 def test_mpi_exit_nofinalize_sm_layer_ends():
     r = run_case(
         "mpi_exit_nofinalize+sm",

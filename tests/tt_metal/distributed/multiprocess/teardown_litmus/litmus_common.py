@@ -10,6 +10,7 @@ else the mpirun on PATH and the probe binary the build made (``build/test/tt_met
 
 from __future__ import annotations
 
+import functools
 import glob
 import os
 import re
@@ -296,6 +297,24 @@ def run_case(
 # ---------------------------------------------------------------------------------------------------------------
 # the assertions a row can make
 # ---------------------------------------------------------------------------------------------------------------
+def known(error: str):
+    """Mark a row that fails today with the error of the teardown plan it exposes. The row still fails (CI is red
+    until the fix lands), and the failure message starts with the error id and the fix, so the job's annotation
+    says what is broken and where. When the fix lands the row passes and the marker is simply dropped."""
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            try:
+                return fn(*a, **k)
+            except AssertionError as e:
+                raise AssertionError(f"known error {error}\n{e}") from None
+
+        return wrapper
+
+    return deco
+
+
 def ended(r: Result) -> None:
     assert (
         not r.timed_out
