@@ -1194,6 +1194,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     const uint32_t taper_tail = options.report_predicted_order ? kOverlapTaperTail : 0;
     if (taper_tail > 0) {
         reader_defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
+        if (const char* e = std::getenv("TT_URE_TAPER_SINGLE")) {
+            reader_defines.emplace_back("URE_TAPER_SINGLE", e);
+        }
+        if (std::getenv("TT_URE_SORT_WALK") != nullptr) {
+            reader_defines.emplace_back("URE_SORT_WALK", "1");
+        }
+        if (const char* e = std::getenv("TT_URE_TAPER_HEAD")) {
+            reader_defines.emplace_back("URE_TAPER_HEAD", e);
+        }
     }
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
@@ -1293,6 +1302,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     }
     if (taper_tail > 0) {
         writer_kernel_desc.defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
+        if (const char* e = std::getenv("TT_URE_TAPER_SINGLE")) {
+            writer_kernel_desc.defines.emplace_back("URE_TAPER_SINGLE", e);
+        }
+        if (std::getenv("TT_URE_SORT_WALK") != nullptr) {
+            writer_kernel_desc.defines.emplace_back("URE_SORT_WALK", "1");
+        }
+        if (const char* e = std::getenv("TT_URE_TAPER_HEAD")) {
+            writer_kernel_desc.defines.emplace_back("URE_TAPER_HEAD", e);
+        }
     }
     if (options.far_chunk_table) {
         writer_kernel_desc.defines.emplace_back("URE_FAR_EXT_OFF", std::to_string(far_ext_off));
@@ -1400,6 +1418,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     }
     if (taper_tail > 0) {
         compute_defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
+        if (const char* e = std::getenv("TT_URE_TAPER_SINGLE")) {
+            compute_defines.emplace_back("URE_TAPER_SINGLE", e);
+        }
+        if (std::getenv("TT_URE_SORT_WALK") != nullptr) {
+            compute_defines.emplace_back("URE_SORT_WALK", "1");
+        }
+        if (const char* e = std::getenv("TT_URE_TAPER_HEAD")) {
+            compute_defines.emplace_back("URE_TAPER_HEAD", e);
+        }
     }
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with

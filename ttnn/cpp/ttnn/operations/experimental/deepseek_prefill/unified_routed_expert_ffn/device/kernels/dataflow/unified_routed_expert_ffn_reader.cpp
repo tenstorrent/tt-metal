@@ -484,11 +484,13 @@ void kernel_main() {
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
+    uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
+    auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
 
     for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
-        const uint32_t local_expert_id = walk_step % experts_per_chip;
+        const uint32_t walk_k = walk_step % experts_per_chip;
 #ifdef URE_BIG_FIRST_T
-        if (local_expert_id == 0) {
+        if (walk_k == 0) {
             const bool big_pass = walk_step == 0;
             band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
             band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
@@ -496,7 +498,11 @@ void kernel_main() {
         }
 #endif
         // Wave role of this expert, and the weight-multicast set it runs with.
-        const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
+        if (walk_k == 0) {
+            adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
+        }
+        const uint32_t local_expert_id = walk_perm[walk_k];
+        const uint32_t role = planner.role(walk_k, experts_per_chip, per_core_M_max, expert_tiles_at);
         const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
         const uint32_t grp_rows = adaptive_chunk::role_rows(role);
         const bool half = (grp_rows == adaptive_chunk::kHalfRows);

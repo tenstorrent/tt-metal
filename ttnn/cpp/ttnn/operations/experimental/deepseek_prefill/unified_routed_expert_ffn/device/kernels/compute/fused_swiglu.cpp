@@ -941,6 +941,7 @@ void kernel_main() {
     // Wave planner state (UNPACK only: it is the thread that can read counts/idx).
     constexpr uint32_t per_core_M_max = chunk_M_max / adaptive_chunk::kGridY;
     [[maybe_unused]] adaptive_chunk::WavePlanner planner;
+    [[maybe_unused]] uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
     constexpr uint32_t kHalfFlag = 0x80000000u;
     constexpr uint32_t kQuarterFlag = 0x40000000u;
     constexpr uint32_t kEighthFlag = 0x20000000u;
@@ -948,9 +949,9 @@ void kernel_main() {
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
     for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
-        const uint32_t local_expert_id = walk_step % experts_per_chip;
+        const uint32_t walk_k = walk_step % experts_per_chip;
 #ifdef URE_BIG_FIRST_T
-        if (local_expert_id == 0) {
+        if (walk_k == 0) {
             const bool big_pass = walk_step == 0;
             band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
             band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
@@ -971,17 +972,22 @@ void kernel_main() {
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+            auto expert_tiles = [&](uint32_t e) -> uint32_t {
+                const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
+                return adaptive_chunk::clamp_count_tiles((cv + 31) / 32, chunk_M_max, num_chunks_max, m_tiles_full);
+            };
+            if (walk_k == 0) {
+                adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
+            }
+            auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
+            const uint32_t local_expert_id = walk_perm[walk_k];
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
             // Hybrid dispatch: experts outside this op's band belong to the other
             // routed-expert op and are dropped here exactly like a zero count.
             count_value = adaptive_chunk::count_in_band(counts_ptr[global_expert_id], band_min, band_max);
             // WAVE: same plan as the reader/writer. A grouped expert this core's rows do not
             // run is sent as count 0 (skipped); one it runs carries its layout's flag.
-            auto expert_tiles = [&](uint32_t e) -> uint32_t {
-                const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
-                return adaptive_chunk::clamp_count_tiles((cv + 31) / 32, chunk_M_max, num_chunks_max, m_tiles_full);
-            };
-            const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
+            const uint32_t role = planner.role(walk_k, experts_per_chip, per_core_M_max, expert_tiles_at);
             if (!adaptive_chunk::role_runs_here(role, my_gy)) {
                 count_value = 0;
             } else if (adaptive_chunk::role_rows(role) == adaptive_chunk::kHalfRows) {

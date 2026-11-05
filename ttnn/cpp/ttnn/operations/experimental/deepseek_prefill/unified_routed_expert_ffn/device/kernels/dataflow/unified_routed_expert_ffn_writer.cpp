@@ -284,6 +284,8 @@ void kernel_main() {
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
+    uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
+    auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
 
 #ifdef URE_PREDICTED_ORDER
     // Each expert is reported to combine as soon as this writer is done with it, at its place in the order combine
@@ -319,8 +321,10 @@ void kernel_main() {
         band_max = pass == 0 ? max_active_tokens : URE_BIG_FIRST_T;
 #endif
         adaptive_chunk::WavePlanner replay;
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            const uint32_t role = replay.role(e, experts_per_chip, per_core_M_max, expert_tiles);
+        adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
+        for (uint32_t k = 0; k < experts_per_chip; ++k) {
+            const uint32_t e = walk_perm[k];
+            const uint32_t role = replay.role(k, experts_per_chip, per_core_M_max, expert_tiles_at);
             if (adaptive_chunk::role_runs_here(role, my_mt) && expert_tiles(e) != 0) {
                 runs_mask |= 1u << e;
             }
@@ -336,16 +340,20 @@ void kernel_main() {
 #endif
 
     for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
-        const uint32_t local_expert_id = walk_step % experts_per_chip;
+        const uint32_t walk_k = walk_step % experts_per_chip;
 #ifdef URE_BIG_FIRST_T
-        if (local_expert_id == 0) {
+        if (walk_k == 0) {
             const bool big_pass = walk_step == 0;
             band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
             band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
             planner = adaptive_chunk::WavePlanner{};
         }
 #endif
-        const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
+        if (walk_k == 0) {
+            adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
+        }
+        const uint32_t local_expert_id = walk_perm[walk_k];
+        const uint32_t role = planner.role(walk_k, experts_per_chip, per_core_M_max, expert_tiles_at);
         const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
         const uint32_t grp_rows = adaptive_chunk::role_rows(role);
         const bool half = (grp_rows == adaptive_chunk::kHalfRows);

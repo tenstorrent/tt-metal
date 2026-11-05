@@ -650,6 +650,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }
             if (args.walk_taper_tail > 0) {
                 kernel.defines.emplace_back("URE_TAPER_TAIL", std::to_string(args.walk_taper_tail));
+                if (const char* e = std::getenv("TT_URE_TAPER_SINGLE")) {
+                    kernel.defines.emplace_back("URE_TAPER_SINGLE", e);
+                }
+                if (std::getenv("TT_URE_SORT_WALK") != nullptr) {
+                    kernel.defines.emplace_back("URE_SORT_WALK", "1");
+                }
+                if (const char* e = std::getenv("TT_URE_TAPER_HEAD")) {
+                    kernel.defines.emplace_back("URE_TAPER_HEAD", e);
+                }
             }
         }
     };
