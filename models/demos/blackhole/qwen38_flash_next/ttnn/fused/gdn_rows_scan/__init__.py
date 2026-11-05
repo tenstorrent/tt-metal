@@ -600,13 +600,39 @@ class LaneBuffers:
     ``[B * R, 12, 128, 128]`` fp32 (slot u * R + j = lane u after j + 1 rows) and the program's constants (shared with
     the decode step, not owned here)."""
 
-    __slots__ = ("prefix", "constants", "gated_memory_config", "lanes", "rows")
+    __slots__ = ("prefix", "constants", "gated_memory_config", "lanes", "rows", "is_view")
 
-    def __init__(self, *, prefix, constants, gated_memory_config, lanes: int, rows: int):
+    def __init__(self, *, prefix, constants, gated_memory_config, lanes: int, rows: int, is_view: bool = False):
         self.prefix, self.constants, self.gated_memory_config = prefix, constants, gated_memory_config
         self.lanes, self.rows = int(lanes), int(rows)
+        self.is_view = bool(is_view)
+
+    def view(self, lanes: int, prefix) -> "LaneBuffers":
+        """The buffers of a ``lanes``-lane width view: ``prefix`` is the caller's lane-prefix alias of this buffer's
+        prefix states (``[lanes * rows, 12, 128, 128]``, the same device buffer); the constants are shared.  The view
+        never frees ``prefix``: it is a reference into this buffer, and freeing it would free this buffer."""
+
+        if self.is_view:
+            raise ValueError("a lanes-form buffer view cannot be viewed again")
+        lanes = int(lanes)
+        if not 1 <= lanes < self.lanes:
+            raise ValueError(f"a lanes-form buffer view takes 1 <= lanes < {self.lanes}, got {lanes}")
+        if tuple(prefix.shape) != lanes_prefix_shape(lanes, self.rows):
+            raise ValueError(
+                f"{NAME} lanes view prefix must be {lanes_prefix_shape(lanes, self.rows)}, got {tuple(prefix.shape)}"
+            )
+        return LaneBuffers(
+            prefix=prefix,
+            constants=self.constants,
+            gated_memory_config=self.gated_memory_config,
+            lanes=lanes,
+            rows=self.rows,
+            is_view=True,
+        )
 
     def deallocate(self) -> None:
+        if self.is_view:
+            return  # the prefix alias belongs to the parent buffers; a deallocate on it frees the parent
         _release(self.prefix)
 
 

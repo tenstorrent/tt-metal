@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import functools
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -674,6 +674,10 @@ class Qwen38TTNNGDNState:
     # view over a parent state of ``storage_lanes`` lanes (lanes 0..batch_size-1 used; the tensors belong to the
     # parent, so the view never frees, resets or snapshots them).
     storage_lanes: int = 0
+    # True on an MTP lane width view (:meth:`Qwen38TTNNGDN.lane_state_view`): every tensor is a lane-prefix alias
+    # (same device buffer as the parent's, ``batch_size`` lanes), so ``stored_lanes == batch_size`` and the shape
+    # checks hold exactly as on a state of that width, while no lifecycle op may reach the parent's buffers.
+    lane_alias: bool = False
 
     @property
     def stored_lanes(self) -> int:
@@ -688,6 +692,11 @@ class Qwen38TTNNGDNState:
             raise RuntimeError(
                 f"GDN state {what} ({self.batch_size} of {self.stored_lanes} lanes) "
                 "is a bucket view; use the parent state"
+            )
+        if self.lane_alias:
+            raise RuntimeError(
+                f"GDN state {what} ({self.batch_size} lanes) is an MTP lane width view whose tensors alias the "
+                "parent's buffers (a deallocate frees the parent); use the parent state"
             )
 
     @classmethod
@@ -1647,6 +1656,52 @@ class Qwen38TTNNGDNLaneRowsState:
     # The verify-rows fold's lanes buffers (``fused.gdn_rows_scan.attach_lanes``: the ``[B * R, 12, 128, 128]`` prefix
     # states), freed with the state; while they are here the fold owns the lane recurrence and the lane commit.
     scan_buffers: Any = None
+    # True on an MTP lane width view (:meth:`width_view`): the tensors alias the parent's buffers, never freed here.
+    lane_alias: bool = False
+
+    def width_view(
+        self, lanes: int, lane_constants: Qwen38TTNNGDNLaneRowsConstants, alias
+    ) -> "Qwen38TTNNGDNLaneRowsState":
+        """The first ``lanes`` lanes of this state as lane-prefix aliases of the same buffers.
+
+        ``alias(tensor, *, lane_dim, per_lane=1)`` returns the ``lanes``-lane prefix alias of a tensor of this state
+        (``mtp_lanes.lane_prefix_view`` with the widths bound).  ``lane_constants`` are the ``(lanes, rows)`` constants
+        of the view (built per width); the rows constants and the projected ``qkv`` tile are the parent's.  Needs the
+        verify-rows fold's lanes buffers (the composed commit lands in the same aliases only through the fold): a
+        state without them (``QWEN38_FUSED_OFF=gdn_rows_scan``) is refused."""
+
+        if self.lane_alias:
+            raise ValueError("a GDN lane rows width view cannot be viewed again")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < self.lanes:
+            raise ValueError(f"a GDN lane rows width view takes 1 <= lanes < {self.lanes}, got {lanes!r}")
+        if lane_constants.lanes != lanes or lane_constants.rows != self.constants.rows:
+            raise ValueError(
+                f"GDN lane rows view constants are {lane_constants.lanes} x {lane_constants.rows}, "
+                f"the view is {lanes} x {self.constants.rows}"
+            )
+        buffers = fused.gdn_rows_scan.lane_buffers_of(self)
+        if buffers is None:
+            raise RuntimeError(
+                "a GDN lane rows width view needs the verify-rows fold's lanes buffers "
+                "(QWEN38_FUSED_OFF=gdn_rows_scan runs the composed commit, which has no width view)"
+            )
+        rows = self.constants.rows
+        view = replace(
+            self,
+            lanes=lanes,
+            lane_constants=lane_constants,
+            history=alias(self.history, lane_dim=1),
+            qkv_lanes=alias(self.qkv_lanes, lane_dim=2, per_lane=CHUNK_SIZE),
+            q=alias(self.q, lane_dim=0),
+            k=alias(self.k, lane_dim=0),
+            v=alias(self.v, lane_dim=1),
+            beta=alias(self.beta, lane_dim=1),
+            g=alias(self.g, lane_dim=1),
+            scan_buffers=buffers.view(lanes, alias(buffers.prefix, lane_dim=0, per_lane=rows)),
+            lane_alias=True,
+        )
+        view.validate()
+        return view
 
     @classmethod
     def allocate(
@@ -1724,6 +1779,11 @@ class Qwen38TTNNGDNLaneRowsState:
             self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.HEAD_SHARDED, shard_dim=shard_dim)
 
     def deallocate(self) -> None:
+        if self.lane_alias:
+            raise RuntimeError(
+                "a GDN lane rows width view aliases the parent's buffers (a deallocate frees the parent); "
+                "release the parent state"
+            )
         _deallocate(self.history, self.qkv, self.qkv_lanes, self.q, self.k, self.v, self.beta, self.g)
         if self.scan_buffers is not None:
             self.scan_buffers.deallocate()
@@ -2381,6 +2441,31 @@ class Qwen38TTNNGDN:
         return Qwen38TTNNGDNState.allocate(
             self.mesh_device, self.mesh_contract, layer_index=self.weights.layer_index, batch_size=lanes
         )
+
+    def lane_state_view(self, state: Qwen38TTNNGDNState, lanes: int, alias) -> Qwen38TTNNGDNState:
+        """The first ``lanes`` lanes of an MTP lane state as lane-prefix aliases of the same buffers (the recurrent
+        state, the four ring slots and the two zero sources; the MTP lane rows path reads and writes only the
+        recurrent state).  ``alias(tensor, *, lane_dim, per_lane=1)`` is ``mtp_lanes.lane_prefix_view`` with the widths
+        bound.  The view refuses every lifecycle op (:meth:`Qwen38TTNNGDNState._refuse_view`)."""
+
+        self._validate_lane_state(state)
+        if state.is_view or state.lane_alias or state.fixed_phase:
+            raise ValueError(
+                "an MTP lane width view takes the ring-phase parent state, not a view or a fixed-phase one"
+            )
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < state.batch_size:
+            raise ValueError(f"an MTP lane width view takes 1 <= lanes < {state.batch_size}, got {lanes!r}")
+        view = replace(
+            state,
+            batch_size=lanes,
+            recurrent=alias(state.recurrent, lane_dim=0),
+            conv=tuple(alias(slot, lane_dim=2) for slot in state.conv),
+            zero_recurrent=alias(state.zero_recurrent, lane_dim=0),
+            zero_conv=alias(state.zero_conv, lane_dim=2),
+            lane_alias=True,
+        )
+        view.validate()
+        return view
 
     def _validate_lane_state(self, state: Qwen38TTNNGDNState) -> int:
         if state.layer_index != self.weights.layer_index:

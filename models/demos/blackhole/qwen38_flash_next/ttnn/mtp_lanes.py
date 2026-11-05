@@ -26,8 +26,9 @@ the draft body follow in the next stages on the same states.
 from __future__ import annotations
 
 import hashlib
+import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,6 +37,7 @@ import torch
 from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
@@ -114,6 +116,101 @@ def kv_scratch_rows(allocated_context: int) -> int:
             f"lane KV context {allocated_context} is not a whole number of {chunk}-row import chunks of two blocks"
         )
     return chunk
+
+
+# The lane counts an MTP lane width view serves: a W-lane pass of the 8-lane parent state (W = 8 is the parent itself).
+LANE_VIEW_WIDTHS = (2, 4)
+
+MTP_LANE_BUCKETS_VARIABLE = "QWEN38_MTP_LANE_BUCKETS"
+DEFAULT_LANE_BUCKETS = (2, 4, 8)
+VIEW_PARENT_LANES = 8  # the width buckets exist for 8-lane sessions only
+FREE_DRAM_FLOOR_BYTES_PER_BANK = 150 * 1024 * 1024  # below this after the captures the 4- and 2-lane widths are dropped
+
+
+def mtp_lane_buckets_from_env(lanes: int, drafts: int, environ: Mapping[str, str] | None = None) -> tuple[int, ...]:
+    """The lane widths of a session: ``QWEN38_MTP_LANE_BUCKETS`` unset or empty = ``2,4,8``; ``off`` or ``0`` = ``(8,)``
+    (one set, no views); else a comma list of widths from ``{2, 4, 8}`` that contains the session's lane count (sorted
+    here; a repeat is refused).  Only an 8-lane session has buckets: any other lane count runs ``(lanes,)`` and the
+    variable is not read.  Every width must fit one verify tile (``W * (drafts + 1) <= 32``).  Anything else is a
+    ValueError naming the variable."""
+
+    if lanes != VIEW_PARENT_LANES:
+        return (lanes,)
+    environ = os.environ if environ is None else environ
+    text = environ.get(MTP_LANE_BUCKETS_VARIABLE, "").strip()
+    if text.lower() in ("off", "0"):
+        return (lanes,)
+    if not text:
+        widths = list(DEFAULT_LANE_BUCKETS)
+    else:
+        try:
+            widths = [int(item.strip()) for item in text.split(",")]
+        except ValueError:
+            raise ValueError(
+                f"{MTP_LANE_BUCKETS_VARIABLE} must be off, 0 or a comma list of widths, got {text!r}"
+            ) from None
+    allowed = (*LANE_VIEW_WIDTHS, VIEW_PARENT_LANES)
+    if len(set(widths)) != len(widths) or any(width not in allowed for width in widths):
+        raise ValueError(f"{MTP_LANE_BUCKETS_VARIABLE} widths must be distinct values of {allowed}, got {text!r}")
+    widths.sort()
+    if lanes not in widths:
+        raise ValueError(f"{MTP_LANE_BUCKETS_VARIABLE} must contain the session's {lanes} lanes, got {text!r}")
+    if any(width * (drafts + 1) > CHUNK_ROWS for width in widths):
+        raise ValueError(
+            f"{MTP_LANE_BUCKETS_VARIABLE} widths {widths} x {drafts + 1} rows do not fit one {CHUNK_ROWS}-row tile"
+        )
+    return tuple(widths)
+
+
+# The lane-state tensors with a lane per ROW of one 32-row tile (a width view's tile-granular write would also rewrite
+# the rows of lanes W..7), and what the lane code does with each: ("scratch", ...) = written by every pass before it
+# is read and never aliased (one own tensor per width); ("unused", ...) = no MTP lane path reads or writes it, so its
+# alias is never written.  There is no per-lane persistent tensor of this kind: every persistent per-lane tensor keeps
+# its lane on an outer axis or in whole tiles (checked on the device by test_lane_prefix_view_device.py, kinds k1-k4).
+K5_LANE_STATE_TENSORS = (
+    ("GDN state conv slots [1,1,B,2560] (4)", "unused"),
+    ("GDN state zero_conv [1,1,B,2560]", "unused"),
+    ("alignment residual [1,4,B,640]", "scratch"),
+    ("MoE input [1,1,moe_rows,640] (per layer and draft)", "scratch"),
+)
+
+
+def _ceil_tile(value: int) -> int:
+    return -(-value // 32) * 32
+
+
+def lane_prefix_view(tensor, *, lanes: int, parent_lanes: int, lane_dim: int, per_lane: int = 1):
+    """The first ``lanes`` lanes of ``tensor`` as an alias of the same device buffer on every device.
+
+    ``tensor`` holds ``parent_lanes`` lanes on ``lane_dim`` of its local shape, ``per_lane`` entries each (rows for a
+    row-major or tile-row layout, 32 for a lane tile).  The alias is ``ttnn.reshape(tensor, logical, padded)`` (the
+    device probe ``test_lane_prefix_view_device.py``: ``ttnn.experimental.view`` refuses a prefix, its volume check
+    fails): lane u sits at the same offset, so every op sees exactly the shapes of a separate ``lanes``-lane state.
+    Rules of the alias: NEVER ``ttnn.deallocate`` it (that frees the parent's buffer; drop the reference instead);
+    a row-major alias takes ``ttnn.copy`` for any write (``ttnn.add(output_tensor=)`` refuses row-major); a tile
+    alias with the lane on the row axis would rewrite the rows of the lanes past ``lanes``
+    (:data:`K5_LANE_STATE_TENSORS`).
+    """
+
+    if any(isinstance(count, bool) or type(count) is not int for count in (lanes, parent_lanes)):
+        raise TypeError("lane prefix view lane counts must be ints")
+    if not 1 <= lanes < parent_lanes:
+        raise ValueError(f"a lane prefix view takes 1 <= lanes < {parent_lanes}, got {lanes}")
+    shape = [int(item) for item in tensor.shape]
+    if not 0 <= lane_dim < len(shape) or per_lane < 1:
+        raise ValueError(f"lane dim {lane_dim} / per-lane {per_lane} do not fit a rank {len(shape)} tensor")
+    if shape[lane_dim] != parent_lanes * per_lane:
+        raise ValueError(
+            f"lane prefix view: dim {lane_dim} of {shape} is not {parent_lanes} lanes x {per_lane} "
+            "(the parent's lane axis)"
+        )
+    shape[lane_dim] = lanes * per_lane
+    padded = list(shape)
+    if tensor.layout == ttnn.TILE_LAYOUT:
+        padded[-2], padded[-1] = _ceil_tile(padded[-2]), _ceil_tile(padded[-1])
+    view = ttnn.reshape(tensor, shape, padded)
+    view.update_tensor_topology(tensor.tensor_topology())
+    return view
 
 
 PAD_DRAFT_COUNT = 64.0  # a running accept count no pad column reaches: its prefix flag is 0
@@ -529,6 +626,37 @@ class Qwen38TTNNMTPLaneVerifyState:
     k_eff_mask_row: Any
     pass_contexts: list[tuple[tuple[int, int] | None, ...]]
     _owner: object = field(repr=False, compare=False)
+    # A width view (:func:`allocate_lane_width_view`) runs ``lanes`` lanes on the buffers of ``storage_lanes`` lanes
+    # (0 = the state owns its ``lanes``): its lane tensors are lane-prefix aliases of ``parent``'s, the position row, the
+    # token / draft / accept / active rows, the chunk and verify constants, the host mirrors (``positions``,
+    # ``pass_contexts``) are the parent's own objects, and ``views`` (on the parent) lists its live width views.
+    storage_lanes: int = 0
+    parent: Any = field(default=None, repr=False, compare=False)
+    views: list = field(default_factory=list, repr=False, compare=False)
+
+    @property
+    def stored_lanes(self) -> int:
+        return self.storage_lanes or self.lanes
+
+    @property
+    def is_view(self) -> bool:
+        return self.stored_lanes != self.lanes
+
+
+def _allocate_lane_moe(layer: Qwen38TTNNDecoderLayer, moe_rows: int) -> Qwen38TTNNMoE:
+    """The lane MoE instance of ``layer`` at ``moe_rows`` rows (its own persistent buffers: release it with
+    ``release_owned_buffers``)."""
+
+    return Qwen38TTNNMoE(
+        layer.mlp.mesh_device,
+        layer.mlp.mesh_contract,
+        layer.mlp.weights,
+        tt_ccl=layer.mlp.tt_ccl,
+        collective_topology=layer.mlp.collective_topology,
+        rows=moe_rows,
+        synchronization_policy=layer.mlp.synchronization_policy,
+        admitted_rows=SUPPORTED_ROWS if moe_rows in SUPPORTED_ROWS else (moe_rows,),
+    )
 
 
 def _allocate_layer_lane_state(
@@ -552,16 +680,7 @@ def _allocate_layer_lane_state(
         if layer.ple is not None:
             ple = layer.ple.allocate_lane_rows_state(lanes, rows)
             actions.append(("PLE lane rows state", ple.deallocate))
-        moe = Qwen38TTNNMoE(
-            layer.mlp.mesh_device,
-            layer.mlp.mesh_contract,
-            layer.mlp.weights,
-            tt_ccl=layer.mlp.tt_ccl,
-            collective_topology=layer.mlp.collective_topology,
-            rows=moe_rows,
-            synchronization_policy=layer.mlp.synchronization_policy,
-            admitted_rows=SUPPORTED_ROWS if moe_rows in SUPPORTED_ROWS else (moe_rows,),
-        )
+        moe = _allocate_lane_moe(layer, moe_rows)
         actions.append(("lane MoE buffers", moe.release_owned_buffers))
         moe_input = None
         if moe_rows != CHUNK_ROWS:
@@ -767,6 +886,13 @@ def allocate_lane_verify_state(
 
 def release_lane_verify_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNMTPLaneVerifyState) -> None:
     _validate_lane_verify_state(model, verify)
+    if verify.is_view:
+        raise RuntimeError(
+            f"lane verify state ({verify.lanes} of {verify.stored_lanes} lanes) is a width view whose tensors alias "
+            "the parent's buffers (a deallocate frees the parent); use release_lane_width_view"
+        )
+    if any(view.active for view in verify.views):
+        raise RuntimeError("release the lane width views of this lane verify state before the state")
     actions: list[tuple[str, Callable[[], Any]]] = [("lane PLE rows", verify.ple_rows.release)]
     for label, tensor in (
         ("lane k_eff mask row", verify.k_eff_mask_row),
@@ -812,13 +938,33 @@ def _validate_lane_verify_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNMT
         raise ValueError("lane accept constants were built for another lane count or draft count")
     if verify.qsa_lane_verify_constants.rows != verify.rows or verify.gdn_lane_constants.rows != verify.rows:
         raise ValueError("lane constants were built for another row count")
-    if verify.positions.lanes != verify.lanes or len(verify.pass_contexts) != verify.lanes:
+    if verify.is_view:
+        parent = verify.parent
+        if (
+            not isinstance(parent, Qwen38TTNNMTPLaneVerifyState)
+            or parent.is_view
+            or parent.lanes != verify.stored_lanes
+        ):
+            raise ValueError("lane verify width view has no parent state of its stored lanes")
+        if not parent.ple_rows.active:
+            raise RuntimeError("the parent of this lane verify width view was released")
+        if verify.positions is not parent.positions or verify.pass_contexts is not parent.pass_contexts:
+            raise ValueError("a lane verify width view shares its parent's positions and contexts (one host owner)")
+    if verify.positions.lanes != verify.stored_lanes or len(verify.pass_contexts) != verify.stored_lanes:
         raise ValueError("lane positions or contexts do not match the lane count")
     if not verify.ple_rows.active:
         raise RuntimeError("lane PLE rows were released")
 
 
 # --------------------------------------------------------------------------- host writes (outside any trace)
+
+
+def _require_parent(verify: Qwen38TTNNMTPLaneVerifyState, what: str) -> None:
+    """Host writes and lane admission take the parent's full lane count: every host mirror lives on the parent and a
+    width view would write its W values into a tensor of the parent's lanes."""
+
+    if getattr(verify, "is_view", False):  # duck-typed verify stand-ins of the lifecycle tests carry no view fields
+        raise ValueError(f"{what}: host writes take the {verify.stored_lanes}-lane parent state, not a width view")
 
 
 def _copy_host(mesh_device, host: torch.Tensor, dtype, layout, target) -> None:
@@ -829,6 +975,7 @@ def write_lane_accepted(model: Qwen38TTNNTextModel, verify: Qwen38TTNNMTPLaneVer
     """Host write of the per-lane accept counts (``-1 .. R - 1``; -1 = a seeded lane that commits nothing)."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "write_lane_accepted")
     values = [int(value) for value in accepted]
     if len(values) != verify.lanes or any(not -1 <= value < verify.rows for value in values):
         raise ValueError(f"lane accept counts need {verify.lanes} ints in [-1, {verify.rows}), got {accepted!r}")
@@ -851,6 +998,7 @@ def write_lane_active(
     next commit takes -- the previous pass in the fused form, this pass for the split form's commit body)."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "write_lane_active")
     values = [int(value) for value in active]
     mask = _mask_row_host(values, verify.lanes)
     commits = [int(value) for value in commit]
@@ -877,6 +1025,7 @@ def write_lane_tokens(
     (its k drafts at ``u*R .. u*R + k - 1``): the ``draft_inputs`` segment of a pass on recorded drafts."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "write_lane_tokens")
     tokens_by_lane = _lane_tokens(verify, tokens_by_lane)
     rows = verify.rows
     token_row = model.model_io.embedding.host_verify_token_rows(
@@ -890,16 +1039,29 @@ def write_lane_tokens(
 
 
 def write_lane_ple_rows(
-    model: Qwen38TTNNTextModel, verify: Qwen38TTNNMTPLaneVerifyState, tokens_by_lane: Sequence[Sequence[int]]
+    model: Qwen38TTNNTextModel,
+    verify: Qwen38TTNNMTPLaneVerifyState,
+    tokens_by_lane: Sequence[Sequence[int]],
+    *,
+    view: Qwen38TTNNMTPLaneVerifyState | None = None,
 ) -> None:
     """Host writes of one pass's PLE rows: every lane's R n-gram rows looked up from its committed context in ONE
     table read (``host_rows_lanes``) and uploaded as one ``[1,1,B*R,640]`` per device; ``verify.pass_contexts[u]``
-    takes lane u's R + 1 contexts (the ``ple_rows`` segment)."""
+    takes lane u's R + 1 contexts (the ``ple_rows`` segment).  ``view`` (a width view of ``verify``): only the first
+    ``view.lanes`` lanes are looked up and uploaded, into the view's alias of the persistent rows (``[1,1,W*R,640]``);
+    the rows and the contexts of the lanes past the width stay as they are (they hold no request)."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "write_lane_ple_rows")
     tokens_by_lane = _lane_tokens(verify, tokens_by_lane)
+    width, target = verify.lanes, verify.ple_rows.embedding_rows
+    if view is not None:
+        _validate_lane_verify_state(model, view)
+        if not view.is_view or view.parent is not verify:
+            raise ValueError("write_lane_ple_rows: view must be a width view of this verify state")
+        width, target = view.lanes, view.ple_rows.embedding_rows
     ple, ple_state = model.layers[PLE_CHECKPOINT_LAYER].ple, verify.layers[PLE_CHECKPOINT_LAYER].ple
-    host, lane_contexts = ple.host_rows_lanes(tokens_by_lane, ple_state.token_contexts)
+    host, lane_contexts = ple.host_rows_lanes(tokens_by_lane[:width], ple_state.token_contexts[:width])
     for lane, contexts in enumerate(lane_contexts):
         verify.pass_contexts[lane] = tuple(contexts)
     ttnn.copy_host_to_device_tensor(
@@ -909,7 +1071,7 @@ def write_lane_ple_rows(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(model.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
         ),
-        verify.ple_rows.embedding_rows,
+        target,
     )
 
 
@@ -930,6 +1092,7 @@ def commit_lane_verify_host(
     advances."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "commit_lane_verify_host")
     counts = [int(count) for count in committed]
     if len(counts) != verify.lanes or any(not 0 <= count <= verify.rows for count in counts):
         raise ValueError(f"lane commits need {verify.lanes} counts in [0, {verify.rows}], got {committed!r}")
@@ -1132,6 +1295,7 @@ def import_lane_state(
     and active flag, and warms every (lane) variant before the captures."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "import_lane_state")
     if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < verify.lanes:
         raise ValueError(f"lane must be an int in [0, {verify.lanes}), got {lane!r}")
     if isinstance(position, bool) or type(position) is not int or position < 0:
@@ -1763,6 +1927,18 @@ class Qwen38TTNNMTPLaneDraftState:
     sentinel_lane: Any
     pass_row: Any
     _owner: object = field(repr=False, compare=False)
+    # A width view (:func:`allocate_lane_width_view`): ``storage_lanes`` lanes of the ``parent`` draft state's buffers
+    # (see :class:`Qwen38TTNNMTPLaneVerifyState`); 0 = the state owns its ``lanes``.
+    storage_lanes: int = 0
+    parent: Any = field(default=None, repr=False, compare=False)
+
+    @property
+    def stored_lanes(self) -> int:
+        return self.storage_lanes or self.lanes
+
+    @property
+    def is_view(self) -> bool:
+        return self.stored_lanes != self.lanes
 
 
 def _validate_lane_draft_state(
@@ -1836,16 +2012,7 @@ def allocate_lane_draft_state(
         qsa_state = qsa.allocate_lane_verify_state(lanes)
         keep("lane draft QSA lane state", qsa_state, lambda: qsa.release_lane_verify_state(qsa_state))
         moe_rows = resolve_moe_rows(lanes, lanes)  # the exact rows-B instance (the lane rule)
-        moe = Qwen38TTNNMoE(
-            layer.mlp.mesh_device,
-            layer.mlp.mesh_contract,
-            layer.mlp.weights,
-            tt_ccl=layer.mlp.tt_ccl,
-            collective_topology=layer.mlp.collective_topology,
-            rows=moe_rows,
-            synchronization_policy=layer.mlp.synchronization_policy,
-            admitted_rows=SUPPORTED_ROWS if moe_rows in SUPPORTED_ROWS else (moe_rows,),
-        )
+        moe = _allocate_lane_moe(layer, moe_rows)
         keep("lane draft MoE buffers", moe, moe.release_owned_buffers)
         moe_input = _allocate_hidden_sharded_zeros(
             mesh_device, mesh_contract, (1, 1, moe_rows, LOCAL_HIDDEN_SIZE), label="lane draft MoE input"
@@ -1915,6 +2082,14 @@ def release_lane_draft_state(
     """Release the lane draft buffers; the alignment layer's lane caches and its MoE weights are not owned here."""
 
     _validate_lane_draft_state(model, verify, draft)
+    if draft.is_view:
+        raise RuntimeError(
+            f"lane draft state ({draft.lanes} of {draft.stored_lanes} lanes) is a width view whose tensors alias the "
+            "parent's buffers (a deallocate frees the parent); use release_lane_width_view"
+        )
+    live_views = getattr(verify, "views", ())
+    if any(view.active and view.draft is not None and view.draft.parent is draft for view in live_views):
+        raise RuntimeError("release the lane width views of this lane draft state before the state")
     qsa = verify.alignment.layer.attention
     _run_cleanup(
         "lane draft state",
@@ -1931,6 +2106,349 @@ def release_lane_draft_state(
             ("lane draft QSA verify constants", draft.qsa_verify_constants.deallocate),
         ],
     )
+
+
+# --------------------------------------------------------------------------- width views (a W-lane pass of the parent)
+
+
+class _ViewLedger:
+    """What one width view holds: the lane-prefix aliases it made (never released: a ``ttnn.deallocate`` of an alias
+    frees the parent's buffer, the view lets go of them by dropping its references) and the release actions of the
+    objects it owns (the per-width constants, MoE instances and scratch tensors).  An alias can never be registered as
+    owned."""
+
+    def __init__(self, lanes: int, parent_lanes: int):
+        self.lanes, self.parent_lanes = lanes, parent_lanes
+        self.aliases: list[Any] = []
+        self.owned: list[tuple[str, Callable[[], Any]]] = []
+
+    def alias(self, tensor, *, lane_dim: int, per_lane: int = 1):
+        view = lane_prefix_view(
+            tensor, lanes=self.lanes, parent_lanes=self.parent_lanes, lane_dim=lane_dim, per_lane=per_lane
+        )
+        self.aliases.append(view)
+        return view
+
+    def is_alias(self, tensor) -> bool:
+        return any(tensor is alias for alias in self.aliases)
+
+    def keep(self, label: str, value, release: Callable[[], Any]):
+        self.owned.append((label, release))
+        return value
+
+    def own_tensor(self, label: str, tensor):
+        if self.is_alias(tensor):
+            raise ValueError(f"{label}: a lane-prefix alias cannot be owned (its deallocate frees the parent's buffer)")
+        return self.keep(label, tensor, lambda: _deallocate(tensor))
+
+
+@dataclass(eq=False)
+class Qwen38TTNNMTPLaneWidthView:
+    """A ``lanes``-lane pass of the ``parent`` lane state: ``verify`` (and ``draft`` when the parent draft state was
+    given) are the width-view states the lane bodies run on; ``owned`` is what releasing the view frees (the aliases
+    are never freed: the parent owns the buffers)."""
+
+    lanes: int
+    parent: Qwen38TTNNMTPLaneVerifyState
+    verify: Qwen38TTNNMTPLaneVerifyState
+    draft: Qwen38TTNNMTPLaneDraftState | None
+    owned: list = field(repr=False)
+    aliases: list = field(repr=False)
+    active: bool = True
+
+
+def _lane_layer_state_view(
+    layer: Qwen38TTNNDecoderLayer,
+    parent_state: Qwen38TTNNMTPLaneLayerState,
+    lanes: int,
+    gdn_lane_constants,
+    moe_rows: int,
+    ledger: _ViewLedger,
+) -> Qwen38TTNNMTPLaneLayerState:
+    alias = ledger.alias
+    if isinstance(layer.attention, Qwen38TTNNGDN):
+        attention_state = layer.attention.lane_state_view(parent_state.attention_state, lanes, alias)
+        attention_rows = parent_state.attention_rows.width_view(lanes, gdn_lane_constants, alias)
+    else:
+        attention_state = layer.attention.lane_state_view(parent_state.attention_state, lanes, alias)
+        attention_rows = layer.attention.lane_verify_state_view(parent_state.attention_rows, lanes, alias)
+    ple = None if parent_state.ple is None else layer.ple.lane_rows_state_view(parent_state.ple, lanes, alias)
+    moe = _allocate_lane_moe(layer, moe_rows)
+    ledger.keep(f"layer {layer.layer_index} lane MoE buffers", moe, moe.release_owned_buffers)
+    moe_input = None
+    if moe_rows != CHUNK_ROWS:
+        moe_input = ledger.own_tensor(
+            f"layer {layer.layer_index} lane MoE input",
+            _allocate_hidden_sharded_zeros(
+                layer.mlp.mesh_device,
+                layer.mlp.mesh_contract,
+                (1, 1, moe_rows, LOCAL_HIDDEN_SIZE),
+                label=f"layer {layer.layer_index} lane MoE input (width {lanes})",
+            ),
+        )
+    return Qwen38TTNNMTPLaneLayerState(
+        layer.namespace, layer.layer_index, attention_state, attention_rows, ple, moe, moe_input
+    )
+
+
+def _check_width_view_parent(model, parent: Qwen38TTNNMTPLaneVerifyState, lanes: int) -> None:
+    _validate_lane_verify_state(model, parent)
+    if parent.is_view:
+        raise ValueError("a lane width view is built over the parent lane verify state, not over a view")
+    if isinstance(lanes, bool) or type(lanes) is not int or lanes not in LANE_VIEW_WIDTHS:
+        raise ValueError(
+            f"lane width views exist for widths {LANE_VIEW_WIDTHS} (the parent is the widest), got {lanes!r}"
+        )
+    if lanes >= parent.lanes:
+        raise ValueError(f"a lane width view must be narrower than its {parent.lanes}-lane parent, got {lanes}")
+    for layer, state in zip(model.layers, parent.layers):
+        folded = fused.gdn_rows_scan.lane_buffers_of(state.attention_rows) is not None
+        if isinstance(layer.attention, Qwen38TTNNGDN) and not folded:
+            raise RuntimeError(
+                "a lane width view needs the verify-rows fold's lanes buffers on every GDN layer "
+                "(QWEN38_FUSED_OFF=gdn_rows_scan runs the composed commit, which has no width view)"
+            )
+
+
+def allocate_lane_width_view(
+    model: Qwen38TTNNTextModel,
+    parent: Qwen38TTNNMTPLaneVerifyState,
+    lanes: int,
+    *,
+    parent_draft: Qwen38TTNNMTPLaneDraftState | None = None,
+) -> Qwen38TTNNMTPLaneWidthView:
+    """The first ``lanes`` lanes of ``parent`` (and of ``parent_draft``) as a width view, so a pass with free lanes
+    past ``lanes`` runs on ``lanes`` lanes: every lane tensor is a lane-prefix alias of the parent's buffer
+    (:func:`lane_prefix_view`), the flat KV cache is the parent's tensor unchanged (its scratch rows stay after the
+    parent's last lane), and what depends on the width is built per width: the accept / GDN / QSA lane constants, one
+    MoE instance per layer at ``lanes * R`` rows with its input rows, the alignment residual and the draft pair
+    scratch.  Shared with the parent (one object): the position row and its host mirror, the token / draft / accept /
+    active rows, the chunk and verify constants.  Lanes ``>= lanes`` must hold no request while a pass of this width
+    runs (the bucket pick guarantees it): the pass rewrites whole tiles of the k5 tensors
+    (:data:`K5_LANE_STATE_TENSORS`) and the sentinel tail of the token rows.  Allocate before any capture; release
+    with :func:`release_lane_width_view` (the aliases are only dropped, never deallocated)."""
+
+    _check_width_view_parent(model, parent, lanes)
+    if parent_draft is not None:
+        _validate_lane_draft_state(model, parent, parent_draft)
+        if parent_draft.is_view:
+            raise ValueError("a lane draft width view is built over the parent draft state, not over a view")
+    rows, total = parent.rows, lanes * parent.rows
+    moe_rows = resolve_moe_rows(total, total)
+    mesh_device, mesh_contract = model.mesh_device, model.mesh_contract
+    gdn = next(layer.attention for layer in model.layers if isinstance(layer.attention, Qwen38TTNNGDN))
+    ledger = _ViewLedger(lanes, parent.lanes)
+    alias = ledger.alias
+    try:
+        constants = Qwen38TTNNMTPLaneConstants.build(mesh_device, mesh_contract, lanes=lanes, drafts=parent.drafts)
+        ledger.keep("lane accept constants", constants, constants.deallocate)
+        gdn_lane_constants = gdn.allocate_lane_rows_constants(lanes, rows)
+        ledger.keep("GDN lane rows constants", gdn_lane_constants, gdn_lane_constants.deallocate)
+        lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build(
+            mesh_device, mesh_contract, lanes=lanes, allocated_context=model.allocated_context
+        )
+        ledger.keep("QSA lane constants", lane_constants, lane_constants.deallocate)
+        lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+            mesh_device,
+            mesh_contract,
+            lanes=lanes,
+            rows=rows,
+            allocated_context=model.allocated_context,
+            storage_lanes=parent.lanes,
+        )
+        ledger.keep("QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
+        layers = [
+            _lane_layer_state_view(layer, state, lanes, gdn_lane_constants, moe_rows, ledger)
+            for layer, state in zip(model.layers, parent.layers)
+        ]
+        parent_alignment = parent.alignment
+        alignment_state = _lane_layer_state_view(
+            parent_alignment.layer, parent_alignment.layer_state, lanes, gdn_lane_constants, moe_rows, ledger
+        )
+        # the pair scratch of one pass (verify writes it, the draft of the same pass reads it): one own tensor per width
+        residual = ledger.own_tensor(
+            "MTP lane residual",
+            _allocate_hidden_sharded_zeros(
+                mesh_device,
+                mesh_contract,
+                (1, RESIDUAL_BRANCHES, lanes, LOCAL_HIDDEN_SIZE),
+                label=f"MTP lane residual (width {lanes})",
+            ),
+        )
+        alignment = Qwen38TTNNMTPLaneAlignment(
+            parent_alignment.layer,
+            parent_alignment.input_mixer,
+            parent_alignment.final_mixer,
+            alignment_state,
+            residual,
+        )
+        parent_rows = parent.ple_rows
+        ple_rows = Qwen38TTNNPLERowsPreparedInput(
+            ledger.alias(parent_rows.embedding_rows, lane_dim=2, per_lane=rows),
+            (0,) * total,
+            (),
+            True,
+            True,
+        )
+        verify = Qwen38TTNNMTPLaneVerifyState(
+            lanes=lanes,
+            drafts=parent.drafts,
+            rows=rows,
+            moe_rows=moe_rows,
+            constants=constants,
+            gdn_rows_constants=parent.gdn_rows_constants,
+            gdn_lane_constants=gdn_lane_constants,
+            qsa_chunk_constants=parent.qsa_chunk_constants,
+            qsa_verify_constants=parent.qsa_verify_constants,
+            qsa_lane_constants=lane_constants,
+            qsa_lane_verify_constants=lane_verify_constants,
+            layers=tuple(layers),
+            alignment=alignment,
+            positions=parent.positions,
+            token_row=parent.token_row,
+            draft_lanes=parent.draft_lanes,
+            ple_rows=ple_rows,
+            accepted_lanes=alias(parent.accepted_lanes, lane_dim=1),
+            accepted_row=parent.accepted_row,
+            active_lanes=alias(parent.active_lanes, lane_dim=1),
+            active_row=parent.active_row,
+            inactive_row=parent.inactive_row,
+            commit_lanes=alias(parent.commit_lanes, lane_dim=1),
+            k_eff_mask_row=parent.k_eff_mask_row,
+            pass_contexts=parent.pass_contexts,
+            _owner=parent._owner,
+            storage_lanes=parent.lanes,
+            parent=parent,
+        )
+        _validate_lane_verify_state(model, verify)
+        draft = None
+        if parent_draft is not None:
+            draft = _lane_draft_state_view(model, parent, parent_draft, verify, ledger)
+        view = Qwen38TTNNMTPLaneWidthView(
+            lanes=lanes,
+            parent=parent,
+            verify=verify,
+            draft=draft,
+            owned=list(ledger.owned),
+            aliases=list(ledger.aliases),
+        )
+    except BaseException as error:
+        _run_cleanup("lane width view allocation", list(reversed(ledger.owned)), primary=error)
+        raise
+    parent.views.append(view)
+    return view
+
+
+def _lane_draft_state_view(
+    model: Qwen38TTNNTextModel,
+    parent: Qwen38TTNNMTPLaneVerifyState,
+    parent_draft: Qwen38TTNNMTPLaneDraftState,
+    verify: Qwen38TTNNMTPLaneVerifyState,
+    ledger: _ViewLedger,
+) -> Qwen38TTNNMTPLaneDraftState:
+    """The draft state of a width view: the draft QSA lane verify state aliased, the rows = 1 constants and the MTP
+    layer's rows-W MoE built per width, the a = 0 lane selectors and the step / sentinel rows at the view's width, the
+    pass row per width (device-written by the view's draft body, read back from it)."""
+
+    lanes, drafts = verify.lanes, verify.drafts
+    mesh_device, mesh_contract = model.mesh_device, model.mesh_contract
+    alignment = verify.alignment
+    layer = alignment.layer
+    qsa = layer.attention
+
+    def upload(values: torch.Tensor, dtype, layout, label: str):
+        tensor = _upload_replicated(mesh_device, mesh_contract, values, dtype, layout, label=label)
+        return ledger.own_tensor(label, tensor)
+
+    lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+        mesh_device,
+        mesh_contract,
+        lanes=lanes,
+        rows=1,
+        allocated_context=model.allocated_context,
+        storage_lanes=parent.lanes,
+    )
+    ledger.keep("lane draft QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
+    qsa_state = qsa.lane_verify_state_view(parent_draft.qsa_state, lanes, ledger.alias)
+    moe_rows = resolve_moe_rows(lanes, lanes)
+    moe = _allocate_lane_moe(layer, moe_rows)
+    ledger.keep("lane draft MoE buffers", moe, moe.release_owned_buffers)
+    moe_input = ledger.own_tensor(
+        "lane draft MoE input",
+        _allocate_hidden_sharded_zeros(
+            mesh_device,
+            mesh_contract,
+            (1, 1, moe_rows, LOCAL_HIDDEN_SIZE),
+            label=f"lane draft MoE input (width {lanes})",
+        ),
+    )
+    layer_state = Qwen38TTNNMTPLaneLayerState(
+        layer.namespace, layer.layer_index, alignment.layer_state.attention_state, qsa_state, None, moe, moe_input
+    )
+    tile, row_major = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
+    zero_accepted = upload(torch.zeros(1, lanes, 1, 1), ttnn.float32, tile, "lane draft zero accept counts")
+    ones = upload(torch.ones(1, lanes, 1, 1), ttnn.float32, tile, "lane draft commit mask")
+    advance_selectors = gdn_module.build_rows_selectors_lanes(zero_accepted, ones, verify.gdn_lane_constants)
+    ledger.keep("lane draft advance selectors", advance_selectors, advance_selectors.deallocate)
+    step_offset_rows = tuple(
+        upload(
+            _uint32_row([step] * lanes + [0] * (CHUNK_ROWS - lanes)),
+            ttnn.uint32,
+            row_major,
+            f"lane draft step {step} offsets",
+        )
+        for step in range(drafts - 1)
+    )
+    sentinel_tail = upload(
+        torch.full((1, 1, 1, CHUNK_ROWS - lanes), float(ZERO_EMBEDDING_TOKEN)),
+        ttnn.float32,
+        row_major,
+        "lane draft sentinel tail",
+    )
+    pass_row = upload(
+        torch.full((1, 1, 1, lane_pass_row_width(lanes)), float(ZERO_EMBEDDING_TOKEN)),
+        ttnn.float32,
+        row_major,
+        "lane draft pass row",
+    )
+    draft = Qwen38TTNNMTPLaneDraftState(
+        lanes=lanes,
+        drafts=drafts,
+        rows=1,
+        qsa_chunk_constants=verify.qsa_chunk_constants,
+        qsa_verify_constants=parent_draft.qsa_verify_constants,
+        qsa_lane_constants=verify.qsa_lane_constants,
+        qsa_lane_verify_constants=lane_verify_constants,
+        qsa_state=qsa_state,
+        layer_state=layer_state,
+        zero_accepted_lanes=zero_accepted,
+        ones_lanes=ones,
+        advance_selectors=advance_selectors,
+        step_offset_rows=step_offset_rows,
+        sentinel_tail=sentinel_tail,
+        sentinel_lane=parent_draft.sentinel_lane,
+        pass_row=pass_row,
+        _owner=model._state_owner,
+        storage_lanes=parent_draft.lanes,
+        parent=parent_draft,
+    )
+    _validate_lane_draft_state(model, verify, draft)
+    return draft
+
+
+def release_lane_width_view(model: Qwen38TTNNTextModel, view: Qwen38TTNNMTPLaneWidthView) -> None:
+    """Free what the width view owns (its constants, MoE instances, scratch tensors).  The lane-prefix aliases are
+    never deallocated -- that would free the parent's buffers -- the view only drops its references to them."""
+
+    if not isinstance(view, Qwen38TTNNMTPLaneWidthView) or view.verify._owner is not model._state_owner:
+        raise ValueError("lane width view was not allocated by this model owner")
+    if not view.active:
+        raise RuntimeError("lane width view was already released")
+    view.active = False
+    owned, view.owned = view.owned, []
+    view.aliases = []
+    view.parent.views[:] = [live for live in view.parent.views if live is not view]
+    _run_cleanup("lane width view", list(reversed(owned)))
 
 
 def forward_draft_history_lanes(
@@ -2193,6 +2711,22 @@ class Qwen38TTNNMTPLanePassRecord:
     first_draft: tuple[int, ...]
     next_tokens: tuple[tuple[int, ...], ...]
     segments_ns: dict[str, int]
+    width: int = 0  # the lane width of the trace set that ran the pass (0: a record of a chain without width sets)
+
+
+@dataclass
+class Qwen38TTNNMTPLaneWidthSet:
+    """The device side of one lane width: the lane verify / draft states the traces were captured on (the parent's own
+    for the full width, a width view's for a narrower one) and the captured traces.  ``view`` is the
+    :class:`Qwen38TTNNMTPLaneWidthView` container of a narrow width (None for the full width); ``output`` the verify
+    trace's output (its readback tensor)."""
+
+    width: int
+    verify: Qwen38TTNNMTPLaneVerifyState
+    draft: Qwen38TTNNMTPLaneDraftState
+    traces: Qwen38TTNNMTPLaneTraces
+    view: Any = None
+    output: Any = None
 
 
 class Qwen38TTNNMTPLaneChain:
@@ -2218,6 +2752,7 @@ class Qwen38TTNNMTPLaneChain:
         clock_ns: Callable[[], int] = time.monotonic_ns,
         observer: Callable[[str], Any] | None = None,
         next_tokens: Sequence[Sequence[int]] | None = None,
+        width_sets: Mapping[int, Qwen38TTNNMTPLaneWidthSet] | None = None,
     ) -> None:
         _validate_lane_draft_state(model, verify, draft)
         if not isinstance(traces, Qwen38TTNNMTPLaneTraces) or not callable(replay):
@@ -2226,6 +2761,18 @@ class Qwen38TTNNMTPLaneChain:
             raise TypeError("enqueue and observer must be callables or None")
         self.model, self.verify, self.draft, self.traces = model, verify, draft, traces
         self.replay, self.enqueue, self.clock_ns, self.observer = replay, enqueue, clock_ns, observer
+        # The trace sets by width: the full width is the parent's own (``verify`` / ``draft`` / ``traces``), a narrower
+        # width a view of it.  Every host write and mirror stays on the parent; a pass runs on the smallest width above
+        # its highest held lane, its commit on the width of the PREVIOUS pass (it reads the buffers that pass wrote).
+        full = Qwen38TTNNMTPLaneWidthSet(verify.lanes, verify, draft, traces)
+        self.width_sets: dict[int, Qwen38TTNNMTPLaneWidthSet] = {verify.lanes: full}
+        for width, width_set in (width_sets or {}).items():
+            if width_set.width != width or width_set.verify.parent is not verify or not 1 < width < verify.lanes:
+                raise ValueError(f"width set {width} is not a width view of the {verify.lanes}-lane parent")
+            self.width_sets[int(width)] = width_set
+        self.prev_set: Qwen38TTNNMTPLaneWidthSet = full  # the pass before the first step is an 8-lane eager pass
+        self.pass_set: Qwen38TTNNMTPLaneWidthSet = full  # the set of the pass in flight
+        self.held: list[int] | None = None  # lanes holding a request (None: the active lanes)
         self.records: list[Qwen38TTNNMTPLanePassRecord] = []
         self.active: list[int] = [1] * verify.lanes  # the host's copy of the device masks (:meth:`set_active`)
         self.commit_mask: list[int] = [
@@ -2240,6 +2787,42 @@ class Qwen38TTNNMTPLaneChain:
             len(self.next_tokens) != verify.lanes or any(len(block) != verify.rows for block in self.next_tokens)
         ):
             raise ValueError(f"next_tokens need {verify.lanes} lanes of {verify.rows} tokens, got {next_tokens!r}")
+
+    @property
+    def buckets(self) -> tuple[int, ...]:
+        return tuple(sorted(self.width_sets))
+
+    def set_held(self, held: Sequence[int] | None) -> None:
+        """The lanes that hold a request (host mask; None: the active mask).  A pass runs on a width above every held
+        lane: a parked lane's state is untouched only while it sits inside the width."""
+
+        if held is None:
+            self.held = None
+            return
+        flags = [int(flag) for flag in held]
+        if len(flags) != self.verify.lanes or any(flag not in (0, 1) for flag in flags):
+            raise ValueError(f"held needs {self.verify.lanes} 0/1 flags, got {held!r}")
+        self.held = flags
+
+    def width_for(self, active: Sequence[int] | None = None, held: Sequence[int] | None = None) -> int:
+        """The smallest bucket width above the highest lane that is active or held (the smallest bucket for none)."""
+
+        active = self.active if active is None else active
+        held = self.held if held is None else held
+        top = max((lane for lane, flag in enumerate(active) if flag), default=-1)
+        if held is not None:
+            top = max(top, max((lane for lane, flag in enumerate(held) if flag), default=-1))
+        return next((width for width in self.buckets if width > top), self.buckets[-1])
+
+    def drop_width(self, width: int) -> Qwen38TTNNMTPLaneWidthSet:
+        """Forget a narrow width's set (the session releases its traces and view).  Refused for the full width and for
+        the width of the pass whose commit is still to come."""
+
+        if width == self.verify.lanes or width not in self.width_sets:
+            raise ValueError(f"cannot drop width {width} of {self.buckets}")
+        if self.prev_set.width == width:
+            raise RuntimeError(f"width {width} holds the pending commit of the last pass")
+        return self.width_sets.pop(width)
 
     def _require_room(self) -> None:
         positions = self.verify.positions.positions
@@ -2275,15 +2858,46 @@ class Qwen38TTNNMTPLaneChain:
         segments[name] = self.clock_ns() - started
         return result
 
+    def _pad_readback(self, readback, next_tokens, held_tokens, width: int):
+        """A ``width``-lane readback as the 8-lane one the callers read: the lanes past the width did not run (accepted
+        -1, no argmaxes; their held blocks stay what they were)."""
+
+        lanes, extra = self.verify.lanes, self.verify.lanes - width
+        held = [tuple(int(t) for t in block) for block in held_tokens]
+        padded = Qwen38TTNNLaneVerifyReadback(
+            accepted=(*readback.accepted, *([-1] * extra)),
+            next_token=(*readback.next_token, *(held[lane][0] for lane in range(width, lanes))),
+            first_draft=(*readback.first_draft, *(held[lane][1] for lane in range(width, lanes))),
+            argmaxes=(*readback.argmaxes, *([()] * extra)),
+            alignment_argmaxes=(*readback.alignment_argmaxes, *([()] * extra)),
+        )
+        return padded, (*(tuple(block) for block in next_tokens), *held[width:])
+
+    def _select_set(self, force_width: int | None) -> Qwen38TTNNMTPLaneWidthSet:
+        width = self.width_for() if force_width is None else force_width
+        if width not in self.width_sets:
+            raise ValueError(f"no trace set of width {width}: buckets {self.buckets}")
+        top = max((lane for lane, flag in enumerate(self.active) if flag), default=-1)
+        if self.held is not None:
+            top = max(top, max((lane for lane, flag in enumerate(self.held) if flag), default=-1))
+        if top >= width:
+            raise RuntimeError(f"lane {top} is active or held, outside the width {width} of this pass")
+        return self.width_sets[width]
+
     def _finish_pass(self, tokens, segments: dict[str, int]) -> Qwen38TTNNMTPLanePassRecord:
         lanes = self.verify.lanes
+        current = self.pass_set  # the width set the pass runs on (picked by step / bootstrap)
+        width = current.width
         positions = tuple(self.verify.positions.positions)
         launch, form = (self.replay, "replay") if self.enqueue is None else (self.enqueue, "enqueue")
-        self._timed(segments, f"verify_{form}", lambda: launch(self.traces.verify_first))
-        self._timed(segments, f"draft_{form}", lambda: launch(self.traces.draft))
-        readback, self.next_tokens = self._timed(
-            segments, "readback", lambda: read_lane_pass_row(self.verify, self.draft)
+        self._timed(segments, f"verify_{form}", lambda: launch(current.traces.verify_first))
+        self._timed(segments, f"draft_{form}", lambda: launch(current.traces.draft))
+        readback, next_tokens = self._timed(
+            segments, "readback", lambda: read_lane_pass_row(current.verify, current.draft)
         )
+        if width < lanes:
+            readback, next_tokens = self._pad_readback(readback, next_tokens, tokens, width)
+        self.next_tokens = tuple(tuple(block) for block in next_tokens)
         # An inactive lane's rows are junk: it commits nothing and its position holds (the device advance is
         # (a_u + 1) * active_u); its readback fields are recorded as read.
         committed = tuple(
@@ -2295,6 +2909,7 @@ class Qwen38TTNNMTPLaneChain:
                     f"lane {lane} readback next token {readback.next_token[lane]} is not argmax {readback.accepted[lane]}"
                 )
         commit_lane_verify_host(self.model, self.verify, [len(block) for block in committed])
+        self.prev_set = current
         record = Qwen38TTNNMTPLanePassRecord(
             index=len(self.records),
             positions=positions,
@@ -2307,11 +2922,14 @@ class Qwen38TTNNMTPLaneChain:
             first_draft=tuple(readback.first_draft),
             next_tokens=self.next_tokens,
             segments_ns=segments,
+            width=width,
         )
         self.records.append(record)
         return record
 
-    def bootstrap(self, tokens_by_lane: Sequence[Sequence[int]]) -> Qwen38TTNNMTPLanePassRecord:
+    def bootstrap(
+        self, tokens_by_lane: Sequence[Sequence[int]], *, force_width: int | None = None
+    ) -> Qwen38TTNNMTPLanePassRecord:
         """The first traced pass after the imports: host-written ``[t_u, d_1 .. d_k]`` per lane (the caller's drafts,
         any exact ids) and the PLE rows, the verify (``catch_up=False`` form: the accept rows hold -1, nothing
         commits), then the draft of the next pass."""
@@ -2319,22 +2937,28 @@ class Qwen38TTNNMTPLaneChain:
         if self.records or self.next_tokens is not None:
             raise RuntimeError("the lane chain was already bootstrapped (or continues an eager pass)")
         self._require_room()
+        current = self._select_set(force_width)
         segments: dict[str, int] = {}
         self._timed(segments, "host_inputs", lambda: write_lane_verify_inputs(self.model, self.verify, tokens_by_lane))
+        self.pass_set = current
         return self._finish_pass(tokens_by_lane, segments)
 
-    def step(self) -> Qwen38TTNNMTPLanePassRecord:
-        """One traced pass on the tokens the previous pass assembled: commit, PLE rows, verify, draft, readback."""
+    def step(self, *, force_width: int | None = None) -> Qwen38TTNNMTPLanePassRecord:
+        """One traced pass on the tokens the previous pass assembled: commit, PLE rows, verify, draft, readback.  The
+        commit replays at the width of the PREVIOUS pass (``prev_set``), the verify and draft at this pass's width
+        (:meth:`width_for`, or ``force_width``)."""
 
         if self.next_tokens is None:
             raise RuntimeError("bootstrap the lane chain first")
         self._require_room()
+        current = self._select_set(force_width)
         segments: dict[str, int] = {}
         tokens = self.next_tokens
+        commit_trace = self.prev_set.traces.commit
         if self.enqueue is not None:
-            self._timed(segments, "commit_enqueue", lambda: self.enqueue(self.traces.commit))
+            self._timed(segments, "commit_enqueue", lambda: self.enqueue(commit_trace))
         else:
-            self._timed(segments, "commit_replay", lambda: self.replay(self.traces.commit))
+            self._timed(segments, "commit_replay", lambda: self.replay(commit_trace))
         if self.commit_mask != self.active:
             # The commit just launched used the mask of the pass it commits; from the next commit on the mask is this
             # pass's (the host write queues behind the commit on the same command queue).  Left stale, a parked lane's
@@ -2345,7 +2969,19 @@ class Qwen38TTNNMTPLaneChain:
                 lambda: write_lane_active(self.model, self.verify, self.active, commit=self.active),
             )
             self.commit_mask = list(self.active)
-        self._timed(segments, "ple_rows", lambda: write_lane_ple_rows(self.model, self.verify, tokens))
+        if current.width > self.prev_set.width:
+            # The previous (narrower) draft landed the sentinel past its lanes: the blocks of the lanes it did not run
+            # come back from the host copy before this wider pass reads them (the held blocks, the same values).
+            self._timed(segments, "widen_tokens", lambda: write_lane_tokens(self.model, self.verify, tokens))
+        if (
+            current.width < self.verify.lanes
+        ):  # host rows only for the lanes the pass runs (the view's alias takes them)
+            self._timed(
+                segments, "ple_rows", lambda: write_lane_ple_rows(self.model, self.verify, tokens, view=current.verify)
+            )
+        else:
+            self._timed(segments, "ple_rows", lambda: write_lane_ple_rows(self.model, self.verify, tokens))
+        self.pass_set = current
         return self._finish_pass(tokens, segments)
 
 
@@ -2475,6 +3111,7 @@ def evict_lane(
     committed).  The device state is left as it is."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "evict_lane")
     if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < verify.lanes:
         raise ValueError(f"lane must be an int in [0, {verify.lanes}), got {lane!r}")
     context = model.allocated_context
@@ -2522,6 +3159,7 @@ def readmit_lane(
     for a seeded lane), the active mask and the lane's next tokens before the next pass."""
 
     _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "readmit_lane")
     if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < verify.lanes:
         raise ValueError(f"lane must be an int in [0, {verify.lanes}), got {lane!r}")
     if not isinstance(image, Qwen38MTPLaneImage):

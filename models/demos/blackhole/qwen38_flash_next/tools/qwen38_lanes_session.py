@@ -33,9 +33,11 @@ its dispatch is the registry's), so the referee chain and the lanes run the serv
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
+from loguru import logger
 from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker, acknowledge_corruptible
 
 import ttnn
@@ -69,6 +71,12 @@ ADMISSION_EVENT_ROWS = LONG_CHUNK_ROWS
 # of the prefill, the forced last step and the row read, the eviction into the host slot; the import into the lane
 # ends the admission.
 ADMISSION_SEGMENTS = ("tower", "chunks", "prefilled", "evicted")
+
+
+# The narrow widths in the order the free-DRAM fallback drops them, and the floor below which it does.
+DROP_ORDER = (4, 2)
+FREE_DRAM_FLOOR_BYTES_PER_BANK = mtp_lanes.FREE_DRAM_FLOOR_BYTES_PER_BANK
+mtp_lane_buckets_from_env = mtp_lanes.mtp_lane_buckets_from_env
 
 
 class Qwen38LanesSessionError(RuntimeError):
@@ -113,6 +121,12 @@ class Qwen38LanesSession:
     output: Any = None
     lane_chain: Any = None
     eager_next_tokens: Any = None
+    # The lane widths (``QWEN38_MTP_LANE_BUCKETS``; ``(lanes,)`` = today's single set, no views) and the narrow widths'
+    # trace sets / views by width; ``verify`` / ``draft`` / ``traces`` / ``output`` above stay the full width's.
+    environ: Mapping[str, str] | None = None
+    buckets: tuple[int, ...] = ()
+    width_sets: dict[int, Any] = field(default_factory=dict)
+    dropped_widths: list[int] = field(default_factory=list)
     dram: dict[str, dict[str, int]] = field(default_factory=dict)
     capture_ms: dict[str, float] = field(default_factory=dict)
     warmup_ms: dict[str, float] = field(default_factory=dict)
@@ -175,6 +189,15 @@ class Qwen38LanesSession:
             positions=[0] * self.lanes,
         )
         self.draft = mtp_lanes.allocate_lane_draft_state(model, self.verify)
+        self.buckets = mtp_lane_buckets_from_env(self.lanes, self.drafts, self.environ)
+        self.width_sets = {}
+        for width in self.buckets[:-1]:  # the narrow widths: views of the full state, per-width constants and MoE
+            view = mtp_lanes.allocate_lane_width_view(model, self.verify, width, parent_draft=self.draft)
+            self.width_sets[width] = mtp_lanes.Qwen38TTNNMTPLaneWidthSet(
+                width, view.verify, view.draft, None, view=view  # traces after the captures
+            )
+            ttnn.synchronize_device(mesh)
+            self.dram[f"after_view_w{width}"] = _dram_view(mesh)
         ttnn.synchronize_device(mesh)
         self.dram["after_states"] = _dram_view(mesh)
         self.warmup_ms["allocate"] = (self.clock_ns() - started) / 1e6
@@ -201,8 +224,12 @@ class Qwen38LanesSession:
                 )
         ttnn.synchronize_device(mesh)
         self.warmup_ms["imports"] = (self.clock_ns() - started) / 1e6
-        # -- the eager passes: the bootstrap on host-written rows, then one split step
+        # -- the eager passes: the bootstrap on host-written rows, then one split step.  Narrow widths first (their device
+        # bodies on the views, every host write and mirror on the parent), the full width LAST: the chain's next tokens
+        # and pending commit belong to the full set when the captures end.
         started = self.clock_ns()
+        for width in self.buckets[:-1]:
+            self._eager_passes_at(self.width_sets[width])
         mtp_lanes.write_lane_accepted(model, self.verify, [-1] * self.lanes)
         mtp_lanes.write_lane_active(model, self.verify, [1] * self.lanes, commit=[1] * self.lanes)
         tokens = [[WARM_TOKEN_ID] + [mtp_lanes.BOOTSTRAP_DRAFT_TOKEN] * self.drafts for _ in range(self.lanes)]
@@ -231,6 +258,16 @@ class Qwen38LanesSession:
         # The host-written and device-read buffers of the lane pass loop, acknowledged to the allocation tracker as the
         # chain acknowledges its own before the miss guard closes.
         verify = self.verify
+        extra = []
+        for width_set in self.width_sets.values():  # the per-width aliases and own tensors the host writes or reads
+            extra += [
+                width_set.verify.ple_rows.embedding_rows,
+                width_set.verify.accepted_lanes,
+                width_set.verify.active_lanes,
+                width_set.verify.commit_lanes,
+                width_set.verify.alignment.residual,
+                width_set.draft.pass_row,
+            ]
         for tensor in (
             verify.token_row,
             verify.draft_lanes,
@@ -243,6 +280,7 @@ class Qwen38LanesSession:
             verify.commit_lanes,
             verify.positions.row,
             self.draft.pass_row,
+            *extra,
         ):
             acknowledge_corruptible(tensor)
         for pager in (self.backbone_pager, self.alignment_pager):
@@ -251,6 +289,31 @@ class Qwen38LanesSession:
         self.program_cache_entries["after_prepare"] = resident_decode.program_cache_count(mesh)
         self.dram["after_prepare"] = _dram_view(mesh)
         self.marker("after-lanes-prepare")
+
+    def _eager_passes_at(self, width_set) -> None:
+        """The two eager passes (bootstrap, one split step) of a narrow width: the device bodies on its view and draft view,
+        the host writes and the mirror on the parent with the lanes past the width inactive (their counts and commits 0).
+        """
+
+        model, parent, width = self.model, self.verify, width_set.width
+        view, draft = width_set.verify, width_set.draft
+        pad = [0] * (self.lanes - width)
+        mtp_lanes.write_lane_accepted(model, parent, [-1] * self.lanes)
+        mtp_lanes.write_lane_active(model, parent, [1] * width + pad, commit=[1] * width + pad)
+        tokens = [[WARM_TOKEN_ID] + [mtp_lanes.BOOTSTRAP_DRAFT_TOKEN] * self.drafts for _ in range(self.lanes)]
+        for index in range(EAGER_PASSES):
+            if index == 0:
+                mtp_lanes.write_lane_verify_inputs(model, parent, tokens)
+            else:
+                mtp_lanes.forward_commit_lanes(model, view)
+                mtp_lanes.write_lane_ple_rows(model, parent, tokens)
+            output = mtp_lanes.forward_verify_lanes(model, view, catch_up=False, land_accept=True)
+            mtp_lanes.forward_draft_lanes(model, view, draft, output)
+            ttnn.synchronize_device(self.mesh)
+            readback, next_tokens = mtp_lanes.read_lane_pass_row(view, draft)
+            output.release_tensors()
+            mtp_lanes.commit_lane_verify_host(model, parent, [a + 1 for a in readback.accepted] + pad)
+            tokens = [list(block) for block in next_tokens] + [list(block) for block in tokens[width:]]
 
     # -- the captures after the chain's --------------------------------------------------------
 
@@ -284,7 +347,14 @@ class Qwen38LanesSession:
         self.output = output
         acknowledge_corruptible(output.readback)
         ttnn.synchronize_device(mesh)
-        for trace_id in (*chain.trace_ids(), verify_id, commit_id, draft_id):
+        self.dram["after_captures_w%d" % self.lanes] = _dram_view(mesh)
+        # the narrow widths, descending, each its own verify_first / commit / draft
+        for width in reversed(self.buckets[:-1]):
+            self._capture_width(self.width_sets[width], guard)
+        trace_ids = [*chain.trace_ids(), verify_id, commit_id, draft_id]
+        for width_set in self.width_sets.values():
+            trace_ids += [width_set.traces.verify_first, width_set.traces.commit, width_set.traces.draft]
+        for trace_id in trace_ids:
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         after = _dram_view(mesh)
         self.dram["after_captures"] = after
@@ -302,10 +372,99 @@ class Qwen38LanesSession:
             replay=chain._replay,
             enqueue=chain._enqueue,
             next_tokens=self.eager_next_tokens,
+            width_sets=self.width_sets,
         )
         self.lane_chain.set_active([0] * self.lanes)  # every lane parked until an admission
         ttnn.synchronize_device(mesh)
+        self.enforce_free_dram()
         self.marker("after-lanes-captures")
+
+    def _capture_width(self, width_set, guard) -> None:
+        mesh, model, width = self.mesh, self.model, width_set.width
+        view, draft = width_set.verify, width_set.draft
+        started = self.clock_ns()
+        verify_id, output = mtp_lanes.capture_verify_lanes(model, view, catch_up=False, land_accept=True, guard=guard)
+        self.capture_ms[f"w{width}_verify_first"] = (self.clock_ns() - started) / 1e6
+        started = self.clock_ns()
+        commit_id = mtp_lanes.capture_commit_lanes(model, view, guard=guard)
+        self.capture_ms[f"w{width}_commit"] = (self.clock_ns() - started) / 1e6
+        started = self.clock_ns()
+        draft_id = mtp_lanes.capture_draft_lanes(model, view, draft, output, guard=guard)
+        self.capture_ms[f"w{width}_draft"] = (self.clock_ns() - started) / 1e6
+        width_set.traces = mtp_lanes.Qwen38TTNNMTPLaneTraces(verify_first=verify_id, commit=commit_id, draft=draft_id)
+        width_set.output = output
+        acknowledge_corruptible(output.readback)
+        ttnn.synchronize_device(mesh)
+        self.dram[f"after_captures_w{width}"] = _dram_view(mesh)
+
+    def free_dram_bytes_per_bank(self) -> int:
+        return int(_dram_view(self.mesh)["free_bytes_per_bank"])
+
+    def enforce_free_dram(self, floor: int = FREE_DRAM_FLOOR_BYTES_PER_BANK) -> list[int]:
+        """After the captures: log the free DRAM per bank; below ``floor`` drop the 4-lane width, then the 2-lane width
+        (their traces and views released, a warning logged), re-measuring after each.  The full width always stays.
+        Returns the widths dropped."""
+
+        free = self.free_dram_bytes_per_bank()
+        logger.info(f"mtp lanes: free DRAM after the captures {free / 2**20:.1f} MiB/bank, widths {self.buckets}")
+        dropped: list[int] = []
+        for width in DROP_ORDER:
+            if free >= floor:
+                break
+            if width not in self.width_sets:
+                continue
+            logger.warning(
+                f"mtp lanes: {free / 2**20:.1f} MiB/bank free after the captures is below {floor / 2**20:.0f}: "
+                f"dropping the {width}-lane width"
+            )
+            self.drop_width(width)
+            dropped.append(width)
+            free = self.free_dram_bytes_per_bank()
+        if dropped:
+            logger.warning(
+                f"mtp lanes: widths {dropped} dropped, serving widths {self.buckets}, {free / 2**20:.1f} MiB/bank free"
+            )
+        return dropped
+
+    def drop_width(self, width: int) -> None:
+        """Release a narrow width's traces, output and views (the chain forgets it first)."""
+
+        if self.lane_chain is not None:
+            width_set = self.lane_chain.drop_width(width)
+        else:
+            width_set = self.width_sets[width]
+        self.width_sets.pop(width, None)
+        self._release_width_set(width_set)
+        self.buckets = tuple(w for w in self.buckets if w != width)
+        self.dropped_widths.append(width)
+
+    def _release_width_set(self, width_set) -> None:
+        ttnn.synchronize_device(self.mesh)
+        if width_set.traces is not None:
+            for trace_id in (width_set.traces.verify_first, width_set.traces.commit, width_set.traces.draft):
+                ttnn.release_trace(self.mesh, trace_id)
+            width_set.traces = None
+        if width_set.output is not None and width_set.output.active:
+            width_set.output.release_tensors()
+        width_set.output = None
+        if width_set.view is not None:
+            mtp_lanes.release_lane_width_view(self.model, width_set.view)
+            width_set.view = None
+
+    def warm_widths(self) -> list[int]:
+        """Replay every width's verify_first / commit / draft once, so no first replay happens while serving: the passes
+        run on the lanes that are active now (the warm requests) with the width forced, full width first then down to the
+        smallest the active lanes fit, and once more at that width (each width's commit follows the pass at it).  The
+        caller releases the warm requests afterwards.  Returns the widths run."""
+
+        chain = self.lane_chain
+        if chain is None:
+            raise Qwen38LanesSessionError("the lanes are not captured")
+        floor = chain.width_for()
+        widths = [width for width in reversed(chain.buckets) if width >= floor]
+        for width in [*widths, widths[-1]]:
+            chain.step(force_width=width)
+        return widths
 
     def growth_bytes_per_bank(self) -> dict[str, int]:
         """The MEASURED DRAM growth of the lanes per bank: the states (pagers + lane states, the hook's allocations)
@@ -321,6 +480,23 @@ class Qwen38LanesSession:
         )
         return {"states": states, "traces": traces}
 
+    def growth_by_width(self) -> dict[str, int]:
+        """The MEASURED DRAM growth per bank of each width's three traces (``traces_w<W>``), from the allocation views
+        taken after each width's captures (the full width first, then the narrow ones descending)."""
+
+        if "before_captures" not in self.dram:
+            return {}
+        out: dict[str, int] = {}
+        last = self.dram["before_captures"]["allocated_bytes_per_bank"]
+        for width in sorted(self.width_sets_captured(), reverse=True):
+            now = self.dram[f"after_captures_w{width}"]["allocated_bytes_per_bank"]
+            out[f"traces_w{width}"] = now - last
+            last = now
+        return out
+
+    def width_sets_captured(self) -> list[int]:
+        return [int(key.rsplit("w", 1)[1]) for key in self.dram if key.startswith("after_captures_w")]
+
     def summary(self) -> dict[str, Any]:
         return {
             "lanes": self.lanes,
@@ -328,6 +504,9 @@ class Qwen38LanesSession:
             "rows": self.rows,
             "moe_rows": None if self.verify is None else self.verify.moe_rows,
             "traces": 0 if self.traces is None else 3,
+            "buckets": list(self.buckets),
+            "dropped_widths": list(self.dropped_widths),
+            "dram_growth_bytes_per_bank_by_width": self.growth_by_width(),
             "capture_ms": dict(self.capture_ms),
             "warmup_ms": dict(self.warmup_ms),
             "program_cache_entries": dict(self.program_cache_entries),
@@ -490,6 +669,11 @@ class Qwen38LanesSession:
                 current[lane] = [int(token) for token in block]
         self.lane_chain.set_next_tokens(current)
 
+    def set_held(self, held: Sequence[int] | None) -> None:
+        """The lanes that hold a request (the lane chain's width pick covers them even when they are parked)."""
+
+        self.lane_chain.set_held(held)
+
     def set_active(self, mask: Sequence[int]) -> None:
         flags = [int(flag) for flag in mask]
         if flags != list(self.lane_chain.active):
@@ -510,6 +694,9 @@ class Qwen38LanesSession:
             return
         mesh = self.mesh
         ttnn.synchronize_device(mesh)
+        for width_set in list(self.width_sets.values()):  # the narrow widths first, before the parent they alias
+            self._release_width_set(width_set)
+        self.width_sets = {}
         if self.traces is not None:
             for trace_id in (self.traces.verify_first, self.traces.commit, self.traces.draft):
                 ttnn.release_trace(mesh, trace_id)

@@ -603,8 +603,16 @@ class Qwen38TTNNPLERowsPreparedInput:
     tokens: tuple[int, ...]
     contexts: tuple[tuple[int, int] | None, ...]
     active: bool = True
+    # True on an MTP lane width view: ``embedding_rows`` is a lane-prefix alias of the parent's persistent rows, which
+    # only the parent releases (a deallocate of the alias frees the parent's buffer).
+    lane_alias: bool = False
 
     def release(self) -> None:
+        if self.lane_alias:
+            raise RuntimeError(
+                "a prepared PLE rows width view aliases the parent's rows (a deallocate frees the parent); "
+                "release the parent input"
+            )
         if not self.active:
             raise RuntimeError("prepared PLE rows input was already released")
         _deallocate(self.embedding_rows)
@@ -630,6 +638,29 @@ class Qwen38TTNNPLELaneRowsState:
     normalized: Any
     mesh_contract: Qwen38MeshContract
     token_contexts: tuple[tuple[int, int] | None, ...]
+    # True on an MTP lane width view (:meth:`width_view`): ``history`` / ``normalized`` alias the parent's buffers.
+    lane_alias: bool = False
+
+    def width_view(self, lanes: int, alias) -> "Qwen38TTNNPLELaneRowsState":
+        """The first ``lanes`` lanes as lane-prefix aliases of the same buffers (``alias(tensor, *, lane_dim,
+        per_lane=1)`` is ``mtp_lanes.lane_prefix_view`` with the widths bound).  The host n-gram contexts stay on the
+        parent (one owner: every host write goes through it); the view's are placeholders no view path reads."""
+
+        if self.lane_alias:
+            raise ValueError("a PLE lane rows width view cannot be viewed again")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < self.lanes:
+            raise ValueError(f"a PLE lane rows width view takes 1 <= lanes < {self.lanes}, got {lanes!r}")
+        view = Qwen38TTNNPLELaneRowsState(
+            lanes,
+            self.rows,
+            alias(self.history, lane_dim=0),
+            alias(self.normalized, lane_dim=0),
+            self.mesh_contract,
+            (None,) * lanes,
+            lane_alias=True,
+        )
+        view.validate()
+        return view
 
     @classmethod
     def allocate(
@@ -675,6 +706,11 @@ class Qwen38TTNNPLELaneRowsState:
         self.token_contexts = _validate_lane_contexts(self.token_contexts, lanes, label="PLE lane rows token contexts")
 
     def deallocate(self) -> None:
+        if self.lane_alias:
+            raise RuntimeError(
+                "a PLE lane rows width view aliases the parent's buffers (a deallocate frees the parent); "
+                "release the parent state"
+            )
         _deallocate(self.history, self.normalized)
 
 
@@ -1845,6 +1881,9 @@ class Qwen38TTNNPLE:
 
     def allocate_lane_rows_state(self, lanes: int, rows: int) -> Qwen38TTNNPLELaneRowsState:
         return Qwen38TTNNPLELaneRowsState.allocate(self.mesh_device, self.mesh_contract, lanes=lanes, rows=rows)
+
+    def lane_rows_state_view(self, state: Qwen38TTNNPLELaneRowsState, lanes: int, alias) -> Qwen38TTNNPLELaneRowsState:
+        return state.width_view(lanes, alias)
 
     def _lane_rows_window(self, lanes_state: Qwen38TTNNPLELaneRowsState):
         """``[history | normalized]`` per lane on the token dim: ``[B, 9 + R, 4, 640]``."""

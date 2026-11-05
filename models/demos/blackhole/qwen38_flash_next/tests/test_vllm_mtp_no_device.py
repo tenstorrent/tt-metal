@@ -1142,7 +1142,8 @@ def test_start_conditions_not_met_use_the_lanes(monkeypatch):
     model, device, chain = _hybrid_model(monkeypatch, 3, flag="0")
     assert model.mtp_hybrid_single is False
     _hybrid_prefill(model, _prompt(5), 1)
-    assert model.mtp_hybrid_slot is None and model.lane_driver.holders == [1] and chain.inputs == []
+    # admission takes the LOWEST free lane, not the slot's own: slot 1 runs in lane 0
+    assert model.mtp_hybrid_slot is None and model.lane_driver.holders == [0] and chain.inputs == []
 
 
 def test_a_lone_request_stays_on_the_chain_and_pads_the_other_rows(monkeypatch):

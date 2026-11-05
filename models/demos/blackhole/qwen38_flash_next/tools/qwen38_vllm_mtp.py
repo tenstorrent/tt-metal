@@ -78,6 +78,9 @@ MTP_PLE_EARLY_VARIABLE = (
 MTP_HYBRID_SINGLE_VARIABLE = (
     "QWEN38_MTP_HYBRID_SINGLE"  # batch mode: a lone request decodes on the B=1 chain; "0" turns it off
 )
+MTP_LANE_BUCKETS_VARIABLE = (
+    "QWEN38_MTP_LANE_BUCKETS"  # lane widths of an 8-lane session: unset "2,4,8", "off"/"0" one width
+)
 DEFAULT_DRAFTS = 4
 PLACEHOLDER_TOKEN_ID = -1  # the plugin's candidate block pad (vllm_tt_plugin.spec_decode.PLACEHOLDER_TOKEN_ID)
 
@@ -479,6 +482,9 @@ class Qwen38VLLMMTPLanesDriver:
             self.device.set_blocks(self.blocks)
             self.blocks = [None] * self.lanes
             self.writes = False
+        set_held = getattr(self.device, "set_held", None)
+        if set_held is not None:  # the width pick covers every lane that holds a request
+            set_held([1 if run is not None else 0 for run in self.runs])
         self.device.set_active([1 if lane in live else 0 for lane in range(self.lanes)])
         record = self.device.step()
         self.passes += 1
@@ -949,7 +955,27 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         self.lane_driver = Qwen38VLLMMTPLanesDriver(lanes_session, self.lanes, self.drafts)
         self.driver = Qwen38VLLMMTPDriver(self.chain, self.session, self.drafts)  # the hybrid single's pass loop
         logger.info(f"mtp lanes ready: {lanes_session.summary()}")
+        summary = lanes_session.summary()
+        logger.info(
+            f"mtp lanes widths {summary['buckets']} ({MTP_LANE_BUCKETS_VARIABLE}), per-width DRAM growth per bank "
+            f"{summary['dram_growth_bytes_per_bank_by_width']}"
+        )
         return None
+
+    def _take_lane(self, slot: int) -> int:
+        """The lane ``slot`` admits into: the LOWEST lane that holds no request, so the live lanes stay low and a narrow
+        lane width serves them.  ``lane_of_slot`` stays a permutation: the slot that mapped to the chosen lane takes the
+        lane ``slot`` gave up (that slot holds no request on the lanes: its lane is free).  Returns the lane."""
+
+        driver = self._require_lanes()
+        lane = next((candidate for candidate in range(self.lanes) if driver.runs[candidate] is None), None)
+        if lane is None:
+            raise Qwen38ChatChainError(f"no free lane for slot {slot}: all {self.lanes} lanes hold requests")
+        current = self.lane_of_slot[slot]
+        if lane != current:
+            other = self.lane_of_slot.index(lane)
+            self.lane_of_slot[slot], self.lane_of_slot[other] = lane, current
+        return lane
 
     def _require_lanes(self) -> Qwen38VLLMMTPLanesDriver:
         if self.lane_driver is None:
@@ -1016,6 +1042,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 if driver.runs[lane] is not None:
                     logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
                     driver.release(lane)
+                lane = self._take_lane(slot)
                 firsts.append(driver.admit(lane, ids))
         except BaseException:
             self.batch_failed = True
@@ -1167,7 +1194,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         ``[t', d_1 .. d_K]``.  The chain is free for the next admission, which resets it."""
 
         driver, single = self._require_lanes(), self.driver
-        lane = self.lane_of_slot[self.mtp_hybrid_slot]
+        lane = self._take_lane(self.mtp_hybrid_slot)
         run = single.run
         try:
             if run is None:  # no pass ran: the prompt's 1-row state and the first token, as an admission leaves them
@@ -1273,6 +1300,9 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 num_valid_drafts=torch.tensor([k if row in slots else 0 for row in range(lanes)], dtype=torch.int32),
                 accepted_counts=counts,
             )
+        warm_widths = getattr(self.lanes_session, "warm_widths", None)
+        if warm_widths is not None:  # every lane width's traces replay once here (the two warm lanes are still live)
+            logger.info(f"mtp lanes: warm replays at widths {warm_widths()}")
         for slot in slots:
             self.release_request(slot)
         if self.mtp_hybrid_single:

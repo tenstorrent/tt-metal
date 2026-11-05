@@ -2830,6 +2830,16 @@ class Qwen38TTNNQSALaneState:
     def is_view(self) -> bool:
         return self.stored_lanes != self.lanes
 
+    @property
+    def lane_prefix(self) -> bool:
+        """An MTP lane width view (:meth:`Qwen38TTNNQSA.lane_state_view`): a view of a FLAT parent (not paged: the
+        plain bucket views are paged).  ``packed_kv_cache`` is the parent's tensor unchanged (lane u at rows ``u*C``,
+        the scratch rows after the parent's last lane); the compressed cache, its flat form, the staging tiles and the
+        raw-key ring are lane-prefix aliases shaped for ``lanes`` lanes, where a bucket view keeps the parent's
+        tensors at their stored shapes."""
+
+        return self.is_view and not self.pool_rows
+
 
 # --------------------------------------------------------------------------- lane verify (B lanes x R rows, one tile)
 # The MTP lanes verify: B lanes each verify R = k + 1 consecutive positions in ONE 32-row tile, lane-major (row
@@ -2843,7 +2853,9 @@ class Qwen38TTNNQSALaneState:
 # The wide indexer scores the lane-major tile against the flat compressed cache once; row r's window is lane_of(r)'s.
 
 
-def qsa_lane_verify_constant_rows(lanes: int, rows: int, allocated_context: int) -> dict[str, torch.Tensor]:
+def qsa_lane_verify_constant_rows(
+    lanes: int, rows: int, allocated_context: int, storage_lanes: int | None = None
+) -> dict[str, torch.Tensor]:
     """Host images of the lane verify constants (UINT32 rows as int64, the bf16 select tiles as float).
 
     Rows ``[1,1,1,32]``: ``lane_of_row`` (row r -> lane ``r // R``; pad rows lane 0), ``draft_of_row`` (``r % R``; pad
@@ -2855,9 +2867,18 @@ def qsa_lane_verify_constant_rows(lanes: int, rows: int, allocated_context: int)
     region).  Tiles: ``expand_select`` ``[B*32, 32]`` (row ``u*32 + j`` <- row ``u*R + j``), ``lane_indicator_rows``
     ``[B, 32, 32]`` (``(u; i, c) = [lane_of(c) == u]``, zero on the pad columns), ``pick_pooled`` ``[32, B*32]``
     (``(2u + i, u*32 + i) = 1``), ``pick_users`` ``[2, B, 32, 32]`` (``(i; u; 0, 2u + i) = 1``).
+
+    ``storage_lanes`` (default ``lanes``): the lanes of the flat KV cache the rows address.  An MTP lane width view
+    runs ``lanes`` lanes on the parent's ``storage_lanes``-lane flat cache, whose scratch rows start after the
+    parent's last lane (``scratch_row = storage_lanes * C``); every other constant depends on ``lanes`` alone.
     """
 
     lanes = require_lane_count(lanes, label="QSA lane verify lanes")
+    stored = (
+        lanes if storage_lanes is None else require_lane_count(storage_lanes, label="QSA lane verify storage lanes")
+    )
+    if stored < lanes:
+        raise ValueError(f"QSA lane verify storage lanes {stored} are fewer than its {lanes} lanes")
     if not 1 <= rows <= VERIFY_MAX_ROWS or lanes * rows > CHUNK_ROWS:
         raise ValueError(
             f"QSA lane verify admits 1..{VERIFY_MAX_ROWS} rows per lane and B x R <= {CHUNK_ROWS}, got {lanes} x {rows}"
@@ -2886,7 +2907,7 @@ def qsa_lane_verify_constant_rows(lanes: int, rows: int, allocated_context: int)
         "draft_of_row": row(draft_of),
         "block_lane_of_row": row(block_lane_of),
         "block_offset_row": row(block_offset),
-        "scratch_row": torch.full((1, 1, 1, CHUNK_ROWS), lanes * capacity, dtype=torch.int64),
+        "scratch_row": torch.full((1, 1, 1, CHUNK_ROWS), stored * capacity, dtype=torch.int64),
         "arange_per_lane": torch.arange(CACHE_WRITE_ROWS, dtype=torch.int64).repeat(lanes).reshape(1, 1, 1, -1),
         "block_offsets_lanes": qsa_row_constants()["block_offsets"].reshape(1, 1, 1, TOKEN_BUDGET) + offsets,
         "arange_slots_rows": torch.arange(SPARSE_INDEX_CAPACITY, dtype=torch.int64).reshape(1, 1, 1, -1) + offsets,
@@ -2921,13 +2942,22 @@ class Qwen38TTNNQSALaneVerifyConstants:
     pick_pooled: Any
     pick_users: tuple[Any, Any]
     select_compute_config: Any
+    # Lanes of the flat KV cache the rows address (0 = ``lanes``): the scratch rows start at ``storage_lanes * C``.
+    storage_lanes: int = 0
 
     @classmethod
     def build(
-        cls, mesh_device, mesh_contract: Qwen38MeshContract, *, lanes: int, rows: int, allocated_context: int
+        cls,
+        mesh_device,
+        mesh_contract: Qwen38MeshContract,
+        *,
+        lanes: int,
+        rows: int,
+        allocated_context: int,
+        storage_lanes: int | None = None,
     ) -> "Qwen38TTNNQSALaneVerifyConstants":
         mesh_contract.validate_mesh(mesh_device)
-        host = qsa_lane_verify_constant_rows(lanes, rows, allocated_context)
+        host = qsa_lane_verify_constant_rows(lanes, rows, allocated_context, storage_lanes)
         uploaded: list[Any] = []
 
         def upload_uint32(name: str):
@@ -2985,6 +3015,7 @@ class Qwen38TTNNQSALaneVerifyConstants:
                     fp32_dest_acc_en=True,
                     packer_l1_acc=False,
                 ),
+                storage_lanes=0 if storage_lanes is None or storage_lanes == lanes else int(storage_lanes),
             )
         except BaseException:
             _deallocate(*uploaded)
@@ -3307,6 +3338,7 @@ def emulate_qsa_lane_verify_inputs(
     rows: int,
     allocated_compressed_blocks: int,
     single_row: bool = False,
+    storage_lanes: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Torch reference of :func:`derive_qsa_lane_verify_inputs` (the tensor fields' names): row r's chunk fields
     are the 1-row derivation at ``P_{lane_of(r)} + draft_of(r)`` with lane_of(r)'s KV offset on its tail ids; the
@@ -3315,7 +3347,8 @@ def emulate_qsa_lane_verify_inputs(
     if len(positions) != lanes or len(active) != lanes:
         raise ValueError(f"lane verify emulation needs {lanes} positions and active flags")
     capacity = allocated_compressed_blocks * COMPRESS_RATIO
-    host = qsa_lane_verify_constant_rows(lanes, rows, capacity)
+    host = qsa_lane_verify_constant_rows(lanes, rows, capacity, storage_lanes)
+    scratch_start = (lanes if storage_lanes is None else storage_lanes) * capacity
     verify_host = qsa_verify_constant_rows(rows, allocated_compressed_blocks)
     lane_of = host["lane_of_row"].reshape(-1).tolist()
     draft_of = host["draft_of_row"].reshape(-1).tolist()
@@ -3351,7 +3384,7 @@ def emulate_qsa_lane_verify_inputs(
         pool_select[0, lane] = verify_host["pool_select_stack"][0, 0, position % COMPRESS_RATIO].reshape(
             CHUNK_ROWS, RAW_WINDOW_TILE_ROWS
         )
-        start = lane * capacity + (position & KV_BLOCK_START_MASK) if active[lane] else lanes * capacity
+        start = lane * capacity + (position & KV_BLOCK_START_MASK) if active[lane] else scratch_start
         kv_row_start.append(start)
         kv_row_start_next.append(start + CACHE_WRITE_ROWS)
     return {
@@ -3408,6 +3441,9 @@ class Qwen38TTNNQSALaneVerifyState:
     lanes: int
     raw_history: Any
     raw_rows: Any
+    # True on an MTP lane width view (:meth:`Qwen38TTNNQSA.lane_verify_state_view`): both tensors are lane-prefix
+    # aliases of the parent's buffers, which only the parent state releases.
+    lane_alias: bool = False
 
 
 class Qwen38TTNNQSA:
@@ -7571,6 +7607,34 @@ class Qwen38TTNNQSA:
             pool_rows=pool_rows,
         )
 
+    def lane_state_view(self, state: Qwen38TTNNQSALaneState, lanes: int, alias) -> Qwen38TTNNQSALaneState:
+        """The first ``lanes`` lanes of a flat MTP lane state (KV scratch rows, not paged) as a width view:
+        ``packed_kv_cache`` is the parent's tensor unchanged (the lane rows address it by absolute row ``u*C``; the
+        scratch rows stay after the parent's last lane), the compressed cache (and its flat form), the staging tiles and
+        the raw-key ring are lane-prefix aliases (``alias(tensor, *, lane_dim, per_lane=1)`` is
+        ``mtp_lanes.lane_prefix_view`` with the widths bound).  The view refuses every lifecycle op."""
+
+        self._validate_lane_state(state)
+        if state.is_view or state.pool_rows or state.kv_scratch_rows <= 0:
+            raise ValueError("an MTP lane width view takes the flat parent state with KV scratch rows")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < state.lanes:
+            raise ValueError(f"an MTP lane width view takes 1 <= lanes < {state.lanes}, got {lanes!r}")
+        rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
+        compressed = alias(state.compressed_index_cache, lane_dim=0)
+        flat = ttnn.experimental.view(compressed, (1, 1, lanes * rows, INDEX_HEAD_DIM))
+        _retag_tensor(flat, reference=compressed, shard_dim=None)
+        view = replace(
+            state,
+            lanes=lanes,
+            storage_lanes=state.lanes,
+            compressed_index_cache=compressed,
+            compressed_index_cache_flat=flat,
+            kv_staging=alias(state.kv_staging, lane_dim=1),
+            raw_key_ring=alias(state.raw_key_ring, lane_dim=1),
+        )
+        self._validate_lane_state(view)
+        return view
+
     @staticmethod
     def _refuse_lane_view(state: Qwen38TTNNQSALaneState, what: str) -> None:
         if state.is_view:
@@ -7643,8 +7707,10 @@ class Qwen38TTNNQSA:
         lanes = require_lane_count(state.stored_lanes, label="QSA lane state stored lanes", error_type=RuntimeError)
         if lanes < state.lanes:
             raise RuntimeError(f"QSA lane state stores {lanes} lanes, fewer than its {state.lanes} lanes")
-        if state.is_view and not state.pool_rows:
+        if state.is_view and not state.pool_rows and state.kv_scratch_rows <= 0:
             raise ValueError("a QSA lane bucket view must be paged (pool_rows > 0)")
+        # the caches' lane extent: a width view's aliases hold ``state.lanes`` lanes, a bucket view's the parent's
+        cache_lanes = state.lanes if state.lane_prefix else lanes
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
         if state.kv_scratch_rows < 0 or state.kv_scratch_rows % CACHE_WRITE_ROWS:
             raise RuntimeError(f"QSA lane KV scratch rows must be whole blocks, got {state.kv_scratch_rows}")
@@ -7661,14 +7727,14 @@ class Qwen38TTNNQSA:
                     2 * HEAD_DIM,
                 ),
             ),
-            ("compressed lane index cache", state.compressed_index_cache, (lanes, 1, rows, INDEX_HEAD_DIM)),
+            ("compressed lane index cache", state.compressed_index_cache, (cache_lanes, 1, rows, INDEX_HEAD_DIM)),
             (
                 "flat compressed lane index cache",
                 state.compressed_index_cache_flat,
-                (1, 1, lanes * rows, INDEX_HEAD_DIM),
+                (1, 1, cache_lanes * rows, INDEX_HEAD_DIM),
             ),
-            ("QSA lane KV staging", state.kv_staging, (1, lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM)),
-            ("QSA lane raw-key ring", state.raw_key_ring, (1, lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
+            ("QSA lane KV staging", state.kv_staging, (1, cache_lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM)),
+            ("QSA lane raw-key ring", state.raw_key_ring, (1, cache_lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
         )
         for label, tensor, shape in expected:
             _require_shape(tensor, shape, label)
@@ -8165,8 +8231,35 @@ class Qwen38TTNNQSA:
             raw_rows=self._allocate_replicated_tile_zeros((1, 1, lanes * CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
         )
 
+    def lane_verify_state_view(
+        self, state: Qwen38TTNNQSALaneVerifyState, lanes: int, alias
+    ) -> Qwen38TTNNQSALaneVerifyState:
+        """The first ``lanes`` lanes of a lane verify state as lane-prefix aliases (``raw_history`` ``[1,W,32,128]``,
+        ``raw_rows`` ``[1,1,W*32,128]``) of the same buffers; ``alias(tensor, *, lane_dim, per_lane=1)`` is
+        ``mtp_lanes.lane_prefix_view`` with the widths bound.  The epoch is the parent's (live while the parent is)."""
+
+        self._validate_lane_verify_state(state)
+        if state.lane_alias:
+            raise ValueError("a QSA lane verify width view cannot be viewed again")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < state.lanes:
+            raise ValueError(f"a QSA lane verify width view takes 1 <= lanes < {state.lanes}, got {lanes!r}")
+        view = replace(
+            state,
+            lanes=lanes,
+            raw_history=alias(state.raw_history, lane_dim=1),
+            raw_rows=alias(state.raw_rows, lane_dim=2, per_lane=CACHE_WRITE_ROWS),
+            lane_alias=True,
+        )
+        self._validate_lane_verify_state(view)
+        return view
+
     def release_lane_verify_state(self, state: Qwen38TTNNQSALaneVerifyState) -> None:
         self._validate_lane_verify_state(state)
+        if state.lane_alias:
+            raise RuntimeError(
+                "a QSA lane verify state width view aliases the parent's buffers (a deallocate frees the parent); "
+                "release the parent state"
+            )
         _deallocate(state.raw_history, state.raw_rows)
         self._live_generic_epochs.remove(state.epoch)
 
@@ -8554,7 +8647,7 @@ class Qwen38TTNNQSA:
         lane_rows = []
         if lane_constants.indexer_form == "wide":
             # A bucket view scores the first ``count`` users of the parent's flat cache: kv_len bounds the keys.
-            view_kwargs = {"kv_len": count * rows} if state.is_view else {}
+            view_kwargs = {"kv_len": count * rows} if state.is_view and not state.lane_prefix else {}
             local_scores = ttnn.experimental.indexer_score_dsa(
                 query_tile,
                 state.compressed_index_cache_flat,
