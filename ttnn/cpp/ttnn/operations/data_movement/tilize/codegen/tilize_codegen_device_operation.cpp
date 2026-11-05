@@ -46,15 +46,19 @@ void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
         plan.cb_out_depth,
         plan.chunk_wt);
     if (plan.write_batch > 1) {
-        // The batched writer addresses each batch from the FIFO read pointer without wrapping, which holds only
-        // when the core writes a single block that fits the output CB.
+        // The batched writer addresses each batch from the FIFO read pointer without wrapping and waits on two
+        // batches at once. That holds when the core writes a single block that fits the output CB, or when the
+        // batch divides the chunk and the output CB holds two chunks, so compute can still reserve a chunk.
         const auto grid = input.device()->compute_with_storage_grid_size();
         const bool one_row_per_core = geometry.route == codegen::TilizeRoute::Column2D ||
                                       geometry.tile_rows <= static_cast<uint32_t>(grid.x * grid.y);
+        const bool single_block_fits = one_row_per_core && plan.cb_out_depth >= geometry.block_wt;
+        const bool aligned_batches = plan.chunk_wt % plan.write_batch == 0 && plan.cb_out_depth == 2 * plan.chunk_wt;
         TT_FATAL(
-            one_row_per_core && plan.cb_out_depth >= geometry.block_wt,
-            "Tilize codegen plan: batched writes need one tile row per core and an output CB of at least {} tiles, "
-            "got {}",
+            single_block_fits || aligned_batches,
+            "Tilize codegen plan: write batch {} needs one tile row per core with an output CB of at least {} tiles, "
+            "or a batch dividing the chunk with an output CB of two chunks, got output CB {}",
+            plan.write_batch,
             geometry.block_wt,
             plan.cb_out_depth);
     }

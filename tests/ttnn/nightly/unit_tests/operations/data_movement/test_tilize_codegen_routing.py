@@ -329,7 +329,9 @@ def test_tilize_codegen_column2d_program_cache_hit(device, shape, kwargs, dtype,
 
 
 # Auto keeps a dtype conversion on native, so ttnn.tilize returns native's conversion whatever the live L1;
-# the forced codegen entry still converts, with its own semantics.
+# the forced codegen entry still converts, with its own semantics. Only the route is asserted for the auto
+# call: native's BFLOAT16 to INT32 output carries the float bit pattern with low bits that differ between
+# identical dispatches, so it is no reference for another native call.
 _CONVERSION_SHAPES = {
     "row": [1, 1, 2 * 32, 32],
     "column2d": [1, 1, 32, 1024],
@@ -346,9 +348,9 @@ def test_tilize_auto_keeps_conversion_on_native(device, shape):
         host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     device.clear_program_cache()
-    golden, out, added = _native_route(device, xt, **kwargs)
+    _, out, added = _native_route(device, xt, **kwargs)
     assert added == 0, "auto built a new program for a dtype conversion; expected native's cached program"
-    assert_equal(golden, ttnn.to_torch(out))
+    assert out.dtype == ttnn.int32 and out.layout == ttnn.TILE_LAYOUT
     assert_equal(_reference(host, **kwargs), ttnn.to_torch(_force_codegen(xt, **kwargs)))
 
 

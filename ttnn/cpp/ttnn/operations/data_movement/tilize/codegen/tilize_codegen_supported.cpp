@@ -47,6 +47,8 @@ constexpr uint32_t kMinColumnBlocks = 2;
 constexpr uint32_t kCompactReaderMaxWt = 8;
 // Tiles per writer batch on a core that holds at most one tile row.
 constexpr uint32_t kBatchedWriteTiles = 4;
+// Largest writer group, in tiles, on a core that holds several tile rows: one flush per group instead of per tile.
+constexpr uint32_t kMaxWriteGroupTiles = 8;
 // Smallest chunk worth double buffering; below it a single-buffered whole row is kept, since a block width with no
 // mid-sized divisor would otherwise run as many one- or two-tile chunks.
 constexpr uint32_t kMinPipelinedChunkTiles = 8;
@@ -210,6 +212,15 @@ std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usa
         if (g.block_wt <= batched_out_depth && cb_bytes(chunk_wt, depth, batched_out_depth) <= budget) {
             write_batch = kBatchedWriteTiles;
             cb_out_depth = batched_out_depth;
+        }
+    }
+    if (write_batch == 1 && !minimal_work) {
+        // A group that divides the chunk also divides the CB depth and every core's tile count, so no group
+        // straddles the FIFO end. The writer holds up to two groups while compute reserves a whole chunk, which a
+        // double-buffered output CB always leaves room for.
+        const uint32_t group = largest_divisor_at_most(chunk_wt, kMaxWriteGroupTiles);
+        if (group > 1 && cb_out_depth >= kDoubleBuffered * chunk_wt) {
+            write_batch = group;
         }
     }
 
