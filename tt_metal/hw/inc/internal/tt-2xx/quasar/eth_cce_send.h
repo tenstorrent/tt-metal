@@ -20,8 +20,7 @@ namespace internal_::cce_eth {
 
 using namespace overlay;
 
-// Every send reprograms this buffer, which is also the NOC layer's read buffer: a router hart issues no NOC reads
-// (CM-084).
+// Every send reprograms this buffer. A CCE's NOC calls use command buffer 0 (cce_noc.h), so nothing else programs it.
 constexpr CmdBuf kCmdBuf = CMDBUF_1;
 constexpr uint32_t kTrid = CMDBUF_1_TRID_STATIC;
 // Request VCs 12-15 reach the Ethernet backends: TX queue q is VC 12 + q.

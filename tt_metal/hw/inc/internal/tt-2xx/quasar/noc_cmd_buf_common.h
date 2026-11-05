@@ -24,6 +24,12 @@
 #error "The Quasar RoCC NOC APIs require COMPILE_FOR_DM (they use RoCC custom instructions)"
 #endif
 
+// A Keraunos CCE (Quasar Ethernet core) has no NOC endpoint; its NOC calls go through cce_noc.h.
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#define NOC_ON_KERAUNOS_CCE
+#include "internal/tt-2xx/quasar/cce_noc.h"
+#endif
+
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(COMPILE_FOR_DM);
 
@@ -488,12 +494,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
+#else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
+#endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
+#else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
+#endif
 }
 
 inline __attribute__((always_inline)) uint32_t noc_available_transactions(uint32_t noc, uint32_t trid) {
@@ -501,24 +515,34 @@ inline __attribute__((always_inline)) uint32_t noc_available_transactions(uint32
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
+#else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent() == 0;
+#endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    // Posted writes are unsupported on a CCE, so none is in flight.
+    return true;
+#else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent() == 0;
+#endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
+#else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
+#endif
 }
 
-// Always true on a Keraunos CCE (Quasar Ethernet), where a router hart does not get past the simple command buffer's
-// transaction-count queries. "None outstanding" holds only if a CCE write with a transaction id completes before its
-// issue call returns.
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    return true;
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
 #endif
@@ -534,18 +558,22 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint3
     return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 
-// Always true on a Keraunos CCE, as ncrisc_noc_nonposted_write_with_transaction_id_sent().
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    return true;
+#ifdef NOC_ON_KERAUNOS_CCE
+    return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
 #endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
+#ifdef NOC_ON_KERAUNOS_CCE
+    // An increment is a CPU load and store, so none is in flight.
+    return true;
+#else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
+#endif
 }
 
 // clang-format off
