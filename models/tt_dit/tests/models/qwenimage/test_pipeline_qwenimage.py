@@ -147,10 +147,20 @@ def test_qwenimage_dbcache(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, mon
         images[0].save(f"qwenimage_dbcache_{name}.png")
         return np.asarray(images[0], dtype=np.float64), durations
 
+    def program_count() -> int:
+        return sum(d.num_program_cache_entries() for d in [mesh_device, *pipeline._devices])
+
+    # The warm-up compiles every program, the cached path's included.
+    programs = program_count()
     full, full_times = run(DBCacheConfig(residual_diff_threshold=0))
+    full_programs = program_count() - programs
     cached, cached_times = run(None)
+    cached_programs = program_count() - programs - full_programs
+    new_programs = {"full run": full_programs, "cached run": cached_programs}
+    assert not any(new_programs.values()), f"programs compiled after the warm-up: {new_programs}"
     assert pipeline._dbcache is not None
     cached_steps = pipeline._dbcache.cached_steps
+    assert cached_steps, "nothing was cached"
 
     mse = np.mean((full - cached) ** 2)
     psnr = 10 * np.log10(255**2 / mse) if mse > 0 else float("inf")
