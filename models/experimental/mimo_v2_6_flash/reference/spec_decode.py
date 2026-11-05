@@ -77,13 +77,59 @@ MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and
 WIDTHS = (2, 4) if ADAPTIVE else (GROUP_SLOTS,)  # the group widths a pass may use
 ADAPTIVE_WIDE_ROWS = int(os.environ.get("MIMO_SPEC_WIDE_ROWS", "2"))
 
+# Group layouts. A pass's layout gives each draft group index g its width w (0: not a group of this layout); group g
+# holds slots g * w .. (g + 1) * w - 1, the addressing the device's chain, plan, tokens and drafts steps and the
+# backfill use with the width each group carries. A uniform layout has groups of one width; the MIXED layout
+# (MIMO_SPEC_MIXED, adaptive groups with MTP drafting) serves 3 requests in groups 0 (slots 0-3, 3 drafts), 2 (slots
+# 4-5) and 3 (slots 6-7, 1 draft each), where groups of 2 would leave slots 6-7 idle: the wide group's request (the
+# adapter gives it to the request whose drafts it accepts most) commits ~3.2 tokens a step instead of ~1.8, for two
+# more verify rows (each row adds the experts it selects to the MoE's distinct-expert stream, ~1 ms a step). The verify
+# runs the mixed pass as groups of 2 (the wide group's request in groups 0 and 1, whose KV it scans twice), so its
+# attention variants, accept groups (first slot // 2) and K / V writes are the uniform-2 pass's.
+MIXED = ADAPTIVE and os.environ.get("MIMO_SPEC_MIXED", "1") == "1" and os.environ.get("MIMO_SPEC_DECODE") != "dflash"
+MIXED_LAYOUT = (4, 0, 2, 2)
+
+
+def uniform_layout(width):
+    """The layout of groups of ``width`` slots: every group index below SPEC_SLOTS / width."""
+    return tuple(width if g < SPEC_SLOTS // width else 0 for g in range(DRAFT_GROUPS))
+
+
+LAYOUTS = tuple(uniform_layout(w) for w in WIDTHS) + ((MIXED_LAYOUT,) if MIXED else ())
+
+
+def layout_groups(layout):
+    """The group indices of ``layout``, in index order."""
+    return [g for g, w in enumerate(layout) if w]
+
+
+def layout_width(layout):
+    """The verify's group width of ``layout``: its narrowest group (the pass's attention groups and accept groups are
+    groups of this many slots; a wider group spans several)."""
+    return min(w for w in layout if w)
+
+
+def pass_layout(live_rows):
+    """The group layout of a lane step with ``live_rows`` requests: groups of GROUP_SLOTS, or with ADAPTIVE groups of 4
+    for up to ADAPTIVE_WIDE_ROWS requests, the MIXED layout for one request more than that when it holds them all, and
+    groups of 2 for more."""
+    if not ADAPTIVE:
+        return uniform_layout(GROUP_SLOTS)
+    if live_rows <= ADAPTIVE_WIDE_ROWS:
+        return uniform_layout(4)
+    if MIXED and live_rows == len(layout_groups(MIXED_LAYOUT)):
+        return MIXED_LAYOUT
+    return uniform_layout(2)
+
 
 def pass_width(live_rows):
-    """The group width of a lane step with ``live_rows`` requests: GROUP_SLOTS, or with ADAPTIVE groups of 4 for up to
-    ADAPTIVE_WIDE_ROWS requests and of 2 for more."""
-    if not ADAPTIVE:
-        return GROUP_SLOTS
-    return 4 if live_rows <= ADAPTIVE_WIDE_ROWS else 2
+    """The verify group width of a lane step with ``live_rows`` requests (pass_layout's layout_width)."""
+    return layout_width(pass_layout(live_rows))
+
+
+def wide_rows():
+    """The most requests a lane step gives a group of GROUP_SLOTS slots (MAX_DRAFTS drafts) to."""
+    return max((n for n in range(1, SPEC_SLOTS + 1) if GROUP_SLOTS in pass_layout(n)), default=0)
 
 
 def width_drafts(width):
@@ -123,34 +169,45 @@ class VerifyPass:
         return sum(p >= 0 for p in self.positions)
 
 
-def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS, aligned=False):
+def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS, aligned=False, layout=None):
     """rows: (row, tokens [1 + K], positions [1 + K], num_valid_drafts) of a lane's active rows, in batch order.
     Returns the lane's passes. A row takes columns 0 .. num_valid_drafts, in consecutive slots of one pass. With draft
     groups (``group_slots`` < ``slots``) each row starts a group: its own (``groups`` {row: group}, the request's
-    sticky group) in the first pass where that group is free, or the first free group. ``aligned`` (the grouped
+    sticky group) in the first pass where that group is free, or the first free group. ``layout`` (a group layout,
+    pass_layout; None: uniform groups of ``group_slots``) gives each group its width: group g holds slots g * w ..
+    (g + 1) * w - 1 of a pass whose verify groups are ``group_slots`` (layout_width) wide. ``aligned`` (the grouped
     verify attention, one KV scan per group: tt/attention.py verify_grouped): without draft groups too, each row
     starts a pass of its own, so every group of slots holds one request."""
     passes = []
     multi = group_slots < slots
+    widths = {g: w for g, w in enumerate(layout) if w} if layout is not None and multi else None
+
+    def span(g):
+        w = widths[g] if widths is not None else group_slots
+        return range(g * w, (g + 1) * w)
 
     def free(p, g):
-        return all(p.positions[s] < 0 for s in range(g * group_slots, (g + 1) * group_slots))
+        return all(p.positions[s] < 0 for s in span(g))
 
     for row, tokens, positions, n in rows:
         width = int(n) + 1
-        if width > (group_slots if multi else slots):
-            raise ValueError(f"row {row}: {n} drafts need {width} slots, a pass has {slots} in groups of {group_slots}")
+        want = (groups or {}).get(row) if multi else None
+        room = len(span(want)) if want is not None else max(map(len, map(span, widths or [0])))
+        if width > (room if multi else slots):
+            raise ValueError(f"row {row}: {n} drafts need {width} slots, a pass has {slots} in groups of {room}")
         for c in range(width):
             if int(positions[c]) < 0:
                 raise ValueError(f"row {row}: column {c} of {width} has no position")
         if multi:
-            want = (groups or {}).get(row)
-            options = range(slots // group_slots) if want is None else [want]
+            if want is None:
+                options = [g for g in (widths or range(slots // group_slots)) if len(span(g)) >= width]
+            else:
+                options = [want]
             p, g = next(((p, g) for p in passes for g in options if free(p, g)), (None, None))
             if p is None:
                 p, g = VerifyPass(width=group_slots), options[0]
                 passes.append(p)
-            first = g * group_slots
+            first = span(g)[0]
         else:
             if not passes or passes[-1].used + width > slots or (aligned and passes[-1].used > 0):
                 passes.append(VerifyPass(width=group_slots))
@@ -193,9 +250,10 @@ class DraftSource:
         return (self.group + 1) * self.width - 1
 
 
-def draft_sources(passes, group_slots=GROUP_SLOTS):
+def draft_sources(passes, group_slots=GROUP_SLOTS, layout=None):
     """The DraftSources of a lane step: every row of a step that ran one pass, at most DRAFT_GROUPS of them (one per
-    draft group, plan_verify_passes); none otherwise."""
+    draft group, plan_verify_passes); none otherwise. ``layout``: the pass's group layout (None: groups of
+    ``group_slots``); a row's group is its first slot // ``group_slots``, its width that group's."""
     if len(passes) != 1:
         return []
     by_row = {}
@@ -206,7 +264,10 @@ def draft_sources(passes, group_slots=GROUP_SLOTS):
     out = []
     for row, cells in by_row.items():
         slots = [s for _, s in sorted(cells)]
-        out.append(DraftSource(row=row, slots=slots, group=slots[0] // group_slots, width=group_slots))
+        g = slots[0] // group_slots
+        width = group_slots if layout is None else layout[g]
+        assert width and slots[0] == g * width, f"row {row}: slots {slots} start no group of layout {layout}"
+        out.append(DraftSource(row=row, slots=slots, group=g, width=width))
     return out
 
 

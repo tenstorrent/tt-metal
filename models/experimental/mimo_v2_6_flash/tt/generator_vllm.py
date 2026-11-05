@@ -142,11 +142,10 @@ from models.common.sampling.tt_sampling import format_grammar_bitmask
 from ..reference import kv_pair_split
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
-from ..reference.sample_verify import commit_pass, pass_inputs
+from ..reference.sample_verify import commit_pass, pass_inputs, pass_rows
 from ..reference.spec_chain import chain_row, chained_draft
 from ..reference.spec_decode import (
     ADAPTIVE,
-    ADAPTIVE_WIDE_ROWS,
     DRAFT_GROUPS,
     GROUP_SLOTS,
     MAX_DRAFTS,
@@ -154,10 +153,14 @@ from ..reference.spec_decode import (
     SPEC_SLOTS,
     DraftSource,
     draft_sources,
+    layout_groups,
+    layout_width,
+    pass_layout,
     plan_mtp,
-    pass_width,
     plan_verify_passes,
     planned_drafts,
+    uniform_layout,
+    wide_rows,
 )
 from .common import fabric_config
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
@@ -321,6 +324,24 @@ def _imbalanced(contexts):
     return live[-1] >= 2 * sum(live[:-1]) / (len(live) - 1)
 
 
+ACCEPT_EMA_RATE = 0.125  # the weight of a verify in a request's first-draft acceptance average
+
+
+def _update_accept_ema(ema, results):
+    """Each verified request's first-draft acceptance (1: its count passed column 0), averaged into ``ema`` [batch
+    rows] over its verifies with drafts: [(lane, VerifyPass, ChainResult)] of one verify."""
+    for _, vp, result in results:
+        columns = {}
+        for _, row, _ in vp.answers:
+            columns[row] = columns.get(row, 0) + 1
+        for g, row in pass_rows(vp):
+            count = int(result.accept[g][0])
+            if columns[row] < 2 or count < 1 or not 0 <= row < len(ema):
+                continue
+            hit = 1.0 if count >= 2 else 0.0
+            ema[row] = hit if ema[row] is None else ema[row] + ACCEPT_EMA_RATE * (hit - ema[row])
+
+
 class VerifyHandle:
     """An accept-mode verify's result pages, one per pass, each copied to the host right behind its pass without
     blocking (SpecChain.read_async), and the events recorded after each lane's last copy. A deferred verify returns
@@ -342,6 +363,7 @@ class VerifyHandle:
         self.relayed = set()  # the chain rows, whose column-0 position the device chose
         self.hints = None  # per row: the drafts verified
         self.prev = None  # a chained verify's: the deferred verify it chained onto, until this one is read
+        self.ema = None  # the adapter's accept_ema, which ``read`` updates with each row's first-draft acceptance
         self.proposed = False
         self.waited = self.draft_wait = 0.0
         self._lock = threading.Lock()
@@ -364,6 +386,8 @@ class VerifyHandle:
                     else:
                         self.waited += time.perf_counter() - t
                 self._results = [(lane, vp, chain.unpack(host)) for lane, vp, chain, host in self.pages]
+                if self.ema is not None:
+                    _update_accept_ema(self.ema, self._results)
             return self._results
 
     def p0_range(self, row):
@@ -563,9 +587,12 @@ class MiMoV2ForCausalLM:
         self.dflash_ring = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
         # Per lane: each draft group's request (its lane slot; ``_draft_groups``), and the step each slot last ran in.
         self.group_owners = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
-        # Per lane: the width of its draft groups (reference.spec_decode.pass_width; ``_set_width``).
-        self.lane_width = [WIDTHS[-1]] * self.dp
+        # Per lane: the layout of its draft groups (reference.spec_decode.pass_layout; ``_set_layout``).
+        self.lane_layout = [uniform_layout(WIDTHS[-1])] * self.dp
         self.slot_seen = [{} for _ in range(self.dp)]
+        # Per batch row: its request's acceptance of first drafts, an exponential average over its verifies (None: no
+        # verify with a draft since its prompt); the mixed layout's wide group goes to the highest (``_draft_groups``).
+        self.accept_ema = [None] * (self.dp * self.per_lane)
         self._steps = 0
         self.chain_stats["dflash_resets"] = 0
         self.chain_stats["width_changes"] = 0
@@ -673,10 +700,10 @@ class MiMoV2ForCausalLM:
             drafter_state="internal",
             supports_narrow_decode=True,
             # Adaptive draft groups: 3 drafts per request in groups of 4 slots for up to ADAPTIVE_WIDE_ROWS requests,
-            # 1 in groups of 2 for more (reference.spec_decode.pass_width).
-            k_by_rows=((ADAPTIVE_WIDE_ROWS, k), (max(max_num_seqs, ADAPTIVE_WIDE_ROWS + 1), 1))
-            if ADAPTIVE and k > 1
-            else (),
+            # 1 in groups of 2 for more (reference.spec_decode.pass_layout). The MIXED layout gives one of 3 requests
+            # a group of 4: up to wide_rows() requests the cap is k, and the adapter proposes each request only the
+            # drafts its group verifies (a chained verify then carries the count its last verify did).
+            k_by_rows=((wide_rows(), k), (max(max_num_seqs, wide_rows() + 1), 1)) if ADAPTIVE and k > 1 else (),
         )
 
     @classmethod
@@ -932,6 +959,7 @@ class MiMoV2ForCausalLM:
             draft_group[i] = self._draft_groups(lane, [slot], prompt=True)[slot]
             if not continues[i]:
                 self.mtp_ring[lane][draft_group[i]] = self.dflash_ring[lane][draft_group[i]] = None
+                self.accept_ema[lane * self.per_lane + slot] = None
         # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
         # (TtMiMoModel.prefill_enqueue_batch, which pads every chunk to the longest); the other rows one by one. Every
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
@@ -1228,12 +1256,12 @@ class MiMoV2ForCausalLM:
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
-            width = self._set_width(lane, len(live))
-            fits = len(live) <= SPEC_SLOTS // width
-            groups = self._draft_groups(lane, live, compact=True, width=width) if fits else {}
+            layout = self._set_layout(lane, len(live))
+            fits = len(live) <= len(layout_groups(layout))
+            groups = self._draft_groups(lane, live, compact=True, layout=layout) if fits else {}
             if live and all(groups.get(s) is not None for s in live):
                 self.spec_sources[lane] = [
-                    DraftSource(row=first + s, slots=[s], group=groups[s], width=width) for s in live
+                    DraftSource(row=first + s, slots=[s], group=groups[s], width=layout[groups[s]]) for s in live
                 ]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
         out = {"rows": rows, "handles": handles, "tokens": on_device, "lanes": lanes}
@@ -1357,15 +1385,10 @@ class MiMoV2ForCausalLM:
             ]
             live = [r - first for r, *_ in active]
             self._seen(lane, live)
-            # The pass's group width (adaptive draft groups: from its request count); a row whose drafts came from a
-            # wider step verifies the first width - 1 of them (the rest count as rejected).
-            width = self._set_width(lane, len(live), hold=any(first <= r < last for r in relayed))
-            if not fused and any(n > width - 1 for *_, n in active):
-                # The plugin walks every draft it sent through the argmax ids / logits: a cell the verify does not
-                # answer would commit garbage. Only the device's accept walk (fused_sample) counts them as rejected.
-                over = {r: n for r, *_, n in active if n > width - 1}
-                raise RuntimeError(f"lane {lane}: drafts {over} past a width-{width} verify ({spec_mode})")
-            active = [(r, tok, pos, min(n, width - 1)) for r, tok, pos, n in active]
+            # The pass's group layout (adaptive draft groups: from its request count; reference.spec_decode
+            # pass_layout) and its verify group width (its narrowest group's).
+            layout = self._set_layout(lane, len(live), hold=any(first <= r < last for r in relayed))
+            width = layout_width(layout)
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
                 # A pass the host builds may move its requests into the lowest groups (the narrowest verify
@@ -1373,15 +1396,26 @@ class MiMoV2ForCausalLM:
                 compact = not any(first <= r < last for r in relayed)
                 groups = {
                     first + s: g
-                    for s, g in self._draft_groups(lane, live, compact=compact, width=width).items()
+                    for s, g in self._draft_groups(lane, live, compact=compact, layout=layout).items()
                     if g is not None
                 }
+            # A row verifies as many drafts as its group holds (a row without a group: the verify's group width); one
+            # whose drafts came from a wider group verifies the first of them (the rest count as rejected).
+            room = {r: (layout[groups[r]] if groups and r in groups else width) - 1 for r, *_ in active}
+            if not fused and any(n > room[r] for r, *_, n in active):
+                # The plugin walks every draft it sent through the argmax ids / logits: a cell the verify does not
+                # answer would commit garbage. Only the device's accept walk (fused_sample) counts them as rejected.
+                over = {r: n for r, *_, n in active if n > room[r]}
+                raise RuntimeError(f"lane {lane}: drafts {over} past a layout-{layout} verify ({spec_mode})")
+            active = [(r, tok, pos, min(n, room[r])) for r, tok, pos, n in active]
             # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
             passes = plan_verify_passes(
-                active, groups=groups, group_slots=width, aligned=KV_PAIR_SPLIT and verify_grouped()
+                active, groups=groups, group_slots=width, aligned=KV_PAIR_SPLIT and verify_grouped(), layout=layout
             )
             lanes.append(passes)
-            lane_sources = sources[lane] = draft_sources(passes, group_slots=width)
+            lane_sources = sources[lane] = draft_sources(
+                passes, group_slots=width, layout=layout if DRAFT_GROUPS > 1 else None
+            )
             # The draft sources run one pass: its chain row goes with it, a block per source.
             chained = accept and SPEC_CHAIN and bool(lane_sources) and self._drafter(lane) is not None
             chained = chained and model.rope_tables is not None
@@ -1401,6 +1435,7 @@ class MiMoV2ForCausalLM:
             return self._verify_unchained(spec_mode, lanes, tables, tokens.shape, t0)
         handle = VerifyHandle(rows, tokens.shape[1], positions[:, 0], fused)
         handle.relayed = set(relayed)
+        handle.ema = self.accept_ema
         handle.hints = counts.to(torch.int64).clone()
         handle.prev = pending if relayed else None
         for k in range(max(map(len, lanes))):
@@ -1803,62 +1838,88 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return [plan.anchor]
 
-    def _set_width(self, lane, live, hold=False):
-        """The draft-group width of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_width). A
+    def _set_layout(self, lane, live, hold=False):
+        """The draft-group layout of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_layout). A
         change on a pass the host builds empties every group (the requests take groups again; their MTP rings and
         stash backfill before their next draft) and points the MTP drafter's page table at the new groups.
 
         ``hold``: the pass relays chain rows, whose relay step reads the commit of the group each row held in the pass
         it chains onto (the same group index), and whose drafts continue that group's ring without a backfill. A
-        narrower width there (more requests: more, smaller groups) keeps every group's owner and ring: each group
-        index of the wider width exists at the narrower one, and ring g's blocks do not depend on the width; the new
-        requests take the free groups. A wider one (fewer requests) may not have a relayed row's group, so the width
-        stays until the next pass the host builds."""
-        width, current = pass_width(live), self.lane_width[lane]
-        if width == current:
-            return width
-        if hold and width > current:
-            self.chain_stats["width_holds"] += 1
-            return current
-        self.lane_width[lane] = width
+        layout whose groups hold the live requests stays until the next pass the host builds. One that does not (more
+        requests) gives way to groups of 2 slots, which keeps every group's owner and ring: every group index of any
+        layout exists there, and ring g's blocks do not depend on the width; the new requests take the free
+        groups."""
+        layout, current = pass_layout(live), self.lane_layout[lane]
+        if layout == current:
+            return layout
+        if hold:
+            if live <= len(layout_groups(current)):
+                self.chain_stats["width_holds"] += 1
+                return current
+            layout = uniform_layout(min(WIDTHS))
+            if layout == current:
+                return layout
+        self.lane_layout[lane] = layout
         if not hold:
             self.group_owners[lane] = [None] * DRAFT_GROUPS
             self.mtp_ring[lane] = [None] * DRAFT_GROUPS
             self.dflash_ring[lane] = [None] * DRAFT_GROUPS
         mtp = self.models[lane].mtp
-        if mtp is not None and hasattr(mtp, "set_width"):
-            mtp.set_width(width)
+        if mtp is not None and hasattr(mtp, "set_layout"):
+            mtp.set_layout(layout)
         self.chain_stats["width_changes"] += 1
-        return width
+        return layout
 
-    def _draft_groups(self, lane, slots, prompt=False, compact=False, width=None):
+    def _draft_groups(self, lane, slots, prompt=False, compact=False, layout=None):
         """{slot: draft group} of the requests in lane ``slots`` (a step's live slots, or a prompt's slot): a request
         keeps its group while it runs, so its drafter state (rings, stash) stays its own. A slot without one takes a
-        group no live slot owns: the lowest unowned one, else the one whose request ran least recently; None when
-        every group belongs to another live slot (more requests than groups: the step drafts for none). A prompt's
+        group no live slot owns: the widest, then the lowest unowned one, else the one whose request ran least
+        recently; None when every group belongs to another live slot (more requests than groups: the step drafts for
+        none). Slots without a group pick in the order of their requests' first-draft acceptance (``accept_ema``,
+        highest first), so the mixed layout's wide group goes to the request whose drafts it accepts most. A prompt's
         slot always takes one (the request that owned it is gone or will be found without one). ``compact`` (a step
-        the host lays out): requests in groups past the narrowest verify variant that holds them all
+        the host lays out, uniform layouts): requests in groups past the narrowest verify variant that holds them all
         (attention.verify_variant) move into the lowest free groups, whose rings the next draft backfills. One draft
         group: always 0."""
         if DRAFT_GROUPS == 1:
             return {s: 0 for s in slots}
-        width = self.lane_width[lane] if width is None else width
-        count = SPEC_SLOTS // width  # the pass's groups at this width
+        layout = self.lane_layout[lane] if layout is None else layout
+        avail = layout_groups(layout)
+        width = layout_width(layout)
+        uniform = layout == uniform_layout(width)
         owners, seen = self.group_owners[lane], self.slot_seen[lane]
+        first = lane * getattr(self, "per_lane", 0)
+
+        emas = getattr(self, "accept_ema", None) or []
+
+        def preference(s):
+            ema = emas[first + s] if 0 <= first + s < len(emas) else None
+            return (ema is None, -(ema or 0.0), s)
+
         out = {}
-        for s in slots:
-            if s in owners[:count]:
-                out[s] = owners.index(s)
+        for s in sorted(slots, key=lambda s: (s not in [owners[g] for g in avail], preference(s))):
+            held = next((g for g in avail if owners[g] == s), None)
+            if held is not None:
+                out[s] = held
                 continue
             taken = set(slots) if not prompt else {s}
-            free = [g for g in range(count) if owners[g] is None or owners[g] not in taken]
+            free = [g for g in avail if owners[g] is None or owners[g] not in taken]
             if not free:
                 out[s] = None
                 continue
-            g = min(free, key=lambda g: (owners[g] is not None, g if owners[g] is None else seen.get(owners[g], -1)))
+            g = min(
+                free,
+                key=lambda g: (owners[g] is not None, -layout[g], g)
+                if owners[g] is None
+                else (True, seen.get(owners[g], -1), g),
+            )
             owners[g], out[s] = s, g
             self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None  # another request's rows
-        variant = verify_variant(len(slots), width) if compact and not prompt and 0 < len(slots) <= count else None
+        out = {s: out[s] for s in slots}
+        count = len(avail)
+        variant = None
+        if compact and uniform and not prompt and 0 < len(slots) <= count:
+            variant = verify_variant(len(slots), width)
         if variant is not None and None not in out.values():
             attended = variant[1]
             while max(out.values()) >= attended:
