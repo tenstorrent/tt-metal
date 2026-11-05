@@ -5,7 +5,8 @@
 """Replay AgentX traces through the Gemma4 continuous-batching cost model (host only).
 
     agentx_sim.py --traces .../cc-traces-weka-062126-256k/traces.jsonl --config 8192x8192:fcfs,2048x8192:pack \
-        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,exact] [-j 16] [--json runs.jsonl] [--ttft-out ttft.jsonl]
+        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,resume,exact] [--mid-cost 0.015] [-j 16] \
+        [--json runs.jsonl] [--ttft-out ttft.jsonl]
 
 Every knob but --sessions and --seed takes a comma list; the runs are their product, -j at a time (the traces are
 parsed once and shared with the forked workers). One row per run, and one JSON line per run with every metric.
@@ -21,8 +22,10 @@ Workload (closed loop, like AIPerf's AgentX replay):
 Prefill:
 - Prefix cache keyed by (session, hash_id), 64-token blocks: infinite or LRU over a token capacity. Lookup at
   arrival, insert when the request's prefill finishes.
-- The request resumes at its cached depth rounded down to the chunk unit (--align chunk, the block-cyclic
-  layout) or exactly (--align exact). Its rows are padded up to whole units.
+- The request resumes at its cached depth rounded down to the chunk unit (--align chunk), to Gemma4's resume granularity
+  (--align resume: a per-rank slab, unit / CP; Gemma4PrefillRuntime.resume_granularity), or exactly (--align exact).
+  Its rows are padded up to whole units. A lane that starts off a unit boundary costs --mid-cost more (measured:
+  +0.015 at 2048, +0.02 at 8192).
 - Each step runs budget / unit slots (unbatched: unit == budget). fcfs: admission order, a request keeps its slot until
   done; pack: the requests with the fewest rows left first, each taking every slot it still needs. A request's k slots
   run as k unit-wide lanes (the 2k-lanes runtime).
@@ -260,6 +263,15 @@ class PrefixCache:
 
 
 # ---- simulation ----
+
+
+def resume_step(C, align):
+    """Token multiple a request resumes at: the unit (chunk), Gemma4's resume granularity (resume: a per-rank slab;
+    Gemma4PrefillRuntime.resume_granularity, which tests/unit/test_prefill_runner.py checks this against), or any
+    token (exact)."""
+    return {"chunk": C, "resume": C // CP, "exact": 1}[align]
+
+
 def run(
     model,
     sessions,
@@ -270,11 +282,13 @@ def run(
     *,
     cache_tokens=None,
     align="chunk",
+    mid_cost=0.0,
     max_think_s=60.0,
     decode_tps=100.0,
     seed=0,
     max_sessions=None,
     calibrated=True,
+    max_seq_len=262144,
 ):
     rng = random.Random(seed)
     order = list(range(len(sessions)))[:max_sessions]
@@ -339,8 +353,11 @@ def run(
         ideal_hit = ideal.lookup(sess_of[g], n["hashes"]) if ideal else cached
         cap = n["in"] - 1  # at least one token is computed
         start = min(cached, cap)
-        if align == "chunk":
-            start = (start // C) * C
+        step = resume_step(C, align)
+        start = start // step * step
+        # The runtime rejects a padded chunk that runs past the slot: near the end, resume earlier.
+        while start and start + math.ceil((n["in"] - start) / C) * C > max_seq_len:
+            start -= step
         need = math.ceil((n["in"] - start) / C) * C
         req[g] = [Stat(send, None, n["in"], cached, start, need, ideal_hit), 0]
         if policy == "fcfs":
@@ -399,6 +416,7 @@ def run(
         # k unit-wide lanes per request
         batch = [(C, req[g][0].start + req[g][1] + j * C) for g, k in run_list for j in range(k)]
         dt, gap = model.step_s(batch, C, budget, calibrated)
+        dt *= 1 + mid_cost * sum(depth % C != 0 for _, depth in batch) / len(batch)
         t += dt
         busy += dt
         steps += 1
@@ -545,12 +563,15 @@ def run_config(job):
         concurrency,
         cache_tokens=None if cache == "inf" else int(float(cache)),
         align=align,
+        mid_cost=G["mid_cost"],
         max_think_s=max_think_s,
         decode_tps=decode_tps,
         seed=G["seed"],
         max_sessions=G["max_sessions"],
     )
-    knobs = dict(config=cfg, concurrency=concurrency, cache=cache, align=align, max_think_s=max_think_s)
+    knobs = dict(
+        config=cfg, concurrency=concurrency, cache=cache, align=align, max_think_s=max_think_s, mid_cost=G["mid_cost"]
+    )
     record = {
         **knobs,
         "uncalibrated": G["model"].calibration(C, budget)[1],
@@ -568,7 +589,8 @@ def main():
     ap.add_argument("--config", default="8192x8192:fcfs,2048x8192:pack", help="UNITxBUDGET:POLICY, POLICY fcfs or pack")
     ap.add_argument("--concurrency", default="32", help="sessions in flight")
     ap.add_argument("--cache", default="inf", help="inf, or LRU capacity in tokens (e.g. 20e6)")
-    ap.add_argument("--align", default="chunk", help="chunk or exact")
+    ap.add_argument("--align", default="chunk", help="chunk, resume or exact")
+    ap.add_argument("--mid-cost", type=float, default=0.0, help="extra step time of a lane that starts mid-chunk")
     ap.add_argument("--max-think-s", default="60")
     ap.add_argument("--decode-tps", default="100", help="per-request decode rate for the closed loop")
     ap.add_argument("--sessions", type=int, default=None, help="first N sessions only")
@@ -580,12 +602,12 @@ def main():
 
     t0 = time.time()
     split = lambda s, f=str: [f(x) for x in s.split(",") if x]
-    G.update(model=Model.load(a.data), seed=a.seed, max_sessions=a.sessions, ttft_out=a.ttft_out)
+    G.update(model=Model.load(a.data), mid_cost=a.mid_cost, seed=a.seed, max_sessions=a.sessions, ttft_out=a.ttft_out)
     for cfg in split(a.config):  # before the traces load and the workers fork
         parse_config(cfg, G["model"])
     for align in split(a.align):
-        if align not in ("chunk", "exact"):
-            ap.error(f"bad --align {align!r}: choose chunk or exact")
+        if align not in ("chunk", "resume", "exact"):
+            ap.error(f"bad --align {align!r}: choose chunk, resume or exact")
     G["sessions"] = load_sessions(a.traces)
     jobs = list(
         itertools.product(
@@ -600,7 +622,7 @@ def main():
     n_req = sum(map(len, G["sessions"][: a.sessions]))
     print(f"{n_req} requests; {len(jobs)} runs on {a.j} workers; traces loaded in {time.time() - t0:.1f} s")
     hdr = (
-        f"{'config':>17} {'conc':>4} {'cache':>5} {'align':>5} {'think':>5} | {'TTFT p50':>8} {'p90':>6} {'p99':>6} | "
+        f"{'config':>17} {'conc':>4} {'cache':>5} {'align':>6} {'think':>5} | {'TTFT p50':>8} {'p90':>6} {'p99':>6} | "
         f"{'tok/s':>6} {'useful':>6} {'pad%':>5} {'recmp%':>6} {'hit':>5} {'used':>5} | "
         f"{'ss util':>7} {'ss useful':>9} {'ss p50':>6} {'ss p99':>6}"
     )
@@ -616,7 +638,7 @@ def main():
             if r["uncalibrated"]:
                 uncalibrated[r["config"]] = r["uncalibrated"]
             print(
-                f"{r['config'] + ('*' if r['uncalibrated'] else ''):>17} {r['concurrency']:>4} {r['cache']:>5} {r['align']:>5} {r['max_think_s']:5g} | "
+                f"{r['config'] + ('*' if r['uncalibrated'] else ''):>17} {r['concurrency']:>4} {r['cache']:>5} {r['align']:>6} {r['max_think_s']:5g} | "
                 f"{r['ttft_p50']:8.2f} {r['ttft_p90']:6.2f} {r['ttft_p99']:6.1f} | "
                 f"{r['tok_s_busy'] / 1e3:5.1f}k {r['useful_tok_s_busy'] / 1e3:5.1f}k {r['pad_pct']:5.1f} "
                 f"{r['recompute_pct']:6.1f} {r['hit_rate']:5.3f} {r['hit_rate_used']:5.3f} | {ss}",

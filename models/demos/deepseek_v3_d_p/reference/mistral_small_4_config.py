@@ -48,12 +48,19 @@ class MistralSmall4Config:
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
     # MoE configuration
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
     # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
     # what it trades. Held at 8: top-4 leaves the region shallow, and halving it again costs this model
     # 15.3% on hot_expert traffic -- the worst of the eight -- to save 13 -> 7 MB a chip.
     COMBINE_FWD_REDUCTION = 8
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at +4.5% balanced and +2.6% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group

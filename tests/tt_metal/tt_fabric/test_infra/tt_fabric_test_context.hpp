@@ -104,6 +104,8 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
 using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
+using tt::tt_fabric::fabric_tests::scatter_chunk_sizes;
+using tt::tt_fabric::fabric_tests::ScatterWriteOptions;
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
