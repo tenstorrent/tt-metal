@@ -103,6 +103,7 @@ Board::Board(
         case BoardType::P150:
         case BoardType::P300:
         case BoardType::UBB_BLACKHOLE: arch_ = tt::ARCH::BLACKHOLE; break;
+        case BoardType::QUASAR_BOARD: arch_ = tt::ARCH::QUASAR; break;
         default: throw std::runtime_error("Invalid board type");
     }
     // Validate that there are no duplicate ASIC channels
@@ -466,6 +467,26 @@ private:
     }
 };
 
+// Quasar board: one Grendel package, one chip. Its Keraunos Ethernet channels 0 and 1 are external ports; the
+// Keraunos test chips (tests/tt_metal/tt_fabric/keraunos) list two Ethernet cores each. Assumed, pending the package's
+// real port map.
+class QUASAR : public Board {
+public:
+    QUASAR() : Board(create_quasar_ports(), create_quasar_internal_connections(), BoardType::QUASAR_BOARD) {}
+
+private:
+    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_quasar_ports() {
+        std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
+        add_port(ports, PortType::QSFP_DD, PortId(1), {{0, ChanId(0)}});  // ASIC 0, channel 0
+        add_port(ports, PortType::QSFP_DD, PortId(2), {{0, ChanId(1)}});  // ASIC 0, channel 1
+        return ports;
+    }
+
+    static std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_quasar_internal_connections() {
+        return {};
+    }
+};
+
 // Factory function to create boards by type
 Board create_board(BoardType board_type) {
     // Lazily initialized map
@@ -484,6 +505,7 @@ Board create_board(BoardType board_type) {
                 case BoardType::P150: return P150();
                 case BoardType::P300: return P300();
                 case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
+                case BoardType::QUASAR_BOARD: return QUASAR();
                 default:
                     throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
             }
