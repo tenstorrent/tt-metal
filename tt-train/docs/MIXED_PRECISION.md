@@ -248,7 +248,10 @@ embedding and LM head.
   activation graph.
 - **When.** `Tensor::add_grad()` stores the first gradient as it comes, so a parameter added to once, the usual case
   with one micro-batch, costs nothing extra. From the second add on, the stored gradient and the new one are both cast
-  to fp32 and added in fp32. A gradient that is already fp32 is added the same way, with or without the setting.
+  to fp32 and added in fp32. A gradient that is already fp32 is added the same way, with or without the setting. The
+  optimizers whose `zero_grad()` installs zeros instead of clearing the gradient (`SGD`, `SGDComposite`,
+  `MuonComposite` and `NoOp`; `MuonWithAdamW` for its Muon half) count as that first add: after their `zero_grad()`,
+  the first gradient of a step is already added in fp32, so it becomes fp32 with one micro-batch too.
 - **Why both operands are cast.** ttnn adds two fp32 tensors on the SFPU, which gives the IEEE fp32 sum. With one fp32
   and one bf16 operand the add runs on the FPU, which reads the fp32 operand with 10 fraction bits: on one p150b,
   adding bf16 zeros this way moved an fp32 tensor by up to 8191 fp32 ulps. `fast_and_approximate_mode=False`, which
@@ -268,7 +271,8 @@ embedding and LM head.
   bf16 shard.
 - **Cost.** On one p150b, adding two 4096x4096 gradients takes 0.235 ms in bf16 and 0.73 ms with the casts and the
   fp32 add, 0.28 ms of it the cast of the new gradient: about 30 ms more per extra micro-batch for every billion
-  parameters a chip holds. A step with one micro-batch and no reused weight pays nothing.
+  parameters a chip holds. A step with one micro-batch and no reused weight pays nothing, unless its optimizer installs
+  zero gradients (see "When" above).
 
 ## Loading values into a tensor
 
