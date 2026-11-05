@@ -437,10 +437,21 @@ struct Arch {
 
 // ============ The whole manifest ============
 
+// A tt-run sub-context: one fabric of a job tt-run split into several, each with its own MPI communicator.
+struct Subcontext {
+    uint32_t id = 0;
+    // This process's rank within the sub-context, and the sub-context's number of ranks.
+    uint32_t rank = 0;
+    uint32_t size = 1;
+};
+
 // This process and the build it runs.
 struct RunInfo {
+    // This process's rank in the whole job, and the job's number of ranks.
     uint32_t mpi_rank = 0;
     uint32_t world_size = 1;
+    // Null when the job isn't split into sub-contexts.
+    std::optional<Subcontext> subcontext;
     // The host this process runs on, as the physical system descriptor names it.
     std::string host_name;
     // When the manifest was written, in UTC, as ISO 8601.

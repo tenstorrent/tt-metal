@@ -79,6 +79,13 @@ json make_run_json(const manifest::RunInfo& run) {
     json out;
     out["mpi_rank"] = run.mpi_rank;
     out["world_size"] = run.world_size;
+    if (run.subcontext.has_value()) {
+        json subcontext;
+        subcontext["id"] = run.subcontext->id;
+        subcontext["rank"] = run.subcontext->rank;
+        subcontext["size"] = run.subcontext->size;
+        out["subcontext"] = std::move(subcontext);
+    }
     out["host_name"] = run.host_name;
     out["written_at"] = run.written_at;
     json build;
@@ -616,8 +623,10 @@ json make_manifest_json(const manifest::ManifestFacts& facts) {
     return out;
 }
 
+// Named by the rank in the whole job, so the ranks of a job tt-run split into sub-contexts, which share a logs
+// directory, don't write the same file.
 std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_world_context();
     const int rank = *distributed_context->rank();
     const int world_size = *distributed_context->size();
     return std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
