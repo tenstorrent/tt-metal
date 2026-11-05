@@ -48,7 +48,6 @@ struct SenderResult {
     uint32_t ack_timeout_iteration;
     // Transfers still unacked on the send buffer's transaction id when the kernel returned.
     uint32_t idma_outstanding_at_end;
-    uint32_t reserved[28];
 };
 static_assert(sizeof(SenderResult) <= kResultSize);
 
@@ -71,7 +70,6 @@ struct ReceiverResult {
     uint32_t first_skip_to;
     // Iteration the receiver was waiting for when it timed out, 0 if none.
     uint32_t timeout_waiting_for;
-    uint32_t reserved[19];
 };
 static_assert(sizeof(ReceiverResult) <= kResultSize);
 
