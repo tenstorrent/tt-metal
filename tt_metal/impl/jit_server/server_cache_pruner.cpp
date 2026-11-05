@@ -4,6 +4,7 @@
 
 #include "impl/jit_server/server_cache_pruner.hpp"
 
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -272,9 +273,10 @@ ServerCachePruner::Lease ServerCachePruner::acquire(const fs::path& kernel_dir) 
         std::lock_guard lock(mutex_);
         ++in_use_[key];
     }
-    // Record the use. A directory that does not exist yet gets a fresh mtime when it is created.
-    std::error_code ec;
-    fs::last_write_time(key, fs::file_time_type::clock::now(), ec);
+    // Record the use. Passing no times sets both to now, which needs only write permission on the
+    // directory; an explicit time would need ownership, and the cache may hold directories another
+    // user's server created. A directory that does not exist yet gets a fresh mtime when it is created.
+    (void)::utimensat(AT_FDCWD, key.c_str(), nullptr, 0);
     return Lease(this, std::move(key));
 }
 
