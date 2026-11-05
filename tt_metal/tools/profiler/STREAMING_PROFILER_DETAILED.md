@@ -1129,7 +1129,10 @@ see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
 Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
 start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
 clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id field carries the 16-bit
-descriptor id (`hostdev/observability_event_descriptor.h`), ELF-name-resolved on the host.
+descriptor id (`hostdev/observability_event_descriptor.h`), ELF-name-resolved on the host. The producer never
+assembles word0 at run time: a zone's type rides in its id's relocation (`descriptor_id_plus`), so the finished
+`ZONE_S` word0 loads in the same two instructions as a bare id, and the rarer `ZONE_ATOMIC` and `ZONE_L` re-type it
+through the 27-bit mask. Point markers (`PP_EVENT`, `PP_DATA`) carry their type the same way.
 
 | type | name | words | payload after word0 | expresses |
 |---|---|---|---|---|

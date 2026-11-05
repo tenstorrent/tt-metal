@@ -89,11 +89,11 @@ public:
     void MakeExecuteInPlace();
 
     // Observability event descriptor ids (hostdev/observability_event_descriptor.h): move the non-ALLOC
-    // .tt_event_descriptor_ids section to BASE, re-resolving every relocation against it -- the lui/addi pair each
-    // event materializes its id with, and the id word of each .tt_event_descriptor_meta record -- so the image emits
-    // ids [BASE, BASE + size). Needs the link's relocations (-Wl,--emit-relocs). Returns the
-    // section's size, 0 when the image has no events. Calling it again moves the ids to the new BASE, or does
-    // nothing at the same one.
+    // .tt_event_descriptor_ids section to BASE, re-resolving every relocation against it, addend included -- the
+    // lui/addi pair each event materializes its id with, and the id word of each .tt_event_descriptor_meta record -- so
+    // the image emits ids [BASE, BASE + size). Needs the link's relocations (-Wl,--emit-relocs). Returns the section's
+    // size, 0 when the image has no events. Calling it again moves the ids to the new BASE, or does nothing at the same
+    // one.
     uint32_t RebaseDescriptorIds(address_t base);
 
 private:

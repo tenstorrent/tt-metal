@@ -706,7 +706,8 @@ void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
 // The descriptor id section is the only one whose VMA the host chooses: the link places it at a fixed fake
 // address (hw/toolchain/main.ld) so that each event's descriptor id is lui/addi of a one-byte handle, and the loader
 // moves it to the image's block of the 16-bit id space by rewriting those immediates. Both halves of a pair carry the
-// full symbol value in their own reloc, so they are patched independently and need no pairing.
+// full symbol value in their own reloc, so they are patched independently and need no pairing. A reloc's addend is
+// kept, so a pair that loads the id with constant bits above it (descriptor_id_plus) still loads them.
 template <bool Is64>
 uint32_t ElfFile::Impl::Elf<Is64>::RebaseDescriptorIds(address_t base) {
     unsigned ids_ix = 0;
