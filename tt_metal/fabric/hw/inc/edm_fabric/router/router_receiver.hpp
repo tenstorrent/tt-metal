@@ -131,9 +131,11 @@ struct ReceiverChannel {
     using Routing = Routing1D;
 #endif
 
-    // From the host: one slot per group under first-level acks (held completion credits stall bubble flow control).
+    // From the host: one slot per group under first-level acks (held completion credits stall bubble flow control) and
+    // on a Wormhole channel that forwards.
     static constexpr uint32_t completion_group_size = RX_CH_COMPLETION_GROUP_SIZE[rx];
     static_assert(!first_level_ack || completion_group_size == 1, "first-level acks credit every slot: groups of 1");
+    static_assert(!(is_wormhole_arch && forwards) || completion_group_size == 1, "Wormhole forwards: groups of 1");
     static constexpr uint32_t completion_groups = (num_slots + completion_group_size - 1) / completion_group_size;
     // The channel's own transaction IDs, from the host: one per completion group, or shared by mask when fewer.
     using CompletionTrids =
@@ -436,12 +438,19 @@ FORCE_INLINE bool receive(
 // - Proof: each slot's NoC commands carry its group's transaction ID and the NIU counts each ID's outgoing writes, so
 //   one status read proves a group free. Groups sharing an ID (a channel with fewer IDs than groups) only make a proof
 //   wait longer, never wrong.
-// - Due: while packets arrive, once more than a group waits (never the slot retired this pass); on an idle pass, a full
-//   group at once, a partial one (traffic stopped mid-group) after IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes in a
-//   row. So a channel holds back at most a group minus one slot, and not for long.
+// - Due: while packets arrive, once more than a group waits (never the slot retired this pass, but for Wormhole's
+//   single slots); on an idle pass, a full group at once, a partial one (traffic stopped mid-group) after
+//   IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes in a row. So a channel holds back at most a group minus one slot,
+//   and not for long.
 // - A group waits for its proof (bounded): left to the next pass, which under load takes the next packet first, its
 //   credit would come a packet later. A single slot is checked once: on rings and tori waiting costs more than it
 //   saves.
+// - Wormhole credits a single slot in the pass that retired it once its writes have left (a small packet's have by the
+//   check; a larger one's usually not, and then the check costs only a status read): a pass later adds a pass to every
+//   hop of a slot's round trip, which a back-pressured fabric's far senders wait on.
+
+// Whether a channel crediting one slot at a time may credit the slot retired in the same pass (above).
+constexpr bool credit_this_pass_slot = is_wormhole_arch;
 
 // Whether every write tagged `trid` has left this ERISC's NIU (local writes and forwards share one NoC: one register).
 static_assert(tt::tt_fabric::local_chip_noc_equals_downstream_noc);
@@ -466,8 +475,9 @@ FORCE_INLINE uint32_t
 slots_due_for_credit(ReceiverChannelProgress& progress, uint32_t next_index, bool handled_packet) {
     const uint32_t waiting = progress.uncredited;
     if constexpr (GROUP_SIZE == 1) {
-        // No partial groups, so no idle count: due once a slot other than this pass's waits.
-        return waiting > static_cast<uint32_t>(handled_packet) ? 1 : 0;
+        // Due once a slot waits, without credit_this_pass_slot one other than this pass's (no partial groups, so no
+        // idle count).
+        return waiting > (credit_this_pass_slot ? 0u : static_cast<uint32_t>(handled_packet)) ? 1 : 0;
     } else {
         bool is_due;
         if (handled_packet) {

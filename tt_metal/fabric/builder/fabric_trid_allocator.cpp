@@ -23,11 +23,11 @@ std::size_t floor_power_of_2(std::size_t n) {
 
 }  // namespace trid_detail
 
-std::size_t completion_group_size(std::size_t slots, bool first_level_ack) {
-    if (first_level_ack) {
+std::size_t completion_group_size(const ReceiverChannel& channel) {
+    if (channel.first_level_ack || channel.wormhole_forwards) {
         return 1;
     }
-    return slots < 8 ? 1 : (slots < 16 ? 2 : 4);
+    return channel.slots < 8 ? 1 : (channel.slots < 16 ? 2 : 4);
 }
 
 Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels) {
@@ -35,7 +35,7 @@ Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels) 
     std::size_t total = 0;
     for (const ReceiverChannel& in : channels) {
         ChannelIds c;
-        c.group_size = completion_group_size(in.slots, in.first_level_ack);
+        c.group_size = completion_group_size(in);
         c.groups = (in.slots + c.group_size - 1) / c.group_size;
         c.num_ids = c.groups == 0 ? 1 : c.groups;
         total += c.num_ids;

@@ -8,10 +8,14 @@
 // transaction ID, and returns a group's credits once no command with that ID is in flight. All receiver channels of a
 // router run on one ERISC and share that NoC's 16 IDs.
 //
-// assign_transaction_ids() is a pure function of the channels' final slot counts (the slot allocator's) and their
-// first-level acks. Per channel it returns the completion group size, the number of IDs and the first ID:
-//   1. Group size G: 1 under first-level acks (each slot is credited on its own), else 1 / 2 / 4 for fewer than 8 /
-//      8-15 / 16 or more slots. Groups = ceil(slots / G): a partial last group counts.
+// assign_transaction_ids() is a pure function of the channels' final slot counts (the slot allocator's), their
+// first-level acks and whether they forward on Wormhole. Per channel it returns the completion group size, the number
+// of IDs and the first ID:
+//   1. Group size G: 1 under first-level acks (each slot is credited on its own) and on a Wormhole channel that
+//      forwards, else 1 / 2 / 4 for fewer than 8 / 8-15 / 16 or more slots. Groups = ceil(slots / G): a partial last
+//      group counts. On Wormhole a forwarding channel's credits share the one TX queue with data and are what the
+//      upstream router of a forwarding chain waits on, so a held group stalls the chain; a channel that only delivers
+//      keeps its groups, which keep credit frames off the shared queue.
 //   2. When every channel's groups fit in the NoC's IDs together, each group has its own ID.
 //   3. Otherwise the largest count shrinks until they fit: a count that is not a power of 2 is rounded down to one,
 //      a power of 2 is halved. A channel with fewer IDs than groups shares them by mask, so a group's proof also waits
@@ -34,6 +38,7 @@ inline constexpr std::size_t noc_transaction_ids = 16;  // NOC_MAX_TRANSACTION_I
 struct ReceiverChannel {
     std::size_t slots = 0;
     bool first_level_ack = false;
+    bool wormhole_forwards = false;  // a Wormhole router's channel that forwards (rule 1)
 };
 
 // A receiver channel's transaction IDs.
@@ -50,8 +55,8 @@ struct Assignment {
     std::optional<std::string> error;
 };
 
-// Slots per completion group: 1 under first-level acks, else 1 / 2 / 4 for fewer than 8 / 8-15 / 16 or more slots.
-std::size_t completion_group_size(std::size_t slots, bool first_level_ack);
+// Slots per completion group (rule 1).
+std::size_t completion_group_size(const ReceiverChannel& channel);
 
 Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels);
 

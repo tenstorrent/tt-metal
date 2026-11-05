@@ -1460,56 +1460,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
     }
-    // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
-    // from the channel's final slot count and first-level acks (fabric_trid_allocator.hpp). Unused channels: 1 / 0 / 0.
-    {
-        namespace trids = tt::tt_fabric::trid_allocator;
-        std::vector<trids::ReceiverChannel> receivers;
-        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
-            for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
-                receivers.push_back(
-                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), first_level_ack});
-            }
-        }
-        TT_FATAL(
-            receivers.size() == num_receiver_channels,
-            "receiver transaction IDs: {} receiver channels by VC, {} on the router",
-            receivers.size(),
-            num_receiver_channels);
-        const trids::Assignment ids = trids::assign_transaction_ids(receivers);
-        TT_FATAL(
-            !ids.error.has_value(),
-            "receiver transaction IDs at fabric node {}, Ethernet channel {}: {}",
-            this->local_fabric_node_id,
-            this->my_eth_channel,
-            ids.error.value_or(""));
-        for (size_t c = 0; c < builder_config::num_max_receiver_channels; ++c) {
-            const bool used = c < ids.channels.size();
-            named_args[fmt::format("RX_CH_{}_COMPLETION_GROUP_SIZE", c)] =
-                used ? static_cast<uint32_t>(ids.channels[c].group_size) : 1;
-            named_args[fmt::format("RX_CH_{}_NUM_TRIDS", c)] =
-                used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
-            named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
-            if (used) {
-                const trids::ChannelIds& ch = ids.channels[c];
-                log_debug(
-                    tt::LogFabric,
-                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in groups "
-                    "of {}{}: {} groups, IDs {}..{} ({})",
-                    this->local_fabric_node_id,
-                    this->my_eth_channel,
-                    c,
-                    receivers[c].slots,
-                    ch.group_size,
-                    receivers[c].first_level_ack ? " (first-level acks)" : "",
-                    ch.groups,
-                    ch.start,
-                    ch.start + ch.num_ids - 1,
-                    ch.num_ids >= ch.groups ? "one per group" : fmt::format("shared: group & {}", ch.num_ids - 1));
-            }
-        }
-    }
     named_args["EDM_NOC_VC"] = config.edm_noc_vc;
 
     // --- Telemetry ---
@@ -1583,6 +1533,63 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             this->my_eth_channel,
             vc,
             vc);
+    }
+
+    // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
+    // from the channel's final slot count, first-level acks and, on Wormhole, whether it forwards
+    // (fabric_trid_allocator.hpp). Unused channels: 1 / 0 / 0.
+    {
+        namespace trids = tt::tt_fabric::trid_allocator;
+        std::vector<trids::ReceiverChannel> receivers;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
+            const bool wormhole_forwards = config.arch == tt::ARCH::WORMHOLE_B0 &&
+                                           named_args.at(fmt::format("DISABLE_RX_CH{}_FORWARDING", vc)) == 0;
+            for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
+                receivers.push_back(
+                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i),
+                     first_level_ack,
+                     wormhole_forwards});
+            }
+        }
+        TT_FATAL(
+            receivers.size() == num_receiver_channels,
+            "receiver transaction IDs: {} receiver channels by VC, {} on the router",
+            receivers.size(),
+            num_receiver_channels);
+        const trids::Assignment ids = trids::assign_transaction_ids(receivers);
+        TT_FATAL(
+            !ids.error.has_value(),
+            "receiver transaction IDs at fabric node {}, Ethernet channel {}: {}",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            ids.error.value_or(""));
+        for (size_t c = 0; c < builder_config::num_max_receiver_channels; ++c) {
+            const bool used = c < ids.channels.size();
+            named_args[fmt::format("RX_CH_{}_COMPLETION_GROUP_SIZE", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].group_size) : 1;
+            named_args[fmt::format("RX_CH_{}_NUM_TRIDS", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
+            named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
+            if (used) {
+                const trids::ChannelIds& ch = ids.channels[c];
+                log_debug(
+                    tt::LogFabric,
+                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in groups "
+                    "of {}{}{}: {} groups, IDs {}..{} ({})",
+                    this->local_fabric_node_id,
+                    this->my_eth_channel,
+                    c,
+                    receivers[c].slots,
+                    ch.group_size,
+                    receivers[c].first_level_ack ? " (first-level acks)" : "",
+                    receivers[c].wormhole_forwards ? " (forwards, Wormhole)" : "",
+                    ch.groups,
+                    ch.start,
+                    ch.start + ch.num_ids - 1,
+                    ch.num_ids >= ch.groups ? "one per group" : fmt::format("shared: group & {}", ch.num_ids - 1));
+            }
+        }
     }
 
     // Credit amortization named compile-time args
