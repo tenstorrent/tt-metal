@@ -162,15 +162,12 @@ void EventSynchronize(const MeshEvent& event) {
             mesh_cq->throw_if_reader_failed();
         }
     }
+    // In-flight marks are not tracked per device, so an event that waited on only part of the mesh
+    // leaves them for a later finish: the program may still be running on the other devices.
     const auto& sub_device_ids = event.impl().sub_device_ids();
-    if (!sub_device_ids.empty()) {
-        // As in finish: an event that waited on every sub-device covers all earlier programs on its queue.
-        ttsl::Span<const SubDeviceId> completed_sub_device_ids;
-        if (sub_device_ids.size() != event.device()->num_sub_devices()) {
-            completed_sub_device_ids = sub_device_ids;
-        }
+    if (!sub_device_ids.empty() && event.impl().device_range() == MeshCoordinateRange(event.device()->shape())) {
         event.device()->allocator_impl()->clear_in_flight_l1_regions(
-            event.impl().mesh_cq_id(), completed_sub_device_ids, event.impl().id());
+            event.impl().mesh_cq_id(), sub_device_ids, event.device()->num_sub_devices(), event.impl().id());
     }
 }
 

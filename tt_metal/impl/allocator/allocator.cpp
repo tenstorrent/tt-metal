@@ -14,6 +14,7 @@
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <mutex>
+#include <set>
 
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
@@ -204,19 +205,25 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
-            std::vector<CoreCoord> cores_to_scan;
-            const bool scope_to_own_cores =
-                experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
             // A tensor carries both specs, so the order matters: the distribution spec wins, as it
             // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
             // allocation, which the shard grid overstates when the data does not fill it.
-            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                scope_to_own_cores && distribution_spec.has_value()) {
-                cores_to_scan = distribution_spec->cores_with_data();
-            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
+            auto find_cores_with_data = [buffer]() -> std::optional<std::vector<CoreCoord>> {
+                if (const auto& distribution_spec = buffer->buffer_distribution_spec(); distribution_spec.has_value()) {
+                    return distribution_spec->cores_with_data();
+                }
+                if (buffer->has_shard_spec()) {
+                    const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+                    bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+                    return corerange_to_cores(grid, std::nullopt, row_major);
+                }
+                return std::nullopt;
+            };
+            std::vector<CoreCoord> cores_to_scan;
+            const bool scope_to_own_cores =
+                experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
+            if (scope_to_own_cores) {
+                cores_to_scan = find_cores_with_data().value_or(std::vector<CoreCoord>{});
             }
 
             // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
@@ -230,9 +237,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
 
             // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
             // them too. They stay unscoped under range lockstep: they are reservations this allocator
-            // cannot attribute to a core, so there is no smaller set to narrow them to. A LOCKSTEP
-            // bank manager has never subtracted them, and in-flight regions below now route it
-            // through the path that would, so they are handed over in HYBRID mode only.
+            // cannot attribute to a core, so there is no smaller set to narrow them to. Only HYBRID
+            // mode subtracts them: any additional range sends a LOCKSTEP bank manager down the path
+            // that does, so they are passed in HYBRID mode only.
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (config_->allocator_mode == AllocatorMode::HYBRID) {
                 additional_ranges = persistent_l1_.occupied_ranges();
@@ -291,16 +298,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 additional_ranges.end(), hybrid_remote_occupied_ranges_.begin(), hybrid_remote_occupied_ranges_.end());
             if (!in_flight_l1_regions_.empty()) {
                 // Only the cores holding data matter here: a CB elsewhere cannot overlap this buffer.
-                std::optional<std::vector<CoreCoord>> cores_with_data;
-                if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                    num_cores.has_value() && distribution_spec.has_value()) {
-                    cores_with_data = distribution_spec->cores_with_data();
-                } else if (num_cores.has_value()) {
-                    const auto& shard_spec = buffer->shard_spec().tensor_shard_spec;
-                    cores_with_data = corerange_to_cores(
-                        shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-                }
-                in_flight_l1_regions_.append_occupied_ranges(cores_with_data, additional_ranges);
+                // An interleaved buffer spans every bank.
+                in_flight_l1_regions_.append_occupied_ranges(
+                    num_cores.has_value() ? find_cores_with_data() : std::nullopt, additional_ranges);
             }
             address = l1_manager_->allocate_buffer(
                 size,
@@ -444,13 +444,18 @@ void AllocatorImpl::mark_in_flight_l1_regions(
 }
 
 void AllocatorImpl::clear_in_flight_l1_regions(
-    uint32_t cq_id, ttsl::Span<const SubDeviceId> sub_device_ids, uint32_t up_to_event_id) {
+    uint32_t cq_id, ttsl::Span<const SubDeviceId> sub_device_ids, uint32_t num_sub_devices, uint32_t up_to_event_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (sub_device_ids.empty()) {
+    const std::set<SubDeviceId> distinct_ids(sub_device_ids.begin(), sub_device_ids.end());
+    const auto num_covered = static_cast<uint32_t>(std::count_if(
+        distinct_ids.begin(), distinct_ids.end(), [&](const SubDeviceId& id) { return *id < num_sub_devices; }));
+    // Waiting on every sub-device also waits on programs of a sub-device manager loaded earlier on
+    // this queue, which are ordered ahead of its reset and whose ids may not exist any more.
+    if (num_covered == num_sub_devices) {
         in_flight_l1_regions_.clear(cq_id, up_to_event_id);
         return;
     }
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : distinct_ids) {
         in_flight_l1_regions_.clear(cq_id, sub_device_id, up_to_event_id);
     }
 }

@@ -454,7 +454,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     // With one sub-device on one CQ, later work runs strictly after this program, so its CBs cannot
-    // be raced and allocations need not avoid them.
+    // be raced and allocations need not avoid them. Otherwise every program is marked, even when the
+    // next work shares its CQ and sub-device: the allocator cannot tell which queue will use a buffer.
+    // Only host-observed completion (finish, blocking calls, EventSynchronize) clears a mark; a
+    // device-side wait does not. Trace replay records no marks, and HYBRID per-core allocations do
+    // not consult them.
     const bool may_run_concurrently = mesh_device_->num_hw_cqs() > 1 || mesh_device_->num_sub_devices() > 1;
     if (may_run_concurrently && this->get_target_device_type() != tt::TargetDevice::Mock &&
         this->get_target_device_type() != tt::TargetDevice::Emule) {
@@ -779,13 +783,8 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
     for (const auto& sub_device_id : finished_sub_device_ids) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
-    // Draining every sub-device also drains programs of a sub-device manager loaded before this one,
-    // which are ordered ahead of its reset and whose ids may not exist any more, so clear them all.
-    if (finished_sub_device_ids.size() == mesh_device_->num_sub_devices()) {
-        mesh_device_->allocator_impl()->clear_in_flight_l1_regions(id_, {});
-    } else {
-        mesh_device_->allocator_impl()->clear_in_flight_l1_regions(id_, finished_sub_device_ids);
-    }
+    mesh_device_->allocator_impl()->clear_in_flight_l1_regions(
+        id_, finished_sub_device_ids, mesh_device_->num_sub_devices());
 
     if (should_handle_exception_.load()) {
         std::lock_guard<std::mutex> exception_lock(exception_mutex_);

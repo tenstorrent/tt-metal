@@ -176,11 +176,12 @@ public:
         SubDeviceId sub_device_id,
         uint32_t event_id,
         const InFlightL1Regions::RegionsByCoreRange& regions);
-    // Clears the marks of programs completed by up_to_event_id on cq_id. An empty sub_device_ids
-    // means every sub-device.
+    // Clears the marks of programs on sub_device_ids completed by up_to_event_id on cq_id.
+    // num_sub_devices is the count under the loaded sub-device manager.
     void clear_in_flight_l1_regions(
         uint32_t cq_id,
         ttsl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t num_sub_devices,
         uint32_t up_to_event_id = std::numeric_limits<uint32_t>::max());
 
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
