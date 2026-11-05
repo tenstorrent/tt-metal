@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -135,9 +136,10 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_BindingKernelCoversPartialReceiversFail
     spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{0, 2}};  // 2 of 3 receivers
     EXPECT_SPEC_REJECTED(
         spec,
-        "Kernel 'receiver' accessor 'weights' (1 pipe(s)): the kernel's WorkUnitSpec nodes must equal either the "
-        "union of the group's receiver nodes (receiver role) or be 1 node(s) outside them, one per pipe (sender "
-        "role). Kernel covers 2 node(s): 2 of the 3 receiver node(s), 0 outside the receivers");
+        "Kernel 'receiver' accessor 'weights' (1 pipe(s)): the kernel's WorkUnitSpec nodes other than its "
+        "extra_nodes must equal either the union of the group's receiver nodes (receiver role) or be 1 node(s) "
+        "outside them, one per pipe (sender role). Kernel covers 2 node(s) besides 0 extra node(s): 2 of the 3 "
+        "receiver node(s), 0 outside the receivers");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_BindingKernelOnSenderAndReceiversFails) {
@@ -145,7 +147,25 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_BindingKernelOnSenderAndReceiversFails)
     ProgramSpec spec = MakeSenderOnlySpec();
     spec.work_units[0].target_nodes =
         NodeRangeSet(std::vector<NodeRange>{NodeRange{pipe_sender_node, pipe_sender_node}, pipe_receiver_nodes});
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 4 node(s): 3 of the 3 receiver node(s), 1 outside the receivers");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 4 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 1 outside the receivers");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ExtraNodesOutsideKernelFails) {
+    ProgramSpec spec = MakeSenderOnlySpec();
+    KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{NodeCoord{2, 2}, NodeCoord{2, 2}});
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel 'sender' accessor 'weights' lists extra_nodes {[2-2 - 2-2]}, but its WorkUnitSpecs");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ExtraNodesOnReceiverFails) {
+    // A receiver of the kernel's own pipe cannot be an extra node.
+    ProgramSpec spec = MakeFullPipeSpec();
+    KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{NodeCoord{0, 3}, NodeCoord{0, 3}});
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel 'receiver' accessor 'weights' lists extra_nodes {[0-3 - 0-3]} that include receiver nodes");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_TwoKernelsBindingOnSenderFails) {
@@ -197,24 +217,37 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupMixedRolesFails) {
         {"mixed"})};
     EXPECT_SPEC_REJECTED(
         spec,
-        "Kernel 'mixed' accessor 'io' (2 pipe(s)): the kernel's WorkUnitSpec nodes must equal either the union of "
-        "the group's receiver nodes (receiver role) or be 2 node(s) outside them, one per pipe (sender role). Kernel "
-        "covers 4 node(s): 3 of the 6 receiver node(s), 1 outside the receivers");
+        "Kernel 'mixed' accessor 'io' (2 pipe(s)): the kernel's WorkUnitSpec nodes other than its extra_nodes must "
+        "equal either the union of the group's receiver nodes (receiver role) or be 2 node(s) outside them, one per "
+        "pipe (sender role). Kernel covers 4 node(s) besides 0 extra node(s): 3 of the 6 receiver node(s), 1 outside "
+        "the receivers");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupPartialTilingFails) {
     // Receiver kernel binds both pipes but only runs on weights' receivers.
     ProgramSpec spec = MakeTwoPipeReceiverSpec();
     spec.work_units[0].target_nodes = pipe_receiver_nodes;
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 3 node(s): 3 of the 6 receiver node(s), 0 outside the receivers");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 3 node(s) besides 0 extra node(s): 3 of the 6 receiver node(s), 0 outside the receivers");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupSpillsOutsideFails) {
-    // Receiver kernel covers both receiver sets plus one unrelated node.
+    // Receiver kernel covers both receiver sets plus one unrelated node it does not list in extra_nodes.
     ProgramSpec spec = MakeTwoPipeReceiverSpec();
     spec.work_units[0].target_nodes = NodeRangeSet(
         std::vector<NodeRange>{pipe_receiver_nodes, other_receiver_nodes, NodeRange{NodeCoord{3, 3}, NodeCoord{3, 3}}});
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 7 node(s): 6 of the 6 receiver node(s), 1 outside the receivers");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 7 node(s) besides 0 extra node(s): 6 of the 6 receiver node(s), 1 outside the receivers");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupReceiverWithExtraNodePasses) {
+    // Receiver kernel (and its relay) covers both receiver sets plus one extra node.
+    ProgramSpec spec = MakeTwoPipeReceiverSpec();
+    const NodeRange extra_node{NodeCoord{3, 3}, NodeCoord{3, 3}};
+    spec.work_units[0].target_nodes =
+        NodeRangeSet(std::vector<NodeRange>{pipe_receiver_nodes, other_receiver_nodes, extra_node});
+    KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes = NodeRangeSet(extra_node);
+    EXPECT_SPEC_VALID(spec);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupOverlappingReceiversFails) {
@@ -226,33 +259,45 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupOverlappingReceiversFails)
         "pipe's in the same accessor");
 }
 
+// A sender kernel on `sender_nodes` that binds weights and other under one accessor.
+ProgramSpec MakeTwoPipeSenderSpec(const std::string& name, const NodeRangeSet& sender_nodes) {
+    ProgramSpec spec;
+    spec.name = name;
+    auto sender = MakeMinimalGen2DMKernel("sender");
+    sender.advanced_options.prefetcher_pipe_bindings.push_back(BindPipes({pipe_param_name, other_param_name}, "out"));
+    spec.kernels = {sender};
+    spec.advanced_options.prefetcher_pipe_parameters = {MakePipeParameter(), MakeOtherPipeParameter()};
+    spec.work_units = {MakeMinimalWorkUnit("sender_wu", sender_nodes, {"sender"})};
+    return spec;
+}
+
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupSenderKernelOnReceiverFails) {
     // The two-pipe sender kernel runs on (0,0) and (0,2); (0,2) is one of weights' receivers, so
     // that node would host two pipes. Neither role fits.
-    ProgramSpec spec;
-    spec.name = "sender_in_receivers";
-    auto sender = MakeMinimalGen2DMKernel("sender");
-    sender.advanced_options.prefetcher_pipe_bindings.push_back(BindPipes({pipe_param_name, other_param_name}, "out"));
-    spec.kernels = {sender};
-    spec.advanced_options.prefetcher_pipe_parameters = {MakePipeParameter(), MakeOtherPipeParameter()};
-    spec.work_units = {MakeMinimalWorkUnit(
-        "sender_wu",
-        NodeRangeSet(std::vector<NodeRange>{NodeRange{pipe_sender_node, pipe_sender_node}, NodeRange{{0, 2}, {0, 2}}}),
-        {"sender"})};
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 2 node(s): 1 of the 6 receiver node(s), 1 outside the receivers");
+    ProgramSpec spec = MakeTwoPipeSenderSpec(
+        "sender_in_receivers",
+        NodeRangeSet(std::vector<NodeRange>{NodeRange{pipe_sender_node, pipe_sender_node}, NodeRange{{0, 2}, {0, 2}}}));
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 2 node(s) besides 0 extra node(s): 1 of the 6 receiver node(s), 1 outside the receivers");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupSenderNodeCountMismatchFails) {
-    // Two pipes under one sender accessor need exactly two sender nodes.
-    ProgramSpec spec;
-    spec.name = "three_sender_nodes";
-    auto sender = MakeMinimalGen2DMKernel("sender");
-    sender.advanced_options.prefetcher_pipe_bindings.push_back(BindPipes({pipe_param_name, other_param_name}, "out"));
-    spec.kernels = {sender};
-    spec.advanced_options.prefetcher_pipe_parameters = {MakePipeParameter(), MakeOtherPipeParameter()};
-    spec.work_units = {
-        MakeMinimalWorkUnit("sender_wu", NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{2, 0}}), {"sender"})};
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 3 node(s): 0 of the 6 receiver node(s), 3 outside the receivers");
+    // Two pipes under one sender accessor need exactly two sender nodes. A kernel off the receivers on any other
+    // count, e.g. a receiver kernel placed on the wrong nodes, is not taken for the sender.
+    ProgramSpec spec =
+        MakeTwoPipeSenderSpec("three_sender_nodes", NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{2, 0}}));
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 3 node(s) besides 0 extra node(s): 0 of the 6 receiver node(s), 3 outside the receivers");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupSenderWithExtraNodePasses) {
+    // Two pipes under one sender accessor on three nodes, one of them an extra node: the pipes' senders settle which
+    // of the other two hosts which pipe when the pipes are supplied.
+    ProgramSpec spec =
+        MakeTwoPipeSenderSpec("three_sender_nodes", NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{2, 0}}));
+    KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{NodeCoord{2, 0}, NodeCoord{2, 0}});
+    EXPECT_SPEC_VALID(spec);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_AccessorGroupGeometryMismatchFails) {

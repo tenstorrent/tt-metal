@@ -6,6 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <functional>
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -25,6 +26,10 @@ class FDMeshCQTestAccessor;
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common
 
 #include "trace/trace_node.hpp"
+
+namespace tt::tt_metal {
+class Device;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 
@@ -68,7 +73,7 @@ private:
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
     void write_program_commands_to_devices(
-        const std::vector<IDevice*>& devices,
+        const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
@@ -106,7 +111,7 @@ private:
     // Value keys avoid retaining manager pointers/IDs after removal. Device-specific command bytes
     // live with this CQ and runtime context. Include device order to handle mesh reshaping.
     struct SubDeviceSetupCommands {
-        std::vector<IDevice*> devices;
+        std::vector<Device*> devices;
         std::vector<uint32_t> workers;
         std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
         bool reset_launch_msg_state;
@@ -294,13 +299,16 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
-    // Enqueue a command list without entering the mesh-trace lifecycle.
+    // Enqueue a command list without entering the mesh-trace lifecycle. `before_submit`, if set, runs under the API
+    // lock after the list is accepted and before its commands are submitted, so work it queues elsewhere is ordered
+    // with these commands against concurrent replays. It must not take the API lock.
     void enqueue_command_list(
         const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
         const std::vector<SubDeviceId>& sub_device_ids,
         const MeshBuffer& buffer,
         SubDeviceManagerId sub_device_manager_id,
-        bool blocking);
+        bool blocking,
+        const std::function<void()>& before_submit);
     // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
     void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
     // Wait until this host's queued device work completes.
@@ -321,6 +329,7 @@ public:
 
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
+    void throw_if_reader_failed() override;
     bool in_use() override { return in_use_.load(); }
 };
 

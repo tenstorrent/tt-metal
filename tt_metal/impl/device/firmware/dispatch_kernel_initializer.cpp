@@ -105,8 +105,12 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    terminate_command_queues();
-    wait_for_dispatch_cores();
+    // After an L1 ECC halt the dispatcher is stuck on the halted worker and never runs terminate; the RISC reset
+    // in RiscFirmwareInitializer::teardown stops the dispatch cores instead.
+    if (!descriptor_->metal_context().l1_ecc_halt_detected()) {
+        terminate_command_queues();
+        wait_for_dispatch_cores();
+    }
 
     process_termination_signals();
 
