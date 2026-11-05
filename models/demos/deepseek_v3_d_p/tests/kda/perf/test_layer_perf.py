@@ -53,9 +53,10 @@ _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
 # through device synchronization.
+# LoudBox SP8xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.30,
+        "SP8xTP1": 1.341,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -68,9 +69,10 @@ _PERF_REFERENCE_MS = {
 # lowers the clock by an amount that varies by runner. The cross-chip programs' wait for their neighbours still moves
 # a single replay by a few percent, hence the wider margin.
 _DEVICE_PERF_MARGIN = 0.05
+# QuietBox SP4xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.24,
+        "SP4xTP1": 1.289,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -82,7 +84,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.271
+_GALAXY_PERF_REFERENCE_MS = 1.337
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
