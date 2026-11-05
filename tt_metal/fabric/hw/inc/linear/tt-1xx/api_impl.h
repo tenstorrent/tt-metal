@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Note: This file was moved from tt_metal/fabric/hw/inc/linear/api.h. For full commit history, run `git log --follow
-// api_impl.h`.
+// Note: This file was moved from tt_metal/fabric/hw/inc/linear/api.h. For full commit history, run `git log --follow api_impl.h`.
 
 #pragma once
 
