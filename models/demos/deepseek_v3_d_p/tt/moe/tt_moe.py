@@ -943,7 +943,8 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
-            residual: optional block residual, added to the output inside the MoE. Ignored with return_intermediates.
+            residual: optional block residual, added to the output inside the MoE. Not allowed with
+                return_intermediates.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -1149,7 +1150,8 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
-        fold_residual = residual is not None and not return_intermediates
+        assert residual is None or not return_intermediates, "residual is not supported with return_intermediates"
+        fold_residual = residual is not None
         if fold_residual:
             shared_rs_output = shared_output
             shared_output = ttnn.add(
