@@ -26,11 +26,15 @@ std::vector<Tensor> addcmul_bw(
     // Passthrough gradient, see #53874: no eltwise backward op relocates it.
     // output[0] keeps grad's own memory config rather than output_mem_config.
     grad_tensor.emplace_back(grad);
+    // Fold value into grad before multiplying by the (possibly large) tensor operand, matching addcdiv_bw
+    // below and the forward addcmul reorder in #53282: grad*tensorN can overflow to inf even when the
+    // true gradient grad*value*tensorN is finite, when value is small enough to bring the product back
+    // into range.
     Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config), tensor2, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(std::move(grad_a));
     Tensor grad_b = ttnn::multiply(
-        ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config), tensor1, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(std::move(grad_b));
     return grad_tensor;
 }
