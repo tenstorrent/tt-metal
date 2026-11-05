@@ -139,6 +139,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(out_mesh_tensor.dtype());
 
     auto* const device = a.device();
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -242,12 +243,22 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // interm0 entry size follows interm0_data_format, not the output dtype.
     const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
+    // Whether the cross-block reload of Float32 partials unpacks straight to DEST (see the unpack_modes
+    // setup of the compute kernel below).
+    //
+    // Not on Quasar: there unpack-to-dest is a mode of the whole compute kernel (UnpackToDestEn), not
+    // of one buffer, and the matmul's SrcA/SrcB unpacks do not fit that mode. With the mode on, the
+    // packer does not zero DEST after it packs a section, so each later use of a DEST half adds onto
+    // the result left there. The partials are then reloaded through SrcA instead.
+    const bool reload_partials_to_dest =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && !is_quasar;
+
     // The fused bias add reads the partials buffer as an FPU operand (SrcA), so UnpackToDest cannot be
     // set on it directly when bias is present. In that case the cross-block FP32 reload instead copies
     // through a second buffer aliasing the same SRAM that does carry UnpackToDest, while the bias add
     // keeps reading the partials buffer via SrcA. The alias reaches the compute kernel as the
     // MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
-    const bool bias_reload_alias = use_bias && fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    const bool bias_reload_alias = use_bias && reload_partials_to_dest;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -812,9 +823,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         // UnpackToDest, it is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32
         // partial loses precision on every block boundary. The flag goes on the reload alias when the
         // fused bias forces a separate SrcA view of the partials buffer (see bias_reload_alias), else on
-        // the partials buffer itself.
+        // the partials buffer itself. Quasar does not set the flag (see reload_partials_to_dest).
         if (fp32_dest_acc_en) {
-            const bool mark_interm0 = interm0_data_format == tt::DataFormat::Float32;
             const DFBSpecName& marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
             auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
                 if (fmt != tt::DataFormat::Float32) {
@@ -822,8 +832,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 }
                 compute_hw.unpack_modes.emplace(
                     name,
-                    (mark_interm0 && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
-                                                     : tt::tt_metal::UnpackMode::UnpackToSrc);
+                    (reload_partials_to_dest && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                                                : tt::tt_metal::UnpackMode::UnpackToSrc);
             };
             add_if_float32(IN0_DFB, in0_data_format);
             add_if_float32(IN1_DFB, in1_data_format);
@@ -1068,7 +1078,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // kernels are built for NOC_0 (their config_1xx NOC applies to WH/BH only).
     ttnn::kernel_lib::host::Mcast in0_mcast(
         *device,
-        {.noc = (device->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : in0_noc, .handshake_cores = all_cores},
+        {.noc = is_quasar ? tt_metal::NOC::NOC_0 : in0_noc, .handshake_cores = all_cores},
         CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
         in0_mcast_receiver_num_cores,
         ttnn::kernel_lib::host::McastExplicitFixedSenderConfig{.senders_per_group = {start_core}});
