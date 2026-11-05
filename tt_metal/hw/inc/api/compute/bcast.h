@@ -421,13 +421,27 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
 
+// clang-format off
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
+ *
+ * With acc_to_dest, every following *mul_tiles_bcast_cols* accumulates into its destination tile rather than
+ * overwriting it: DST[idst] += A * column 0 of B. That makes a column-broadcast multiply a MAC, so a weighted sum over
+ * several input tiles lands in one DST tile without an intermediate CB.
+ *
+ * | Argument    | Description                                                          | Type     | Valid Range | Required |
+ * |-------------|----------------------------------------------------------------------|----------|-------------|----------|
+ * | icb0        | CB whose tile is unpacked into SrcA (operand A)                      | uint32_t | 0 to 31     | True     |
+ * | icb1        | CB whose tile is unpacked into SrcB (operand B, column 0 broadcast)  | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest | If true, operation = A * B + dst_tile_idx of mul_tiles_bcast_cols    | bool     | 0,1         | False    |
  */
-ALWI void mul_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+// clang-format on
+ALWI void mul_bcast_cols_init(
+    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+        icb0, icb1, acc_to_dest)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }

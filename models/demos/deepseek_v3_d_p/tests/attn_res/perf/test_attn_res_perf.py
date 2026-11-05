@@ -15,10 +15,10 @@ The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
-    program it has — the 1-site `inter_block` over the inherited set for the read that straddles the rank
-    boundary, the pre-attention read, the seal (the largest concat of any full block), the 24-site
-    `inter_block` at the largest sealed count of any full block, past the statistics fold's threshold, and the
-    post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
+    program it has — the seal of the inherited live stream, the 25-site `inter_block` at the largest sealed
+    count of any full block, which carries the read that straddles the rank boundary as its first site and
+    returns it whole, and the post-attention read. The last block has one more snapshot but only 9 layers, so
+    it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into
     it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model, which the boundary
     layer alone weights at under 10%.
@@ -90,21 +90,31 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Untraced is host-dispatch
-# bound, with the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Galaxies
-# off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41501648694,
+# 41501662481 and 41501677551. Production prefill runs untraced, so untraced is held to the traced reference where
+# it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
+# its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
+# the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
+# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 1700.0, "ordinary": 140.0},
-    "untraced": {"boundary": 4140.0, "ordinary": 284.0},
+    "traced": {"boundary": 394.0, "ordinary": 118.0},
+    "untraced": {"boundary": 394.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
 _PERF_REFERENCE_E2E_US = {
     _LOUDBOX_PERF_SKU: {},
 }
-# LoudBox SP2xTP4 has no CI references yet: it reports but is not gated.
-_REPORT_ONLY_LAYOUTS = ("SP2xTP4",)
-_MARGIN = {"traced": 0.05, "untraced": 0.10}
+# LoudBox SP2xTP4 has no CI references yet, and SP4xTP4 runs only on a Galaxy carved by hand
+# (`SUBTORUS_4X4_ENV`), which CI has no job for: both report but are not gated.
+_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP4xTP4")
+# A layout's prefill chunk where it is not PER_CHIP_TOKENS a chip: a 4x4 stage takes the same
+# chunk as the 8x4 mesh, so each chip holds twice the rows.
+_CHUNK_TOKENS = {"SP4xTP4": PER_CHIP_TOKENS * 8}
+_MARGIN = {
+    "traced": {"boundary": 0.05, "ordinary": 0.05},
+    "untraced": {"boundary": 0.10, "ordinary": 0.10},
+}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
 
@@ -136,8 +146,8 @@ def _assert_within_margin(what: str, measured_us: float, reference_us: float, ma
 def test_attn_res_performance_uses_two_sided_margin(mode, monkeypatch, expect_error) -> None:
     # The Galaxy gate needs no ATTN_RES_PERF_SKU opt-in.
     monkeypatch.delenv("ATTN_RES_PERF_SKU", raising=False)
-    margin = _MARGIN[mode]
     for layer, reference_us in _perf_reference_e2e_us(_GALAXY, mode).items():
+        margin = _MARGIN[mode][layer]
         _assert_within_margin(layer, reference_us * (1 - 0.99 * margin), reference_us, margin)
         _assert_within_margin(layer, reference_us * (1 + 0.99 * margin), reference_us, margin)
         with expect_error(AssertionError, "outside performance range"):
@@ -263,6 +273,13 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # One 4x4 pipeline stage of SC1, on a Galaxy carved with `SUBTORUS_4X4_ENV`.
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-xy",
+        ),
         # Unwrapped 2D, the fabric the AttnRes model suite runs on LoudBox; `attn_res_gather_softmax` needs 2D.
         pytest.param(
             (2, 4),
@@ -285,7 +302,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     # Before measuring, so a gated run without its SKU opt-in fails fast.
     references = None if report_only else _perf_reference_e2e_us(layout, mode)
     require_realtime_profiler("the AttnRes device-time report")
-    num_tokens = PER_CHIP_TOKENS * op.sp_factor
+    num_tokens = _CHUNK_TOKENS.get(layout, PER_CHIP_TOKENS * op.sp_factor)
 
     rng = generator(0)
     q_pre = [op.to_query(q) for q in random_queries(rng, RANK_LAYERS)]
@@ -366,7 +383,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
 
-    margin = _MARGIN[mode]
+    margins = _MARGIN[mode]
     fabric = ttnn.get_fabric_config().name
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
@@ -376,7 +393,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     for name, label in zip(LAYERS, (f"layer {LAYER}", f"mean of {LAYER + 1}-{LAYER + ORDINARY_LAYERS}")):
         line = f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
         if references is not None:
-            reference = references[name]
+            reference, margin = references[name], margins[name]
             within_band[name] = abs(e2e_us[name] - reference) <= reference * margin
             line += f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if within_band[name] else 'OUT OF BAND'}"
         logger.info(line)
@@ -401,7 +418,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
         "wall_us": walls,
         "device_samples_us": [us for us, _ in per_sample],
         "reference_e2e_us": references,
-        "margin_pct": margin * 100.0,
+        "margin_pct": {name: margin * 100.0 for name, margin in margins.items()},
     }
     print("ATTN_RES_PERF=" + json.dumps(result, sort_keys=True))
     tp_wrapped = layout != _GALAXY or tp_axis_is_wrapped(mesh_device)
@@ -418,4 +435,4 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     if not tp_wrapped:
         pytest.skip(f"TP axis not wrapped: the {layout} references assume the TP ring")
     for name in LAYERS:
-        _assert_within_margin(f"{layout} {mode} {name} layer e2e", e2e_us[name], references[name], margin)
+        _assert_within_margin(f"{layout} {mode} {name} layer e2e", e2e_us[name], references[name], margins[name])
