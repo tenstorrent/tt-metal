@@ -41,6 +41,8 @@ jobs:
       - {name: CCACHE_MAXSIZE, value: 4G}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      # TEMPORARY diagnostics (torrentci#2377): attribute direct-mode fallbacks.
+      - {name: CCACHE_LOGFILE, value: /tmp/ccache.log}
     artifacts:
       publish:
         # Consumed as packages-artifact-name by smoke, sdk-examples and
@@ -51,6 +53,11 @@ jobs:
         # Consumed by build-docs as TT_FROM_PRECOMPILED_DIR=/work.
         - name: ttnn-import-ASan
           path: ttnn-import.tar.zst
+          content-type: application/zstd
+        # TEMPORARY diagnostics (torrentci#2377): log lines of every
+        # non-direct-hit ccache call, capped at 256 MiB before compression.
+        - name: ccache-fallbacks-log
+          path: ccache-fallbacks.log.zst
           content-type: application/zstd
     steps:
       - id: check-image
@@ -88,6 +95,11 @@ jobs:
           run:
             - cmake --build build --target install
             - ccache -s -v
+            # TEMPORARY diagnostics (torrentci#2377)
+            - ls -l /tmp/ccache.log
+            - python3 .torrentci-diag/ccache_fallbacks.py /tmp/ccache.log /tmp/ccache-fallbacks.log
+            - head -c 268435456 /tmp/ccache-fallbacks.log | zstd -19 -T0 -q -o ccache-fallbacks.log.zst
+            - ls -l ccache-fallbacks.log.zst
       - id: package
         kind: shell
         shell:
