@@ -33,9 +33,6 @@
 namespace tt::tt_fabric::fabric_router_tests {
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
-    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
-    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& devices = fixture->get_devices();
 
@@ -54,7 +51,8 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    const FabricTestWorker sender = BaseFabricFixture::get_fabric_test_worker(sender_device, {0, 0});
+    const FabricTestWorker receiver = BaseFabricFixture::get_fabric_test_worker(receiver_device, {1, 0});
 
     // Get fabric context and topology
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -89,48 +87,50 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Create sender program
     auto sender_program = tt_metal::CreateProgram(*sender_device);
-    auto sender_kernel = tt_metal::CreateKernel(
+    auto sender_kernel = BaseFabricFixture::create_fabric_test_worker_kernel(
         sender_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
-        {sender_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+        sender,
+        compile_time_args,
+        defines);
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
-        receiver_virtual_core.x,
-        receiver_virtual_core.y,
+        receiver.noc_core.x,
+        receiver.noc_core.y,
         1, /* num_hops - simple for smoke */
         1, /* fwd_range */
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
-    auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
-    auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
+    auto worker_teardown_semaphore_id =
+        tt_metal::CreateSemaphore(sender_program, sender.logical, 0, sender.core_type);
+    auto worker_buffer_index_semaphore_id =
+        tt_metal::CreateSemaphore(sender_program, sender.logical, 0, sender.core_type);
     append_worker_to_fabric_edm_sender_rt_args(
         edm_port, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, sender_runtime_args);
 
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender.logical, sender_runtime_args);
 
     // Create receiver program
     auto receiver_program = tt_metal::CreateProgram(*receiver_device);
-    auto receiver_kernel = tt_metal::CreateKernel(
+    auto receiver_kernel = BaseFabricFixture::create_fabric_test_worker_kernel(
         receiver_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+        receiver,
+        compile_time_args);
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver.logical, receiver_runtime_args);
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        sender_program.impl().compile(&tt_metal::slow_dispatch::physical_device_from_unit_mesh(*sender_device));
+        receiver_program.impl().compile(&tt_metal::slow_dispatch::physical_device_from_unit_mesh(*receiver_device));
+        GTEST_SKIP() << "Mock: kernels compiled. MockChip reads and writes are no-ops, so nothing launches.";
+    }
 
     // Run programs
     fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
@@ -143,19 +143,19 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     tt_metal::slow_dispatch::ReadFromL1(
         *sender_device,
-        sender_logical_core,
-        worker_mem_map.test_results_address,
+        sender.logical,
+        worker_mem_map.test_results_address - worker_mem_map.kernel_view_offset,
         worker_mem_map.test_results_size_bytes,
         sender_status,
-        CoreType::WORKER);
+        sender.core_type);
 
     tt_metal::slow_dispatch::ReadFromL1(
         *receiver_device,
-        receiver_logical_core,
-        worker_mem_map.test_results_address,
+        receiver.logical,
+        worker_mem_map.test_results_address - worker_mem_map.kernel_view_offset,
         worker_mem_map.test_results_size_bytes,
         receiver_status,
-        CoreType::WORKER);
+        receiver.core_type);
 
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
     EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
@@ -165,6 +165,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     uint64_t receiver_bytes =
         ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
     EXPECT_EQ(sender_bytes, receiver_bytes);
+    EXPECT_EQ(sender_bytes, uint64_t{worker_mem_map.packet_payload_size_bytes} * num_packets);
 }
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPI2DSmoke) { RunTestUnicastSmoke(this); }
