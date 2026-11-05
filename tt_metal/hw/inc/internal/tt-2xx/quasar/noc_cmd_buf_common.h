@@ -468,7 +468,9 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
+// No-op on a Keraunos CCE (Quasar Ethernet): it has no NIU issue/ack counters to read.
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
+#if !(defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
     constexpr uint32_t noc = 0;
     // Hide latency of NOC reg reads by reading first, writing second
     uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
@@ -482,6 +484,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
     noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
+#endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
