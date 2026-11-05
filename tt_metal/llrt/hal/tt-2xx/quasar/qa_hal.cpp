@@ -103,11 +103,17 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
-        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // Firmware is built per CCE (processor_id is the CCE); a kernel's processor_id is
+        // Linked or not, a Quasar Ethernet core runs the CCE image on the MEM_IERISC_* map.
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
+            params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            // IDLE_ETH firmware is built per CCE (processor_id is the CCE); its kernel's processor_id is
             // MEM_IERISC_LOCAL_HARTS * CCE + hart. Each build is linked into its own CCE's SRAM, at the CCE's base.
-            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
-            const uint32_t hart = params.is_fw ? 0 : params.processor_id % MEM_IERISC_LOCAL_HARTS;
+            // ACTIVE_ETH has one build, for CCE0: its processor_id is the hart.
+            const bool per_cce = params.core_type == HalProgrammableCoreType::IDLE_ETH;
+            const uint32_t eth_cce =
+                !per_cce ? 0 : params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            const uint32_t hart =
+                params.is_fw ? 0 : per_cce ? params.processor_id % MEM_IERISC_LOCAL_HARTS : params.processor_id;
             const DeviceAddr cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
             const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
             const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
