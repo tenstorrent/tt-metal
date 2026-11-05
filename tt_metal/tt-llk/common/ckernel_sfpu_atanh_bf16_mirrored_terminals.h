@@ -10,7 +10,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <std::uint32_t BoundBits, bool SignedEndpoints>
-inline void mirrored_class_terminals(vFloat x_raw, vFloat& result)
+__attribute__((always_inline)) inline void mirrored_class_terminals(vFloat x_raw, vFloat& result)
 {
     vFloat absolute_raw = setsgn(x_raw, 0);
     if constexpr (SignedEndpoints)
@@ -37,7 +37,7 @@ inline void mirrored_class_terminals(vFloat x_raw, vFloat& result)
 }
 
 template <int CODE>
-inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
+__attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
     if constexpr (CODE == 0)
@@ -72,7 +72,7 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 
 // Keep the selected BH conjunction and WH nested predicate distinct.
 template <int Code, bool Nested>
-inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result)
+__attribute__((always_inline)) inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result)
 {
     static_assert(Code >= 0 && Code <= 4, "negative NaN requires a class result");
     if constexpr (Nested)

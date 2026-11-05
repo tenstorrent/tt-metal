@@ -1299,6 +1299,158 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device, case):
     logger.success(f"[{case}] {heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")
 
 
+# Input row window: several requests' K/V stacked along each chip's rows (a batched prefill step), each written
+# to its own slot from its rows of the stacked input. (slot, kv_actual_global in chunks of that lane, rows per
+# chip in tiles). The last lane starts one tile short of a chunk boundary: partway through a chip's two-tile stripe,
+# so its write crosses into the next chunk (and, on 2x2, the next chip).
+_WINDOW_LANES = [(0, 3, 1), (1, 0, 1), (2, 1, 2), (3, 2, 2)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+        ),
+        # 2x4 is the shape L2's dp_op_unit_tests selects for this op; 8x4 is a BH Galaxy.
+        pytest.param(
+            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+        ),
+        pytest.param(
+            (8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES[:2], ids=DTYPE_LAYOUT_IDS[:2])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_input_row_window(mesh_device, dtype, layout):
+    """A windowed write of a stacked multi-head input matches slice-then-write bit for bit, for four lanes at
+    different slots and depths; same-size lanes hit the program cache at a new offset."""
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+    heads, head_dim, num_layers, layer_idx = 4, 128, 2, 1
+    lane_rows = [n * tile for _, _, n in _WINDOW_LANES]
+    stacked_local = sum(lane_rows)
+    seq_local = 8 * tile
+
+    mesh_device.enable_program_cache()
+    caches = [
+        _alloc_multihead_cache(
+            mesh_device,
+            batch=len(_WINDOW_LANES) * num_layers,
+            heads=heads,
+            seq_local=seq_local,
+            head_dim=head_dim,
+            dtype=dtype,
+            layout=layout,
+        )
+        for _ in range(2)
+    ]
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+    torch.manual_seed(5)
+    stacked = _make_input(
+        torch.randn(1, heads, sp * stacked_local, head_dim, dtype=torch.bfloat16), dtype, layout, mesh_device, mapper
+    )
+
+    def write(cache, tensor, slot, kv_actual, **window):
+        # Tensor-metadata form, the one traced prefill uses.
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=slot)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            tensor,
+            slot_idx=slot_t,
+            kv_actual_global=kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            **window,
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+
+    lanes = []
+    offset = 0
+    for (slot, depth, _), rows in zip(_WINDOW_LANES, lane_rows):
+        lanes.append((slot, depth * rows * sp - (tile if slot == 3 else 0), offset, rows))
+        offset += rows
+    for slot, kv_actual, offset, rows in lanes:
+        sliced = ttnn.slice(stacked, (0, 0, offset, 0), (1, heads, offset + rows, head_dim))
+        write(caches[0], sliced, slot, kv_actual)
+        ttnn.deallocate(sliced)
+    # The windowed writes alone: one program per distinct row count, whatever the offsets.
+    entries_before = mesh_device.num_program_cache_entries()
+    for slot, kv_actual, offset, rows in lanes:
+        write(caches[1], stacked, slot, kv_actual, input_row_offset=offset, input_rows=rows)
+    ttnn.synchronize_device(mesh_device)
+    distinct_rows = len(set(lane_rows))
+    assert mesh_device.num_program_cache_entries() == entries_before + distinct_rows, (
+        f"{len(lanes)} windowed writes of {distinct_rows} row counts should add {distinct_rows} programs, added "
+        f"{mesh_device.num_program_cache_entries() - entries_before}"
+    )
+
+    reference, windowed = (
+        [ttnn.to_torch(t).to(torch.float32) for t in ttnn.get_device_tensors(cache.cpu())] for cache in caches
+    )
+    for chip, (a, b) in enumerate(zip(reference, windowed)):
+        assert torch.count_nonzero(a) > 0, f"chip {chip}: the reference wrote nothing"
+        assert torch.equal(a, b), f"chip {chip}: windowed write differs from slice + write"
+    logger.success(f"{len(_WINDOW_LANES)} windows of a {stacked_local}-row stacked input match slice + write")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_input_row_window_rejects(mesh_device, expect_error):
+    """A window must be tile-aligned, non-empty and inside the input, on cache misses and hits alike."""
+    tile = ttnn.TILE_SIZE
+    cache = _alloc_multihead_cache(
+        mesh_device, batch=1, heads=1, seq_local=8 * tile, head_dim=128, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    tensor = ttnn.from_torch(
+        torch.zeros(1, 1, 4 * tile, 128, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=0)
+    kwargs = dict(slot_idx=slot_t, kv_actual_global=kv_t, layer_idx=0, num_layers=1, cluster_axis=0)
+    window_cases = [
+        (16, tile),  # misaligned
+        (0, 0),  # empty
+        (3 * tile, 2 * tile),  # past the end
+        (4 * tile, None),  # offset alone, past the end
+        (2**32 - tile, 2 * tile),  # offset + rows wraps in uint32
+    ]
+    for offset, rows in window_cases:
+        window = dict(input_row_offset=offset) | ({} if rows is None else dict(input_rows=rows))
+        with expect_error(RuntimeError, "input row window"):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, tensor, **window, **kwargs)
+
+    # The offset is not hashed, so a cache hit must re-check it: prime a 2-tile window, then reuse its program
+    # with an offset that runs past the end.
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache, tensor, input_row_offset=0, input_rows=2 * tile, **kwargs
+    )
+    with expect_error(RuntimeError, "input row window"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache, tensor, input_row_offset=3 * tile, input_rows=2 * tile, **kwargs
+        )
+
+
 # KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
 # mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2), (2, 4)], ids=["1x4", "2x2", "2x4"], indirect=True)

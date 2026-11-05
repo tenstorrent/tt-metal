@@ -35,6 +35,13 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
+    // The tilize/transpose intermediate is BFLOAT16, so a wider input would be silently truncated.
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16, "convert_to_hwc input dtype must be BFLOAT16 (was {})", input.dtype());
+    TT_FATAL(
+        args.dtype == DataType::BFLOAT16 || args.dtype == DataType::FLOAT32,
+        "convert_to_hwc output dtype must be BFLOAT16 or FLOAT32 (was {})",
+        args.dtype);
 }
 
 tt::tt_metal::TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
@@ -45,7 +52,7 @@ tt::tt_metal::TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const int HW = shape[3];
 
     // Output needs to be multiple of alignment requirement to guarantee aligned copies
-    const auto alignment_elements = compute_alignment_requirement_in_elements(tensor_args.input);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(args.dtype);
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return tt::tt_metal::TensorSpec(

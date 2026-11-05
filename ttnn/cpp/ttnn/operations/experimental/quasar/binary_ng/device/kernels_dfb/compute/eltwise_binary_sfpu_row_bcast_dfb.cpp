@@ -6,8 +6,8 @@
 //
 // Copy of eltwise_binary_row_bcast_dfb.cpp (the FPU ROW kernel) with the binary-op section swapped to the
 // SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp applies vs eltwise_binary_no_bcast_dfb.cpp
-// (unary_op_init_common + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with the
-// ARCH_QUASAR copy_tile_to_dst_init_short handling). The broadcast pass (unary_bcast<ROW> through the
+// (compute_kernel_hw_startup + copy_init + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with
+// reconfig_data_format_srca + copy_init before each operand copy). The broadcast pass (unary_bcast<ROW> through the
 // intermediate llk_post DFB) and its two pack_reconfig_data_format / pack_init (ARCH_QUASAR gasket) calls are
 // IDENTICAL to the FPU kernel -- unary_bcast is FPU-side regardless of the binary op that consumes its output.
 //

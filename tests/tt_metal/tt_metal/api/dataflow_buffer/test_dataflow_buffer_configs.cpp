@@ -38,6 +38,7 @@
 #include "../metal2_host_api/test_helpers/test_helpers.hpp"
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -261,7 +262,7 @@ TEST_F(UnitMeshFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -292,11 +293,12 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -424,10 +426,11 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
     };
     for (const auto& c : cases) {
         SCOPED_TRACE(c.name);
-        Program program = CreateProgram();
+        Program program = CreateProgram(this->device());
         const CoreCoord logical_core(0, 0);
         experimental::dfb::CreateDataflowBuffer(program, logical_core, c.config);
         program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
         program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
         const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
@@ -470,11 +473,12 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
         .enable_producer_implicit_sync = true,
         .enable_consumer_implicit_sync = true};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -551,7 +555,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -586,7 +590,7 @@ TEST_F(UnitMeshFixture, DMTensixTest1xDFB4Sx1SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -619,7 +623,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx1SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -652,7 +656,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx4SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -685,7 +689,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Sx4SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -724,7 +728,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx2SConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -757,7 +761,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Sx1BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -787,7 +791,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -822,7 +826,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx1BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -855,7 +859,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx4BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -912,7 +916,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB4Sx2BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -964,7 +968,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Sx4BConfig) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -1053,7 +1057,7 @@ TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores: (0,0) and (1,0)
     experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
 
@@ -1115,7 +1119,7 @@ TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
         .enable_producer_implicit_sync = true,
         .enable_consumer_implicit_sync = true};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores
     experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
 
@@ -1153,7 +1157,7 @@ TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
         .enable_producer_implicit_sync = false,
         .enable_consumer_implicit_sync = false};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     // 4 cores in a 2x2 grid — all identical config → should produce 1 DfbGroup.
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 1)));
     experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
@@ -1248,7 +1252,7 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig) {
         .enable_consumer_implicit_sync = false,
         .tensix_scope = experimental::dfb::TensixScope::INTRA};
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
@@ -2176,7 +2180,7 @@ TEST_F(UnitMeshFixture, IntraPackerRemapperPairsTopDownConfig) {
         GTEST_SKIP() << "Quasar-only remapper pool split";
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core(0, 0);
 
     // Two INTRA DFBs on Neo0 → ClientL 16 then 18; contiguous packer remapper block [62,64).
@@ -2256,7 +2260,7 @@ TEST_F(UnitMeshFixture, MaxEightIntraPerNeoConfig) {
     constexpr uint32_t max_intra_dfbs_per_neo =
         ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB;
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     CoreCoord logical_core(0, 0);
     for (uint32_t i = 0; i < max_intra_dfbs_per_neo + 1; i++) {
         experimental::dfb::DataflowBufferConfig intra{
@@ -2327,7 +2331,7 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotsReusedAcrossDisjointCores) {
     const CoreRange workers(CoreCoord(1, 0), CoreCoord(4, 0));
     const CoreRange all_cores(CoreCoord(0, 0), CoreCoord(4, 0));
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const auto config = make_minimal_dfb_config();
 
     // Spans every core, so it conflicts with everything below.
@@ -2371,7 +2375,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     const CoreCoord coordinator(0, 0);
     const CoreCoord worker(1, 0);
     const CoreRange all_cores(coordinator, worker);
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const auto config = make_minimal_dfb_config();
 
     for (int i = 0; i < 3; i++) {
@@ -2382,7 +2386,8 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
 
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& impl = program.impl();
     EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 0u);
@@ -2419,18 +2424,64 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     EXPECT_EQ(read_word(3, 3), wide_dfb->config.entry_size);
 }
 
+// Quasar counterpart: the coordinator's slots are {0, 3}; the two unused ones are in no participation mask.
+TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only DFB config layout";
+    }
+
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "Needs at least two worker cores in a row";
+    }
+
+    const CoreCoord coordinator(0, 0);
+    const CoreCoord worker(1, 0);
+    const CoreRange all_cores(coordinator, worker);
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    for (int i = 0; i < 3; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(worker)), config);
+    }
+    const uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+    const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 0u);
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 3u);
+
+    const auto dfbs = impl.dataflow_buffers_on_core(coordinator);
+    ASSERT_EQ(dfbs.size(), 2u);
+    std::vector<uint8_t> buf(8192, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(coordinator, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    EXPECT_EQ(ghdr->num_dfbs, 2u);
+    constexpr uint32_t slots_0_and_3 = 0b1001;
+    EXPECT_EQ(ghdr->participation_mask[0], slots_0_and_3);  // producer_risc_mask 0x1
+    EXPECT_EQ(ghdr->participation_mask[1], slots_0_and_3);  // consumer_risc_mask 0x2
+    for (uint8_t h = 2; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+    }
+}
+
 // The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
-    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
-    const uint32_t max_slots = is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_num_dataflow_buffers();
+    const uint32_t max_slots = hal::get_num_dataflow_buffers();
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {
         GTEST_SKIP() << "Needs at least " << num_dfbs << " cores to place one DFB per core";
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const auto config = make_minimal_dfb_config();
     for (uint32_t i = 0; i < num_dfbs; i++) {
         const CoreCoord core(i % grid.x, i / grid.x);
@@ -2503,7 +2554,7 @@ TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected)
         .cap = dfb::AccessPattern::ALL,
         .enable_producer_implicit_sync = true,
         .enable_consumer_implicit_sync = false};
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     EXPECT_THAT(
         [&] {
             experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
@@ -2534,6 +2585,30 @@ TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
             program.impl().finalize_dataflow_buffer_configs();
         },
         std::exception);
+}
+
+// A program with DFBs and no CBs reserves no CB config region, so its DFB config follows its semaphores directly and
+// dispatch sends both in one write. local_cb_mask describes the DFBs once the offsets are finalized: bit 0 for slot 0
+// on WH/BH, a count of 1 on Quasar.
+TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegion) {
+    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
+    experimental::ProgramSpec spec = is_quasar ? experimental::test_helpers::MakeMinimalValidProgramSpec()
+                                               : experimental::test_helpers::MakeMinimalGen1ValidProgramSpec();
+    spec.semaphores.push_back(
+        {.unique_id = experimental::SemaphoreSpecName{"sem"}, .target_nodes = experimental::NodeCoord{0, 0}});
+
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().finalize_offsets(this->device().get_devices()[0]);
+
+    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+    const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const ProgramConfig& config = program.impl().get_program_config(index);
+    EXPECT_EQ(config.cb_size, 0u);
+    EXPECT_EQ(config.dfb_offset, config.sem_offset + config.sem_size);
+    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
+        EXPECT_EQ(kernel_group->launch_msg.view().kernel_config().local_cb_mask(), 1u);
+    }
 }
 
 }  // end namespace tt::tt_metal
