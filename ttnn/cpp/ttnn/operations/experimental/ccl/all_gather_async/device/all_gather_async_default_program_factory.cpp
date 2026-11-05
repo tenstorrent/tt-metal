@@ -145,7 +145,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    uint32_t output_data_size_bytes = output_tensor.mesh_buffer().device_local_size();
+    // The packed size of the spec, the quantity the program hash derives the default worker count from.
+    uint32_t output_data_size_bytes = output_tensor.tensor_spec().compute_packed_buffer_size_bytes();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(default_workers(
         *mesh_device,
         sub_device_id,

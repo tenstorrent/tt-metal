@@ -35,8 +35,7 @@ inline AllGatherWorkerSplit all_gather_worker_split(
     // Zero means "not pinned": one sync per packet, capped at 160 (sweep-derived heuristic).
     constexpr uint32_t kMaxChunksPerSync = 160;
     const uint32_t packets = (s.input_tile_id_end - s.input_tile_id_start) / tiles_per_packet;
-    s.chunks_per_sync = chunks_per_sync_or_zero != 0
-                            ? chunks_per_sync_or_zero
-                            : ttnn::runtime_length::min_u32(packets > 1 ? packets : 1, kMaxChunksPerSync);
+    s.chunks_per_sync = chunks_per_sync_or_zero != 0 ? chunks_per_sync_or_zero
+                                                     : std::min(packets > 1 ? packets : 1u, kMaxChunksPerSync);
     return s;
 }

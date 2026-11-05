@@ -264,7 +264,6 @@ ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
         return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args);
     }
     using ttnn::operations::common::hash_spec_without_rows;
-    constexpr uint64_t kSalt = 0x6e6c705f63716b76ULL;  // "nlp_cqkv"
     auto hash = tt::tt_metal::operation::hash_operation<NlpCreateHeadsDeviceOperation>(
         operation_attributes.num_q_heads,
         operation_attributes.num_kv_heads,
@@ -274,14 +273,13 @@ ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.q_head_split,
         operation_attributes.runtime_rows,
-        hash_spec_without_rows(tensor_args.input_tensor_q, kSalt),
-        hash_spec_without_rows(tensor_args.input_tensor_kv, kSalt),
+        hash_spec_without_rows(tensor_args.input_tensor_q),
+        hash_spec_without_rows(tensor_args.input_tensor_kv),
         tensor_args.optional_output_tensors.size());
     for (std::size_t i = 0; i < tensor_args.optional_output_tensors.size(); ++i) {
         // A transposed K output is [B, Hkv, D, S]: its rows (the sequence) sit in the last dim.
         const int rows_dim = (i == 1 && operation_attributes.transpose_k_heads) ? -1 : -2;
-        hash = ttsl::hash::hash_objects(
-            hash, hash_spec_without_rows(tensor_args.optional_output_tensors[i], kSalt, rows_dim));
+        hash = ttsl::hash::hash_objects(hash, hash_spec_without_rows(tensor_args.optional_output_tensors[i], rows_dim));
     }
     return hash;
 }
