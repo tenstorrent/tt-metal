@@ -251,8 +251,9 @@ class ChainDevice:
     Outputs, written IN PLACE with ttnn.copy (addresses never change):
              tok_out    uint32 RM [1, R]   (= model._vfy_token_buf)
              vaux_out   uint32 RM [3, W_v] (= model._vfy_aux_buf; W_v = align(max(R, spec_ctrl_words(B, Nv))));
-                        [2 + G, W_v] with ``ring_idx`` (G uint32 RM [B, T*Nv] ring_page_idx tensors, QWEN36_MAMBA_SPEC):
-                        one ctrl page per GDN group, start pages gathered at column mi' (chain_reference)
+                        [2 + G, W_v] with ``ring_pages`` (QWEN36_MAMBA_SPEC: the fp32 [B, T*G*Nv] start-page table of
+                        the G GDN groups, SpecBlockBook.pages_cat): one ctrl page per group, start pages gathered at
+                        column mi' (chain_reference with ring_idx)
              next_aux_out = aux_prev_in itself (int32 [7, W_a]): every value is read before the final copy.
     All values are integers < 2^24, so fp32 TILE math is exact.
     QWEN36_SPEC_CHAIN_KERNEL=1: ``body`` is ONE single-core kernel on the same buffers (spec_fused_kernels.ChainKernel); the op
@@ -294,20 +295,22 @@ class ChainDevice:
         draft_ins=None,
         tok_out=None,
         vaux_out=None,
-        ring_idx=None,
+        ring_pages=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
-        checked), None allocates a standalone one. ``ring_idx``: see the class docstring."""
+        checked), None allocates a standalone one. ``ring_pages`` = (fp32 TILE [B, T * G * Nv] table, G): see the class
+        docstring."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
         self = cls()
         self.mesh, self.B, self.K, self.Nv, self.T, self.R = mesh, B, K, Nv, K + 1, B * (K + 1)
-        self.ring_idx = None if ring_idx is None else list(ring_idx)
-        n_ctrl = 1 if ring_idx is None else len(self.ring_idx)
-        if self.ring_idx is not None:
-            for i, t in enumerate(self.ring_idx):
-                cls._check_bound(f"ring_idx[{i}]", t, (B, (K + 1) * Nv), ttnn.uint32)
+        self.ring_pages, self.G = (None, 1) if ring_pages is None else ring_pages
+        n_ctrl = self.G
+        if self.ring_pages is not None:
+            got = (tuple(int(d) for d in self.ring_pages.shape), self.ring_pages.dtype, self.ring_pages.layout)
+            want = ((B, (K + 1) * self.G * Nv), ttnn.float32, ttnn.TILE_LAYOUT)
+            assert got == want, f"bound ring_pages: {got} != {want}"
         R = self.R
         self.W_res, self.W_a = _align(max(R, B)), _align(max(B, 5))
         self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(B, Nv)
@@ -344,7 +347,7 @@ class ChainDevice:
         self.c_iota_h = f(torch.arange(Nv).reshape(1, Nv))
         self.c_u = f(torch.arange(B).reshape(B, 1))
         if spec_chain_kernel_enabled():
-            if self.ring_idx is not None:
+            if self.ring_pages is not None:
                 raise ValueError(
                     "QWEN36_SPEC_CHAIN_KERNEL=1 does not build the per-group ctrl pages of QWEN36_MAMBA_SPEC"
                 )
@@ -423,22 +426,20 @@ class ChainDevice:
         # ---- verify aux [3, W_v]: kv positions, rope rows, GDN ctrl page
         pos = ttnn.add(p0n, self.c_iota_t)  # [B,T]
         ridx = ttnn.minimum(ttnn.relu(ttnn.add(pos, delta)), rows_m1)
-        if self.ring_idx is None:
+        if self.ring_pages is None:
             blks = [
                 ttnn.add(ttnn.multiply(ttnn.add(ttnn.multiply(min_, float(B)), self.c_u), float(Nv)), self.c_iota_h)
             ]
-        else:  # QWEN36_MAMBA_SPEC: start page of (u, h) = ring_page_idx[u, mi'*Nv + h] (one-hot over the T columns)
+        else:  # QWEN36_MAMBA_SPEC: start page of (g, u, h) = the table at column mi'*G*Nv + g*Nv + h (one-hot over T)
+            GN = self.G * Nv
             sel = fl(ttnn.eq(self.c_iota_t, min_))  # [B,T]
-            blks = []
-            for idx in self.ring_idx:
-                pages = fl(idx)  # [B, T*Nv]
-                acc = None
-                for t in range(T):
-                    term = ttnn.multiply(
-                        ttnn.slice(pages, [0, t * Nv], [B, (t + 1) * Nv]), ttnn.slice(sel, [0, t], [B, t + 1])
-                    )
-                    acc = term if acc is None else ttnn.add(acc, term)
-                blks.append(acc)  # [B,Nv]
+            acc = None
+            for t in range(T):
+                term = ttnn.multiply(
+                    ttnn.slice(self.ring_pages, [0, t * GN], [B, (t + 1) * GN]), ttnn.slice(sel, [0, t], [B, t + 1])
+                )
+                acc = term if acc is None else ttnn.add(acc, term)  # [B, G*Nv]
+            blks = [ttnn.slice(acc, [0, g * Nv], [B, (g + 1) * Nv]) for g in range(self.G)]
         ctrls = [
             padw(cat([parity, ttnn.transpose(min_, 0, 1), ttnn.reshape(blk, (1, B * Nv))], 1), 1 + B + B * Nv)
             for blk in blks

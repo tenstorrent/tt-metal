@@ -328,6 +328,11 @@ class SpecBlockBook:
             for g in range(self.G):
                 self.init[g][u] = self._pages[g][u, int(c)]
 
+    def pages_cat(self):
+        """float32 [B, T * G * Nv]: the head pages of every group, column t * G * Nv + g * Nv + h (the chain body's
+        start-page table, gathered at column mi')."""
+        return torch.stack(self._pages, dim=2).reshape(self.B, -1).to(torch.float32)
+
     def step_start_blocks(self, u):
         """[G] block ids of engine row u's start column in the staged step, or None."""
         if self.step_blocks is None:
@@ -482,6 +487,11 @@ class SpecGdnBlockState:
         ]
         for _, dn, g in self.layers:
             dn._spec_paged.idx = self._idx_dev[g]
+        # the chain body's start-page table: fp32 TILE [B, T * G * Nv], column t * G * Nv + g * Nv + h = first page of
+        # head h of group g in window column t (exact in fp32: below 2^24 pages)
+        self.pages_dev = ttnn.from_torch(
+            self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
 
     cache_mode = property(lambda self: self.book.cache_mode)
     mamba_block_size = property(lambda self: self.book.mamba_block_size)
@@ -494,12 +504,18 @@ class SpecGdnBlockState:
         import ttnn
 
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
-        for g in self.book.set_step(blocks, start_col, live_rows, boundary):
+        changed = self.book.set_step(blocks, start_col, live_rows, boundary)
+        for g in changed:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
                     self.book.idx_host[g], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
                 ),
                 self._idx_dev[g],
+            )
+        if changed:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep),
+                self.pages_dev,
             )
 
     def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):

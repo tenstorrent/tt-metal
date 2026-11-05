@@ -168,6 +168,10 @@ def test_chain_body_twin_builds_the_host_ctrl_pages():
         twin = chain_ctrl_rows(mi, 1, B=B, K=K, Nv=lay.nv, ctrl_words=words, ring_idx=book.idx_host)
         assert [r.tolist() for r in host] == [r.tolist() for r in twin]
     assert max(int(r.max()) for r in book.idx_host) < 1 << 24  # exact in the body's fp32 math
+    # the body's table (SpecGdnBlockState.pages_dev): column t * G * Nv + g * Nv + h = ring_page_idx[g][u, t * Nv + h]
+    cat = book.pages_cat().to(torch.int64).reshape(B, T, 3, lay.nv)
+    for g in range(3):
+        assert torch.equal(cat[:, :, g].reshape(B, -1), book.idx_host[g].to(torch.int64))
 
 
 # --------------------------------------------------------------------------------------------------- the fake device

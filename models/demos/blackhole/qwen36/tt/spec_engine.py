@@ -2227,7 +2227,7 @@ class MTPSpecEngine:
                     f"QWEN36_SPEC_CHAIN with QWEN36_MAMBA_SPEC: {2 * paged.layout.pool1_pages} state pages exceed the "
                     "chain body's exact fp32 range (2^24)"
                 )
-            kw["ring_idx"] = list(paged._idx_dev)
+            kw["ring_pages"] = (paged.pages_dev, paged.G)
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
