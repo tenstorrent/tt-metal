@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# Fetch the per-test durations that the LLK legs upload as test-durations-<arch>-*,
-# from the newest successful run of <workflow-file> on <branch> for <event>.
-# Writes <out-dir>/<arch>.json (test id -> seconds, summed over all files of the
-# arch) and found=true|false to $GITHUB_OUTPUT. Exits 0 when nothing is found.
-#
-# Usage: llk-fetch-test-durations.sh <workflow-file> <branch> <event> <out-dir>
 set -euo pipefail
 
-WORKFLOW="${1:?usage: llk-fetch-test-durations.sh <workflow-file> <branch> <event> <out-dir>}"
-BRANCH="${2:?usage: llk-fetch-test-durations.sh <workflow-file> <branch> <event> <out-dir>}"
-EVENT="${3:?usage: llk-fetch-test-durations.sh <workflow-file> <branch> <event> <out-dir>}"
-OUT="${4:?usage: llk-fetch-test-durations.sh <workflow-file> <branch> <event> <out-dir>}"
 DOWNLOAD="$(mktemp -d)"
 
-for run in $(gh run list -w "$WORKFLOW" -b "$BRANCH" -e "$EVENT" -s success -L 5 --json databaseId --jq '.[].databaseId'); do
-  gh run download "$run" -p 'test-durations-*' -D "$DOWNLOAD" && echo "durations from run $run" && break
+for run in $(gh run list -w "$1" -b "$2" -e "$3" -s success -L 5 --json databaseId --jq '.[].databaseId'); do
+  gh run download "$run" -p 'test-durations-*' -D "$DOWNLOAD" && break
 done
 
-python3 - "$DOWNLOAD" "$OUT" << 'PY'
+python3 - "$DOWNLOAD" "$4" << 'PY'
 import json
 import os
 import sys
@@ -35,8 +25,6 @@ for arch in ("wormhole", "blackhole", "quasar"):
     if summed:
         (out / f"{arch}.json").write_text(json.dumps(summed))
         found = True
-if "GITHUB_OUTPUT" in os.environ:
-    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-        handle.write(f"found={str(found).lower()}\n")
-print(f"found={str(found).lower()}")
+with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+    handle.write(f"found={str(found).lower()}\n")
 PY

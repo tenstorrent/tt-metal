@@ -71,9 +71,6 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name }}
 
-      # pytest-split (--splits) cuts by test count unless it finds .test_durations. Take
-      # them from the newest green push run on main, once here, so every leg cuts the
-      # same list. On any failure the legs cut by test count, as before.
       - name: Fetch test durations from main
         id: durations
         continue-on-error: true

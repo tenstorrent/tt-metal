@@ -1,9 +1,6 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-
-"""Tests for llk-fetch-test-durations.sh, with a fake gh on PATH."""
 
 from __future__ import annotations
 
@@ -15,7 +12,6 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "llk-fetch-test-durations.sh"
 
 FAKE_GH = """#!/usr/bin/env bash
-# gh run list prints the run ids; gh run download copies $FIXTURE/<run>/* into -D.
 if [[ "$2" == list ]]; then cat "$FIXTURE/runs"; exit 0; fi
 run="$3"; dir="${@: -1}"
 [[ -d "$FIXTURE/$run" ]] || { echo "no artifact matches" >&2; exit 1; }

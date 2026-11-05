@@ -758,12 +758,11 @@ def _select_node_list(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its own time from LLK_SPLIT_DURATIONS, when set (see _store_split_durations);
-    a test it does not know weighs the mean of the known ones. Else a test weighs its module's
-    cost from perf_split_costs.json (perf_split_costs_sol.json with --speed-of-light, which
-    compiles every variant) divided by the module's test count. The chunks are contiguous, so a
-    module's tests, and the ELFs they share, stay in one shard except at a cut point. This runs
-    before _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
+    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
+    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
+    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -826,11 +825,6 @@ def _weights_from_durations(items):
 
 
 def _store_split_durations(session):
-    """Write this leg's per-test leg seconds (duration / xdist workers) to .test_durations.
-
-    The run pass (--compile-consumer) adds to the compile pass's file; any other pass starts
-    a new file. CI uploads it, and later runs cut with it through LLK_SPLIT_DURATIONS.
-    """
     config = session.config
     if config.getoption("--perf-splits") is None:
         return
