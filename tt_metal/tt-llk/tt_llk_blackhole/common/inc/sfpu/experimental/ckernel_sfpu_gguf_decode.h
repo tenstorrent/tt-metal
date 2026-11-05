@@ -99,17 +99,15 @@ inline void _calculate_gguf_decode_body_()
 {
     if constexpr (FMT == IQ2_XXS)
     {
-        iq2_xxs_init();
-        iq2_xxs_body<false>();
+        iq2_stage<false>();
     }
     else if constexpr (FMT == IQ1_S)
     {
-        iq1_s_body<false>();
+        iq1_stage<false>();
     }
     else if constexpr (FMT == IQ2_S)
     {
-        iq2_xxs_init();
-        iq2_xxs_body<true>();
+        iq2_stage<true>();
     }
     else if constexpr (FMT == IQ3_S)
     {
@@ -122,12 +120,11 @@ inline void _calculate_gguf_decode_body_()
     }
     else if constexpr (FMT == IQ2_XS)
     {
-        iq2_xxs_init();
-        iq2_xxs_body<true, true>();
+        iq2_stage<true, true>();
     }
     else if constexpr (FMT == IQ1_M)
     {
-        iq1_s_body<true>();
+        iq1_stage<true>();
     }
     else if constexpr (FMT == TQ1_0)
     {
