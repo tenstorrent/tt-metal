@@ -190,6 +190,7 @@ ALWI void reconfig_data_format(
 
 /**
  * Reconfigures the srcA data format for a new operand, always re-deriving the int8/unsigned state from the new format.
+ * Before SFPU use, reconfigure SrcB if needed to match the DEST exponent family.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {

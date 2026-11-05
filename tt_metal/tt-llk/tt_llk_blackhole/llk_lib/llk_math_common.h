@@ -13,18 +13,54 @@
 
 using namespace ckernel::math;
 
+// Cache writes through this helper per bank; hw_configure refreshes after external writes.
+static std::uint32_t sfpu_srcb_format[2] = {0xff, 0xff};
+
+template <bool wait_for_sfpu = true>
+inline bool _llk_math_configure_sfpu_srcb_(const std::uint32_t srcb_data_format)
+{
+    std::uint32_t format;
+    switch (static_cast<DataFormat>(srcb_data_format))
+    {
+        case DataFormat::Float16:
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp2:
+        case DataFormat::Fp8_e4m3:
+        case DataFormat::Lf8:
+            // The SFPU needs the DEST exponent family, not the packed source width.
+            format = to_underlying(DataFormat::Float16);
+            break;
+        default:
+            // B-family, Float32 and wildcard/integer SrcB select B for BF16 values (e.g. TopK).
+            format = to_underlying(DataFormat::Float16_b);
+            break;
+    }
+    if (format != sfpu_srcb_format[ckernel::cfg_state_id])
+    {
+        if constexpr (wait_for_sfpu)
+        {
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+        }
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(format);
+        sfpu_srcb_format[ckernel::cfg_state_id] = format;
+        return true;
+    }
+    return false;
+}
+
 /**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, and programs FP32 dest
  * accumulation mode. Applies HW-bug workarounds (disables debug feature bit 11) for INT8 math and for the
- * UInt16-with-FP32-dest combination.
+ * UInt16-with-FP32-dest combination. Configures the SFPU DEST format from SrcB.
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB (the SrcB ALU format, programmed unpack-side on Blackhole, not here) to
- *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
+ * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB to interpret data loaded from DEST even though the FPU uses
+ *       implied source formats on Blackhole. For SFPU work, ensure srcb_data_format's exponent family matches
  *       the data in DEST (tt-llk #951).
  */
 template <bool is_fp32_dest_acc_en = false>
@@ -36,17 +72,15 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    sfpu_srcb_format[ckernel::cfg_state_id] = 0xff;
+    _llk_math_configure_sfpu_srcb_<false>(srcb_data_format);
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
 
-    // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
-    // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
-    // SrcB_val/override so the base (or Blackhole per-bank implied) SrcA/SrcB formats are used. The
-    // Dstacc override fields in the same word are owned by the pack thread (configure_pack); the two
-    // writers touch disjoint bits and rely on per-byte RMWCIB atomicity, so no cross-thread mutex is
-    // needed.
+    // Clear the FPU SrcA/SrcB overrides; SFPU DEST accesses use the explicit SrcB format.
+    // Pack owns the disjoint Dstacc fields; per-byte RMWCIB atomicity avoids a cross-thread mutex.
     constexpr std::uint32_t src_fmt_override_mask =
         ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
@@ -170,14 +204,13 @@ inline void _llk_math_pack_sync_init_()
     }
 }
 
-// Following functions do not need to program ALU_FORMAT_SPEC_REG0_SrcA/ALU_FORMAT_SPEC_REG1_SrcB
-// for blackhole since ALU format is inferred
 /**
  * @brief Reconfigure the math thread for a new source A data format.
  *
  * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from the new
- * format. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
- * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
+ * format. Before SFPU use, reconfigure SrcB if needed to match the DEST exponent family.
+ * The INT8 update is on by default (tt-metal#34499); pass
+ * skip_int8 = true to skip that update only when no Int8/UInt8/Int32 boundary is crossed.
  *
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when the new format is Int8/UInt8/Int32).
  * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new format.
@@ -191,9 +224,8 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         LLK_ASSERT(
             is_fp32_dest_acc_en || !is_int8_or_int32_format(srca_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
+        // SrcA-only reconfiguration changes FPU state, not the SrcB format read by the SFPU.
+        // Draining the FPU (MATH) suffices here.
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
@@ -209,9 +241,9 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 /**
  * @brief Reconfigure the math thread for a new source B data format.
  *
- * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from the new
- * format. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
- * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
+ * Updates the SFPU DEST format when its derived SrcB format changes and, by default, re-derives the INT8 math enable bit
+ * so an int8-boundary reconfig cannot leave it stale (tt-metal#34499). The FPU source format remains inferred.
+ * Pass skip_int8 = true only when no Int8/UInt8/Int32 boundary is crossed; changed SFPU formats are still updated.
  *
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when the new format is Int8/UInt8/Int32).
  * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new format.
@@ -220,15 +252,16 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
+    [[maybe_unused]] const bool sfpu_format_changed = _llk_math_configure_sfpu_srcb_(srcb_data_format);
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
             is_fp32_dest_acc_en || !is_int8_or_int32_format(srcb_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        if (!sfpu_format_changed)
+        {
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        }
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srcb_data_format);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }
@@ -243,9 +276,9 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 /**
  * @brief Reconfigure the math thread for new source A and source B data formats.
  *
- * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from both new
- * formats. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
- * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
+ * Updates the SFPU DEST format when its derived SrcB format changes and, by default, re-derives the INT8 math enable bit
+ * from both new formats (tt-metal#34499). The FPU source formats remain inferred. Pass skip_int8 = true only
+ * when no Int8/UInt8/Int32 boundary is crossed; changed SFPU formats are still updated.
  *
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when either new format is Int8/UInt8/Int32).
  * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new formats.
@@ -255,15 +288,16 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    [[maybe_unused]] const bool sfpu_format_changed = _llk_math_configure_sfpu_srcb_(srcb_data_format);
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
             is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format)),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        if (!sfpu_format_changed)
+        {
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        }
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }

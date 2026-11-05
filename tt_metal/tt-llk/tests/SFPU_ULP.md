@@ -61,15 +61,13 @@ infinity or NaN is fed: the unpack flushes a subnormal, so a lane there would me
 flush rather than the op. The domain is not clipped to the op's safe range: undefined
 inputs reach the hardware and are masked out afterwards. An exponent-B input packed to
 `Float16` needs a 32-bit Dest on Wormhole and Blackhole, so those cells run at
-`dest_acc=Yes` only (`ulp_sweep.sweep_cells`). On Blackhole no cell that holds fp16 in
-a 16-bit Dest (a `Float16` input, or a `Float16` output from `Float32`, at
-`dest_acc=No`) is swept, since the SFPU reads garbage there (#62654,
-`ulp_sweep.fp16_dest_unusable`). The emitter keeps `dest` pinned on every pair of an
-op with a pair swept at one Dest for that reason (on Blackhole, every swept op), so no
-step-budget row of the Blackhole table covers those cells. No functional
-driver runs a `Float16` unary cell either; the unary driver's `_skip_bh_unless_fp32` is
-a separate, broader Blackhole skip (every `dest_acc=No` variant but
-`Float32 -> Float32`).
+`dest_acc=Yes` only (`ulp_sweep.sweep_cells`). Both architectures sweep all four
+pairs that hold fp16 in a 16-bit Dest: Float16 to Float16/Float16_b/Float32 and
+Float32 to Float16. Blackhole's math configuration programs the SrcB format used
+by the SFPU to interpret these operands. `test_sfpu_fp16_dest.py` also checks
+exact Add1 results with Float16 and FP8 inputs. The general functional unary
+profile still has its separate `_skip_bh_unless_fp32` guard for standard-profile
+`dest_acc=No` variants other than `Float32 -> Float32`.
 
 The binary, ternary and scalar rows, and the hand-built unary sweeps, are measured over
 their own drivers' stimuli, and those drivers gate on the whole contract. No functional
