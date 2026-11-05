@@ -603,3 +603,34 @@ def test_fold_padded_pixels(device, shape, dtype, memory_config):
     assert actual.shape == expected.shape
     wrong = int((actual != expected).sum())
     assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"
+
+
+@pytest.mark.parametrize(
+    "shape, buffer_type, padding",
+    [
+        ((1, 4, 8, 3), L1, [1, 1, 1, 1, 0, 0]),
+        ((1, 4, 8, 3), L1, [0, 0, 0, 0, 0, 1]),
+        ((1, 4, 8, 3), L1, [1, 1, 1, 1, 0, 1]),
+        ((1, 4, 8, 4), L1, [1, 1, 1, 1, 0, 0]),
+        ((1, 4, 8, 3), DRAM, [1, 1, 1, 1, 0, 0]),
+    ],
+    ids=["l1_c3_pad_hw", "l1_c3_pad_c", "l1_c3_pad_hw_c", "l1_c4_pad_hw", "dram_c3_pad_hw"],
+)
+def test_fold_padded_pixels_with_padding(device, shape, buffer_type, padding):
+    """A height-sharded input with a shard wider than C takes the general fold path, which pads it in interleaved
+    memory: the fast path's halo padding needs a shard as wide as C, and pad cannot grow a sharded tensor."""
+    n = math.prod(shape)
+    torch_input = ((torch.arange(n) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
+    memory_config = _legacy_config(HEIGHT, buffer_type, TWO_CORES, [16, 8])
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+    assert tt_input.padded_shape[-1] > tt_input.shape[-1], "the case must have padded pixels"
+
+    tt_out = ttnn.fold(tt_input, 2, 2, padding=padding)
+
+    top, bottom, left, right, c_front, c_back = padding
+    padded = torch.nn.functional.pad(ttnn.to_torch(tt_input), (c_front, c_back, left, right, top, bottom))
+    expected = fold_torch(padded, 2, 2)
+    actual = ttnn.to_torch(tt_out)
+    assert actual.shape == expected.shape
+    wrong = int((actual != expected).sum())
+    assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"

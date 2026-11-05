@@ -19,16 +19,9 @@ namespace ttnn::operations::data_movement {
 
 bool is_fast_path_input(const Tensor& t) {
     return t.memory_config().is_l1() && t.is_sharded() && t.shard_spec().has_value() &&
-           t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR;
+           t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR &&
+           t.shard_spec()->shape[1] == t.logical_shape()[-1];
 }
-
-namespace CMAKE_UNIQUE_NAMESPACE {
-// The fast-path kernel moves whole shard-width pixels, so it needs a shard as wide as the logical channels. Wider
-// shards pad every pixel, and MultiCoreDRAMFold copies only the logical channels.
-bool takes_fast_path(const Tensor& t) {
-    return is_fast_path_input(t) && t.shard_spec()->shape[1] == t.logical_shape()[-1];
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
     const Tensor& input_tensor, tt::tt_metal::TensorMemoryLayout layout, uint32_t rows, uint32_t cols) {
@@ -48,8 +41,8 @@ tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
 
 Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& tensors) {
-    return CMAKE_UNIQUE_NAMESPACE::takes_fast_path(tensors.input_tensor) ? program_factory_t{MultiCore{}}
-                                                                         : program_factory_t{MultiCoreDRAMFold{}};
+    return is_fast_path_input(tensors.input_tensor) ? program_factory_t{MultiCore{}}
+                                                    : program_factory_t{MultiCoreDRAMFold{}};
 }
 
 void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, uint32_t stride_w) {
@@ -90,7 +83,7 @@ void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, 
             reason.value_or(""));
     }
 
-    if (CMAKE_UNIQUE_NAMESPACE::takes_fast_path(input_tensor)) {
+    if (is_fast_path_input(input_tensor)) {
         auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(
             shard_shape[0] % (logical_shape[2] * stride_h) == 0,

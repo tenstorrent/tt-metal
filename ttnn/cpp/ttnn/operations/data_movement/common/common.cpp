@@ -978,7 +978,11 @@ Tensor launch_through_interleaved(
                                    ? ttnn::to_memory_config(input, interleaved(input.memory_config()))
                                    : input;
     const auto& output_memory_config = output_spec.memory_config();
-    if (!has_subaligned_split_row(output_spec) && !preallocated_output.has_value()) {
+    if (!has_subaligned_split_row(output_spec) && preallocated_output.has_value()) {
+        // Only the input was sub-aligned: write straight into the preallocated output.
+        return launch(moved_input, std::nullopt);
+    }
+    if (!has_subaligned_split_row(output_spec)) {
         // The output config was derived from the input before it moved; the moved input would derive another.
         Tensor output = launch(moved_input, output_memory_config);
         if (is_functionally_same_memory_config(output.memory_config(), output_memory_config)) {
