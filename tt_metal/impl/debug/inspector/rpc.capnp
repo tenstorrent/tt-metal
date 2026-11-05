@@ -17,14 +17,20 @@ struct KernelArg {
 }
 
 struct RuntimeArgCount {
-    count @0 :UInt32;  # args per core, without the watcher count word
-    coreRanges @1 :List(LogicalCoreRange);
+    core @0 :LogicalCoord;
+    count @1 :UInt32;  # without the watcher count word
 }
 
-# Values live in L1 at kernel_config_base + rta_offset (crta_offset for common args).
+# Values live in L1 at kernel_config_base + rta_offset.
 struct RuntimeArgs {
     names @0 :List(Text);  # names[i] names word i, empty if unnamed; words past the end, like varargs, are unnamed
-    counts @1 :List(RuntimeArgCount);  # kernel cores not listed have no args
+    counts @1 :List(RuntimeArgCount);  # one entry per core with args
+}
+
+# Values live in L1 at kernel_config_base + crta_offset.
+struct CommonRuntimeArgs {
+    names @0 :List(Text);  # like RuntimeArgs.names
+    count @1 :UInt32;  # the same on every core of the kernel, without the watcher count word
 }
 
 struct KernelData {
@@ -36,7 +42,7 @@ struct KernelData {
     processorElfPaths @5 :List(Text);
     compileTimeArgs @6 :List(KernelArg);  # positional, then named
     runtimeArgs @7 :RuntimeArgs;
-    commonRuntimeArgs @8 :RuntimeArgs;
+    commonRuntimeArgs @8 :CommonRuntimeArgs;
 }
 
 enum BinaryStatus {

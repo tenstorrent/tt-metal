@@ -8,7 +8,6 @@
 #include <iterator>
 #include <map>
 #include <stdexcept>
-#include <unordered_map>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
 #include <tt-metalium/experimental/inspector_config.hpp>
@@ -542,30 +541,20 @@ void Data::populate_kernel(rpc::KernelData::Builder out, const KernelData& kerne
 
     auto runtime_args = out.initRuntimeArgs();
     fill(runtime_args.initNames(rta_names.size()), rta_names);
-    std::unordered_map<uint32_t, std::vector<CoreCoord>> cores_by_count;
-    for (const auto& core : kernel->cores_with_runtime_args()) {
-        if (const auto count = kernel->logical_runtime_arg_count(core); count > 0) {
-            cores_by_count[count].push_back(core);
-        }
-    }
-    auto counts = runtime_args.initCounts(cores_by_count.size());
+    const auto& cores = kernel->cores_with_runtime_args();
+    auto counts = runtime_args.initCounts(cores.size());
     i = 0;
-    for (const auto& [count, cores] : cores_by_count) {
-        const CoreRangeSet core_ranges(cores);
+    for (const auto& core : cores) {
         auto runtime_arg_count = counts[i++];
-        runtime_arg_count.setCount(count);
-        populate_core_ranges(runtime_arg_count.initCoreRanges(core_ranges.ranges().size()), core_ranges);
+        auto logical_core = runtime_arg_count.initCore();
+        logical_core.setX(core.x);
+        logical_core.setY(core.y);
+        runtime_arg_count.setCount(kernel->logical_runtime_arg_count(core));
     }
 
-    // Common args are the same list on every core of the kernel.
     auto common_runtime_args = out.initCommonRuntimeArgs();
     fill(common_runtime_args.initNames(crta_names.size()), crta_names);
-    if (const auto count = kernel->logical_common_runtime_arg_count(); count > 0) {
-        auto common_runtime_arg_count = common_runtime_args.initCounts(1)[0];
-        common_runtime_arg_count.setCount(count);
-        const auto& core_ranges = kernel->core_range_set();
-        populate_core_ranges(common_runtime_arg_count.initCoreRanges(core_ranges.ranges().size()), core_ranges);
-    }
+    common_runtime_args.setCount(kernel->logical_common_runtime_arg_count());
 }
 
 // Helper function to populate the core info
