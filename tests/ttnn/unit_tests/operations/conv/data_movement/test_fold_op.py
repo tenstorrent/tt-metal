@@ -14,7 +14,7 @@ from tt_py_test_utils_common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
@@ -683,3 +683,49 @@ def test_fold_fast_path_unaligned_pixels(device, dtype):
     assert actual.shape == expected.shape
     wrong = int((actual != expected).sum())
     assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"
+
+
+def _ramp_rows(shape):
+    # Multiples of 1/8, exact in bfloat16.
+    return ((torch.arange(math.prod(shape)) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def test_fold_nd_sharded_subaligned_output_rows(device):
+    """Fold synthesizes an ND output with ceil(4 * C / grid width) values per shard row. C is picked so that row is
+    not 16-byte aligned, which the sharded writes cannot split, so fold writes the output interleaved first."""
+    grid_width = device.compute_with_storage_grid_size().x
+    c = next(c for c in range(3, 64) if (-(-4 * c // grid_width) * 2) % 16 != 0 and 4 * c > grid_width)
+    shape = (1, 4, 12, c)
+    torch_input = _ramp_rows(shape)
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_nd_config(ONE_CORE, list(shape))
+    )
+
+    tt_out = ttnn.fold(tt_input, 2, 2)
+
+    out_config = tt_out.memory_config()
+    shard_width = (
+        out_config.shard_spec.shape[1]
+        if out_config.shard_spec is not None
+        else out_config.nd_shard_spec.shard_shape[-1]
+    )
+    assert out_config.memory_layout != HEIGHT and (shard_width * 2) % 16 != 0, out_config
+    assert_equal(fold_torch(torch_input, 2, 2), ttnn.to_torch(tt_out))
+
+
+def test_fold_nd_sharded_subaligned_input_rows(device):
+    """Only the input's 8-byte ND shard rows are sub-aligned: fold reads it from interleaved memory, and its
+    synthesized output, with 16-byte shard rows, stays sharded."""
+    shape = (1, 4, 12, 16)
+    torch_input = _ramp_rows(shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_nd_config(((0, 0), (3, 0)), [1, 4, 12, 4]),
+    )
+
+    tt_out = ttnn.fold(tt_input, 2, 2)
+
+    assert tt_out.memory_config().is_sharded(), tt_out.memory_config()
+    assert_equal(fold_torch(torch_input, 2, 2), ttnn.to_torch(tt_out))
