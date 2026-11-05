@@ -114,7 +114,7 @@ void kernel_main() {
     }
 #ifdef DIT_NORM_RUNTIME_ROWS
     const uint32_t num_tile_rows = get_common_arg_val<uint32_t>(0);
-    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(num_tile_rows, num_workers);
+    const uint32_t rows_per_worker = ttnn::runtime_length::div_up(num_tile_rows, num_workers);
     const uint32_t max_rounds = rows_per_worker;
     const uint32_t num_chunks_per_device = num_forwarders * max_rounds;
     // Group workers that still own a tile row in round r: a prefix of the group, since the
