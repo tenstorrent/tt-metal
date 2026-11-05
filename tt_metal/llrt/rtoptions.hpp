@@ -315,6 +315,7 @@ class RunTimeOptions {
     std::string emu_server;
     std::vector<std::string> emu_soc_desc_paths;
     std::string emu_cluster_desc_path;
+    bool quasar_mock_jit = false;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;
     std::string grendel_jtag_transport = "jtag2axi_v2";
@@ -995,6 +996,9 @@ public:
     // Mock cluster accessors
     // True on the Mock target only. Simulator and Emule runs may also carry a mock cluster descriptor path.
     bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    // TT_METAL_QUASAR_MOCK_JIT: a Quasar Mock device builds its firmware and JIT-compiles program kernels; otherwise
+    // Mock skips both for Quasar.
+    bool get_quasar_mock_jit() const { return quasar_mock_jit; }
     // TT_METAL_MOCK_CLUSTER_DESC_PATH, or the programmatic mock descriptor; empty when unset. The Mock and Emule
     // targets require it, and the Simulator target uses it when set.
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }

@@ -150,13 +150,13 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
 }
 
 // Whether a Mock device of `arch` builds firmware. Quasar Mock skips kernel JIT (ProgramImpl::compile), which is
-// what links against the firmware, so it builds firmware only when llrt::quasar_mock_jit_enabled() lifts that skip.
+// what links against the firmware, so it builds firmware only when TT_METAL_QUASAR_MOCK_JIT lifts that skip.
 // Real silicon devices bypass this check.
-bool mock_builds_firmware_for(tt::ARCH arch) {
+bool mock_builds_firmware_for(tt::ARCH arch, const llrt::RunTimeOptions& rtoptions) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0:
         case tt::ARCH::BLACKHOLE: return true;
-        case tt::ARCH::QUASAR: return llrt::quasar_mock_jit_enabled();
+        case tt::ARCH::QUASAR: return rtoptions.get_quasar_mock_jit();
         default: return false;
     }
 }
@@ -309,7 +309,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             //      riscv firmware ELFs are never linked or consumed.
             const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
                                        (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
-                                        !mock_builds_firmware_for(cluster_.arch()));
+                                        !mock_builds_firmware_for(cluster_.arch(), rtoptions_));
             if (!skip_fw_build) {
                 build_env_manager.build_firmware(device_id);
             }
