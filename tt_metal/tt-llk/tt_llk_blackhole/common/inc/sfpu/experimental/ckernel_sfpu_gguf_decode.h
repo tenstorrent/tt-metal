@@ -2,25 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SFPU decoders of GGUF weight formats: one page (experimental/ckernel_gguf_page.h) to one Float32 [K][N] tile in DEST
-// with the block scales applied. Needs a 32-bit DEST (fp32_dest_acc_en).
+// SFPU decoders of GGUF weight formats: one page (experimental/ckernel_gguf_page.h) to one Float32 [K][N] tile in DEST,
+// scales applied, equal to ggml's dequantization. Needs a 32-bit DEST (fp32_dest_acc_en).
 //
-// DEST, from the tile the call starts at (sfpu_gguf_decode_tile): tile 0 is the output, tile 1 the page (unpacked as
-// UInt32), tile 2 scratch for the per-lane scales S and offsets M. Output o of SFPU lane (r, c) is element
-// k = 16h + 4((o / 2) % 4) + r, n = 16a + 2c + b of the tile, with h = o / 16, a = (o / 8) % 2, b = o % 2: the K
-// row and the N column (the weight's row) of a [K][N] tile, as a matmul's SrcA wants it.
-//
-// The page's code words sit where those lanes load them: word-vector v (DEST rows 4 (v / 2) .. + 3 of the page tile,
-// columns of parity v % 2) holds, in lane (r, c), the codes of that lane's outputs. Its scale fields start at row
-// R = scale_offset / 64, regrouped so that word w = 2c + p of a row carries the fields of columns 16p + 2c and
-// 16p + 2c + 1 (low half, high half).
-//
-// Phase 1 (params) reads the scale fields and writes S[a][b][h] and M[a][b][h] per lane to the scratch tile: a 4-row
-// block of scale rows is loaded four times and transposed (transp4), which leaves each row replicated over the four
-// SFPU row groups; fp16 fields come converted (f16_at) or as the fp32 rows ckernel_gguf_page.h prepare_scales adds.
-// Phase 2 (body) extracts each output's code and writes q * S + M (linear formats) or v(q) * S (value-table and
-// codebook formats). Results equal ggml's dequantization bit for bit: every product of a code and a scale is exact in
-// fp32, and q * S + M rounds once like ggml's d * q - m.
+// DEST tiles from the call's tile: 0 output, 1 page (unpacked as UInt32), 2 scratch for the per-lane scales S and
+// offsets M. Output o of SFPU lane (r, c) is element k = 16h + 4((o / 2) % 4) + r, n = 16a + 2c + b, with h = o / 16,
+// a = (o / 8) % 2, b = o % 2. Word-vector v of the page (rows 4 (v / 2) .. + 3, columns of parity v % 2) holds the
+// codes of lane (r, c)'s outputs; in the scale rows (from scale_offset / 64), word 2c + p holds the fields of columns
+// 16p + 2c and 16p + 2c + 1 (low, high half).
+// Phase 1 (params) writes S[a][b][h] and M[a][b][h] to the scratch tile. Phase 2 (body) writes q * S + M (linear
+// formats) or v(q) * S (value-table and codebook formats).
 
 #pragma once
 
@@ -98,8 +89,7 @@ inline void _calculate_gguf_decode_params_()
     }
 }
 
-// IQ2_XS decodes in two calls, its tile-index phase 1 and the phase 2 below, shared by every tile index: with phase 2
-// inlined into each of the eight phase 1 instantiations its decode wrote zeros in a matmul kernel.
+// IQ2_XS runs phase 2 as a separate call, one copy shared by every tile index.
 template <int FMT>
 constexpr bool two_calls = FMT == IQ2_XS;
 
@@ -197,8 +187,7 @@ inline void macro_init()
 
 } // namespace gguf
 
-// The SFPU at DEST tile dst_index, `rows` rows further on (a page tile holding several pages: the page `rows` rows
-// into tile dst_index + 1, the output over the rows before it).
+// Points the SFPU at DEST tile dst_index plus `rows` rows (a page `rows` rows into a tile of several pages).
 inline void sfpu_gguf_decode_start(const std::uint32_t dst_index, const std::uint32_t rows)
 {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (dst_index << 6) + rows + get_dest_buffer_base());
@@ -246,8 +235,7 @@ inline void sfpu_gguf_decode_init()
  *                       timing it.
  * @param dst_index: DEST tile of the output. The page must be in tile dst_index + 1 (unpacked to DEST as UInt32);
  *                   tile dst_index + 2 is scratch.
- * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles): the formats whose scales or
- *            page differ per tile select them by it.
+ * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
  * @param rows: DEST row offset of the page inside tile dst_index + 1 (several pages unpacked as one tile); the output
  *              tile and the scratch tile move with it.
  * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init. Overwrites the programmable constants and may record

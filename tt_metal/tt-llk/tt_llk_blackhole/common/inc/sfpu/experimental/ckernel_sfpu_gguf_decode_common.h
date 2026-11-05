@@ -20,8 +20,7 @@ namespace gguf
 
 using namespace ckernel::gguf;
 
-// SFPTRANSP transposes LRegs 0..3 and 4..7 as two 4x4 blocks; the second block is scratch here. It uses all eight
-// LRegs, so no other value stays in an LReg across it.
+// SFPTRANSP of LRegs 0..3 (4..7 are scratch). Uses all eight LRegs: no other value stays in an LReg across it.
 template <typename V>
 sfpi_inline void transp4(V& a, V& b, V& c, V& d)
 {
@@ -69,8 +68,7 @@ sfpi_inline void rep4(const int g, const int p, vUInt& r0, vUInt& r1, vUInt& r2,
     transp4(r0, r1, r2, r3);
 }
 
-// Replicated copies of scale rows 4g..4g+3, parity p, into scratch dst_reg[base + 0..3] of the output tile (phase 2
-// overwrites the output tile afterwards).
+// rep4 into dst_reg[base + 0..3] of the output tile, which phase 2 overwrites.
 template <int FMT>
 sfpi_inline void rep4_to(const int g, const int p, const int base)
 {
@@ -82,7 +80,7 @@ sfpi_inline void rep4_to(const int g, const int p, const int base)
     sfpi::dst_reg[base + 3].mode<sfpi::DataLayout::U32>() = r3;
 }
 
-// Bit field [lsb, lsb + width) of w, unsigned: at most two shifts, no mask constant.
+// Bit field [lsb, lsb + width) of w, unsigned.
 sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
 {
     if (lsb + width == 32)
@@ -92,9 +90,7 @@ sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
     return (w << static_cast<unsigned>(32 - lsb - width)) >> static_cast<unsigned>(32 - width);
 }
 
-// Prepared formats (fp16_rows > 0): fp32 field F (fp16 row F after the raw rows) of column 16a + 2c + b, from rows
-// R + 4 (2F + b) .. + 3 of the scale fields, R = scale rows rounded up to 4 (ckernel_gguf_page.h prepare_scales): one
-// load gives every lane its value without an fp16 conversion.
+// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b (prepare_scales).
 template <int FMT>
 sfpi_inline vFloat pf32(const int F, const int b, const int a)
 {
@@ -108,10 +104,8 @@ sfpi_inline vUInt byte_bits(const int base, const int B, const int lsb, const in
     return bits(ldu(base + B / 4), 8 * (B % 4) + lsb, width);
 }
 
-// Scale conversions without branches on the value class. B rebias-adds the field's bits into the fp32 exponent: exact
-// for normal values, larger than the true value for subnormal ones. A = 2 B - (smallest normal): exact for subnormal
-// values, not smaller than the true value for normal ones. The minimum is the value. Only normal fp32 values occur.
-// Constants (params_init): programmable constant 0 = 112 << 23 (fp16), 1 = 119 << 23 (UE4M3 halved).
+// f16_at and ue4m3_half: b rebias-adds the field into the fp32 exponent (exact for normals), a = 2 b - smallest normal
+// (exact for subnormals), the value is min(a, b). Programmable constants 0 = 112 << 23 (fp16), 1 = 119 << 23 (UE4M3).
 sfpi_inline void params_init()
 {
     sfpi::vConstIntPrgm0 = 0x38000000;
@@ -134,7 +128,7 @@ constexpr int pidx(const int a, const int b, const int h)
     return (a * 2 + b) * 2 + h;
 }
 
-// No per-lane value stays in an LReg across transp4: the shift amounts are reloaded from DEST after each transpose.
+// Shift amounts are reloaded from DEST: no per-lane value stays in an LReg across transp4.
 sfpi_inline vUInt shift_after_transp(const vUInt w, const int amount)
 {
     return w << ldu(amount);
@@ -146,14 +140,10 @@ sfpi_inline vInt lane_row()
     return sfpi::as<vInt>(sfpi::as<vUInt>(sfpi::vConstTileId) >> 4u);
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Phase 2: codes. A linear format's code is one B-bit field (Q8_0 8; Q6_K 6, ql | qh << 4; Q5_K, Q5_0, Q5_1 5; Q4_* 4;
-// Q3_K 3; Q2_K, TQ2_0, Q2_0 2; Q1_0 1) in the tile's B code word-vectors (pair pages Q5_K, Q3_K, Q1_0, Q5_0, Q5_1: tile
-// CP's from word-vector B CP). Stream position k is row o = mrow(k) = 16 h + 8 a + i, with (a, h, i) = (k / 16,
-// k / 8 % 2, k % 8); mrow is its own inverse. When B divides 32, row o is field o % F of word o / F (F = 32 / B fields
-// a word). Otherwise (B = 6, 5, 3) stream position k < F B is field k % F of word k / F, and the last two rows take the
-// words' top 32 - F B = 2 bits: bit j of that string (word 0 bits 30, 31, word 1 bits 30, 31, ..) is bit j % B of
-// stream position F B + j / B.
+// Linear code layout: one B-bit code per output (Q6_K: ql | qh << 4) in the tile's B code word-vectors (pair formats:
+// tile CP's from word-vector B CP). Stream position k is row mrow(k), its own inverse. B dividing 32: row o is field
+// o % F of word o / F. Otherwise position k < F B is field k % F of word k / F, and bit j of the words' top-2-bit
+// string (word 0 bits 30, 31, word 1 bits 30, 31, ..) is bit j % B of position F B + j / B.
 
 template <int FMT>
 struct mfield
@@ -188,7 +178,7 @@ constexpr int mlsb(const int k)
     return M::B * (32 % M::B == 0 ? mrow(k) % M::F : k % M::F);
 }
 
-// Field f (LO bits wide) of word w, as an unsigned value: two shifts, one for the top field (no mask constant).
+// Field f (LO bits wide) of word w, unsigned.
 template <int LO>
 sfpi_inline vUInt field(const vUInt w, const int f)
 {
@@ -242,9 +232,8 @@ sfpi_inline vUInt code_at(const int o, const vUInt w)
     }
 }
 
-// IQ4_NL value table: round(P4(q)) with P4 = minimax fit whose constant term is the integer -127 (max error 0.4397,
-// exact for q = 0..15 under fp32 Horner, fused or not). The constant term is folded into the rounding constant
-// 1.5 * 2^23, which keeps it exact; c4..c2 live in the three programmable constant registers (set in iq4_init).
+// IQ4_NL value table: round(P4(q)), exact for q = 0..15. The constant term -127 is folded into the rounding constant
+// 1.5 * 2^23; c4..c2 go to programmable constants 0..2 (iq4_init).
 constexpr float IQ4_C4  = 0.0014480184763669968f;
 constexpr float IQ4_C3  = 0.03627324849367142f;
 constexpr float IQ4_C2  = -1.4385637044906616f;
@@ -289,8 +278,7 @@ sfpi_inline void body()
 #pragma GCC unroll 2
         for (int h = 0; h < 2; h++)
         {
-            // When B divides 32, the 8 outputs of (a, h) read one code word (two for 8-bit codes); otherwise code_of
-            // reads each output's code from DEST.
+            // B dividing 32: one code word per (a, h), two for 8-bit codes.
             const int o0 = 16 * h + 8 * a;
             vUInt l0, l1;
             if constexpr (32 % M::B == 0)
@@ -308,7 +296,7 @@ sfpi_inline void body()
                 {
                     M = sfpi::dst_reg[PM + pi];
                 }
-// Two outputs per step, interleaved: SFPMAD results are consumed two instructions later instead of at once.
+// Two outputs per step, interleaved to hide the SFPMAD latency.
 #pragma GCC unroll 2
                 for (int s = 0; s < 4; s += 2)
                 {
@@ -337,7 +325,7 @@ sfpi_inline void body()
                         pb              = pb * xb + c0r;
                         pa              = pa + -12582912.0f;
                         pb              = pb + -12582912.0f;
-                        // Both products before either store: a store right after its SFPMUL stalls a cycle.
+                        // Both products before either store (SFPMUL latency).
                         const vFloat ra   = pa * S;
                         const vFloat rb   = pb * S;
                         sfpi::dst_reg[oa] = ra;

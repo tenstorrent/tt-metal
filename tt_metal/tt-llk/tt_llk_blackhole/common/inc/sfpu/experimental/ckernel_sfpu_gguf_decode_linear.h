@@ -164,13 +164,9 @@ sfpi_inline void linear_params()
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// body() of the linear formats but Q8_0 and TQ1_0 through SFPLOADMACRO, with the same arithmetic. Per output, a macro
-// on the output's row runs q >> (32 - B), its conversion to fp32, S q + M into LReg16 and the store of LReg16, while
-// the regular instruction after the macro moves the output's field to the top of its code word. Each output takes
-// three slots: the macro, the shift and one without a Simple instruction, where the macro's Round-unit shift runs (a
-// Simple and a Round instruction in one cycle must not both write LRegs 0..7). ttsim does not model the macros: under
-// DISABLE_SFPLOADMACRO these formats use body().
+// body() of the linear formats but Q8_0 and TQ1_0 through SFPLOADMACRO. Three slots per output: the macro (shift,
+// cast, S q + M, store), a shift of the output's field to the top of its word, and a slot without a Simple instruction
+// for the macro's Round-unit shift. Under DISABLE_SFPLOADMACRO (ttsim) these formats use body().
 
 template <int FMT>
 constexpr bool macro_q4 = FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K;
@@ -203,9 +199,8 @@ sfpi_inline void macro_init_linear()
     TTI_SFPNOP;
 }
 
-// Q4_0, Q4_1 and Q4_K: output field i of code word 2h + a (L3) through macro i % 2, with L0..L2 in turn. The third slot
-// loads the next code word or S, M when due. S, M of the next a load once the MADs reading the old ones have run; the
-// last store runs before the body returns.
+// Q4_0, Q4_1 and Q4_K: field i of code word 2h + a (L3) through macro i % 2, v in L0..L2 in turn; third slots load
+// the next code word or S, M.
 sfpi_inline void body_macro_q4()
 {
     TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * CO);
@@ -252,10 +247,8 @@ sfpi_inline void body_macro_q4()
     }
 }
 
-// The other macro formats: an issue stream planned at compile time (make_mplan), output by output in stream order k.
-// Code-word and S / M loads go into third slots once their register is free and before their first reader, into extra
-// slots where no third slot is left. v alternates L0 / L1, code words L3 / L2 (one load per word), S / M of column half
-// b sit in L4 / L5 (b = 0) and L6 / L7 (b = 1).
+// The other macro formats: an issue stream planned at compile time (make_mplan) in stream order k; loads take free
+// third slots or extra slots. v alternates L0 / L1, code words L3 / L2, S / M of column half b in L4 + 2b / L5 + 2b.
 
 enum : int
 {
@@ -305,8 +298,7 @@ constexpr bool mready(const mtask& x, const int* T, const int t)
     }
 }
 
-// Last slot task x may take if stream position knext's macro issues in slot tnext and every later one 3 slots on:
-// before its position's macro, or for the second S / M load up to that position's third slot.
+// Last slot task x may take if position knext's macro issues in slot tnext (3 slots per position).
 constexpr int mdeadline(const mtask& x, const int tnext, const int knext)
 {
     return tnext + 3 * (x.k - knext) + (x.late ? 2 : -1);
@@ -464,14 +456,11 @@ sfpi_inline void body_macro()
     mslots_issue<FMT, CP>(std::make_integer_sequence<int, mplan_v<FMT, CP>.n> {});
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// TQ1_0: one page holds the group's eight K tiles as the GGUF bytes. Byte j of lane (r, c):
-//   word-vector 4a + 2h + b (tiles 0..4): qs[16h + 4j + r] of column 16a + 2c + b;
-//   word-vector 8 + 2a + b (tiles 5..7): qs[32 + 4j + r];
-//   scale rows 0 / 1, word 2c + a: qh of columns (a, 0) / (a, 1); row 2: d.
-// Output o = 16h + 8a + 2j + b of tile TI is trit D of its byte, ((x 3^D) mod 256) 3 >> 8 as in dequantize_row_tq1_0:
-// D = TI for tiles 0..4, 2 (TI - 5) + h for tiles 5 and 6, 4 for h = 0 of tile 7; h = 1 of tile 7 is trit j of qh[r].
-// Value = trit * d - d.
+// TQ1_0: one page holds the group's eight K tiles as GGUF bytes. Byte j of lane (r, c): word-vector 4a + 2h + b
+// (tiles 0..4): qs[16h + 4j + r] of column 16a + 2c + b; word-vector 8 + 2a + b (tiles 5..7): qs[32 + 4j + r]; scale
+// rows 0 / 1, word 2c + a: qh of columns (a, 0) / (a, 1); row 2: d. Output o = 16h + 8a + 2j + b of tile TI is trit D
+// of its byte: D = TI for tiles 0..4, 2 (TI - 5) + h for tiles 5, 6 and 4 for h = 0 of tile 7; h = 1 of tile 7 is trit
+// j of qh[r]. Value = trit * d - d.
 constexpr int QH = 2 * TILE; // tile 7: qh[r] of column (a, b) at QH + 2a + b
 constexpr int NQ = QH + 4;   // -8r per lane
 
