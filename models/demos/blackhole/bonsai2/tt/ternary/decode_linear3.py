@@ -158,7 +158,7 @@ class TernaryDecodeLinear3:
     def __call__(
         self,
         x_rot,
-        inflight=8,
+        inflight=int(os.environ.get("BONSAI_TDEC_INFLIGHT", "3")),  # reads in flight per RISC: 3 beat 8 by ~4% (traced)
         sfpu_iter=10,
         dbg=False,
         sfpu_reinit=True,
