@@ -2616,6 +2616,9 @@ def test_slice_docstring_supported_inputs(dtype, layout, buffer_type, device, ex
         assert_exact(expected[:, :, ::2, :], ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
 
 
+# ttnn.slice already rejects step <= 0 at its entry; these cases guard that and
+# cover quasar slice, whose host path used to cast a negative step to a huge uint32 (silent empty tensor)
+# and divide by a zero step (SIGFPE). The moved device-op check is not reachable from here.
 @pytest.mark.parametrize("slice_fn", [ttnn.slice, ttnn.experimental.quasar.slice], ids=["slice", "quasar_slice"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(

@@ -335,7 +335,8 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
     } else {
         // Regular path using slice_start, slice_end, step
         auto output_dim_i = [&args](size_t i) {
-            TT_FATAL(args.step[i] > 0, "Step({}) = {} should be positive", i, args.step[i]);
+            // args.step is unsigned, so this only rejects 0 (the divide-by-zero); sign is checked in ttnn::slice.
+            TT_FATAL(args.step[i] != 0, "Step({}) must be non-zero", i);
             return (args.slice_end[i] - args.slice_start[i] + args.step[i] - 1) / args.step[i];
         };
         for (uint32_t i = 0; i < out_shape.size(); i++) {
