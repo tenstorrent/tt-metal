@@ -541,7 +541,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     // TT_METAL_WORKLOAD_FAN_OUT=1: write all devices in one parallel_for. A program on one device is updated by its
     // worker; the others are updated here first.
-    static const bool fan_out = tt::parse_env("TT_METAL_WORKLOAD_FAN_OUT", false);
+    static const bool fan_out = tt::parse_env("TT_METAL_WORKLOAD_FAN_OUT", true);
     const bool fan_out_writes = fan_out && mesh_device_->impl().get_devices().size() > 1;
     program_writes_.clear();
     program_write_device_ids_.clear();
