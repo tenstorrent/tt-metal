@@ -5,30 +5,20 @@
 #pragma once
 
 // Downstream connections: the routers on this chip that a receiver channel forwards packets to (one per other
-// direction in 2D, one in 1D). For each, the receiver keeps
-//   - its progress: the next slot in the downstream sender channel and the number of slots known free there;
-//   - the link: the channel's first slot and the downstream's NoC coordinate and credit register (from runtime args,
-//     set at init).
+// direction in 2D, one in 1D). For each, the receiver keeps its progress (the next slot in the downstream sender
+// channel and the slots known free there) and its link (the channel's first slot, the downstream's NoC coordinate and
+// credit register; set at init from the runtime args).
 //
-// Credits. The downstream's sender channel has a free-slots stream register; this router keeps a local copy of it,
-// which the downstream increments as it frees slots. A forward decrements both (the downstream's is its doorbell), and
-// the progress's known-free count is a lower bound of the local copy, re-read only when it reaches zero. So admission
-// usually costs no register read (cached downstream credits).
+// Credits: this router keeps a local copy of each downstream sender channel's free-slots register, which the downstream
+// increments as it frees slots. A forward decrements both (the downstream's is its doorbell); the known-free count is a
+// lower bound of the local copy, re-read only at zero, so an admit usually reads no register.
 //
-// Forwards go through the NoC API. How a VC's forwards use their command buffers is fixed at compile time
-// (ForwardCommands): with one destination for the whole run the buffers keep it, with several they keep only what no
-// forward changes, and without presets every forward writes its whole commands.
+// Names: a downstream's name is its direction in 2D (so a packet's action bits are its downstreams), 0 for 1D's one
+// downstream; its entry is its index in the host's compact order, which the tables keep (downstream_entry maps a name
+// to its entry); its dense index is its index among the entries the runtime args list.
 //
-// Names, entries and dense indices, one term each:
-//   - name: how the receiver loop and routing name a downstream: its direction in 2D (so a packet's action bits are its
-//     downstreams), 0 for 1D's one downstream;
-//   - entry: its index in the host's compact order, which the tables below keep (downstream_entry maps a name to its
-//     entry at compile time);
-//   - dense index: its index among the entries the runtime args list (the entries that have a downstream).
-//
-// UDM (FabricTensixConfig::UDM). Packets for this chip go to the fabric's relay, a kernel on a Tensix core that does
-// their NoC work on this chip (writes, atomics, reads), not to their NoC destinations. To the receiver the relay is one
-// more downstream (Relay).
+// UDM: packets for this chip go to the fabric's relay, a Tensix kernel that does their NoC work on this chip; to the
+// receiver it is one more downstream (Relay). How forwards use their command buffers: "Forward command buffers" below.
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
@@ -45,10 +35,9 @@ namespace fabric_router {
 // (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
 constexpr std::array<size_t, 2> DOWNSTREAM_EDM_COUNT_BY_VC = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
 
-// The downstreams a router can forward to on VC, one bit per name. In 2D, the directions with an entry (the host lists
-// DOWNSTREAM_EDM_COUNT_BY_VC[VC] of them); an E/W-facing router inside a mesh never turns a packet onto N/S (packets
-// travel Y first), so its N/S downstreams are not live. Intermesh routers (a landing decodes Y first) and routers on a
-// mesh's edge (an exit may leave in any direction) can turn onto N/S. In 1D, downstream 0.
+// The downstreams a router can forward to on VC, one bit per name. In 2D, the directions with an entry, but an
+// E/W-facing router inside a mesh never turns a packet onto N/S (Y first); intermesh routers (a landing decodes Y
+// first) and routers on a mesh's edge (an exit may leave in any direction) can. In 1D, downstream 0.
 template <size_t VC>
 constexpr uint32_t live_downstreams() {
     constexpr bool east_west =
@@ -248,10 +237,9 @@ struct FullPresetForwards {
     FORCE_INLINE static void forward(
         const DownstreamLink&, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
 #if defined(ARCH_BLACKHOLE)
-        // The forward's two commands go on the data and credit command buffers: their ready state is read as a pair, so
-        // the two reads overlap instead of each being a lone read inside the NoC API, and a buffer not
-        // ready yet is waited for just before its command, as the API would. Only this ERISC issues on them, so a
-        // buffer seen ready stays ready until its next command.
+        // The two commands' buffers' ready states are read as a pair, so the reads overlap instead of each being a lone
+        // read inside the NoC API; a buffer not ready is waited for just before its command. Only this ERISC issues on
+        // them, so a buffer seen ready stays ready until its next command.
         const bool data_ready = noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf);
         const bool sync_ready = noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf);
         if (!data_ready) {
@@ -312,9 +300,8 @@ struct PartialPresetForwards {
     }
 
     // The packet into `dst` on the node at `link`, tagged with `trid`, then -1 on that node's free-slots register. The
-    // two buffers' ready state is read as a pair, so the two reads overlap, and tested together: when
-    // either is busy (rare), both are waited for before either command, so no ready state is held across the data
-    // command. Only this ERISC issues on them, so a buffer seen ready stays ready until its next command.
+    // two buffers' ready states are read as a pair and tested together: when either is busy (rare), both are waited for
+    // before either command, so no ready state is held across the data command.
     template <size_t ENTRY>
     FORCE_INLINE static void forward(
         const DownstreamLink& link, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
@@ -417,9 +404,8 @@ struct Downstreams {
     std::array<DownstreamLink, Traits::count> links;                      // by entry, set at init
 
     // Every downstream in `forward_to` (live names, one bit each) has a free slot. The known counts are tested first;
-    // only when one the packet needs is used up are the live local credit registers re-read, as one group (without
-    // it, a VC1 router's 2-hop row measured about 4 cycles per packet slower; single-ERISC forwarding up to 2.6
-    // faster).
+    // only when one the packet needs is used up are the live local credit registers re-read, as one group (measured
+    // without it: a VC1 router's 2-hop row about 4 cycles per packet slower, single-ERISC forwarding up to 2.6 faster).
     FORCE_INLINE bool admit(uint32_t forward_to) {
         if (!any_without_free_slot<live>(forward_to)) {
             return true;
@@ -497,10 +483,9 @@ private:
     }
 };
 
-// The receiver's downstream connections: the downstream routers of each VC whose downstream connections a receiver
-// channel here forwards on (any_forwards_on_vc: VC0's, VC1's), and UDM's relay, each where this router has it.
-// Placement: only forwards touch them, so they stay in memory (the receiver loop takes them by reference), not in the
-// registers every packet needs.
+// The receiver's downstream connections: the downstream routers of each VC a receiver channel here forwards on
+// (any_forwards_on_vc: VC0's, VC1's), and UDM's relay, each where this router has it. In memory (the receiver loop
+// takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
 struct DownstreamConnections {
     [[no_unique_address]] Present<any_forwards_on_vc(0), Downstreams<0>, 0> vc0;
     [[no_unique_address]] Present<any_forwards_on_vc(1), Downstreams<1>, 1> vc1;

@@ -12,9 +12,7 @@
 //                  cycles per side), the router state and the TX / RX heartbeats, in the FabricTelemetry block
 // Packets and words are counted in the send and receive paths; the rest happens once per round, out of line. The counts
 // live in one global rather than in the loops' locals, so an option adds memory updates per packet without changing a
-// loop's register state. A round is one run of passes between end_round calls (router_round.hpp).
-// The call sites guard each call with `if constexpr` on the option, so a build with both options off carries no call,
-// argument or lambda in its loops.
+// loop's register state. Each call site is under `if constexpr` on its option: with both off, the loops carry no call.
 
 #include "router_common.hpp"
 #include "router_round.hpp"
@@ -33,7 +31,7 @@ struct Counters {
     uint64_t tx_packets;
     uint64_t tx_words;            // 4 B words (dynamic bandwidth)
     uint64_t tx_eth_words;        // 16 B words, truncated per packet (perf recorder)
-    uint32_t round_tx_words;      // this round's (a round sends far fewer than 2^32 words)
+    uint32_t round_tx_words;      // this round's (a round sends fewer than 2^32 words)
     uint32_t round_tx_eth_words;  // this round's
     uint64_t rx_packets;
     uint64_t rx_words;

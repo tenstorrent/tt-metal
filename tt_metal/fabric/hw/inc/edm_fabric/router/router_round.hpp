@@ -108,11 +108,9 @@ struct RoundCounters {
     uint32_t idle_rounds = 0;
 };
 
-// The heartbeat and the streaming profiler's clock sync, then the context switch: with IDLE_CONTEXT_SWITCHING the
-// master hands the core to the base firmware after SWITCH_INTERVAL rounds in a row without a send attempt
-// (`send_attempted`: a send went out or yielded this round), otherwise every SWITCH_INTERVAL rounds; the other ERISC
-// follows. Returns whether the base firmware ran on this ERISC (the master's context switch), which may have used its
-// command buffers.
+// The heartbeat, the streaming profiler's clock sync, then the context switch: the master hands the core to the base
+// firmware every SWITCH_INTERVAL rounds, or under IDLE_CONTEXT_SWITCHING after that many without a send attempt; the
+// other ERISC follows. Returns whether the base firmware ran here (it may have used the command buffers).
 __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_attempted) {
     if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;

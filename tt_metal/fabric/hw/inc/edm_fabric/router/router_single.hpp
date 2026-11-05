@@ -5,28 +5,24 @@
 #pragma once
 
 // The single-ERISC router (Blackhole with two-ERISC mode off; Wormhole once supported): one ERISC runs both roles. Each
-// role keeps its two-ERISC pass (sender::pass, receiver::pass) and its own state; here each pass runs out of line over
-// a record of its state in memory, so neither role's code has to hold the other's state in registers. The receiver's
-// pass runs first: it frees ring slots and returns the credits the far sender is waiting on.
-//
-// Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp); with one
-// ERISC there is no other ERISC to park or follow. Channel trimming may leave a role without channels: its pass is then
-// empty.
+// role keeps its two-ERISC pass (sender::pass, receiver::pass) and its state; here each pass runs out of line over its
+// state in memory, so neither role's code holds the other's state in registers. The receiver's pass runs first: it
+// frees slots and sends the credits the remote sender is waiting on.
+// Rounds, router commands, the heartbeat and the context switch are the sender loop's (router_round.hpp), with no other
+// ERISC to park. A role channel trimming left without channels makes empty passes.
 
 #include "router_receiver.hpp"
 #include "router_sender.hpp"
 
 namespace fabric_router::single {
 
-// The sender's state between passes (sender::run keeps the same objects; there the loop-local send state is copied
-// into a loop local, here it stays in the state: sender::SenderChannelStates).
+// The sender's state between passes: sender::run's objects, with the loop-local send state kept here, not copied.
 struct SenderState {
     sender::SenderChannelStates states;
     uint32_t channels_in_flight = 0;
 };
 
-// The receiver's state between passes (receiver::run keeps the same objects; there the loop-local VC's progress is
-// copied into a loop local, here every VC's stays in the state: receiver::ReceiverChannelStates).
+// The receiver's state between passes: receiver::run's objects, with every VC's progress kept here, not copied.
 struct ReceiverState {
     receiver::ReceiverChannelStates states;
     receiver::Credits credits{0};

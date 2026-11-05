@@ -43,8 +43,7 @@ constexpr uint32_t without_lowest_bit(uint32_t mask) { return mask & (mask - 1);
 
 // A member that exists only where its channel or VC is present on this router (by configuration or channel trimming),
 // and is an empty Absent<TAG> elsewhere (TAG keeps two absent members of one struct at distinct addresses). Code names
-// such a member only under `if constexpr` on the same flag, from template-dependent code, so an absent one never has to
-// compile.
+// it only under `if constexpr` on the same flag, from template-dependent code, so an absent one never has to compile.
 template <size_t TAG>
 struct Absent {};
 template <bool PRESENT, typename T, size_t TAG>
@@ -105,21 +104,18 @@ struct Each<0, T> {
 // ---------------------------------------------------------------------------------------------------------------------
 // Each is compiler-only: it emits no instruction, it only constrains where the compiler may keep or move things.
 
-// Keeps `obj` in memory at this point: its current value is stored before it and read back after it (GCC's documented
-// semantics of an asm memory operand). The whole object is affected, so state meant to stay in registers must not
-// share an object with it. It says nothing about where `obj` lives between such points. Use: state touched only on some
-// passes (a forwarding channel's record, or a later VC's worker channel's), so the registers go to the state every pass
-// touches.
+// Keeps `obj` in memory at this point: its value is stored before and read back after (GCC's documented semantics of an
+// asm memory operand), for the whole object, so state meant for registers must not share an object with it. Use: state
+// only some passes touch, so the registers go to the state every pass touches.
 template <typename T>
 FORCE_INLINE void keep_in_memory(T& obj) {
     asm volatile("" : "+m"(obj));
 }
 
-// Read group boundaries (std::atomic_signal_fence): a compiler barrier for memory. No access to memory other code could
-// see (device registers, L1, any object whose address escapes) moves across either one, so the reads written between
-// a begin and an end stay together, with no other such access among them, and their latencies overlap when their
-// values are first used after the end. They do not stop arithmetic, or locals kept in registers, moving between the
-// reads, and such memory used on both sides of a boundary is stored before it and reloaded after it.
+// Read group boundaries (std::atomic_signal_fence), a compiler memory barrier: no access to memory other code could see
+// (device registers, L1, escaped objects) crosses one, so the reads between a begin and an end stay together and their
+// latencies overlap until their first use after the end. Register locals may still move; such memory used on both
+// sides is stored before and reloaded after.
 FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 

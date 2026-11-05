@@ -231,10 +231,9 @@ constexpr bool ENABLE_FIRST_LEVEL_ACK_VC2 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK
 
 // Per-VC features, indexed by VC, as the host sets them (one arg or define per VC: MAX_NUM_VCS entries each).
 static_assert(MAX_NUM_VCS == 3, "the per-VC features below list one host arg per VC");
-// Whether this router is configured for the VC: VC0 always; VC1 and VC2 where the host's mode gives this router the
-// VC (the host defines FABRIC_2D_VC1_SERVICED / FABRIC_2D_VC2_SERVICED). Configuration only: channel trimming is
-// applied per channel (is_receiver_channel_serviced / is_sender_channel_serviced, "serviced" meaning not trimmed). The
-// one per-VC fact that combines both is runs_vc (router_common.hpp); this array has no other reader.
+// Whether this router is configured for the VC: VC0 always; VC1 and VC2 where the host's mode gives it the VC
+// (FABRIC_2D_VC1_SERVICED / FABRIC_2D_VC2_SERVICED). Configuration only: channel trimming is per channel ("serviced").
+// runs_vc (router_common.hpp) combines both and is this array's only reader.
 constexpr std::array<bool, MAX_NUM_VCS> is_vc_configured = {
     true,
 #if defined(FABRIC_2D_VC1_SERVICED)
@@ -248,8 +247,8 @@ constexpr std::array<bool, MAX_NUM_VCS> is_vc_configured = {
     false,
 #endif
 };
-// Whether the VC's packets are first-level acked: the far sender returns a slot to its producer when the packet has
-// arrived, on an ack, rather than when it is completed (ENABLE_FIRST_LEVEL_ACK_VC<n>).
+// Whether the VC's packets are first-level acked: the sender credits a slot to its producer when the remote receiver
+// acks the packet's arrival, rather than at its completion (ENABLE_FIRST_LEVEL_ACK_VC<n>).
 constexpr std::array<bool, MAX_NUM_VCS> is_vc_first_level_ack_enabled = {
     ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1, ENABLE_FIRST_LEVEL_ACK_VC2};
 // The VC's receiver channel's index in the host's per-receiver-channel arrays (on both routers of a link).
@@ -649,9 +648,9 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
         sender_channel_is_traffic_injection_channel_all_);
-// Bubble flow control (deadlock avoidance on a ring or torus): the free slots an injection channel needs in the far
-// router's VC0 receiver channel before it sends. The host's, from that receiver's depth; it passes it only with
-// deadlock avoidance, where it is at least 2 (the bubble) and at most the receiver's slots (router_sender.hpp).
+// Bubble flow control (deadlock avoidance on a ring or torus): the free slots an injection channel needs in the remote
+// router's VC0 receiver channel before it sends. The host's, from that receiver's slot count; passed only with deadlock
+// avoidance, where it is at least 2 (the bubble) and at most the receiver's slots (router_sender.hpp).
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS =
     enable_deadlock_avoidance ? NAMED_CT_ARG("BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS") : 0;
 

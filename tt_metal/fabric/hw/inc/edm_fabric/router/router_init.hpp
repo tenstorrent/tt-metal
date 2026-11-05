@@ -139,8 +139,8 @@ __attribute__((noinline)) void restore_keepalive() {
 }
 
 // Zeroes one block of L1 credit counters (a word per sender channel): this router's receiver's first-level-ack and
-// completion counts, which its credit frames carry to the far sender, or the far receiver's, into which its frames land
-// for this router's sender.
+// completion counts, which its credit frames carry to the remote sender, or the block where the remote receiver's
+// credit frames land for this router's sender.
 FORCE_INLINE void zero_credit_counters(size_t block_addr) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(block_addr)[i] = 0;
@@ -152,8 +152,8 @@ __attribute__((noinline)) void init_txqs() {
     set_keepalive();
     if constexpr (receiver_txq_id != sender_txq_id) {
         if constexpr (is_receiver_role) {
-            // The receiver's queue carries completion credits; its counters start at 0. The credit block holds a count
-            // per far sender channel (and every frame carries all of them), so all of them are zeroed.
+            // The receiver's queue carries completion credits; its counters start at 0. The block holds a count per
+            // remote sender channel (every credit frame carries all of them), so all of them are zeroed.
             eth_enable_packet_mode(receiver_txq_id);
             zero_credit_counters(local_receiver_ack_counters_base_address);
             zero_credit_counters(local_receiver_completion_counters_base_address);
@@ -166,7 +166,7 @@ __attribute__((noinline)) void init_txqs() {
         }
     } else if constexpr (any_vc_uses_counter_credits) {
         // Counter credits on the one TX queue (a single-ERISC router): both blocks start at 0 here, since the host
-        // clears them only for two-TXQ routers. Before the handshake, so the far router's first frame comes after.
+        // clears them only for two-TXQ routers. Before the handshake, so the remote router's first frame comes after.
         zero_credit_counters(local_receiver_ack_counters_base_address);
         zero_credit_counters(local_receiver_completion_counters_base_address);
         zero_credit_counters(to_sender_remote_ack_counters_base_address);
@@ -201,8 +201,8 @@ __attribute__((noinline)) void init_telemetry_block() {
 }
 
 // The prologue, before the first phase: the channel-trimming capture's record cleared, the router state INITIALIZING,
-// the RISC's L1 data cache set off (the router reads L1 the NoC and the far router write), the telemetry block's static
-// info and the telemetry counts, and the code profiler's buffer cleared.
+// the RISC's L1 data cache off (the NoC and the remote router write the L1 the router reads), the telemetry block's
+// static info and the telemetry counts, and the code profiler's buffer cleared.
 FORCE_INLINE void init_router() {
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.reset();
@@ -315,10 +315,9 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
 // Handshakes
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The Ethernet handshake with the far router, then (with the host's start signal) the handshake among this chip's
+// The Ethernet handshake with the remote router, then (with the host's start signal) the handshake among this chip's
 // routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC.
-// Compiled for size: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every
-// image that sends the handshake.
+// Compiled for size: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every image that sends it.
 __attribute__((noinline, optimize("Os"))) void run_handshakes() {
     if constexpr (enable_ethernet_handshake) {
         const auto& routing_table = l1_routing_table();

@@ -203,10 +203,9 @@ constexpr bool runs_vc(size_t vc) {
 // The VC of the downstream connections VC's receiver channel forwards on: its own, or VC1 where it crosses over.
 constexpr size_t forwards_on_vc_of(size_t vc) { return is_vc_crossover_to_vc1[vc] ? 1 : vc; }
 
-// Whether a receiver channel this router runs sends packets out on VC vc's downstream connections (a channel that
-// forwards, and forwards on vc). It is about vc's downstream connections, not vc's traffic: on a router whose VC0
-// crosses over, VC0's packets are forwarded on VC1's downstreams, so any_forwards_on_vc(0) is false and
-// any_forwards_on_vc(1) is true. False for every VC on a sender-only ERISC.
+// Whether a receiver channel this router runs forwards on VC vc's downstream connections. About the connections, not
+// vc's traffic: where VC0 crosses over, its packets go on VC1's downstreams, so any_forwards_on_vc(0) is false and
+// any_forwards_on_vc(1) true. False for every VC on a sender-only ERISC.
 constexpr bool any_forwards_on_vc(size_t vc) {
     for (size_t rx_vc = 0; rx_vc < MAX_NUM_VCS; rx_vc++) {
         if (runs_vc(rx_vc) && !is_vc_forwarding_disabled[rx_vc] && forwards_on_vc_of(rx_vc) == vc) {
@@ -216,14 +215,11 @@ constexpr bool any_forwards_on_vc(size_t vc) {
     return false;
 }
 
-// Which NoC command buffer each kind of command uses on this ERISC (the host's ids), which kinds keep their buffer
-// programmed between commands (a preset, through the stateful NoC API), and the rule they follow. A buffer that a kind
-// keeps preset carries that kind only: any other command on it rewrites the preset (a second worker channel's credit,
-// or an inline write, on a preset buffer would). The atomics buffer carries no preset and no write from L1: atomics
-// need the return address the firmware keeps there; upstream-router credits, stateless forward credits and teardowns,
-// whole inline-register writes and increments, go on it too. Each ERISC's buffers are its own: two ERISCs issue on
-// different NoCs. The table holds the router's own commands; an API that ignores its buffer argument is outside it
-// (Blackhole's emulated L1 inline write always issues on write_cmd_buf).
+// Which NoC command buffer each kind of command uses on this ERISC (the host's ids), and which kinds keep their buffer
+// preset between commands (stateful NoC API). A preset buffer carries its kind only: any other command on it rewrites
+// the preset. The atomics buffer keeps no preset and takes no write from L1 (atomics need the return address the
+// firmware keeps there); upstream-router credits, stateless forward credits, teardowns and inline register writes go on
+// it. Two ERISCs issue on different NoCs. Blackhole's emulated L1 inline write always uses write_cmd_buf (not listed).
 struct CommandBuffers {
     // The host's buffer of each kind.
     static constexpr uint8_t atomics = write_at_cmd_buf;
@@ -320,7 +316,7 @@ static_assert(
 //     delivers);
 //   - Tensix mux mode on one ERISC, VC0 (the fabric's muxes feed the worker channel and take the forwards);
 //   - UDM on 2D meshes, one ERISC (packets for this chip go to the fabric's relay);
-//   - the speedy path (VC0 worker-only routers whose receiver channel only delivers: it skips decode and admission);
+//   - the speedy path (VC0 worker-only routers whose receiver channel only delivers: no decode, no admit);
 //   - the host's telemetry options: the perf recorder at low resolution and the dynamic stats;
 //   - channel trimming: the capture, and a replay's routers with channels compiled out (an ERISC left with nothing to
 //     service runs rounds only, router_round.hpp's run_idle).

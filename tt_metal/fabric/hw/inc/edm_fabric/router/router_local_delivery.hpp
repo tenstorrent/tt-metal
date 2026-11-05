@@ -87,10 +87,9 @@ FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, ui
     noc_semaphore_inc<true>(addr, value, LOCAL_NOC, LOCAL_NOC_VC);
 }
 
-// An inline write (one word) to this chip, then the local-write command buffer's preset restored. On Blackhole the
-// library emulates a write to L1 with a posted 4-byte write on the ERISC's write command buffer (NCRISC_WR_CMD_BUF),
-// which is the local-write buffer here: the write leaves it posted. A write to a register goes out on the atomics
-// buffer, which keeps no preset.
+// An inline write (one word) to this chip, then the local-write buffer's preset restored: on Blackhole the library
+// emulates a write to L1 with a posted 4-byte write on NCRISC_WR_CMD_BUF, the local-write buffer here. A write to a
+// register goes out on the atomics buffer, which keeps no preset.
 static_assert(
     CommandBuffers::local_writes == NCRISC_WR_CMD_BUF,
     "the emulated L1 inline write reprograms the local-write command buffer, which local_write_init restores");
@@ -100,10 +99,9 @@ FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
     local_write_init();
 }
 
-// Send types without a direct arm, out of line. An inline write is issued here, then the local-write command buffer's
-// preset is restored (an inline write to L1 reprograms that buffer). Any other type goes through
-// execute_chip_unicast_to_local_chip_impl, which delivers a sparse multicast write; the NoC multicast types never
-// reach local delivery (the impl asserts).
+// Send types without a direct arm, out of line: an inline write (local_inline_write); any other type through
+// execute_chip_unicast_to_local_chip_impl, which delivers a sparse multicast write (the NoC multicast types never reach
+// local delivery: the impl asserts).
 __attribute__((noinline)) void deliver_other(
     tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint16_t payload_size,

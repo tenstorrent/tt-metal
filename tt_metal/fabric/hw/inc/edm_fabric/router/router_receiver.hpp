@@ -4,40 +4,20 @@
 
 #pragma once
 
-// The receiver program: takes packets off the Ethernet link from the far router's sender channels, and for each one
-// forwards it to the next router on this chip, writes it to this chip, or both, then returns the slot's credit.
+// The receiver program: takes packets off the Ethernet link from the remote router's sender channels, forwards each to
+// downstream routers, writes it to this chip, or both, then credits its slot back to the remote sender.
 //
-// Each pass, one step per serviced VC's receiver channel (in VC order; step), the same for every channel:
-//   ack       channels with first-level acks (the host's ENABLE_FIRST_LEVEL_ACK_VC<n>): ack every packet that arrived
-//   poll      packets known present: the count from the packets-received register (one of the pass's first reads)
-//             is taken only when the count kept from its last read is used up (the register stays the source of truth;
-//             the kept count is a lower bound of it); under first-level acks, the packets acked and not yet processed
-//   decode    the route: deliver here, and which downstream routers to forward to (router_routing.hpp; with the
-//             landing and exit steps of multi-mesh fabrics)
-//   admit     every downstream the packet goes to has a free slot (router_downstream.hpp)
-//   forward   one copy per downstream
-//   deliver   the packet's NoC commands on this chip (router_local_delivery.hpp); in UDM mode, a copy to the fabric's
-//             relay instead, which does them (router_downstream.hpp; admitted with the forwards)
-//   retire    the slot's source (its sender channel) recorded, packets-received register -1, next slot
-//   credit    completion credits back to the far sender (Completions, below)
-// A channel that does not forward (its VC's forwarding is off, the host's DISABLE_RX_CH<n>_FORWARDING) only delivers:
-// it skips decode and admit (ReceiverChannel::forwards).
-// Around the steps, once per pass:
-//   reads     every channel's packets-received register and, where a channel has first-level acks (a frame goes out
-//             most passes), the TX queue's status, as one group of reads
-//   frame     one credit frame, when the pass's acks or completions changed the counts
+// A pass reads every channel's packets-received register (and, with first-level acks, the TX queue's status) as one
+// group, steps each serviced VC's receiver channel in VC order, then sends one credit frame if the counts changed.
+// A step: ack (first-level acks), take a packet, decode its route, admit its downstreams, forward, deliver, retire,
+// credit completions. A channel that does not forward only delivers: no decode, no admit.
+// Decode: router_routing.hpp; admit, forward: router_downstream.hpp; deliver: router_local_delivery.hpp;
+// rounds: router_round.hpp.
+// The packets-received register is the source of truth for arrivals; the count kept from it is a lower bound.
 //
-// Channels and VCs. The receiver has one channel per VC it services (the 1D line VCs included), and its code is
-// keyed by the VC: ReceiverChannel<VC> holds the channel's features, which are its VC's. Only the host's per-channel
-// arrays are indexed by the host's receiver channel, receiver_channel_of(VC) (VC2's is 1 on routers without VC1).
-//
-// State, by placement class: each channel's ring progress and slot sources (`ReceiverChannelStates`, whose note states
-// where they live); whether a credit frame is due, a loop local; the credit sender, an object of its own; ring bounds,
-// stream ids and command buffers, compile-time. The downstream connections are passed in, by VC
-// (router_downstream.hpp).
-//
-// Sections, in order: tuning; ring arithmetic and completion groups; transaction IDs; channels and their features;
-// state; arrivals and first-level acks; packets; completions; the pass.
+// One channel per serviced VC; the code is keyed by VC (ReceiverChannel<VC>). Only the host's per-channel arrays are
+// indexed by receiver channel, receiver_channel_of(VC) (VC2's is 1 on routers without VC1).
+// Where the state lives: ReceiverChannelStates (ring progress, slot sources) and Credits (the credit sender).
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
@@ -61,14 +41,16 @@ namespace fabric_router::receiver {
 
 // Passes without a packet after which a partial completion group is credited.
 constexpr uint32_t IDLE_PASSES_BEFORE_PARTIAL_CREDIT = 4;
-// Status reads a completion group's proof waits for, at most; then its credit is left to a later pass.
+// Status reads a completion group's proof waits for, at most; then its credit is left to a later pass. A safety bound:
+// on Blackhole P150 proofs finish within 8 reads (large-write deliverers mostly 5-8); the cap is for slower cases, such
+// as non-L1 destinations.
 constexpr uint32_t COMPLETION_PROOF_MAX_CHECKS = 32;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Ring arithmetic and completion groups
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Ring index `index + n` in a ring of NUM_SLOTS slots (n < NUM_SLOTS).
+// `index + n` around a ring of NUM_SLOTS slots; n < NUM_SLOTS.
 template <uint32_t NUM_SLOTS>
 FORCE_INLINE uint32_t index_add(uint32_t index, uint32_t n) {
     const uint32_t sum = index + n;
@@ -93,8 +75,7 @@ FORCE_INLINE uint32_t oldest_uncredited(uint32_t next_index, uint32_t waiting) {
 // Transaction IDs
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The transaction IDs of a receiver ring: every slot of a group carries its group's ID, one of NUM_IDS IDs from
-// FIRST_ID (groups past NUM_IDS reuse them in order).
+// Every slot of a completion group carries its group's ID; groups past NUM_IDS reuse the IDs in order (Completions).
 template <uint32_t GROUP_SIZE, uint32_t FIRST_ID, uint32_t NUM_IDS>
 struct CompletionGroupTrids {
     static_assert(GROUP_SIZE == 1 || GROUP_SIZE == 2 || GROUP_SIZE == 4);
@@ -109,7 +90,7 @@ struct CompletionGroupTrids {
 // Channels and their features
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The VCs whose receiver channel this router runs, one bit each (ReceiverChannelStates).
+// The VCs whose receiver channel this router runs, one bit each.
 constexpr uint32_t receiver_vcs = [] {
     uint32_t vcs = 0;
     for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
@@ -118,27 +99,24 @@ constexpr uint32_t receiver_vcs = [] {
     return vcs;
 }();
 
-// VC's receiver channel: its ring and packets-received register, and its features, which are its VC's.
+// VC's receiver channel: its ring, its packets-received register and its features (the host's, per VC or per channel).
 template <size_t VC>
 struct ReceiverChannel {
     static constexpr size_t rx = receiver_channel_of(VC);  // the host's index of the channel
 
-    // The ring: num_slots slots of channel_buffer_size bytes from first_slot_addr, each starting with its header.
+    // num_slots slots of channel_buffer_size bytes from first_slot_addr, each starting with its packet header.
     static constexpr uint32_t num_slots = RECEIVER_NUM_BUFFERS_ARRAY[rx];
     static constexpr uint32_t first_slot_addr = channel_allocs::template Entry<RECEIVER_TO_ENTRY_IDX[rx]>::base_address;
     static constexpr uint32_t packets_received_stream = to_receiver_packets_sent_streams[rx];
 
-    // Features, the host's per VC or per channel (fabric_erisc_router_ct_args.hpp).
-    // Forwards: decodes each packet's route, then forwards and/or delivers. A channel that does not forward only
-    // delivers: every packet is for this chip, no route to decode, nothing to admit.
+    // Without forwarding, a channel only delivers: every packet is for this chip, nothing to decode or admit.
     static constexpr bool forwards = !is_vc_forwarding_disabled[VC];
-    // First-level acks (accumulate_first_level_acks).
     static constexpr bool first_level_ack = is_vc_first_level_ack_enabled[VC];
-    // Intermesh ingress: the channel's packets come from another mesh (router_routing.hpp).
+    // The channel's packets come from another mesh.
     static constexpr bool intermesh_ingress = receiver_channel_is_intermesh_ingress[rx];
     // The VC of the downstream routers the channel forwards to: its own, or VC1 where it crosses over.
     static constexpr size_t forwards_on_vc = forwards_on_vc_of(VC);
-    // UDM: packets for this chip go to the fabric's relay (router_downstream.hpp), admitted with the forwards.
+    // UDM: packets for this chip go to the fabric's relay, admitted with the forwards.
     static constexpr bool delivers_through_relay = udm_mode;
 #if defined(FABRIC_2D)
     using Routing = Routing2D<forwards_on_vc, intermesh_ingress>;
@@ -146,15 +124,12 @@ struct ReceiverChannel {
     using Routing = Routing1D;
 #endif
 
-    // Completions (Completions, below). Slots per completion group: one under first-level acks, where held completion
-    // credits stall bubble flow control.
+    // One slot per group under first-level acks: held completion credits there stall bubble flow control.
     static constexpr uint32_t completion_group_size = first_level_ack ? 1 : completion_group_size_for<num_slots>;
-    // The transaction IDs of the slots' NoC commands: one per completion group, from the channel's own range.
+    // One transaction ID per completion group, from the channel's own range.
     using CompletionTrids = CompletionGroupTrids<completion_group_size, RX_CH_TRID_STARTS[rx], NUM_TRANSACTION_IDS>;
 
-    // The header address of slot `index`.
     static FORCE_INLINE uint32_t slot_addr(uint32_t index) { return first_slot_addr + index * channel_buffer_size; }
-    // The ring index after `index`.
     static FORCE_INLINE uint32_t index_after(uint32_t index) { return index + 1 == num_slots ? 0 : index + 1; }
 
     // Credits go back as counts in one frame (send_credit_frame); stream-register credits are not brought up.
@@ -162,7 +137,6 @@ struct ReceiverChannel {
     static_assert(num_slots > 0 && num_slots <= 255 && num_slots <= stream_count_mask);
 };
 
-// Whether some receiver channel runs here with first-level acks.
 constexpr bool any_first_level_ack_channel = [] {
     for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
         if (runs_vc(vc) && is_vc_first_level_ack_enabled[vc]) {
@@ -172,9 +146,8 @@ constexpr bool any_first_level_ack_channel = [] {
     return false;
 }();
 
-// The far router's sender channel that sent a packet, given the packet's header field. In Tensix mux mode the far
-// router sends everything from its worker channel and does not stamp the field (it holds what the packet's previous hop
-// wrote), so the channel is the worker channel and the field is not used.
+// The remote sender channel that sent a packet. In Tensix mux mode the remote router sends everything from its worker
+// channel and leaves the header field as the previous hop wrote it, so the field is not used.
 FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
     if constexpr (skip_src_ch_id_update) {
         return 0;
@@ -187,17 +160,15 @@ FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
 // State
 // ---------------------------------------------------------------------------------------------------------------------
 
-// A receiver channel's progress through its ring: its per-packet state.
+// A receiver channel's per-packet state.
 struct ReceiverChannelProgress {
-    uint32_t packets_ready = 0;   // packets it may process (present, and acked under first-level acks), not retired
-    uint32_t next_slot_addr = 0;  // header address of the next slot
-    uint32_t next_index = 0;      // ring index of the next slot
-    uint32_t uncredited = 0;      // slots retired (NoC commands issued) but not yet credited
-    // Groups of several slots: passes without a packet while a partial completion group waits.
-    uint32_t idle_passes_with_partial_group = 0;
+    uint32_t packets_ready = 0;  // present (and acked under first-level acks), not retired
+    uint32_t next_slot_addr = 0;
+    uint32_t next_index = 0;
+    uint32_t uncredited = 0;                      // retired (NoC commands issued), not yet credited
+    uint32_t idle_passes_with_partial_group = 0;  // completion groups of several slots only
 };
 
-// Moves `progress` to the slot after its next one in VC's ring.
 template <size_t VC>
 FORCE_INLINE void advance(ReceiverChannelProgress& progress) {
     progress.next_index = ReceiverChannel<VC>::index_after(progress.next_index);
@@ -205,10 +176,9 @@ FORCE_INLINE void advance(ReceiverChannelProgress& progress) {
         progress.next_index == 0 ? ReceiverChannel<VC>::first_slot_addr : progress.next_slot_addr + channel_buffer_size;
 }
 
-// The sender channel each slot's packet came from, one byte per slot: byte k of word w is slot 4w + k, so an aligned
-// group (1, 2 or 4 slots) lies in one word. Only the slots from the oldest uncredited one to the one before the next
-// slot are ever read (each written when it retired), and a group's read masks off the bytes past the group, so the
-// initial zeros and stale bytes are never used.
+// The sender channel each slot's packet came from, byte k of word w for slot 4w + k, so an aligned group lies in one
+// word. Only retired, uncredited slots are read, and a group's read masks off the bytes past it, so the initial zeros
+// and stale bytes are never used.
 template <uint32_t NUM_SLOTS>
 struct SlotSources {
     static constexpr uint32_t slots_per_word = 4;
@@ -217,13 +187,12 @@ struct SlotSources {
 
     FORCE_INLINE void set(uint32_t index, uint8_t source) { bytes()[index] = source; }
 
-    // Slot `index`'s sender channel.
     FORCE_INLINE uint32_t source_of(uint32_t index) const { return bytes()[index]; }
 
-    // The sender channels of slots `first` .. `first + n - 1`, all in one group: slot `first + k`'s in byte k.
+    // Slots `first` .. `first + n - 1`, within one group: slot `first + k`'s sender channel in byte k.
     FORCE_INLINE uint32_t completion_group_sources(uint32_t first, uint32_t n) const {
         const uint32_t word = words[first / slots_per_word] >> (8 * (first % slots_per_word));
-        return n == 4 ? word : word & ((1u << (8 * n)) - 1);  // its low n bytes
+        return n == 4 ? word : word & ((1u << (8 * n)) - 1);
     }
 
 private:
@@ -231,7 +200,6 @@ private:
     FORCE_INLINE const uint8_t* bytes() const { return reinterpret_cast<const uint8_t*>(words.data()); }
 };
 
-// VC's ring progress before its first packet.
 template <size_t VC>
 constexpr ReceiverChannelProgress progress_start() {
     ReceiverChannelProgress progress;
@@ -239,33 +207,28 @@ constexpr ReceiverChannelProgress progress_start() {
     return progress;
 }
 
-// VC's slot sources, in memory (indexed by ring slot at run time): the sender channel each retired slot's packet came
-// from, for its completion credit.
+// In memory: indexed by ring slot at run time.
 template <size_t VC>
 using SlotSourcesOf = SlotSources<ReceiverChannel<VC>::num_slots>;
 
-// VC's receiver channel state: its ring progress and its slot sources.
 template <size_t VC>
 struct ReceiverChannelState {
     ReceiverChannelProgress progress = progress_start<VC>();
     SlotSourcesOf<VC> sources{};
 };
 
-// One credit sender for every receiver channel: counter credits are one L1 block indexed by the far sender channel, and
-// the channels' far sender channels are different channels, so one frame per pass carries every channel's credits.
-// Placement: an object of its own; inside an aggregate with the channel states its constant block addresses would be
-// loaded from the stack at each use.
+// One credit sender for every channel: the counts are one L1 block indexed by remote sender channel, and the channels'
+// remote sender channels differ, so one credit frame per pass carries every channel's credits. An object of its own:
+// inside an aggregate with the channel states, its constant block addresses would be loaded from the stack at each use.
 using Credits = ReceiverChannelCounterBasedResponseCreditSender;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Arrivals and first-level acks
 // ---------------------------------------------------------------------------------------------------------------------
 
-// First-level acks. A packet that has arrived is acked to the far sender before it is processed, and the far sender
-// returns its slot to the producer on the ack. Every packet that has arrived since the last pass is acked: its sender
-// channel's ack count goes up (the frame goes out with the pass's other credits), and the packets-received register is
-// consumed here rather than at retire. The packets acked are the oldest not yet acked: `ready` slots past the next
-// one to process. `arrived` is the packets-received count, read at the start of the pass. Returns whether it acked any.
+// Acks the `arrived` packets (the register's count at pass start), the oldest unacked, before they are processed; the
+// remote sender credits their slots to its producers on the ack. The register is consumed here, not at retire. Returns
+// whether it acked.
 template <size_t VC>
 FORCE_INLINE bool accumulate_first_level_acks(ReceiverChannelProgress& progress, Credits& credits, uint32_t arrived) {
     if (arrived == 0) {
@@ -288,9 +251,8 @@ FORCE_INLINE bool accumulate_first_level_acks(ReceiverChannelProgress& progress,
 // Packets
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The packet in the next slot is done here (its NoC commands are issued): its source recorded for its completion credit
-// and the slot counted uncredited, the packets-received register -1 (under first-level acks, consumed at the ack),
-// the next slot.
+// The next slot's NoC commands are issued: record its source for the completion credit, count it uncredited, consume
+// its packets-received count (already done at the ack under first-level acks), move on.
 template <size_t VC>
 FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& sources, uint8_t source) {
     sources.set(progress.next_index, source);
@@ -302,7 +264,7 @@ FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& s
     advance<VC>(progress);
 }
 
-// A packet taken on VC's channel, `size` bytes with its header: the channel-trimming capture's and telemetry's count.
+// Channel-trimming capture and telemetry: a packet of `size` bytes (header included) taken on VC's channel.
 template <size_t VC>
 FORCE_INLINE void note_received(uint32_t size) {
     channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(ReceiverChannel<VC>::rx);
@@ -311,9 +273,8 @@ FORCE_INLINE void note_received(uint32_t size) {
     }
 }
 
-// Channel-trimming capture: the sender channels, on the downstream routers, a packet forwarded on VC's channel went
-// to (`forward_to`: the routing names of its downstreams): in 2D each downstream's channel from
-// the host's packed table (by the downstream's compact index), in 1D the downstream's forwarding channel, 1.
+// Channel-trimming capture: the downstream routers' sender channels a packet forwarded on VC's channel went to; in 2D
+// from the host's packed table, in 1D the downstream's forwarding channel.
 template <size_t VC>
 FORCE_INLINE void record_forwarded(uint32_t forward_to) {
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
@@ -336,10 +297,8 @@ FORCE_INLINE void record_forwarded(uint32_t forward_to) {
     }
 }
 
-// A 1D sparse multicast that goes on past this chip: this chip writes its own page group (counts[chip_idx] pages from
-// write_idx), write_idx and chip_idx advance so the next chip picks the next group, then the forward carries the
-// advanced header. The write reads the indices before the advance and the forward reads the header after it, so for
-// this send type the local write comes first. Out of line: rare.
+// A 1D sparse multicast going past this chip: write this chip's page group, advance write_idx and chip_idx, forward the
+// advanced header. The local write comes first because it reads the indices before the advance. Out of line: rare.
 template <size_t VC>
 __attribute__((noinline)) void sparse_multicast_hop(
     tt_l1_ptr PACKET_HEADER_TYPE* header,
@@ -360,9 +319,8 @@ __attribute__((noinline)) void sparse_multicast_hop(
     record_forwarded<VC>(forward_to);
 }
 
-// The packet in the next slot, from its header word and (on a channel that forwards) its route word: admit, forward
-// and/or deliver, retire. Returns whether it handled it (false: a downstream had no room; the packet stays for a later
-// pass).
+// Admits, forwards and/or delivers, then retires the next slot's packet. Returns false when a downstream had no room;
+// the packet stays for a later pass.
 template <size_t VC, typename Connections>
 FORCE_INLINE bool handle(
     ReceiverChannelProgress& progress,
@@ -374,7 +332,6 @@ FORCE_INLINE bool handle(
     const auto packet = PACKET_HEADER_TYPE::PackedPayloadAndSendType::unpack(header_word);
     auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
     if constexpr (ReceiverChannel<VC>::forwards) {
-        // The downstream routers it forwards to.
         auto& routers = downstreams.template of<ReceiverChannel<VC>::forwards_on_vc>();
         const typename Routing::Route route(route_word);
         if (route.forwards() && !routers.admit(route.forward_to())) {
@@ -400,7 +357,7 @@ FORCE_INLINE bool handle(
                 size,
                 trid);
         } else {
-            // Forward first (the next router starts sooner), then write here.
+            // Forward first (the downstream router starts sooner), then write here.
             if (route.forwards()) {
                 Routing::update_for_next_hop(header, route_word);
                 routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
@@ -426,9 +383,8 @@ FORCE_INLINE bool handle(
     return true;
 }
 
-// One packet, when one is present (acked, under first-level acks; otherwise counted present: `arrived` is the
-// channel's packets-received count, read at the start of the pass) and (on a channel that forwards) its downstreams
-// have room: its header word and route word read, then handled. Returns whether it handled one.
+// Handles one packet when one is ready: acked under first-level acks, else counted in `arrived` (the register's count
+// at pass start). Returns whether it handled one.
 template <size_t VC, typename Connections>
 FORCE_INLINE bool receive(
     ReceiverChannelProgress& progress,
@@ -441,15 +397,14 @@ FORCE_INLINE bool receive(
         if constexpr (ReceiverChannel<VC>::first_level_ack) {
             return false;  // nothing acked to process
         } else {
-            progress.packets_ready = arrived;  // the register's count, from the pass's first reads
+            progress.packets_ready = arrived;
             if (progress.packets_ready == 0) {
                 return false;
             }
         }
     }
     auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
-    // Payload size, send type and source channel: one header word, one load (the header's accessor), kept as it is
-    // until the packet is handled.
+    // Payload size, send type and source channel in one load, kept packed until the packet is handled.
     const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
     uint32_t route_word = 0;
     if constexpr (ReceiverChannel<VC>::forwards) {
@@ -462,32 +417,20 @@ FORCE_INLINE bool receive(
 // Completions
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Completion credits: a receiver slot goes back to the far sender channel its packet came from once every NoC command
-// that reads the slot has left the NIU (the far sender may then overwrite it).
-//
-// - Credit frame: the credits are absolute counts per sender channel in this router's L1 (completions, and acks on
-//   first-level-ack VCs), copied to the far sender's L1 as one Ethernet frame. accumulate_first_level_ack and
-//   credit_completions only raise the counts; the receiver loop sends one frame per pass when they changed
-//   (send_credit_frame).
-// - Completion groups: a ring is credited in aligned groups of slots (completion_group_size), so the far sender returns
-//   one credit to its own upstream per group instead of one per slot. An aligned group never wraps around the ring.
-// - Proof: every NoC command that reads a slot carries its completion group's transaction ID (CompletionGroupTrids),
-//   and the NIU counts each ID's outgoing writes over every command buffer, so one status read proves a whole group
-//   free. Where a channel has fewer IDs (NUM_TRANSACTION_IDS) than groups, two groups share an ID and a group's proof
-//   also waits for the other's writes: conservative, never wrong.
-//
-// When a group goes out (credit_completions):
-//   due     for credit: while packets keep arriving, once more than a group waits (the slot retired this pass is never
-//           in it); on a pass without a packet, a full group at once, a partial one after
-//           IDLE_PASSES_BEFORE_PARTIAL_CREDIT such passes;
-//   proof   the oldest group's transaction ID: a single slot is checked once, a group waits for it (bounded);
-//   credit  one count of n to the slots' sender channel when they all came from one (usual), else one per slot.
-//
-// Why:
-//   - a channel holds back at most a group minus one of its slots, and only until its next packet or a few idle passes;
-//   - a group waits for its proof: left to the next pass, which under load handles the next packet first, its credit
-//     would come a packet later;
-//   - a single slot is checked once: on rings and tori waiting for it costs more than it saves.
+// A slot is credited to the remote sender channel its packet came from once every NoC command reading it has left the
+// NIU.
+// - The credits are absolute counts per remote sender channel in L1 (completions, and acks on first-level-ack VCs); the
+//   steps only raise them, and the pass sends them as one credit frame when they changed (send_credit_frame).
+// - A ring is credited in aligned completion groups, which never wrap, so the remote sender credits its producer once
+//   per group instead of per slot.
+// - Proof: each slot's NoC commands carry its group's transaction ID and the NIU counts each ID's outgoing writes, so
+//   one status read proves a group free. Two groups sharing an ID only make a proof wait longer, never wrong.
+// - Due: while packets arrive, once more than a group waits (never the slot retired this pass); on an idle pass, a full
+//   group at once, a partial one after IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes. So a channel holds back at most
+//   a group minus one slot, and not for long.
+// - A group waits for its proof (bounded): left to the next pass, which under load takes the next packet first, its
+//   credit would come a packet later. A single slot is checked once: on rings and tori waiting costs more than it
+//   saves.
 
 // Whether every write tagged `trid` has left this ERISC's NIU (local writes and forwards share one NoC: one register).
 static_assert(tt::tt_fabric::local_chip_noc_equals_downstream_noc);
@@ -506,14 +449,13 @@ FORCE_INLINE bool trid_writes_sent_within(uint32_t trid) {
     return trid_writes_sent(trid);
 }
 
-// How many of the oldest uncredited slots are due for credit this pass: none (0), or the rest of the oldest slot's
-// completion group that has been retired (the Completions introduction).
+// How many of the oldest uncredited slots are due this pass: 0, or the retired rest of the oldest one's group.
 template <uint32_t GROUP_SIZE, uint32_t NUM_SLOTS>
 FORCE_INLINE uint32_t
 slots_due_for_credit(ReceiverChannelProgress& progress, uint32_t next_index, bool handled_packet) {
     const uint32_t waiting = progress.uncredited;
     if constexpr (GROUP_SIZE == 1) {
-        // One slot as soon as a slot other than this pass's waits (no partial group, so no idle count).
+        // No partial groups, so no idle count: due once a slot other than this pass's waits.
         return waiting > static_cast<uint32_t>(handled_packet) ? 1 : 0;
     } else {
         bool is_due;
@@ -527,24 +469,22 @@ slots_due_for_credit(ReceiverChannelProgress& progress, uint32_t next_index, boo
         if (!is_due) {
             return 0;
         }
-        // The oldest uncredited slot and the rest of its group that has been retired.
         const uint32_t first = oldest_uncredited<NUM_SLOTS>(next_index, waiting);
-        const uint32_t group_end = (first | (GROUP_SIZE - 1)) + 1;  // just past first's group (groups are aligned)
+        const uint32_t group_end = (first | (GROUP_SIZE - 1)) + 1;  // groups are aligned
         const uint32_t left_in_group = std::min(group_end, NUM_SLOTS) - first;
         return std::min(waiting, left_in_group);
     }
 }
 
-// Credit: `count` slots from `first` (one group's) to their sender channels: as one count when they all came from one
-// (the usual case), else one per slot.
+// Credits `count` slots from `first`, within one group: one count when they all came from one sender channel (usual),
+// else one per slot.
 template <uint32_t GROUP_SIZE, uint32_t NUM_SLOTS, typename CreditSender>
 FORCE_INLINE void accumulate_completion_credits(
     const SlotSources<NUM_SLOTS>& sources, uint32_t first, uint32_t count, CreditSender& credits) {
     if constexpr (GROUP_SIZE == 1) {
         credits.accumulate_completion_credit(static_cast<uint8_t>(sources.source_of(first)), 1);
     } else {
-        // One sender channel when every byte of `group` equals the first: `one_per_slot` holds a 1 in each of the
-        // group's bytes. Slot first + k's sender channel is in byte k.
+        // All from one sender channel: every byte of `group` equals the first.
         const uint32_t group = sources.completion_group_sources(first, count);
         constexpr uint32_t BYTE_MASK = 0xFF;
         constexpr uint32_t ONE_PER_BYTE = 0x01010101u;
@@ -561,20 +501,18 @@ FORCE_INLINE void accumulate_completion_credits(
 }
 
 // Credits VC's oldest uncredited slots when they are due and their writes have left; returns whether it did.
-// `handled_packet` says whether this pass handled a packet.
 template <size_t VC, typename CreditSender>
 FORCE_INLINE bool credit_completions(
     ReceiverChannelProgress& progress, const SlotSourcesOf<VC>& sources, bool handled_packet, CreditSender& credits) {
     constexpr uint32_t completion_group_size = ReceiverChannel<VC>::completion_group_size;
     constexpr uint32_t num_slots = ReceiverChannel<VC>::num_slots;
     static_assert(completion_group_size >= 1 && completion_group_size <= 4 && completion_group_size <= num_slots);
-    const uint32_t next_index = progress.next_index;  // as the pass's step left it
+    const uint32_t next_index = progress.next_index;
     const uint32_t waiting = progress.uncredited;
     const uint32_t count = slots_due_for_credit<completion_group_size, num_slots>(progress, next_index, handled_packet);
     if (count == 0) {
         return false;
     }
-    // Proof: a single slot is checked once; a group waits for it, bounded.
     constexpr uint32_t proof_checks = completion_group_size == 1 ? 1 : COMPLETION_PROOF_MAX_CHECKS;
     const uint32_t first = oldest_uncredited<num_slots>(next_index, waiting);
     if (!trid_writes_sent_within<proof_checks>(ReceiverChannel<VC>::CompletionTrids::of_slot(first))) {
@@ -592,9 +530,8 @@ FORCE_INLINE bool credit_completions(
 // The pass
 // ---------------------------------------------------------------------------------------------------------------------
 
-// One step of VC's receiver channel (`arrived_raw`: its packets-received register, read at the start of the pass): ack
-// what has arrived (a channel with first-level acks), at most one packet (timed for code profiling, on every receiver
-// channel), then its completions. `credit_frame_due` is set when the credit counts changed.
+// VC's step: ack what arrived (first-level acks), at most one packet, then completions. `arrived_raw`: the channel's
+// register from the pass's reads. Sets `credit_frame_due` when the counts changed.
 template <size_t VC, typename Connections>
 FORCE_INLINE void step(
     ReceiverChannelProgress& progress,
@@ -620,7 +557,7 @@ FORCE_INLINE void step(
     credit_frame_due |= credit_completions<VC>(progress, sources, handled_packet, credits);
 }
 
-// VC's packets-received register, raw, for the pass's grouped reads; none (0) where its channel does not run.
+// VC's packets-received register, raw, for the pass's grouped reads; 0 where its channel does not run.
 template <size_t VC>
 FORCE_INLINE uint32_t read_packets_received() {
     if constexpr (runs_vc(VC)) {
@@ -630,9 +567,8 @@ FORCE_INLINE uint32_t read_packets_received() {
     }
 }
 
-// Sends the credit frame, all the counts, unless the TX queue is busy (the next pass sends it then). Returns whether it
-// was sent. `txq_status_at_pass_start`: the TX queue's status, from the pass's grouped reads on routers with
-// first-level acks (unused elsewhere); only this ERISC sends on the queue, so a queue seen free there is still free.
+// Sends the credit frame unless the TX queue is busy (a later pass retries); returns whether it went. Only this ERISC
+// sends on the queue, so a queue free in `txq_status_at_pass_start` (first-level-ack routers) is still free.
 FORCE_INLINE bool send_credit_frame(Credits& credits, uint32_t txq_status_at_pass_start) {
     if constexpr (ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
@@ -647,27 +583,22 @@ FORCE_INLINE bool send_credit_frame(Credits& credits, uint32_t txq_status_at_pas
     return true;
 }
 
-// Whether VC0's packets-received register reads 0: the receiver's idle test for telemetry's RX heartbeat, once per
-// round. It reads VC0's channel only, whichever VCs this router runs, so the heartbeat also moves while another VC's
-// channel is stuck.
+// Telemetry's RX heartbeat idle test, once per round: VC0's register only, so the heartbeat still moves while another
+// VC's channel is stuck.
 FORCE_INLINE bool vc0_register_empty() { return read_stream_count<ReceiverChannel<0>::packets_received_stream>() == 0; }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Where the channel states live, and the loop
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Every serviced VC's receiver channel state (get<VC>()) and where it lives. The loop-local VC's progress is copied
-// into a local of run()'s loop, so the compiler can keep it in registers; every other VC's state is stepped in place,
-// in memory.
-// A one-ERISC router keeps every state in memory and steps the loop-local VC's progress in place (router_single.hpp).
-// The accessors are templates on the VC so that an absent channel's state is named only in template-dependent code.
+// Every serviced VC's channel state. The loop-local VC's progress is copied into a local of run()'s loop, so it can
+// stay in registers; every other VC's state is stepped in memory (a one-ERISC router steps all of them in memory).
+// The accessors are templates on VC so an absent channel's state is named only in template-dependent code.
 struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
-    // The VC whose progress run() carries as a loop local: the lowest VC whose receiver channel this router runs (a
-    // trimmed router can run VC1's and not VC0's). 0 where none runs: then nothing is stepped.
+    // The lowest serviced VC (a trimmed router can run VC1's and not VC0's); 0 where none runs.
     static constexpr size_t loop_local_vc = receiver_vcs != 0 ? lowest_bit(receiver_vcs) : 0;
 
-    // The loop-local VC's progress in place: what run() copies at its start; a one-ERISC router steps on it in place.
-    // Without a receiver channel (receiver_vcs == 0), the states themselves: no step uses it.
+    // What run() copies at its start; without a receiver channel, the states themselves (no step uses it).
     template <size_t VC = loop_local_vc>
     FORCE_INLINE auto& loop_local_progress() {
         if constexpr (runs_vc(VC)) {
@@ -677,7 +608,6 @@ struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
         }
     }
 
-    // VC's progress for its step: the loop's copy for the loop-local VC, the state in memory otherwise.
     template <size_t VC>
     FORCE_INLINE ReceiverChannelProgress& progress_for(ReceiverChannelProgress& loop_copy) {
         if constexpr (VC == loop_local_vc) {
@@ -688,7 +618,6 @@ struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
     }
 };
 
-// VC's step, on its progress where ReceiverChannelStates places it. None where VC's channel does not run.
 template <size_t VC, typename LoopCopy, typename Connections>
 FORCE_INLINE void step_channel(
     LoopCopy& loop_copy,
@@ -710,11 +639,8 @@ FORCE_INLINE void step_channel(
     }
 }
 
-// One pass over the serviced VCs' receiver channels: the pass's reads, one step per channel, and the credit frame when
-// the counts changed. The reads, first: every channel's packets-received register and, with first-level acks (a frame
-// goes out most passes), the TX queue's status, raw, each tested where it is used.
-// The body of run()'s loop; a single-ERISC router runs it as the receiver half of each pass over its state in memory
-// (router_single.hpp).
+// One pass: the grouped reads first (raw, each tested where it is used), a step per serviced channel, then the credit
+// frame when the counts changed. Also the receiver half of a single-ERISC router's pass.
 static_assert(MAX_NUM_VCS == 3, "pass() steps the receiver channels of VCs 0, 1 and 2");
 template <typename LoopCopy, typename Connections>
 FORCE_INLINE void pass(
@@ -724,10 +650,8 @@ FORCE_INLINE void pass(
     Credits& credits,
     Connections& downstreams,
     const ChipCoordinates& my_chip) {
-    const std::array<uint32_t, MAX_NUM_VCS> arrived = {// by VC, in order
-                                                       read_packets_received<0>(),
-                                                       read_packets_received<1>(),
-                                                       read_packets_received<2>()};
+    const std::array<uint32_t, MAX_NUM_VCS> arrived = {
+        read_packets_received<0>(), read_packets_received<1>(), read_packets_received<2>()};
     uint32_t txq_status = 0;
     if constexpr (any_first_level_ack_channel) {
         txq_status = read_txq_status(receiver_txq_id);
@@ -744,21 +668,18 @@ FORCE_INLINE void pass(
 // Init (out of line, once)
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Before the Ethernet handshake (both ERISCs, before their first sync): each receiver channel's packets-received
-// register at 0, before the far router's sender can increment it. Every channel the router has, serviced or not.
+// Before the Ethernet handshake and the ERISCs' first sync, so before the remote sender can increment them: every
+// receiver channel's packets-received register at 0, serviced or not.
 __attribute__((noinline)) void init_channel_streams() {
     for_each_index<NUM_RECEIVER_CHANNELS>(
         [](auto rx) { init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0); });
 }
 
-// Whether this ERISC holds the receiver's downstream connections: where it runs the receiver; a single-ERISC router's
-// loop takes them whatever channel trimming left it (empty without a receiver channel).
+// A single-ERISC router's loop takes them whatever channel trimming left it (empty without a receiver channel).
 constexpr bool has_downstream_connections = is_receiver_role || NUM_ACTIVE_ERISCS == 1;
 
-// Before the Ethernet handshake: the receiver's downstream connections (router_downstream.hpp), returned for its loop,
-// with every connection's links and progress where this ERISC runs the receiver (VC0's and VC1's where a receiver
-// channel forwards on them, UDM's relay where the router has it), then the receiver channels' slot buffers. A
-// sender-only ERISC gets none. (A template, so an absent connection is named only in template-dependent code.)
+// Before the Ethernet handshake: the downstream connections for the receiver loop, set up on the receiver's ERISC, and
+// the receiver slot buffers. A template so an absent connection is named only in template-dependent code.
 template <typename Connections = Present<has_downstream_connections, DownstreamConnections, 0>>
 FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
     Connections downstreams{};
@@ -779,10 +700,8 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
     return downstreams;
 }
 
-// Tensix mux mode: the receiver forwards into the fabric's mux of each other direction, not into that direction's
-// router. Each such mux counts itself into this router's sync word once its channels are set up (the host clears the
-// word before launch); wait for all of them before opening the downstream connections, so no open lands on a mux still
-// setting up. UDM: the relay counts itself in the same way (one connection). Nothing to wait for otherwise.
+// Tensix mux mode (each direction's mux) and UDM (the relay): each counts itself into this router's sync word once set
+// up (the host clears it before launch). Wait for all before opening, so no open lands on one still setting up.
 FORCE_INLINE void wait_for_downstream_muxes() {
     if constexpr (num_ds_or_local_tensix_connections != 0) {
         wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
@@ -790,12 +709,9 @@ FORCE_INLINE void wait_for_downstream_muxes() {
     }
 }
 
-// After the Ethernet handshake: the downstream connections, opened when the host's open gate says so. VC0's when
-// receiver channel 0 is serviced, also where no packet uses them (an intermesh router's VC0 connections with
-// crossover), since the downstream routers wait for them; VC1's when the receiver channel that forwards on them is
-// serviced (VC0's with crossover, else VC1's; channel trimming may leave a crossover router's VC1 channel
-// unserviced). In Tensix mux mode the downstreams are the other directions' muxes, opened once they are set up; in UDM
-// the relay is opened after the downstream routers, once it is set up.
+// After the Ethernet handshake, by the host's open gates (rules: fabric_erisc_router_ct_args.hpp). VC0's are opened
+// even on an intermesh router whose VC0 crosses over, where no packet uses them: the downstream routers wait for them.
+// UDM's relay after the downstream routers.
 FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     wait_for_downstream_muxes();
     if constexpr (open_downstream_vc0_connections) {
@@ -809,8 +725,7 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     }
 }
 
-// VC's forward buffer pair preset (ForwardCommands), where VC presets it. (A template on VC, so the forward commands of a
-// VC nothing forwards on are named only in template-dependent code.)
+// A template on VC so the forward commands of a VC nothing forwards on are named only in template-dependent code.
 template <size_t VC>
 FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
     if constexpr (CommandBuffers::presets_forward_pair(VC)) {
@@ -818,26 +733,23 @@ FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
     }
 }
 
-// After every connection is open: the forwards' command buffers preset, each pair of buffers by the lowest VC whose
-// downstream connections a receiver channel forwards on (any_forwards_on_vc).
+// After every connection is open: each forward buffer pair preset by the lowest VC that forwards on it
+// (any_forwards_on_vc), so VC1 owns it on a crossover router (CommandBuffers::presets_forward_pair).
 FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
     preset_forward_pair<0>(args);
     preset_forward_pair<1>(args);
     static_assert(!any_forwards_on_vc(2), "the runtime args list downstream routers for VC0 and VC1");
 }
 
-// The receiver loop: rounds of passes over the serviced VCs' receiver channels until termination. A function of its
-// own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
-//
-// The downstream connections are passed in (router_downstream.hpp); each channel forwards on its VC's downstream
-// routers (ReceiverChannel<VC>::forwards_on_vc).
+// The receiver loop: rounds of passes until termination. A function of its own so its code depends only on this body;
+// once-per-round work is out of line (router_round.hpp).
 __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
     const auto& routing_table = l1_routing_table();
     const ChipCoordinates my_chip{
         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
 
     ReceiverChannelStates states;
-    auto loop_copy = states.loop_local_progress();  // carried through the loop (ReceiverChannelStates)
+    auto loop_copy = states.loop_local_progress();  // the loop-local VC's progress (ReceiverChannelStates)
     local_write_init();
     Credits credits(0);
     bool credit_frame_due = false;  // the credit counts changed since the last frame

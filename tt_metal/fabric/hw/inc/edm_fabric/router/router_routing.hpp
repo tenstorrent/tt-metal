@@ -4,28 +4,22 @@
 
 #pragma once
 
-// Routing: what a receiver does with a packet, decided from its header. The answer is a Route: deliver it to this
-// chip or not, and which downstreams to forward it to (one bit per downstream, named as router_downstream.hpp names
-// them: by direction in 2D, 0 in 1D). 1D and 2D differ only here.
+// Routing: what a receiver channel does with a packet, decided from its header. The answer is a Route: deliver it to
+// this chip or not, and which downstreams to forward it to (one bit per downstream, named as router_downstream.hpp
+// names them: by direction in 2D, 0 in 1D). 1D and 2D differ only here.
 //
-// `read` reads a packet's route word from its header, once per packet: one word, which the receiver may keep with the
-// packet's header word until it handles the packet (router_receiver.hpp). A Route holds that word and answers each
-// question with a mask of it, so a test costs what testing the header value would (packing the answers into a word of
-// their own would cost instructions per packet to build and unpack).
-//   - 2D: the packet's route buffer holds one action byte per mesh row (Y) and column (X). An E/W-facing router reads
-//     its column's byte; any other router reads its row's byte, and its column's when the row's is 0 (Y first). The
-//     action has one bit per output direction (bit d for direction d) and a local-delivery bit, so its direction bits
-//     are the downstreams to forward to. The route word is the action byte.
+// `read` reads a packet's route word from its header, once per packet; the receiver may keep it with the header word
+// until it handles the packet. A Route answers each question with a mask of that word, so a test costs what testing
+// the header would (packing the answers into a word of their own costs instructions per packet).
+//   - 2D: one action byte per mesh row (Y) and column (X). An E/W-facing router reads its column's byte; any other
+//     router its row's, and its column's when the row's is 0 (Y first). Bit d forwards to direction d; one more bit
+//     delivers here. The route word is the action byte.
 //   - 1D: the routing word; its low field says write here, forward, or both (the next hops' fields are above it).
-//
-// Multi-mesh fabrics (2D) add two steps, both routing policy of the router kinds that need them, both inside `read`:
-//   - landing (a receiver channel that is intermesh ingress: its packets come from another mesh): before the decode,
-//     the packet's route buffer is rebuilt for this mesh (fabric_set_2d_intermesh_landing_route, out of line, every
-//     packet on such a channel); its decode is then Y first whatever this router's direction;
-//   - exit (a router on a chip at its mesh's edge): a packet whose action is "deliver here" while its destination mesh
-//     is another one leaves the mesh here, forwarded as it is toward that mesh (the direction comes from the routing
-//     table's intermesh directions, out of line), with no local delivery: its route word is the exit's direction bit.
-//     The destination mesh is read with the action.
+// Multi-mesh fabrics (2D) add two steps inside `read`:
+//   - landing (an intermesh ingress channel): before the decode, the route buffer is rebuilt for this mesh
+//     (fabric_set_2d_intermesh_landing_route, out of line, every packet); the decode is then Y first in any direction;
+//   - exit (a router at its mesh's edge): a packet to deliver here whose destination mesh is another leaves here toward
+//     that mesh (the routing table's intermesh directions, out of line), with no local delivery.
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #if defined(FABRIC_2D)
@@ -73,10 +67,8 @@ struct Routing2D {
     static __attribute__((noinline)) void set_landing_route(tt_l1_ptr PACKET_HEADER_TYPE* header) {
         fabric_set_2d_intermesh_landing_route(header, l1_routing_table(), MESH_Y_SIZE, MESH_X_SIZE);
     }
-
-    // The action byte, by the codec's decode for this build (Fabric2DRoutingConfig over Routing2DCodec,
-    // hostdevcommon/fabric_common.h; Y first after a landing).
-    // Header bytes are written by the link's DMA, so the router reads them through the codec's volatile API; the codec
+    // The action byte, by the codec's decode for this build (Fabric2DRoutingConfig over Routing2DCodec; Y first after a
+    // landing). The link's DMA writes the header, so its bytes are read through the codec's volatile API.
     // owns the decode.
     static FORCE_INLINE uint8_t action(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates& my_chip) {
         const volatile uint8_t* const route_buffer = header->route_buffer;
@@ -150,10 +142,9 @@ struct Routing1D {
         uint32_t field_;
     };
 
-    // The next router reads the next hop's field: this hop's is shifted out of the route word. When that empties the
-    // word (a packet past 16 hops, with extension words), the first extension word refills it and the rest move down,
-    // as update_packet_header_for_next_hop does; otherwise the extension words stay as they are in the header.
-    // Volatile: the forward's NoC read of the slot must see the update.
+    // The downstream router reads the next hop's field: this hop's is shifted out. When that empties the word (a packet
+    // past 16 hops), the first extension word refills it and the rest move down, as update_packet_header_for_next_hop
+    // does. Volatile: the forward's NoC read of the slot must see the update.
     static FORCE_INLINE void update_for_next_hop(tt_l1_ptr PACKET_HEADER_TYPE* header, uint32_t route_word) {
         volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
         uint32_t next = route_word >> LowLatencyFields::FIELD_WIDTH;

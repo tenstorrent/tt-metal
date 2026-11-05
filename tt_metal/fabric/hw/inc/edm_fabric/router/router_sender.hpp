@@ -4,39 +4,22 @@
 
 #pragma once
 
-// The sender program: sends packets from this router's sender channels over the Ethernet link into the far router's
-// receiver channel of the same VC, and returns each slot to its producer once the far router completes it.
+// The sender program: sends packets from this router's sender channels over the Ethernet link into the remote router's
+// receiver channel of the same VC, and credits each slot to its producer once the remote receiver completes it (or, on
+// first-level-ack VCs, acks it).
 //
-// Each pass (pass, below):
-//   reads     the worker channels' connection semaphores and the free-slots registers of every VC with a worker
-//             channel, together at the pass's start; a VC without one reads its registers right before its visit,
-//             so a packet landing during the earlier VCs' visits does not wait a pass
-//   connect   each worker channel's connection, checked every pass (by rule); a change is handled out of line
-//   visit     each VC in turn, against its remote receiver channel's progress:
-//               - its worker channel: send if it holds a packet and the remote receiver channel has room; take
-//                 completions (and first-level acks) and credit the worker (out of line, once per completion group);
-//               - its forwarding channels, skipped with one test when none holds a packet or has packets in flight;
-//                 each one with work sends, takes completions and credits its upstream router.
-//             The loop-local VC is visited every pass; a later VC is skipped with one test when none of its channels
-//             holds a packet or has packets in flight (SenderChannelStates).
-// The pass makes no call while it sends; the worker credit and the connection event are out of line. It takes no
-// closures: a lambda capturing the loop's state can keep that state in memory, so the helpers recurse over their
-// channel mask with their inputs as arguments.
+// A pass: the first reads (the worker channels' connection semaphores and the free-slots registers of every VC with a
+// worker channel, together; a VC without one reads its registers right before its visit, so a packet landing during the
+// earlier visits does not wait a pass); each worker channel's connection (checked every pass, by rule; a change out of
+// line); then one visit per VC against its remote receiver channel's progress: its worker channel, then its forwarding
+// channels (skipped with one test when none has work). A channel with work sends, takes completions (and acks) and
+// credits its producer. The loop-local VC is visited every pass; a later VC is skipped with one test when none of its
+// channels has work. The pass makes no call while it sends and takes no closures (a lambda capturing the loop's state
+// can keep that state in memory), so helpers recurse over channel masks.
 //
-// Channels and VCs. Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>). A VC has at most one
-// worker channel, which takes a worker on this chip (WorkerChannel<CH>; the host's role, by channel); its other
-// channels are forwarding channels, written by the routers on this chip that face other directions
-// (ForwardingChannel<CH>). A VC's packets go into the far router's receiver channel of that VC
-// (RemoteReceiverChannel<VC>).
-//
-// State, by placement class: the loop-local VC's send state (its remote receiver progress and its worker channel's
-// progress and connection state) and which channels kept in memory have packets in flight, loop locals; every other
-// VC's send state and each forwarding channel's state, in memory between its visits; the channels' interfaces
-// (SenderChannelInterfaces), in memory (out-of-line calls reach them); slot bounds, registers and counters,
-// compile-time. The block before pass() (SenderChannelStates) states the rule.
-//
-// Sections, in order: channels and their features; state; producers (the channel kinds' links to their producers);
-// free-slots registers; sending; visits; where the channel states live, and the loop; init.
+// Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>); a VC has at most one worker channel
+// (WorkerChannel<CH>), and its others are forwarding channels (ForwardingChannel<CH>). Where state lives:
+// SenderChannelStates.
 
 #include <algorithm>
 
@@ -68,7 +51,7 @@ struct SenderChannel {
     static constexpr uint32_t last_slot_addr = first_slot_addr + (num_slots - 1) * channel_buffer_size;
     // Its free-slots register: the host's table is by fabric position, the same on every router.
     static constexpr uint32_t free_slots_stream = sender_free_slots_streams[fabric_position_for_compact_sender(CH)];
-    // Counters the far router's receiver writes over the link.
+    // Counters the remote receiver writes over the link.
     static constexpr uint32_t completion_counter_addr =
         sender_channel_counter_addr(to_sender_remote_completion_counters_base_address, CH);
     static constexpr uint32_t first_level_ack_counter_addr =
@@ -77,8 +60,7 @@ struct SenderChannel {
     // Bubble flow control: on a deadlock-avoiding ring or torus an injection channel (the worker channel; on a torus a
     // channel fed from the other axis, a turn) sends only with the host's count of free remote slots, at least two
     // (BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS); any other channel with one. (The untrimmed array:
-    // GCC rejects the trimmed std::array<bool, N>'s operator[] in a constant expression here as "used before its
-    // definition".)
+    // GCC rejects the trimmed one's operator[] in this constant expression.)
     static constexpr bool bubble_flow_control_injection =
         enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[CH];
     static constexpr uint32_t remote_free_slots_to_send =
@@ -86,10 +68,9 @@ struct SenderChannel {
     // The NoC of its producer's credits and connection handshake (the library's, from SENDER_CH_<i>_ACK_NOC_ID).
     static constexpr uint8_t producer_noc = tt::tt_fabric::worker_handshake_noc;
 
-    // Whether its free-slots register (raw) says it holds a packet. The register counts the free slots of the channel:
-    // the producer takes one for each packet it writes, this router gives one back for each packet it sends. Anything
-    // but the slot count means a packet: "below the slot count" would not do, since a count out of range (an over-fill)
-    // must read as holding packets, as the generic loop reads it, or the channel is never served.
+    // Whether its free-slots register (raw) says it holds a packet: the producer takes a slot per packet it writes, the
+    // router gives one back per packet it sends, so anything but the slot count means a packet. ("Below the slot count"
+    // would not do: an over-fill must read as holding packets, as the generic loop reads it, or it is never served.)
     static FORCE_INLINE bool holds_packet(uint32_t free_slots_register) {
         return (free_slots_register & stream_count_mask) != num_slots;
     }
@@ -128,8 +109,7 @@ public:
     static constexpr bool has_worker_channel = worker_channels != 0;
     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
     // Where its free-slots registers are read: in the pass's first reads where VC has a worker channel (with its
-    // connection semaphore, which those reads take anyway); otherwise right before VC's own visits, so a packet landing
-    // during the earlier VCs' visits does not wait a pass.
+    // connection semaphore, which those reads take anyway), otherwise right before VC's visits.
     static constexpr bool reads_free_slots_at_pass_start = has_worker_channel;
 };
 
@@ -168,7 +148,7 @@ struct SenderChannels {
         "a static upstream connection is a forwarding channel's");
 };
 
-// The far router's receiver channel of VC: its slots and its packets-received register (on the far router).
+// The remote router's receiver channel of VC: its slots and its packets-received register.
 template <size_t VC>
 struct RemoteReceiverChannel {
     static constexpr size_t rx = receiver_channel_by_vc[VC];  // the host's index of the channel
@@ -185,8 +165,8 @@ struct RemoteReceiverChannel {
 
 // This router's progress into VC's remote receiver channel, in one word: the slots known free there (low 16 bits) and
 // the next slot to fill, its address / 16 (high 16 bits). One word, so a VC kept in memory takes and puts back its
-// progress with one load and one store. The encoding is for ERISC L1 only (the remote receiver channel is always in the
-// far ERISC's L1); a Tensix downstream must not reuse it.
+// progress with one load and one store. For ERISC L1 only (the remote receiver channel is always in the remote router's
+// L1); a Tensix downstream must not reuse it.
 template <size_t VC>
 class RemoteReceiverChannelProgress {
 public:
@@ -209,7 +189,7 @@ public:
         word += word >= last_slot_word ? wrap_add : advance_add;
     }
 
-    // Slots the far router completed: free again.
+    // Slots the remote receiver completed: free again.
     FORCE_INLINE void add_free_slots(uint32_t n) {
         ASSERT(free_slots() + n <= RemoteReceiverChannel<VC>::num_slots);
         word += n;
@@ -294,9 +274,8 @@ struct SenderChannelInterfaces {
     }
 
     // Builds every position's interface, serviced or not (once, at init, on an ERISC that serves sender channels): its
-    // connection info, its connection semaphore (the runtime args'), its starting credits (0 for a worker channel,
-    // whose credits are counts; the slot count for a forwarding channel) and a worker channel's credit source word (its
-    // read counter).
+    // connection info and semaphore, its starting credits (0 for a worker channel, whose credits are counts; the slot
+    // count for a forwarding channel) and a worker channel's credit source word (its read counter).
     __attribute__((noinline)) static void start(
         const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         new (storage) All{};
@@ -329,10 +308,9 @@ private:
     alignas(All) static inline unsigned char storage[sizeof(All)];
 };
 
-// What a worker channel's connection-semaphore change does, the same for every worker channel (one copy: the connection
-// type does not depend on the channel's slot count). Opening caches the worker's credit address; closing writes the
-// credits returned so far (`returned`) into the worker's connection info and signals its teardown semaphore. Returns
-// the value the semaphore holds while nothing changes.
+// A worker channel's connection-semaphore change, one copy for every worker channel: opening caches the worker's credit
+// address; closing writes the credits so far (`returned`) into the worker's connection info and signals its teardown
+// semaphore. Returns the value the semaphore holds while nothing changes.
 __attribute__((noinline)) uint32_t open_or_close_worker_connection(
     tt::tt_fabric::EdmChannelWorkerConnection<tt::tt_fabric::worker_handshake_noc>& connection,
     uint32_t semaphore,
@@ -354,14 +332,12 @@ __attribute__((noinline)) uint32_t open_or_close_worker_connection(
 }
 
 // A worker channel: a worker on this chip connects at run time (its connection semaphore, checked every pass) and is
-// credited with the absolute count of slots returned. The count goes into the channel's read counter, which therefore
-// always holds it; while a worker is connected, a 4-byte posted NoC write copies that word into the worker's L1 on the
-// channel's own credit command buffer (CommandBuffers). Where command buffers keep presets, that buffer holds the whole
-// command for the connection (source, destination, length; programmed at the connection, and again after the base
-// firmware ran), so a credit is the read counter store and the command's send request; elsewhere every credit is a
-// whole command. The credit and the connection event are out of line: a credit goes back once per completion group
-// from the far router (every few packets), or under first-level acks once per ack frame, and its constants are built
-// then instead of being held in the sender loop's registers for its whole run.
+// credited with the absolute count of slots credited so far, kept in the channel's read counter; while a worker is
+// connected, a 4-byte posted NoC write copies that word to the worker's L1 on the channel's own credit command buffer.
+// Where command buffers keep presets that buffer holds the whole command for the connection (programmed at connect,
+// and again after the base firmware ran), so a credit is a store and a send request; elsewhere a whole command. The
+// credit and the connection event are out of line: a credit goes once per completion group (or ack frame), and its
+// constants are built then instead of held in the loop's registers.
 template <size_t CH>
 struct WorkerChannel {
     static_assert(SenderChannel<CH>::worker);
@@ -546,20 +522,9 @@ FORCE_INLINE uint32_t channels_with_packets(uint32_t* connection_semaphores = nu
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Sends channel CH's next packet. Precondition: it has a packet and the remote receiver channel has room. Returns false
-// when the TX queue was busy (nothing sent; the next pass tries again); after a send, `completions` holds the
-// completions reported since `completed`, read right after the send, and on first-level-ack VCs `acks` the channel's
-// ack count, read with them (the visit then uses it, rather than loading it where its next instruction would wait for
-// it).
-//   - read the payload size and the TX queue status as one group, and stamp the packet's source channel;
-//     a busy queue yields;
-//   - send the packet into the remote receiver channel's next slot, advance both slots;
-//   - read the queue status and the channel's completion counter (and ack counter) as one group while the free counts
-//     update;
-//   - increment the far router's packets-received register (after the data, on the same queue).
-// The channel enters only through four values of SenderChannel<CH>: its slot bounds (the slot advance), its completion
-// counter, its free-slots register and its id (stamped into the header); the rest is the same for every channel. It is
-// inlined once per channel with those values as immediates: one copy shared at run time is slower on forwarded
-// packets.
+// when the TX queue was busy (nothing sent). After a send, `completions` holds the completions since `completed` and,
+// on first-level-ack VCs, `acks` the ack count, read in the send's second read group so the visit does not wait on
+// them. Inlined per channel with its slot bounds, counters and id as immediates: a shared copy is slower on forwards.
 template <size_t CH>
 FORCE_INLINE bool send(
     uint32_t& next_slot_addr,
@@ -618,6 +583,7 @@ FORCE_INLINE bool send(
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         }
     }
+    // The remote router's packets-received register +1: after the data, on the same TX queue.
     remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
     sent++;
     if constexpr (telemetry::counts_sent) {
@@ -645,9 +611,9 @@ FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, 
     }
 }
 
-// The loop-local VC's worker channel, its state on the loop's copy (visited every pass): send if it has a packet and
-// the remote receiver channel has room, take completions (and first-level acks), return the slots to the worker. (Its
-// connection is checked at the top of the pass: check_worker_connection.)
+// The loop-local VC's worker channel, on the loop's copy of its state (visited every pass): send if it has a packet and
+// the remote receiver channel has room, take completions (and first-level acks), credit the worker. (Its connection is
+// checked at the top of the pass: check_worker_connection.)
 template <size_t CH>
 FORCE_INLINE void visit_worker(
     SenderChannelState<CH>& state,
@@ -662,10 +628,9 @@ FORCE_INLINE void visit_worker(
         sent = send<CH>(
             progress.next_slot_addr, remote, progress.sent, progress.completed, completions, sent_acks, send_yielded);
     }
-    // The visit's counters, unless the send read them, as one read group: completions, and acks (first-level-ack VCs).
-    // Completions before acks, so the acks seen are never fewer than the completions seen. Whether to read each is
-    // known before any is read. (Without the group, some rows measured up to 3 cycles per packet faster but a VC1
-    // router's 2-hop row 2 slower; it stays.)
+    // The visit's counters, unless the send read them, as one read group: completions, then acks (first-level-ack VCs),
+    // so the acks seen are never fewer than the completions seen. (Measured without the group: some rows up to 3 cycles
+    // per packet faster, a VC1 router's 2-hop row 2 slower; it stays.)
     const bool read_completions = !sent && progress.sent != progress.completed;
     const bool read_acks = SenderChannel<CH>::first_level_ack && !sent && progress.sent != progress.first_level_acked;
     uint32_t reported_completions = 0;
@@ -699,11 +664,10 @@ FORCE_INLINE void visit_worker(
     }
 }
 
-// A channel with work whose state stays in memory (a forwarding channel, or a later VC's worker channel:
-// SenderChannelStates): send if it has a packet and the remote receiver channel has room, take completions (and acks),
-// return the slots to the producer, and keep the channel's bit in `channels_in_flight` equal to "packets not yet
-// completed (or acked)". The state's fields are taken into locals where first needed and written back where they change
-// (the send's read group would make the compiler store and reload memory state around it).
+// A channel with work whose state stays in memory (a forwarding channel, or a later VC's worker channel): send if it
+// has a packet and the remote receiver channel has room, take completions (and acks), credit the producer, and keep its
+// bit in `channels_in_flight` equal to "packets not yet completed (or acked)". Fields are taken into locals where first
+// needed and written back where changed (the send's read group would make the compiler store and reload memory state).
 template <size_t CH>
 FORCE_INLINE void visit_channel_with_work(
     SenderChannelState<CH>& state,
@@ -759,16 +723,14 @@ FORCE_INLINE void visit_channel_with_work(
 // Where the channel states live, and the loop
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Every serviced VC's send state (vcs.get<VC>()) and every forwarding channel's state (forwarding.get<CH>()), and where
-// they live. The loop-local VC's send state (its remote receiver progress and its worker channel's state) is copied
-// into a local of run()'s loop, so the compiler can keep it in registers. Every other VC's send state and every
-// forwarding channel's state stays in memory: such a channel is visited only when the pass's reads show it work (it
-// holds a packet, or has packets in flight: channels_in_flight), its fields are taken into locals where first needed
-// and written back where they change, and its state is kept in memory after the visit (keep_in_memory), so it does not
-// take the loop-local VC's registers on its packet path (without that, forwarding rows measured 6 to 9 cycles per
-// packet slower, and single-ERISC rows about 8). A one-ERISC router keeps every state in memory and visits the
-// loop-local VC's in place (router_single.hpp). The accessors are templates on the VC so that an absent VC's state is
-// named only in template-dependent code.
+// Every serviced VC's send state (vcs.get<VC>()) and every forwarding channel's state (forwarding.get<CH>()). The
+// loop-local VC's send state (its remote receiver progress and worker channel state) is copied into a local of run()'s
+// loop, so it can stay in registers. Every other state stays in memory: visited only when the pass's reads show it work
+// (a packet held, or packets in flight: channels_in_flight), its fields taken into locals where first needed, written
+// back where changed, and kept in memory after the visit (keep_in_memory), so it does not take the loop-local VC's
+// registers (measured without that: forwarding rows 6 to 9 cycles per packet slower, single-ERISC rows about 8). A
+// one-ERISC router keeps every state in memory. The accessors are templates on VC so an absent VC's state is named only
+// in template-dependent code.
 struct SenderChannelStates {
     Each<SenderChannels::serviced_vcs, SenderVcState> vcs;
     Each<SenderChannels::forwarding_channels, SenderChannelState> forwarding;
@@ -793,7 +755,6 @@ struct SenderChannelStates {
         }
     }
 
-    // VC's send state for its visit: the loop's copy for the loop-local VC, the state in memory otherwise.
     template <size_t VC, typename LoopCopy>
     FORCE_INLINE SenderVcState<VC>& progress_for(LoopCopy& loop_copy) {
         if constexpr (VC == loop_local_vc) {
@@ -862,10 +823,8 @@ FORCE_INLINE void visit_channels(
 }
 
 // VC's visit, on its send state where SenderChannelStates places it: its free-slots registers (when not read with the
-// pass's first reads), then its channels. The loop-local VC is visited every pass on its state in place. A later
-// VC is skipped with one test when none of its channels holds a packet or has packets in flight; otherwise its remote
-// receiver progress is taken into a local and put back where it changed (after_visit). None where VC has no serviced
-// sender channel.
+// pass's first reads), then its channels. A later VC is skipped with one test when none of its channels has work;
+// otherwise its remote receiver progress is taken into a local and put back where it changed (after_visit).
 template <size_t VC, typename LoopCopy>
 FORCE_INLINE void visit_vc(
     LoopCopy& loop_copy,
@@ -958,9 +917,8 @@ FORCE_INLINE void check_worker_connection(
     }
 }
 
-// One pass over the sender channels: the first reads, each worker channel's connection, then one visit per VC.
-// The body of run()'s loop; a single-ERISC router runs it as the sender half of each pass over its state in memory
-// (router_single.hpp).
+// One pass over the sender channels: the first reads, each worker channel's connection, then one visit per VC. Also the
+// sender half of a single-ERISC router's pass.
 template <typename LoopCopy>
 FORCE_INLINE void pass(
     LoopCopy& loop_copy, SenderChannelStates& states, uint32_t& channels_in_flight, bool& send_yielded) {
@@ -1058,11 +1016,9 @@ __attribute__((noinline)) void run() {
 // Init (out of line, once)
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Before the Ethernet handshake and before any producer connects (both ERISCs, before their first sync): each sender
-// channel's registers, at its fabric position: its free-slots register at its slot count (this chip's producer takes a
-// slot from it per packet), and its first-level-ack and completion registers at 0 where its VC takes stream credits
-// (the far router's receiver increments them). Every channel the router has, serviced or not: the host sizes the
-// channel arrays for the fabric's widest router, so positions past the router's own channels have no fabric position.
+// Before the Ethernet handshake and any producer connects (both ERISCs, before their first sync), every sender channel,
+// serviced or not: its free-slots register at its slot count, its first-level-ack and completion registers at 0 where
+// its VC takes stream credits. Positions past the router's own channels (arrays sized for the widest router) have none.
 __attribute__((noinline)) void init_channel_streams() {
     constexpr size_t own_channels =
         ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + ACTUAL_VC2_SENDER_CHANNELS;
