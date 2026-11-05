@@ -1,0 +1,101 @@
+# E2 variant V3 of keraunos_chip_a_soc_desc.yaml: only the channel-0 DRAM views (programmable), so
+# the two chips' Metal DRAM cores are disjoint. DRAM cores, SMC and Mimir channels as the original.
+
+grid:
+  x_size: 6
+  y_size: 4
+
+arc:
+  []
+
+pcie:
+  []
+
+dram:
+  [[0-0, 1-0],
+  [2-0, 3-0]]
+
+# Dram view parameters are used by tt-metal and are not recognized by UMD.
+# worker_endpoint and eth_endpoint are the location index inside the channel,
+# once per NOC. programmable: true marks that location's CCE as a Metal DRAM core.
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: [0, 0],
+      worker_endpoint: [0, 0],
+      address_offset: 0,
+      programmable: true
+    },
+    {
+      channel: 0,
+      eth_endpoint: [1, 1],
+      worker_endpoint: [1, 1],
+      address_offset: 4294967296,
+      programmable: true
+    }
+  ]
+
+dram_view_size:
+  536870912
+
+eth:
+  [4-0, 4-2]
+
+functional_workers:
+  []
+
+router_only:
+  []
+
+dispatch:
+  []
+
+smc:
+  [0-1,
+  1-1]
+
+worker_l1_size:
+  0
+
+dram_bank_size:
+  8589934592
+
+# One Keraunos CCE region. Chippy _KER_CCE_REGION_SIZE.
+eth_l1_size:
+  4194304
+
+arch_name: QUASAR
+
+# Chiplet-local AXI behind chippy. Omitting this selects full_package.
+address_space: mimir_local
+
+# Channel is not the SPA instance or the chippy id; both are recorded here.
+# MMK wires M0 D2D1 to M1 D2D0. M0 D2D0 has no Mimir peer.
+mimir_channels:
+  - channel: 0
+    instance: 0
+    chiplet: m0
+    routes:
+      - peer: 1
+        d2d: 1
+  - channel: 1
+    instance: 1
+    chiplet: m1
+    routes:
+      - peer: 0
+        d2d: 0
+
+# 0x22800000, tile stride 0x4000000. x = 4 + cce, y = hsio, tiles 0-3.
+keraunos:
+  chiplet: k0
+  tap: 0
+  local_window: 578813952
+  tile_stride: 67108864
+  cores:
+    - core: 4-0
+      hsio: 0
+      cce: 0
+    - core: 4-2
+      hsio: 2
+      cce: 0
