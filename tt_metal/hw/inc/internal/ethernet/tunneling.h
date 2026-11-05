@@ -11,9 +11,6 @@
 #include "api/debug/eth_link_status.h"
 #include "tt_eth_ss_regs.h"
 #include "internal/ethernet/tt_eth_api.h"
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/eth_cce_send.h"
-#endif
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
@@ -34,6 +31,10 @@ static volatile uint32_t* const fabric_scratch_ptr = reinterpret_cast<volatile u
     static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE) + fabric_status_word_alias);
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
+
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/eth_cce_send.h"
+#endif
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
@@ -87,9 +88,8 @@ namespace internal_ {
 
 #if defined(ARCH_QUASAR)
 // A Keraunos CCE sends on its command buffer (eth_cce_send.h). There is no base firmware to switch to, so ctx_switch
-// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an 8-byte inline
-// write to the same flat address in the peer's CCE SRAM: @p reg_addr 8-byte aligned, @p val below 2^52, else the hart
-// halts (cce_eth::send_dword).
+// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an inline write
+// to the same flat address in the peer's CCE SRAM (cce_eth::send_dword).
 FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return cce_eth::txq_busy(q_num); }
 
 template <bool ctx_switch = true>
