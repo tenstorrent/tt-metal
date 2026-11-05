@@ -166,7 +166,7 @@ and `router/router_receiver.hpp`.
 */
 
 // On a two-ERISC Blackhole router, ERISC 0 runs the sender program (router/router_sender.hpp) and ERISC 1 the receiver
-// program (router/router_receiver.hpp); on a single-ERISC router one ERISC runs both (router/router_single.hpp).
+// program (router/router_receiver.hpp); on a single-ERISC router one ERISC runs both (router/router_single_erisc.hpp).
 // kernel_main is the init and teardown skeleton every ERISC runs (helpers: router/router_init.hpp): in each phase each
 // role does its own part, and the ERISCs meet at the phase's end. The supported configurations are listed in
 // router/router_common.hpp; others fail to compile there.
@@ -176,7 +176,7 @@ and `router/router_receiver.hpp`.
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_single_erisc.hpp"
 
 namespace fabric_router {
 
@@ -186,7 +186,7 @@ namespace fabric_router {
 template <typename Downstreams>
 FORCE_INLINE void run_loop(Downstreams& downstreams) {
     if constexpr (NUM_ACTIVE_ERISCS == 1) {
-        single::run(downstreams);
+        single_erisc::run(downstreams);
     } else if constexpr (is_sender_role) {
         sender::run();
     } else if constexpr (is_receiver_role) {

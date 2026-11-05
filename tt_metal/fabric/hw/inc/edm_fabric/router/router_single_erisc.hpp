@@ -26,7 +26,7 @@
 #define SINGLE_ERISC_PASS FORCE_INLINE
 #endif
 
-namespace fabric_router::single {
+namespace fabric_router::single_erisc {
 
 // Whether the passes run inline (SINGLE_ERISC_PASS), which lets the loop carry the receiver's loop-local progress.
 constexpr bool inline_passes = is_wormhole_arch;
@@ -87,6 +87,6 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
     }
 }
 
-}  // namespace fabric_router::single
+}  // namespace fabric_router::single_erisc
 
 #undef SINGLE_ERISC_PASS
