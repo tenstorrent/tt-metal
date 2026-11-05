@@ -5,7 +5,7 @@ Use this action in place of `actions/checkout`, retaining existing checkout inpu
 ```yaml
 - name: Checkout
   id: checkout
-  uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@<full-tt-metal-commit-sha>
+  uses: tenstorrent/.github/actions/cachew-checkout@<full-tenstorrent/.github-commit-sha>
   with:
     ref: ${{ inputs.ref || github.sha }}
     path: docker-job
@@ -183,16 +183,21 @@ Everything runs from this action's own directory, so the consumers' pin to this
 action (`ACTION_SHA` in `.github/scripts/utils/cachew_checkout.py`) is the only
 pin. `--verify-pins` compares the pin with this tree's runtime files
 (`action.yml`, `checkout.py`, `git_wrapper.py`, `session/`,
-`trusted_caches.json`); README and test changes need no re-pin. To release a
-change:
+`trusted_caches.json`); README and test changes need no re-pin.
 
-1. Commit the action change. In a second commit, set `ACTION_SHA` to the first
-   commit and run `python3 .github/scripts/utils/cachew_checkout.py --write`.
-   Push both together; `--verify-pins` checks that the pin matches this tree.
-2. Main is squash-merged, so the pin is not on `main` after merging; GitHub keeps
-   it fetchable through `refs/pull/<n>/head`, and the test workflow only warns.
-   Re-pin `ACTION_SHA` to the merge commit in a follow-up and run `--write`
-   again (`--verify-pins --require-main`).
+Consumers run a published copy from `tenstorrent/.github` (`actions/cachew-checkout`),
+not from tt-metal. A remote `uses:` makes the runner download the whole host
+repository for every job, and tt-metal is far too large for that. This directory
+stays the source of truth and the tests run against it. To release a change:
+
+1. Merge the runtime-file change into `tenstorrent/.github` under
+   `actions/cachew-checkout/`.
+2. In tt-metal, make the same change here, set `ACTION_SHA` to that
+   `tenstorrent/.github` commit and run
+   `python3 .github/scripts/utils/cachew_checkout.py --write`. `--verify-pins`
+   fetches the pin from `tenstorrent/.github` and fails if its runtime files differ
+   from this directory; on main it also requires the pin to be on
+   `tenstorrent/.github` main (`--require-main`).
 
 A checkout with a trailing `# cachew: keep` comment is never migrated (the test
 workflow's bootstrap checkout uses this to test the working tree's action).
