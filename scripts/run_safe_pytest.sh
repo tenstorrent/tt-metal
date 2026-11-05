@@ -41,6 +41,20 @@
 #   1 - Test failure (normal pytest failure, no hang)
 #   2 - Hang detected (dispatch timeout fired)
 #   3 - Setup error (missing args, etc.)
+#
+# Total runtime:
+#   Prints "SAFE_PYTEST_TOTAL_RUNTIME: <m>m<ss>s (<n>s total, ...)" on every exit path once the
+#   device lock is held: wall-clock from "device lock acquired" to script exit, so idle queueing
+#   behind other runners is excluded. Under the simulator there is no lock and the clock starts
+#   at the equivalent point. Deferred warnings still print after it, and on a hang it precedes
+#   the "SAFE_PYTEST: LLM triage: <path>" line.
+#
+# Device-lock timing record:
+#   When $TT_DEVICE_TIMING_LOG is set, one JSON line is appended to that file on exit:
+#     {source, pid, started_at_ms, wait_ms, run_ms, test_path, exit_code}
+#   wait_ms = script entry -> device lock acquired (contention)
+#   run_ms  = device lock acquired -> script exit (device occupied)
+#   Not written for exits before the lock is taken. Under the simulator wait_ms is 0.
 
 set -o pipefail
 
@@ -58,6 +72,74 @@ DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_LLM="${TRIAGE_LLM_DIR}/triage.csv"
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
+
+# --- Exit handling ---
+# bash keeps one EXIT handler and each `trap ... EXIT` replaces the previous one, so everything
+# that must run on exit is called from _on_exit, the script's only EXIT trap. Add new exit work
+# there rather than registering another trap.
+
+# Device-lock timing record (see header). TT_TIMING_LOCK_ACQUIRED_MS stays 0 until the lock is
+# taken (or the simulator seeds it), and no record is written while it is 0.
+TT_TIMING_ENTRY_MS=$(date +%s%3N)
+TT_TIMING_LOCK_ACQUIRED_MS=0
+TT_TIMING_SOURCE="run_safe_pytest"
+TT_TIMING_TEST_PATH=""
+
+_emit_device_timing() {
+    local ec=$?
+    if [[ -n "${TT_DEVICE_TIMING_LOG:-}" && "$TT_TIMING_LOCK_ACQUIRED_MS" -ne 0 ]]; then
+        local end_ms wait_ms run_ms log_dir esc_path
+        end_ms=$(date +%s%3N)
+        wait_ms=$(( TT_TIMING_LOCK_ACQUIRED_MS - TT_TIMING_ENTRY_MS ))
+        run_ms=$(( end_ms - TT_TIMING_LOCK_ACQUIRED_MS ))
+        log_dir="$(dirname "$TT_DEVICE_TIMING_LOG")"
+        [[ -n "$log_dir" ]] && mkdir -p "$log_dir" 2>/dev/null
+        # JSON-escape test_path: backslash first, then double-quote.
+        esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
+        esc_path="${esc_path//\"/\\\"}"
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d}\n' \
+            "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
+            >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
+    fi
+    return $ec
+}
+
+# Total-run timer (see header). RUN_START is set once the device lock is held, so nothing is
+# printed for exits that happen before a run takes place (e.g. missing args). It is cleared after
+# printing: the hang branch prints early to keep the triage path below it, and _on_exit then
+# skips it.
+RUN_START=
+_print_total_runtime() {
+    [[ -z "${RUN_START:-}" ]] && return 0
+    local elapsed=$(( $(date +%s) - RUN_START ))
+    RUN_START=
+    echo "========================================"
+    printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
+        $((elapsed / 60)) $((elapsed % 60)) "$elapsed"
+}
+
+# Deferred warnings: warnings raised during setup get buried under pytest/triage output, so the
+# user never sees them. Buffer them and flush on exit so they surface as the very last thing
+# printed, regardless of how the script exits.
+DEFERRED_WARNINGS=()
+defer_warning() { DEFERRED_WARNINGS+=("$1"); }
+flush_deferred_warnings() {
+    if [[ ${#DEFERRED_WARNINGS[@]} -gt 0 ]]; then
+        echo ""
+        local w
+        for w in "${DEFERRED_WARNINGS[@]}"; do
+            echo "$w"
+        done
+    fi
+}
+
+# _emit_device_timing goes first: it records the script's exit status from $?.
+_on_exit() {
+    _emit_device_timing
+    _print_total_runtime
+    flush_deferred_warnings
+}
+trap _on_exit EXIT
 
 # --- Detect simulator mode ---
 SIM_MODE=false
@@ -100,23 +182,7 @@ fi
 
 TEST_PATH="$1"
 shift
-
-# --- Deferred warnings ---
-# Warnings raised during setup get buried under pytest/triage output, so the
-# user never sees them. Buffer them and flush via an EXIT trap so they surface
-# as the very last thing printed, regardless of how the script exits.
-DEFERRED_WARNINGS=()
-defer_warning() { DEFERRED_WARNINGS+=("$1"); }
-flush_deferred_warnings() {
-    if [[ ${#DEFERRED_WARNINGS[@]} -gt 0 ]]; then
-        echo ""
-        local w
-        for w in "${DEFERRED_WARNINGS[@]}"; do
-            echo "$w"
-        done
-    fi
-}
-trap flush_deferred_warnings EXIT
+TT_TIMING_TEST_PATH="$TEST_PATH"
 
 # Newest ops_perf_results CSV before the run; set just before pytest (below).
 PROFILE_CSV_BEFORE=""
@@ -141,6 +207,8 @@ if [[ "$SIM_MODE" == false ]]; then
 
     echo "SAFE_PYTEST: Waiting for device lock..."
     flock 9
+    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
+    RUN_START=$(date +%s)
     echo "SAFE_PYTEST: Device lock acquired"
 
     # --- Check if device needs reset from previous hang ---
@@ -153,6 +221,10 @@ if [[ "$SIM_MODE" == false ]]; then
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete"
     fi
+else
+    # Simulator: no device lock, so start the clocks at the equivalent point (wait_ms is 0).
+    TT_TIMING_LOCK_ACQUIRED_MS=$TT_TIMING_ENTRY_MS
+    RUN_START=$(date +%s)
 fi
 
 # --- Setup environment ---
@@ -336,7 +408,9 @@ if [[ "$IS_HANG" == true ]]; then
         echo ""
     fi
 
-    # Emit the LLM triage path so machine-readers can find it (grep the prefix).
+    # Emit the LLM triage path so machine-readers can find it (grep the prefix). The
+    # total-runtime line would otherwise follow it from _on_exit, so print that first.
+    _print_total_runtime
     if [[ -f "$TRIAGE_LLM" ]]; then
         echo "SAFE_PYTEST: LLM triage: ${TRIAGE_LLM}"
     fi
