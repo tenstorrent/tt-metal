@@ -4,9 +4,12 @@
 
 """ttnn.experimental.alias_view: a zero-copy view of a paged cache with another dtype.
 
-The input is a bfloat16 paged cache [num_blocks, 1, block_size, 256]. Writes go through paged_fill_cache, the op a
-model uses to write one block. A valid view must cover exactly the input's block b when it writes its block b.
+The input is a bfloat16 or bfloat8_b paged cache [num_blocks, 1, block_size, 256]. Writes go through
+paged_fill_cache, the op a model uses to write one block. A valid view must cover exactly the input's block b when it
+writes its block b.
 """
+
+import math
 
 import pytest
 import torch
@@ -15,6 +18,7 @@ import ttnn
 
 NUM_BLOCKS = 12
 TARGET = 5
+BF8_TILE_BYTES = 1088  # 1,024 one-byte mantissas and 64 shared exponents
 BF16_TILE_BYTES = 2048
 FP32_TILE_BYTES = 4096
 
@@ -24,16 +28,25 @@ def _num_banks(device):
     return grid.x * grid.y
 
 
-def _fp32_view_is_valid(block_size, banks):
-    """alias_view's rule for a float32 view of one bfloat16 [block_size, 256] block."""
-    pages = (block_size // 32) * (256 // 32)
-    return pages % banks == 0 and (pages // banks * BF16_TILE_BYTES) % FP32_TILE_BYTES == 0
+def _pages_per_block(block_size):
+    return (block_size // 32) * (256 // 32)
+
+
+def _block_bytes_per_bank(block_size, banks, owner_tile):
+    """Bytes one [block_size, 256] block of the input holds on each bank, when its pages split evenly over banks."""
+    return _pages_per_block(block_size) // banks * owner_tile
+
+
+def _view_is_valid(block_size, banks, owner_tile=BF16_TILE_BYTES, view_tile=FP32_TILE_BYTES):
+    """alias_view's rule, with check_slices=True, for a view of one [block_size, 256] block of the input."""
+    pages = _pages_per_block(block_size)
+    return pages % banks == 0 and _block_bytes_per_bank(block_size, banks, owner_tile) % view_tile == 0
 
 
 def _valid_block_size(device):
     """A block size whose float32 view is valid on this device's bank count (7 on P100, 8 on P150, 12 on Wormhole)."""
     banks = _num_banks(device)
-    return next(b for b in (1024, 896, 768) if _fp32_view_is_valid(b, banks))
+    return next(b for b in (1024, 896, 768) if _view_is_valid(b, banks))
 
 
 def _owner(device, block_size, mesh_mapper=None, num_devices=1):
@@ -42,15 +55,30 @@ def _owner(device, block_size, mesh_mapper=None, num_devices=1):
     return host, dev
 
 
-def _fill_block(view, data, block_id, device, mesh_mapper=None):
+def _bf8_owner(device, num_blocks, block_size):
+    host = torch.randn(num_blocks, 1, block_size, 256).bfloat16()
+    return ttnn.from_torch(host, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def _fill_blocks(view, data, block_ids, device, mesh_mapper=None):
+    """Writes data to view blocks block_ids, one block-size chunk of data per id, in order."""
     page_table = ttnn.from_torch(
-        torch.tensor([[block_id]], dtype=torch.int32),
+        torch.tensor([block_ids], dtype=torch.int32),
         dtype=ttnn.int32,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if mesh_mapper else None,
     )
     x = ttnn.from_torch(data, dtype=view.dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper)
     ttnn.experimental.paged_fill_cache(view, x, page_table, batch_idx=0)
+
+
+def _fill_block(view, data, block_id, device, mesh_mapper=None):
+    _fill_blocks(view, data, [block_id], device, mesh_mapper)
+
+
+def _bits(x):
+    """Bit pattern of a float tensor, so that equal NaNs compare equal."""
+    return x.view({2: torch.int16, 4: torch.int32}[x.element_size()])
 
 
 def _tiles(x):
@@ -88,7 +116,7 @@ def test_alias_view_fp32_block_mapping(device, block_size, expect_error):
     """A float32 view either covers the input's blocks exactly or raises."""
     shape = ttnn.Shape([NUM_BLOCKS, 1, block_size, 128])
     host, k = _owner(device, block_size)
-    if not _fp32_view_is_valid(block_size, _num_banks(device)):
+    if not _view_is_valid(block_size, _num_banks(device)):
         with expect_error(RuntimeError, "alias_view"):
             ttnn.experimental.alias_view(k, shape, ttnn.float32)
         return
@@ -145,6 +173,104 @@ def test_alias_view_rejects_unsafe_inputs(device, expect_error):
     )
     with expect_error(RuntimeError, "multiple of the"):
         ttnn.experimental.alias_view(one_tile_blocks, ttnn.Shape([banks, 1, 32, 32]), ttnn.float32)
+
+
+@pytest.mark.parametrize("view_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_alias_view_bf8_aligned_blocks(device, view_dtype):
+    """A view of a bfloat8_b [N, 1, 2048, 256] cache: writing all of view block b leaves every other block unchanged.
+
+    On 8 banks a block of 2048 holds 64 bfloat8_b pages per bank, 69,632 bytes, the least common multiple of the
+    1,088 byte bfloat8_b page and the 4,096 byte float32 page. A raw int32 view of the whole buffer is read before and
+    after each write, so the other blocks are compared bit for bit.
+    """
+    block_size = 2048
+    banks = _num_banks(device)
+    view_tile = FP32_TILE_BYTES if view_dtype == ttnn.float32 else BF16_TILE_BYTES
+    if not _view_is_valid(block_size, banks, BF8_TILE_BYTES, FP32_TILE_BYTES):
+        pytest.skip(f"a bfloat8_b block of {block_size} is not whole float32 pages per bank on {banks} banks")
+    bytes_per_bank = _block_bytes_per_bank(block_size, banks, BF8_TILE_BYTES)
+    rows = banks * bytes_per_bank // view_tile * 32 // 8  # rows of a [rows, 256] block, 8 tiles per row of tiles
+    raw_rows = banks * bytes_per_bank // FP32_TILE_BYTES * 32 // 8
+
+    k = _bf8_owner(device, NUM_BLOCKS, block_size)
+    view = ttnn.experimental.alias_view(k, ttnn.Shape([NUM_BLOCKS, 1, rows, 256]), view_dtype)
+    raw = ttnn.experimental.alias_view(k, ttnn.Shape([NUM_BLOCKS, 1, raw_rows, 256]), ttnn.int32)
+    torch_dtype = torch.float32 if view_dtype == ttnn.float32 else torch.bfloat16
+
+    written = [0, 1, TARGET, 6, NUM_BLOCKS - 1]
+    decoded = ttnn.to_torch(k)
+    before = ttnn.to_torch(raw)
+    for b in written:
+        state = torch.randn(1, 1, rows, 256, dtype=torch_dtype)
+        _fill_block(view, state, b, device)
+        after = ttnn.to_torch(raw)
+        others = [i for i in range(NUM_BLOCKS) if i != b]
+        assert torch.equal(after[others], before[others]), f"writing block {b} changed another block"
+        assert torch.equal(ttnn.to_torch(view)[b], state[0]), "a write and read through the view must round-trip"
+        if view_dtype == ttnn.float32:
+            assert torch.equal(after[b], _bits(state[0])), "block b of the input must hold the state's bytes"
+        before = after
+
+    untouched = [i for i in range(NUM_BLOCKS) if i not in written]
+    assert torch.equal(_bits(ttnn.to_torch(k)[untouched]), _bits(decoded[untouched]))
+
+
+@pytest.mark.parametrize("block_size", [896, 1024])
+def test_alias_view_bf8_unaligned_blocks_raise(device, block_size, expect_error):
+    """bfloat8_b blocks of 896 and 1024 hold 7.4375 and 8.5 float32 pages per bank on 8 banks, so the default raises."""
+    banks = _num_banks(device)
+    k = _bf8_owner(device, NUM_BLOCKS, block_size)
+    message = "not a multiple of the view's" if _pages_per_block(block_size) % banks == 0 else "banks"
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.alias_view(k, ttnn.Shape([NUM_BLOCKS, 1, 32, 256]), ttnn.float32)
+
+
+@pytest.mark.parametrize("block_size, min_whole_pages_on_8_banks", [(1024, 8), (896, 6)])
+def test_alias_view_bf8_whole_pages_per_block(device, block_size, min_whole_pages_on_8_banks, expect_error):
+    """A flat float32 view (check_slices=False) of a bfloat8_b cache whose blocks are not whole float32 pages per bank.
+
+    Block b holds bytes [b * c, (b + 1) * c) on every bank, with c = block_size * 34 on 8 banks. Its state goes only
+    to the float32 page rows wholly inside that range: rows ceil(b * c / 4096) to floor((b + 1) * c / 4096) - 1.
+    Slice r of the view is page row r: one float32 page on each bank, at offset r * 4096. A raw int32 view of the
+    same rows is read before and after each write, so every byte outside the written rows is compared bit for bit.
+    """
+    banks = _num_banks(device)
+    if _pages_per_block(block_size) % banks:
+        pytest.skip(f"a block of {block_size} does not split evenly over {banks} banks")
+    num_blocks = 16
+    c = _block_bytes_per_bank(block_size, banks, BF8_TILE_BYTES)
+    rows = num_blocks * c // FP32_TILE_BYTES
+    k = _bf8_owner(device, num_blocks, block_size)
+    flat = ttnn.experimental.alias_view(k, ttnn.Shape([rows, 1, 32, 32 * banks]), ttnn.float32, check_slices=False)
+    raw = ttnn.experimental.alias_view(k, ttnn.Shape([rows, 1, 32, 32 * banks]), ttnn.int32, check_slices=False)
+    with expect_error(RuntimeError, "the input owns"):
+        ttnn.experimental.alias_view(k, ttnn.Shape([rows + 1, 1, 32, 32 * banks]), ttnn.float32, check_slices=False)
+
+    whole_rows = [range(math.ceil(b * c / FP32_TILE_BYTES), (b + 1) * c // FP32_TILE_BYTES) for b in range(num_blocks)]
+    if banks == 8:
+        assert min(len(r) for r in whole_rows) == min_whole_pages_on_8_banks
+
+    decoded = ttnn.to_torch(k)
+    before = ttnn.to_torch(raw)
+    for b, block_rows in enumerate(whole_rows):
+        n = len(block_rows)
+        state = torch.randn(1, 1, n * 32, 32 * banks, dtype=torch.float32)
+        _fill_blocks(flat, state, list(block_rows), device)
+        after = ttnn.to_torch(raw)
+        new_decoded = ttnn.to_torch(k)
+        outside = [r for r in range(rows) if r not in block_rows]
+        others = [i for i in range(num_blocks) if i != b]
+        assert torch.equal(after[outside], before[outside]), f"writing block {b} changed bytes outside its pages"
+        assert torch.equal(after[block_rows.start : block_rows.stop], _bits(state).reshape(n, 1, 32, 32 * banks))
+        assert torch.equal(_bits(new_decoded[others]), _bits(decoded[others])), f"block {b} changed another block"
+        before, decoded = after, new_decoded
+
+    # A page row across a block boundary holds bytes of both blocks, which is why the runner must skip it.
+    b = next(b for b in range(num_blocks - 1) if (b + 1) * c % FP32_TILE_BYTES)
+    _fill_blocks(flat, torch.randn(1, 1, 32, 32 * banks), [(b + 1) * c // FP32_TILE_BYTES], device)
+    new_decoded = ttnn.to_torch(k)
+    changed = [i for i in range(num_blocks) if not torch.equal(_bits(new_decoded[i]), _bits(decoded[i]))]
+    assert changed == [b, b + 1]
 
 
 def test_alias_view_on_mesh(mesh_device):
