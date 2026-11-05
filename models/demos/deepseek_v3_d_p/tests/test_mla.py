@@ -7,6 +7,7 @@ chunked perf gate. ``run_mla_inference`` is the shared single-shot forward helpe
 tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 """
 
+import functools
 import math
 import os
 from pathlib import Path
@@ -42,7 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
@@ -53,6 +54,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -493,7 +495,7 @@ def test_mistral_small4_mla(
 
 
 # ---------------------------------------------------------------------------------------------------
-# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
+# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+SDPA -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
 # reference='trace' takes its trace dirs from variant.mla_trace_defaults. MLA_CHUNKED_TRACE_PATH
@@ -523,8 +525,9 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_319_000
-K3_CHUNKED_RT_PERF_MARGIN = 0.03
+# Kimi-K3 50k + 5k, TorusXY Galaxy 8x4 (DDR 14000), +/-5%.
+K3_CHUNKED_RT_PERF_NS = 5_830_000
+K3_CHUNKED_RT_PERF_MARGIN = 0.05
 
 
 def _rt_profile_forward_ns(mesh_device, run_fn):
@@ -539,6 +542,48 @@ def _rt_profile_forward_ns(mesh_device, run_fn):
         duration_ns = float(record["duration_ns"])
         per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
     return result, sum(per_program.values())
+
+
+def _meta_scalar(mesh_device, value):
+    """A replicated 1-element uint32 [1, 1, 1, 1] DRAM tensor: one field of the chunk metadata."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _new_chunk_metadata(mesh_device, chunk, scale_buf):
+    """Persistent chunk metadata (slot 0, start 0, end chunk) that write_chunk_metadata rewrites in place per step."""
+    return ChunkMetadata(
+        _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, chunk), scale_buf
+    )
+
+
+def _new_layered_kv_cache(config, mesh_device, seq_len, num_layers, num_users, sp_axis, tp_axis, tp_sharded=True):
+    """A num_users x num_layers BFP8 KVPE cache over the whole mesh, TP-deduped when tp_sharded."""
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis if tp_sharded else None,
+    )
+
+
+def _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len):
+    """Every (user, layer) slot of the cache, un-striped to natural token order."""
+    flat, stripes = gather_cache_natural(cache.storage, mesh_device, tp_sharded)
+    nat = torch.empty_like(flat)
+    nat[:, blockcyclic_positions(stripes, chunk, seq_len)] = flat
+    return nat
 
 
 def _run_chunked_prefill(
@@ -557,6 +602,9 @@ def _run_chunked_prefill(
     profile=False,
     tight_cache=False,
     tp_shard_kv=False,
+    return_outputs=False,
+    return_pccs=False,
+    mla_kwargs=None,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -569,6 +617,7 @@ def _run_chunked_prefill(
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
+    mla_kwargs: extra ttMLA arguments, e.g. expanded_k.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
     # Mutually exclusive like determinism_check vs pcc_validation in test_prefill_block: a reference
@@ -625,8 +674,8 @@ def _run_chunked_prefill(
             max_real_end = max(max_real_end, ka)
     if tight_cache:
         # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
-        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
-        # caps logical_n at the cache.
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and the SDPA's
+        # logical_n is capped at the cache.
         write_end = -(-max_real_end // tile) * tile
         max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
@@ -711,6 +760,7 @@ def _run_chunked_prefill(
         layer_num=1,
         # None, not False: False would turn off a sparse variant's dedup.
         tp_shard_kv=True if tp_shard_kv else None,
+        **(mla_kwargs or {}),
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
@@ -815,7 +865,7 @@ def _run_chunked_prefill(
                 ),
             )
             # Trace-safe metadata variant: build the runner's canonical metadata and hand it to forward
-            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/ring_mla), which read
+            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/SDPA), which read
             # their per-chunk scalars on-device. The contract is a 3-tuple of separate 1-element uint32
             # tensors indexed as metadata[0]=slot_id, [1]=actual_start, [2]=actual_end -- NOT one packed
             # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
@@ -858,6 +908,7 @@ def _run_chunked_prefill(
                         hidden_states=tt_h,
                         rope_tensors=indexed_rope,
                         kvpe_cache=tt_kvpe_cache,
+                        cache_layer_idx=0,
                         actual_start=None if use_metadata_tensor else kv_actual,
                         # Scalar path needs actual_end only when the window overruns; None otherwise keeps
                         # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
@@ -915,6 +966,20 @@ def _run_chunked_prefill(
 
     if profile:
         return profiled_ns
+    if return_outputs:
+        if return_pccs:
+            assert reference is not None, "return_pccs needs a reference"
+            # Each user's full measured-region output PCC against the reference (the check below, as values; the
+            # KV-cache comparison below does not run on this path).
+            pccs = [
+                comp_pcc(
+                    users[u]["ref_out"][prefill_len:].reshape(1, 1, -1, hidden_size).float(),
+                    out_accum[u][:, :, prefill_len:, :].float(),
+                )[1]
+                for u in range(num_users)
+            ]
+            return out_accum, pccs
+        return out_accum
 
     if determinism_check:
         if det_failures:
@@ -1397,6 +1462,9 @@ def test_mla_chunked_prefill(
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():
         pytest.skip("mistral_small_4 is validated on Blackhole only")
+    # Expanded K/V has measured schedules for Kimi on 8x4 only (_EXPANDED_K_SDPA_CHUNKS).
+    if tp_shard_kv and (variant.name == "mistral_small_4" or tuple(mesh_device.shape) != (8, 4)):
+        pytest.skip("a TP-deduped cache runs expanded K/V only, which has no schedule for this model and mesh")
     # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
     # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
     # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
@@ -1465,7 +1533,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
     timed with the realtime (lightweight) profiler instead of Tracy.
 
-    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
+    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's target: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
     require_high_power("kimi_k3 MLA chunked perf")
@@ -1502,3 +1570,977 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
         f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
     )
+
+
+# TP-sharded vs TP-replicated cache: the full-mesh ring (32 sources) and the SP-axis ring (8 slices) merge softmax
+# states in different orders, so outputs agree only to rounding (measured K2.7: ring_mla 0.99987, expanded K/V 0.99983).
+_TP_SHARDED_MIN_PCC = 0.999
+
+
+def _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, what):
+    """TP-sharded output agrees with the TP-replicated (sp_only) output to PCC >= _TP_SHARDED_MIN_PCC (see above)."""
+    assert torch.isfinite(tp_sharded).all(), f"{what}: non-finite tp_sharded output"
+    _, pcc = comp_pcc(sp_only.float(), tp_sharded.float(), _TP_SHARDED_MIN_PCC)
+    logger.info(f"{what}: expanded K/V tp_sharded vs sp_only PCC {pcc:.6f}")
+    assert pcc >= _TP_SHARDED_MIN_PCC, f"{what}: tp_sharded vs sp_only PCC {pcc}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "reference,kwargs",
+    [pytest.param(None, kw, id=f"func-{sid}") for sid, kw in _CHUNKED_SCENARIOS]
+    # CPU-reference inputs (its prefix is the reference KV, not random) on every scenario short enough for the CPU MLA.
+    + [
+        pytest.param("cpu", kw, id=f"cpu-{sid}")
+        for sid, kw in _CHUNKED_SCENARIOS
+        if not sid.startswith(("deep", "prod"))
+    ]
+    + [pytest.param("trace", dict(iters_isl=[5120] * 11), id="trace-production-50k+5k")],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
+    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor
+):
+    """The TP-sharded cache matches the TP-replicated (sp_only) output on the same inputs to _TP_SHARDED_MIN_PCC
+    (different ring merge order, so not bit for bit)."""
+    if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
+        pytest.skip(f"no golden MLA trace recorded for {variant.name}")
+    topology = per_axis_topology(device_params["fabric_config"])
+    outs = {}
+    for tp_shard_kv in (False, True):
+        outs[tp_shard_kv] = _run_chunked_prefill(
+            request,
+            mesh_device,
+            reference=reference,
+            topology=topology,
+            use_metadata_tensor=use_metadata_tensor,
+            tp_shard_kv=tp_shard_kv,
+            return_outputs=True,
+            mla_kwargs=dict(expanded_k=True),
+            **kwargs,
+        )
+    assert len(outs[False]) == len(outs[True]), "the two layouts returned different user counts"
+    for u, (sp_only, tp_sharded) in enumerate(zip(outs[False], outs[True])):
+        _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, f"user {u}")
+    logger.success(f"✓ tp_sharded output matches sp_only ({len(outs[True])} user(s))")
+
+
+# A captured three-layer forward on the TP-sharded cache, replayed with user and prefix changed between replays, must
+# equal the eager forwards bit for bit, which must match the TP-replicated (sp_only) eager forwards. Two users share
+# each layer's cache; prefixes go long -> short -> long; user 1's starts are not chunk-aligned.
+_REPLAY_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (1, 7680)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152, trace_region_size=64 * 1024 * 1024),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("chunk", [5120, 2048], ids=["c5k", "c2k"])
+@pytest.mark.timeout(0)
+def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant, chunk):
+    # Expanded K/V: every layer passes its own wkv_b1 and W_UV^T as the in-kernel K and V weights.
+    config, weights = request.getfixturevalue("random_weights")
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    # _REPLAY_STEPS is written for 5k chunks; scale its starts so 2k chunks keep the same long/short/rotated pattern.
+    replay_steps = [(user, start * chunk // 5120) for user, start in _REPLAY_STEPS]
+    seq_len_cache = 4 * chunk
+    config.max_seq_len = seq_len_cache
+    num_layers, num_users = 3, 2
+    hidden_size = config.hidden_size
+    topology = per_axis_topology(device_params["fabric_config"])
+
+    def layer_weights(layer):
+        # Distinct per-layer kv_b, so a captured program that kept another layer's weight address would differ.
+        return {**weights, "kv_b_proj.weight": (weights["kv_b_proj.weight"].float() * (1 + 0.25 * layer)).bfloat16()}
+
+    layers = [
+        ttMLA(
+            config,
+            layer_weights(layer),
+            mesh_device,
+            layer_idx=layer,
+            seq_len=seq_len_cache,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            is_balanced=False,
+            topology=topology,
+            is_chunked=True,
+            active_seq_len=chunk,
+            slot_num=num_users,
+            layer_num=num_layers,
+            tp_shard_kv=True,
+            expanded_k=True,
+        )
+        for layer in range(num_layers)
+    ]
+    assert all(mla_layer._expanded_k for mla_layer in layers), "expanded K mode not applied"
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
+    scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
+
+    hidden_dims = [None, None]
+    hidden_dims[tp_axis] = -1
+    hidden_dims[sp_axis] = -2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_dims)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=hidden_dims, mesh_shape=mesh_device.shape)
+
+    def host_hidden(step, layer):
+        gen = torch.Generator().manual_seed(10_000 * step + layer)
+        return torch.randn(1, 1, chunk, hidden_size, generator=gen, dtype=torch.bfloat16)
+
+    def to_device(x):
+        return ttnn.from_torch(
+            x,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
+
+    def set_step(user, start):
+        write_chunk_metadata(
+            metadata,
+            (user, start, start + chunk),
+            hf_config=config,
+            mesh_device=mesh_device,
+            chunk_size_global=chunk,
+            sp_axis=sp_axis,
+        )
+
+    def forward_all(cache, hiddens):
+        # One pass over the layers of a chunk.
+        return [
+            layers[layer].forward(
+                hidden_states=hiddens[layer],
+                rope_tensors=rope,
+                kvpe_cache=cache,
+                actual_start=None,
+                actual_end=None,
+                cache_layer_idx=layer,
+                cache_user_id=0,
+                metadata=metadata,
+            )
+            for layer in range(num_layers)
+        ]
+
+    # Eager reference on a fresh cache.
+    eager = []
+    cache_eager = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
+    for step, (user, start) in enumerate(replay_steps):
+        set_step(user, start)
+        outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+        eager.append([ttnn.to_torch(o, mesh_composer=composer) for o in outs])
+
+    # Traced: one capture, replayed once per step with the inputs and metadata rewritten in place.
+    cache_traced = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
+    # Allocated before the capture: persistent buffers allocated while the trace is alive could alias its
+    # intermediates and be overwritten by a replay.
+    cache_sp = _new_layered_kv_cache(
+        config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
+    )
+    tt_hidden = [to_device(host_hidden(0, layer)) for layer in range(num_layers)]
+    set_step(*replay_steps[0])
+    # Compile the sp_only programs now too, so nothing compiles (allocates kernel binaries) while the trace is alive.
+    for mla_layer in layers:
+        mla_layer.set_tp_shard_kv(False)
+    forward_all(cache_sp, tt_hidden)
+    for mla_layer in layers:
+        mla_layer.set_tp_shard_kv(True)
+    forward_all(cache_traced, tt_hidden)  # compile; rewrites step 0's rows with step 0's data, as the replay will
+    ttnn.synchronize_device(mesh_device)
+    # Live-buffer allocation during the trace is checked only with TT_METAL_TRACE_ALLOC_TRACKING=1.
+    program_entries = mesh_device.num_program_cache_entries()
+    # The dense MLA forward loads no sub-device manager, so the capture is one trace segment.
+    controller = SubDeviceTraceController(mesh_device)
+    for mla_layer in layers:
+        mla_layer.set_trace_controller(controller)
+    controller.begin_capture()
+    traced_outs = forward_all(cache_traced, tt_hidden)
+    controller.end_capture()
+    assert controller.num_segments == 1, f"{controller.num_segments} trace segments"
+
+    def replay(steps):
+        for step in steps:
+            user, start = replay_steps[step]
+            set_step(user, start)
+            for layer in range(num_layers):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        host_hidden(step, layer), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+                    ),
+                    tt_hidden[layer],
+                )
+            controller.replay()
+            for layer in range(num_layers):
+                got = ttnn.to_torch(traced_outs[layer], mesh_composer=composer)
+                mismatched = (got != eager[step][layer]).sum().item()
+                assert mismatched == 0, (
+                    f"step {step} (user {user}, start {start}) layer {layer}: {mismatched} elements of the traced "
+                    "replay differ from the eager forward"
+                )
+
+    try:
+        replay(range(len(replay_steps)))
+
+        # The same steps eagerly on the TP-replicated cache must give the same output.
+        for mla_layer in layers:
+            mla_layer.set_tp_shard_kv(False)
+        for step, (user, start) in enumerate(replay_steps):
+            set_step(user, start)
+            outs = forward_all(cache_sp, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+            for layer in range(num_layers):
+                _assert_tp_sharded_matches_sp_only(
+                    ttnn.to_torch(outs[layer], mesh_composer=composer),
+                    eager[step][layer],
+                    f"step {step} (user {user}, start {start}) layer {layer}",
+                )
+            # Allocated while the trace is alive: free before any replay (allocation tracking rejects live ones).
+            for out in outs:
+                ttnn.deallocate(out)
+
+        # Back to TP-sharded: eager forwards (cache hits, patched runtime args) and a second replay must still match.
+        for mla_layer in layers:
+            mla_layer.set_tp_shard_kv(True)
+        for step, (user, start) in enumerate(replay_steps):
+            set_step(user, start)
+            outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
+            for layer in range(num_layers):
+                got = ttnn.to_torch(outs[layer], mesh_composer=composer)
+                assert torch.equal(
+                    got, eager[step][layer]
+                ), f"eager tp_sharded after sp_only: step {step} layer {layer}"
+            for out in outs:
+                ttnn.deallocate(out)
+        replay(range(len(replay_steps)))
+        assert (
+            mesh_device.num_program_cache_entries() == program_entries
+        ), "a program compiled while the trace was alive"
+    finally:
+        controller.release()
+        for mla_layer in layers:
+            mla_layer.set_trace_controller(None)
+
+    # The caches (natural order) of all three runs must be identical and fully written: equal outputs alone would miss
+    # a cache write that ignores the layer, since every layout would read the same wrong slot.
+    nat_eager, nat_traced, nat_sp = (
+        _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len_cache)
+        for cache, tp_sharded in ((cache_eager, True), (cache_traced, True), (cache_sp, False))
+    )
+    assert torch.equal(nat_traced, nat_eager), "traced and eager TP-sharded caches differ"
+    assert torch.equal(nat_sp, nat_eager), "TP-replicated and TP-sharded caches differ"
+    # Every slot is written, and rows past user 1's extent (12800 at 5k chunks) are written only in user 0's slots
+    # (user 0 writes to 20480): a transposed (layer, user) slot mapping would put user 0's rows into a user-1 slot.
+    user1_end = max(start for user, start in replay_steps if user == 1) + chunk
+    for user in range(num_users):
+        for layer in range(num_layers):
+            slot = user * num_layers + layer
+            assert nat_eager[slot].abs().sum() > 0, f"cache slot of user {user} layer {layer} was never written"
+            tail = nat_eager[slot, user1_end:].abs().sum()
+            assert (tail == 0) == (user == 1), f"user {user} layer {layer}: rows past {user1_end} in the wrong slot"
+    logger.success(
+        f"✓ traced replay == eager (tp_sharded) ~ eager (sp_only) outputs, caches bitwise, over "
+        f"{len(replay_steps)} steps x {num_layers} layers, replayed again after the sp_only pass"
+    )
+
+
+class _SdpaRecorder:
+    """Wraps ring_joint_scaled_dot_product_attention (eager tests only), recording per call: expanded K, Q chunk,
+    fidelity, scale, per-device output (with keep_inputs also Q, latent K, V or None, W_UK, W_UV^T). Device lists are
+    in mesh order: index sp * tp_size + tp."""
+
+    def __init__(self, monkeypatch, keep_inputs=False, keep_device_rows=None):
+        self.calls = []
+        # Always wrap the real op: a second recorder in the same test must not record through the first.
+        sdpa = ttnn.transformer.ring_joint_scaled_dot_product_attention
+        sdpa = getattr(sdpa, "_recorded_op", sdpa)
+
+        def host(t):
+            return None if t is None else [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(t)]
+
+        def recorded(q, k, v, *args, **kwargs):
+            result = sdpa(q, k, v, *args, **kwargs)
+            weight = kwargs.get("k_expand_weight")
+            call = {
+                "expanded": weight is not None,
+                "q_chunk": kwargs["program_config"].q_chunk_size,
+                "fidelity": kwargs["program_config"].matmul_math_fidelity,
+                "scale": kwargs["scale"],
+                "out": host(result[0]),
+            }
+            if keep_inputs:
+                call.update(q=host(q), k=host(k), v=host(v), w=host(weight), w_uv=host(kwargs.get("v_expand_weight")))
+            if keep_device_rows is not None:
+                # Device copies of Q and of the first keep_device_rows rows of the latent K, and the call's arguments,
+                # to replay the op directly (expanded K/V: no V tensor).
+                assert v is None, "keep_device_rows replays expanded K/V calls only"
+                rows = keep_device_rows
+                call["device"] = {
+                    "q": ttnn.clone(q),
+                    "k": ttnn.slice(k, [0, 0, 0, 0], [1, 1, rows, k.shape[3]]),
+                    "kwargs": dict(kwargs),
+                }
+            self.calls.append(call)
+            return result
+
+        recorded._recorded_op = sdpa
+        monkeypatch.setattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", recorded)
+
+
+# Layer output PCC floors vs the CPU reference (test_mla_expanded_kv_accuracy_floor's shape). Expanded K/V is lower:
+# the in-op V expansion accumulates in bf16 (measured K3 0.99296 vs 0.99805, K2.7 0.99632 vs 0.99738); fix pending.
+_RING_MLA_MIN_PCC = {"kimi_k3": 0.9978, "kimi_k2_7": 0.9968}
+_EXPANDED_KV_MIN_PCC = {"kimi_k3": 0.9925, "kimi_k2_7": 0.9958}
+# Expanded K/V vs ring_mla layer outputs; mostly bounded by the bf16 V accumulation above.
+_EXPANDED_KV_MIN_PCC_VS_ABSORBED = 0.99
+
+
+def _expanded_kv_max_pcc_loss(variant_name):
+    """How far the expanded K/V output's PCC vs the CPU reference may fall below ring_mla's: the floors' gap, plus
+    0.001 for scenario-to-scenario spread."""
+    return _RING_MLA_MIN_PCC[variant_name] - _EXPANDED_KV_MIN_PCC[variant_name] + 0.001
+
+
+def _record_ring_mla(monkeypatch):
+    """Wraps ttnn.transformer.ring_mla; returns the list that gets each call's program config."""
+    calls = []
+    ring_mla = ttnn.transformer.ring_mla
+
+    def recorded(*args, **kwargs):
+        calls.append(kwargs["program_config"])
+        return ring_mla(*args, **kwargs)
+
+    monkeypatch.setattr(ttnn.transformer, "ring_mla", recorded)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "kwargs",
+    [pytest.param(kw, id=sid) for sid, kw in _CHUNKED_SCENARIOS if not sid.startswith(("deep", "prod"))],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_matches_absorbed(
+    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, tp_shard_kv, monkeypatch
+):
+    """Expanded K/V vs ring_mla (absorbed) on CPU-reference inputs: per user, the expanded output's PCC against the
+    reference is at most _expanded_kv_max_pcc_loss below ring_mla's, and the two outputs agree to
+    _EXPANDED_KV_MIN_PCC_VS_ABSORBED. tp_shard_kv picks expanded K/V's cache layout; ring_mla runs on the TP-replicated
+    cache, the only one it supports."""
+    _check_expanded_k_vs_absorbed(
+        request, mesh_device, device_params, variant, kwargs, use_metadata_tensor, tp_shard_kv, monkeypatch
+    )
+
+
+def _check_expanded_k_vs_absorbed(
+    request,
+    mesh_device,
+    device_params,
+    variant,
+    kwargs,
+    use_metadata_tensor,
+    tp_shard_kv,
+    monkeypatch,
+    q_chunk=None,
+    fidelity=None,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    outs, ref_pccs = {}, {}
+    for expanded in (False, True):
+        sdpa_calls = _SdpaRecorder(monkeypatch).calls
+        ring_mla_configs = _record_ring_mla(monkeypatch)
+        outs[expanded], ref_pccs[expanded] = _run_chunked_prefill(
+            request,
+            mesh_device,
+            reference="cpu",
+            topology=topology,
+            use_metadata_tensor=use_metadata_tensor,
+            tp_shard_kv=tp_shard_kv and expanded,
+            return_outputs=True,
+            return_pccs=True,
+            mla_kwargs=dict(expanded_k=expanded),
+            **kwargs,
+        )
+        # The mode (and the expected schedule) really took effect: a declined gate would compare ring_mla with itself.
+        if expanded:
+            assert not ring_mla_configs, "expanded K/V ran ring_mla"
+            assert sdpa_calls and all(c["expanded"] for c in sdpa_calls), "expanded K/V not applied"
+            if q_chunk is not None:
+                assert all(c["q_chunk"] == q_chunk for c in sdpa_calls), f"schedule not q{q_chunk}"
+            fidelities = [c["fidelity"] for c in sdpa_calls]
+        else:
+            assert ring_mla_configs and not sdpa_calls, "expanded_k=False did not run ring_mla"
+            fidelities = [c.matmul_math_fidelity for c in ring_mla_configs]
+        if fidelity is not None:
+            assert all(f == fidelity for f in fidelities), f"SDPA fidelity not {fidelity}"
+    max_loss = _expanded_kv_max_pcc_loss(variant.name)
+    for u, (absorbed, expanded) in enumerate(zip(outs[False], outs[True])):
+        assert torch.isfinite(expanded).all(), f"user {u}: non-finite expanded K/V output"
+        _, pcc = comp_pcc(absorbed.float(), expanded.float(), _EXPANDED_KV_MIN_PCC_VS_ABSORBED)
+        ref_absorbed, ref_expanded = ref_pccs[False][u], ref_pccs[True][u]
+        logger.info(
+            f"user {u}: PCC vs CPU reference ring_mla {ref_absorbed:.6f} expanded {ref_expanded:.6f}; expanded vs "
+            f"ring_mla {pcc:.6f}"
+        )
+        assert (
+            ref_expanded >= ref_absorbed - max_loss
+        ), f"user {u}: expanded K/V PCC {ref_expanded} < ring_mla {ref_absorbed} - {max_loss:.4f}"
+        assert pcc >= _EXPANDED_KV_MIN_PCC_VS_ABSORBED, f"user {u}: expanded K/V vs ring_mla PCC {pcc}"
+
+
+# 2k chunks (256 rows per chip; q128 head pairs): partial and rotated chunks, a preloaded
+# prefix with a short chunk between full ones, and two users in their own slots.
+_EXPANDED_K_2K_SCENARIOS = [
+    ("c2k-maxedge", dict(iters_isl=[1024, 1056, 2048], chunk_size_global=2048)),
+    ("c2k-prefix", dict(iters_isl=[2048, 1024, 2048], prefill_len=10240, chunk_size_global=2048)),
+    ("c2k-2u", dict(iters_isl=[1024, 2048] * 2, num_users=2, chunk_size_global=2048)),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("kwargs", [pytest.param(kw, id=sid) for sid, kw in _EXPANDED_K_2K_SCENARIOS])
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_matches_absorbed_2k(
+    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, tp_shard_kv, monkeypatch
+):
+    """test_mla_expanded_k_matches_absorbed at 2k chunks, on the table's q128 schedule."""
+    _check_expanded_k_vs_absorbed(
+        request,
+        mesh_device,
+        device_params,
+        variant,
+        kwargs,
+        use_metadata_tensor,
+        tp_shard_kv,
+        monkeypatch,
+        q_chunk=128,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "variant", ["kimi_k2_7", "kimi_k3", "mistral_small_4"], indirect=True, ids=["k2_7", "k3", "mistral4"]
+)
+@pytest.mark.parametrize("expanded_k", [None, False, True], ids=["default", "off", "on"])
+@pytest.mark.timeout(0)
+def test_mla_attention_selection(request, mesh_device, device_params, variant, expanded_k, monkeypatch, expect_error):
+    """The dense chunked attention comes from mla_config.MLA_ATTENTION_CONFIG: Kimi runs expanded K/V by default, and
+    expanded_k=False runs ring_mla; a model without an entry (Mistral) runs ring_mla, where expanded_k=True is
+    refused."""
+    ring_mla_calls = _record_ring_mla(monkeypatch)
+    recorder = _SdpaRecorder(monkeypatch)
+    run = functools.partial(
+        _run_chunked_prefill,
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[5120],
+        mla_kwargs=dict(expanded_k=expanded_k),
+    )
+    if variant.name == "mistral_small_4" and expanded_k:
+        with expect_error(ValueError, "expanded K does not apply"):
+            run()
+        return
+    run()
+    if variant.name == "mistral_small_4" or expanded_k is False:
+        assert ring_mla_calls and not recorder.calls, f"{variant.name} expanded_k={expanded_k} did not run ring_mla"
+        return
+    assert not ring_mla_calls, f"{variant.name} ran ring_mla"
+    assert recorder.calls and all(c["expanded"] for c in recorder.calls), "expanded K/V not applied"
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
+@pytest.mark.timeout(0)
+def test_mla_attention_overrides(request, mesh_device, device_params, variant, monkeypatch, expect_error):
+    """expanded_k=False puts Kimi on ring_mla, which a TP-deduped cache refuses (it runs expanded K/V only);
+    expanded_k=True at a shape without a measured head-pair schedule (2.5k chunks: 320 rows per chip) is refused, where
+    the model default would run ring_mla."""
+    ring_mla_calls = _record_ring_mla(monkeypatch)
+    recorder = _SdpaRecorder(monkeypatch)
+    run = functools.partial(
+        _run_chunked_prefill,
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+    )
+    run(iters_isl=[5120], mla_kwargs=dict(expanded_k=False))
+    assert ring_mla_calls and not recorder.calls, "expanded_k=False did not run ring_mla"
+    with expect_error(AssertionError, "dense tp_shard_kv needs expanded K and V"):
+        run(iters_isl=[5120], tp_shard_kv=True, mla_kwargs=dict(expanded_k=False))
+    with expect_error(ValueError, "expanded K does not apply"):
+        run(chunk_size_global=2560, iters_isl=[2560], mla_kwargs=dict(expanded_k=True))
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_kv_accuracy_floor(request, mesh_device, device_params, variant, expanded_k):
+    """Layer output PCC vs the CPU reference at two 5k chunks after a 10k prefix (metadata path) is at least
+    _EXPANDED_KV_MIN_PCC (expanded K/V) or _RING_MLA_MIN_PCC (ring_mla): tighter than the harness's own checks, so an
+    accuracy loss in either attention shows here."""
+    _, pccs = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference="cpu",
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[5120, 5120],
+        prefill_len=10240,
+        use_metadata_tensor=True,
+        return_outputs=True,
+        return_pccs=True,
+        mla_kwargs=dict(expanded_k=expanded_k),
+    )
+    floor = (_EXPANDED_KV_MIN_PCC if expanded_k else _RING_MLA_MIN_PCC)[variant.name]
+    logger.info(f"{variant.name} expanded_k={expanded_k}: output PCC vs CPU reference {pccs[0]:.6f} (floor {floor})")
+    assert pccs[0] >= floor, f"output PCC {pccs[0]} < {floor}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "kwargs",
+    [pytest.param(kw, id=sid) for sid, kw in _CHUNKED_SCENARIOS if sid in ("rot-multislab", "rot-rot_partial")],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_pairs_without_k_split(
+    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, monkeypatch
+):
+    """test_mla_expanded_k_matches_absorbed's checks (sp_only) on a pair schedule the table does not pick: q320 / k256
+    with no K split, so the pairs and their exchange run without bands on rotated chunked metadata."""
+    chunks = (320, 256, 1)
+    # Only the 640-row (5k chunk) entries: q320 gives pairs there, not at 256 rows.
+    table = {key: chunks if key[3] == 640 else value for key, value in ttMLA._EXPANDED_K_SDPA_CHUNKS.items()}
+    monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", table)
+    _check_expanded_k_vs_absorbed(
+        request,
+        mesh_device,
+        device_params,
+        variant,
+        kwargs,
+        use_metadata_tensor,
+        False,
+        monkeypatch,
+        q_chunk=chunks[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], id="c5k-pairs"),
+        pytest.param(dict(_EXPANDED_K_2K_SCENARIOS)["c2k-prefix"], id="c2k-pairs"),
+    ],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, variant, monkeypatch):
+    """The SDPA matmul fidelity override (sdpa_matmul_fidelity=LoFi) also sets the in-op expansion's fidelity: the
+    expanded vs ring_mla checks of test_mla_expanded_k_matches_absorbed, with LoFi QK / PV (both modes) and LoFi
+    expansion, on the table's head-pair schedules (4 x 2 expansion blocks) at 5k and 2k chunks."""
+    init = ttMLA.__init__
+
+    def init_lofi(self, *args, **init_kwargs):
+        init(self, *args, **init_kwargs)
+        self.sdpa_matmul_fidelity = ttnn.MathFidelity.LoFi
+
+    monkeypatch.setattr(ttMLA, "__init__", init_lofi)
+    _check_expanded_k_vs_absorbed(
+        request,
+        mesh_device,
+        device_params,
+        variant,
+        kwargs,
+        False,
+        False,
+        monkeypatch,
+        fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+
+# test_mla_expanded_k_distinct_layer_weights's steps, (user, start, valid tokens) over two users: chunk-aligned and
+# chip-boundary (2560) rotated starts, and a partial chunk.
+_DISTINCT_WEIGHTS_STEPS = [(0, 0, 5120), (1, 0, 2560), (0, 5120, 5120), (1, 2560, 5120)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_params, variant):
+    """W_UK and W_UV^T are runtime-patched buffers. Each layer's kv_b is rotated by one head, so a program reading
+    another layer's weights would use a neighbouring head's: expanded (TP-sharded) vs ring_mla (replicated) must agree
+    per layer and step. On sp_only and one cache layer, layers differing only in weights must share every program."""
+    config, weights = request.getfixturevalue("random_weights")
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    chunk = 5120
+    seq_len_cache = 4 * chunk
+    config.max_seq_len = seq_len_cache
+    num_layers, num_users = 3, 2
+    topology = per_axis_topology(device_params["fabric_config"])
+    kv_b = weights["kv_b_proj.weight"]
+    heads = config.num_attention_heads
+
+    def layer_weights(layer):
+        per_head = kv_b.reshape(heads, -1, kv_b.shape[-1])
+        return {**weights, "kv_b_proj.weight": per_head.roll(layer, dims=0).reshape(kv_b.shape)}
+
+    layers = [
+        ttMLA(
+            config,
+            layer_weights(layer),
+            mesh_device,
+            layer_idx=layer,
+            seq_len=seq_len_cache,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            is_balanced=False,
+            topology=topology,
+            is_chunked=True,
+            active_seq_len=chunk,
+            slot_num=num_users,
+            layer_num=num_layers,
+            tp_shard_kv=True,
+            expanded_k=True,
+        )
+        for layer in range(num_layers)
+    ]
+    assert all(mla_layer._expanded_k for mla_layer in layers), "expanded K was not enabled for this shape"
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
+    scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
+    hidden_dims = [None, None]
+    hidden_dims[tp_axis] = -1
+    hidden_dims[sp_axis] = -2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_dims)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=hidden_dims, mesh_shape=mesh_device.shape)
+
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
+
+    def forward_layer(cache, step, layer, cache_layer_idx=None):
+        user = _DISTINCT_WEIGHTS_STEPS[step][0]
+        gen = torch.Generator().manual_seed(1000 * step + layer)
+        hidden = ttnn.from_torch(
+            torch.randn(1, 1, chunk, config.hidden_size, generator=gen, dtype=torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        out = layers[layer].forward(
+            hidden_states=hidden,
+            rope_tensors=rope,
+            kvpe_cache=cache,
+            actual_start=None,
+            actual_end=None,
+            cache_layer_idx=layer if cache_layer_idx is None else cache_layer_idx,
+            cache_user_id=user,
+            metadata=metadata,
+        )
+        host = ttnn.to_torch(out, mesh_composer=composer).float()
+        ttnn.deallocate(out)
+        return host
+
+    def set_step(step):
+        user, start, valid = _DISTINCT_WEIGHTS_STEPS[step]
+        write_chunk_metadata(
+            metadata,
+            (user, start, start + valid),
+            hf_config=config,
+            mesh_device=mesh_device,
+            chunk_size_global=chunk,
+            sp_axis=sp_axis,
+        )
+
+    outputs = {}
+    for expanded in (False, True):
+        # ring_mla runs on the TP-replicated cache, expanded K/V on the TP-deduped one.
+        for mla_layer in layers:
+            mla_layer._expanded_k = expanded
+            mla_layer.set_tp_shard_kv(expanded)
+        cache = _new_layered_kv_cache(
+            config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=expanded
+        )
+        outputs[expanded] = []
+        for step in range(len(_DISTINCT_WEIGHTS_STEPS)):
+            set_step(step)
+            outputs[expanded].append([forward_layer(cache, step, layer) for layer in range(num_layers)])
+        ttnn.deallocate(cache.storage)
+    for step in range(len(outputs[True])):
+        for layer in range(num_layers):
+            _, pcc = comp_pcc(outputs[False][step][layer], outputs[True][step][layer], _EXPANDED_KV_MIN_PCC_VS_ABSORBED)
+            logger.info(f"step {step} layer {layer}: expanded K/V vs ring_mla PCC {pcc:.6f}")
+            assert pcc >= _EXPANDED_KV_MIN_PCC_VS_ABSORBED, f"step {step} layer {layer}: expanded vs ring_mla PCC {pcc}"
+
+    # On sp_only and one cache layer (the metadata path keys the SDPA program by cache layer), layers 1 and 2 add no
+    # program-cache entry after layer 0: W_UK and W_UV^T addresses are patched, not hashed.
+    for mla_layer in layers:
+        mla_layer.set_tp_shard_kv(False)
+        mla_layer._expanded_k = True
+    cache = _new_layered_kv_cache(
+        config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
+    )
+    set_step(0)
+    # Start cold, so layer 0 must compile (a reused mesh may already hold these programs).
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    before = mesh_device.num_program_cache_entries()
+    forward_layer(cache, 0, 0)
+    entries = mesh_device.num_program_cache_entries()
+    assert entries > before, "the program cache did not record layer 0's sp_only programs"
+    shared = {layer: forward_layer(cache, 0, layer, cache_layer_idx=0) for layer in (1, 2)}
+    assert mesh_device.num_program_cache_entries() == entries, "a layer with different weights compiled new programs"
+    # ... and the shared program used each layer's own W_UK and W_UV^T (step 0 writes only its own chunk, so each
+    # run's inputs match).
+    for layer in (1, 2):
+        layers[layer]._expanded_k = False
+        absorbed = forward_layer(cache, 0, layer, cache_layer_idx=0)
+        _, pcc = comp_pcc(absorbed, shared[layer], _EXPANDED_KV_MIN_PCC_VS_ABSORBED)
+        assert (
+            pcc >= _EXPANDED_KV_MIN_PCC_VS_ABSORBED
+        ), f"layer {layer} on a shared program: expanded vs ring_mla PCC {pcc}"
+    ttnn.deallocate(cache.storage)
+
+
+def _sp_gathered(per_device, sp, tp, t, take):
+    """take() of TP group t's tensor on every SP chip, concatenated in SP order along dim -2 (natural token order at
+    position 0)."""
+    return torch.cat([take(per_device[s * tp + t]) for s in range(sp)], dim=-2)
+
+
+# Expanded K/V SDPA output per (query chip, head) vs fp32 attention on the op's own inputs: the in-op V expansion
+# accumulates in bf16 (see _EXPANDED_KV_MIN_PCC), which bounds this below fp32-accumulation accuracy.
+_EXPANDED_KV_MIN_HEAD_PCC = 0.99
+
+
+def _per_head_attention_reference(call, sp, tp, t, rows, keep):
+    """Yield (head, fp32 attention output) for TP group t from a recorded expanded K/V SDPA call's per-device inputs,
+    gathered over the SP chips' first `rows` rows: K_h = [c_kv @ W_UK_h^T | k_pe] and V_h = c_kv @ (W_UV^T_h)^T, c_kv
+    the latent's first kv_lora_rank columns. `keep` is the [query, key] mask of scores kept, so the caller owns
+    causality and pad rows."""
+    k_latent = _sp_gathered(call["k"], sp, tp, t, lambda x: x[0, 0, :rows])  # [N, 576], this TP device's copy
+    q = _sp_gathered(call["q"], sp, tp, t, lambda x: x[0, :, :rows])  # [heads, N, D]
+    for h in range(q.shape[0]):
+        w_uk = call["w"][t][0, h]  # [qk_nope_head_dim, kv_lora_rank]
+        w_uv_t = call["w_uv"][t][0, h]  # [v_head_dim, kv_lora_rank]
+        c_kv = k_latent[:, : w_uk.shape[1]]
+        k = torch.cat([c_kv @ w_uk.T, k_latent[:, w_uk.shape[1] :]], dim=-1)
+        scores = ((q[h] @ k.T) * call["scale"]).masked_fill(~keep, float("-inf"))
+        yield h, torch.softmax(scores, dim=-1) @ (c_kv @ w_uv_t.T)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("valid", [5120, 2560], ids=["full", "partial"])
+@pytest.mark.timeout(0)
+def test_ring_joint_expanded_k_per_head_vs_reference(
+    request, mesh_device, device_params, variant, tp_shard_kv, use_metadata_tensor, valid, monkeypatch
+):
+    """Expanded K/V SDPA output per head vs fp32 attention on the device's own inputs, for one causal chunk at position
+    0, full or partial (partial adds unwritten pad rows). PCC is per (query chip, head): output norms fall with the row
+    index, so one PCC over all rows would be dominated by chip 0."""
+    recorder = _SdpaRecorder(monkeypatch, keep_inputs=True)
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[valid],
+        prefill_len=0,
+        use_metadata_tensor=use_metadata_tensor,
+        tp_shard_kv=tp_shard_kv,
+        mla_kwargs=dict(expanded_k=True),
+    )
+    (call,) = recorder.calls
+    assert call["expanded"] and call["v"] is None, "expanded K/V not applied"
+    sp, tp = tuple(mesh_device.shape)
+    rows = 5120 // sp
+
+    keep = torch.ones(5120, 5120, dtype=torch.bool).tril()
+    keep[:, valid:] = False
+    worst, worst_err = 1.0, 0.0
+    for t in range(tp):
+        out = _sp_gathered(call["out"], sp, tp, t, lambda x: x[0, :, :rows])
+        for h, ref in _per_head_attention_reference(call, sp, tp, t, rows, keep):
+            assert torch.isfinite(ref[:valid]).all(), f"TP group {t} head {h}: non-finite reference"
+            assert torch.isfinite(out[h, :valid]).all(), f"TP group {t} head {h}: non-finite SDPA output"
+            for s in range(sp):
+                lo, hi = s * rows, min((s + 1) * rows, valid)
+                if lo >= hi:
+                    continue
+                _, pcc = comp_pcc(ref[lo:hi], out[h, lo:hi])
+                worst = min(worst, pcc)
+                worst_err = max(worst_err, (ref[lo:hi] - out[h, lo:hi]).abs().max().item())
+                assert (
+                    pcc >= _EXPANDED_KV_MIN_HEAD_PCC
+                ), f"TP group {t} head {h} query chip {s}: SDPA PCC {pcc} vs fp32 reference"
+    logger.success(
+        f"✓ expanded K/V SDPA per (query chip, head) vs fp32 reference: min PCC {worst:.6f}, max abs error "
+        f"{worst_err:.4f}"
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.timeout(0)
+def test_ring_joint_expanded_k_causal_vs_reference(
+    request, mesh_device, device_params, variant, monkeypatch, expect_error
+):
+    """Non-chunked causal expanded K/V SDPA per (query chip, head) vs fp32 attention, replaying inputs recorded from a
+    chunk-0 MLA forward. Causal skipping means one core of a head pair skips K chunks its peer needs and must still
+    expand and exchange them. Also checks the op refuses schedules without head pairs."""
+    sp, tp = tuple(mesh_device.shape)
+    rows = 5120 // sp
+    # Pin the schedule this test exists for: q320 gives two Q chunks per head (a pair), one Q chunk per core.
+    monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", {key: (320, 256, 1) for key in ttMLA._EXPANDED_K_SDPA_CHUNKS})
+    recorder = _SdpaRecorder(monkeypatch, keep_inputs=True, keep_device_rows=rows)
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[5120],
+        prefill_len=0,
+        mla_kwargs=dict(expanded_k=True),
+    )
+    (call,) = recorder.calls
+    assert call["expanded"], "expanded K/V not applied"
+    dev, kw = call["device"], call["device"]["kwargs"]
+    # Pair prerequisites (the factory's head pairs): two Q chunks per head, at most one Q chunk per core.
+    grid = mesh_device.compute_with_storage_grid_size()
+    units = dev["q"].shape[1] * (rows // call["q_chunk"])
+    assert call["q_chunk"] == 320 and rows // call["q_chunk"] == 2, f"q chunk {call['q_chunk']}: no head pairs"
+    assert units <= (grid.x - 1) * grid.y, f"{units} (head, Q chunk) units: more than one per core, no pairs"
+    tt_ccl = get_tt_ccl(mesh_device)
+    sdpa = ttnn.transformer.ring_joint_scaled_dot_product_attention._recorded_op
+
+    def run(program_config):
+        return sdpa(
+            dev["q"],
+            dev["k"],
+            None,
+            persistent_output_buffer_k=tt_ccl.get_mla_chunked_kv_buffer(
+                cache_batch=1, seq_len=5120, kvpe_dim=dev["k"].shape[3]
+            ),
+            logical_n=5120,
+            program_config=program_config,
+            compute_kernel_config=kw["compute_kernel_config"],
+            dim=2,
+            multi_device_global_semaphore=kw["multi_device_global_semaphore"],
+            num_links=kw["num_links"],
+            cluster_axis=kw["cluster_axis"],
+            mesh_device=mesh_device,
+            topology=kw["topology"],
+            ccl_core_grid_offset=kw["ccl_core_grid_offset"],
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=call["scale"],
+            is_balanced=False,
+            k_expand_weight=kw["k_expand_weight"],
+            v_expand_weight=kw["v_expand_weight"],
+        )
+
+    out, _, _ = run(kw["program_config"])
+    out = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(out)]
+
+    keep = torch.ones(5120, 5120, dtype=torch.bool).tril()
+    worst = 1.0
+    for t in range(tp):
+        got = _sp_gathered(out, sp, tp, t, lambda x: x[0, :, :rows])
+        for h, ref in _per_head_attention_reference(call, sp, tp, t, rows, keep):
+            assert torch.isfinite(got[h]).all(), f"TP group {t} head {h}: non-finite SDPA output"
+            for s in range(sp):
+                _, pcc = comp_pcc(ref[s * rows : (s + 1) * rows], got[h, s * rows : (s + 1) * rows])
+                worst = min(worst, pcc)
+                assert pcc >= _EXPANDED_KV_MIN_HEAD_PCC, f"TP group {t} head {h} query chip {s}: causal SDPA PCC {pcc}"
+    logger.success(f"✓ non-chunked causal expanded K/V SDPA per (query chip, head) vs fp32: min PCC {worst:.6f}")
+    # The op refuses, before launching, schedules without head pairs (q160: four Q chunks per head; 4x4 grid: >1 Q chunk
+    # per core) and segmented accumulation.
+    base = kw["program_config"]
+    small = ttnn.CoreCoord(4, 4)
+    for grid_size, q_chunk_size, segmented, error in (
+        (base.compute_with_storage_grid_size, 160, False, "needs head pairs"),
+        (small, 320, False, "needs head pairs"),
+        (base.compute_with_storage_grid_size, 320, True, "segmented_accumulation"),
+    ):
+        config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=base.k_chunk_size,
+            exp_approx_mode=False,
+            matmul_math_fidelity=base.matmul_math_fidelity,
+            segmented_accumulation=segmented,
+        )
+        with expect_error(RuntimeError, error):
+            run(config)

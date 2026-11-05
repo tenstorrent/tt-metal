@@ -22,13 +22,16 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
 }
 
 // Used to signal an operation that it can start processing data, resulting in overlapping
-struct OpSignaler {
+// packed_signal_coords: the host packed the fused-op core coordinates (push_all_gather_fused_op_rt_args).
+template <bool packed_signal_coords = false>
+struct OpSignalerT {
     Noc noc;
     uint32_t num_workers_to_sync = 0;
     uint32_t* workers_noc_coords = nullptr;  // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
     Semaphore<> worker_sync_sem{0};
 
     uint32_t num_fused_op_cores_to_signal = 0;
+    // [x1, y1, x2, y2...], or with packed_signal_coords two cores per word, 16 bits each (x | y << 8)
     uint32_t* signal_op_cores_noc_coords = nullptr;
     Semaphore<> signal_op_sem{0};
     bool mcast_signal_op_cores = true;
@@ -37,9 +40,9 @@ struct OpSignaler {
 
     bool initialized = false;
 
-    OpSignaler() {}
+    OpSignalerT() {}
 
-    OpSignaler(uint32_t& rt_args_idx) {
+    OpSignalerT(uint32_t& rt_args_idx) {
         // Runtime args
         this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
         this->curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
@@ -49,8 +52,10 @@ struct OpSignaler {
             increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));  // Skip over the number of workers
 
         this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
-        this->signal_op_cores_noc_coords =
-            (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
+        this->signal_op_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(
+            rt_args_idx,
+            packed_signal_coords ? (this->num_fused_op_cores_to_signal + 1) / 2
+                                 : this->num_fused_op_cores_to_signal * 2));
         this->signal_op_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->mcast_signal_op_cores = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
@@ -64,6 +69,15 @@ struct OpSignaler {
         this->initialized = true;
     }
 
+    uint32_t signal_core_x(uint32_t i) const {
+        return packed_signal_coords ? (this->signal_op_cores_noc_coords[i / 2] >> (16 * (i % 2))) & 0xFF
+                                    : this->signal_op_cores_noc_coords[i * 2];
+    }
+    uint32_t signal_core_y(uint32_t i) const {
+        return packed_signal_coords ? (this->signal_op_cores_noc_coords[i / 2] >> (16 * (i % 2) + 8)) & 0xFF
+                                    : this->signal_op_cores_noc_coords[i * 2 + 1];
+    }
+
     void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
         ASSERT(this->initialized);
         if (this->curr_worker_is_master) {
@@ -75,18 +89,11 @@ struct OpSignaler {
             // Send signal to op
             if (this->mcast_signal_op_cores) {
                 for (uint32_t i = 0; i < this->num_fused_op_cores_to_signal; i++) {
-                    this->signal_op_sem.up(
-                        this->noc,
-                        this->signal_op_cores_noc_coords[i * 2],
-                        this->signal_op_cores_noc_coords[i * 2 + 1],
-                        1);
+                    this->signal_op_sem.up(this->noc, this->signal_core_x(i), this->signal_core_y(i), 1);
                 }
             } else {
                 this->signal_op_sem.up(
-                    this->noc,
-                    this->signal_op_cores_noc_coords[fused_op_core_idx * 2],
-                    this->signal_op_cores_noc_coords[fused_op_core_idx * 2 + 1],
-                    1);
+                    this->noc, this->signal_core_x(fused_op_core_idx), this->signal_core_y(fused_op_core_idx), 1);
             }
 
             if (this->num_workers_to_sync > 1) {
@@ -117,15 +124,14 @@ struct OpSignaler {
         ASSERT(this->initialized);
         const uint32_t counter_addr = counter_base_l1 + this->curr_worker_index * sizeof(uint32_t);
         for (uint32_t i = 0; i < this->num_fused_op_cores_to_signal; i++) {
-            const uint64_t dst_noc_addr = ::get_noc_addr(
-                this->signal_op_cores_noc_coords[i * 2],
-                this->signal_op_cores_noc_coords[i * 2 + 1],
-                counter_addr,
-                this->noc.get_noc_id());
+            const uint64_t dst_noc_addr =
+                ::get_noc_addr(this->signal_core_x(i), this->signal_core_y(i), counter_addr, this->noc.get_noc_id());
             noc_semaphore_inc(dst_noc_addr, 1, this->noc.get_noc_id());
         }
     }
 };
+
+using OpSignaler = OpSignalerT<>;
 
 // Used by datacopy kernel
 FORCE_INLINE void advance_start_page_idx(

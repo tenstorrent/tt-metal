@@ -237,9 +237,9 @@ void kernel_main() {
             input_tile_id_end);
     }
 
-    OpSignaler op_signaler;
+    OpSignalerT</*packed_signal_coords=*/true> op_signaler;
     if constexpr (fuse_op) {
-        op_signaler = OpSignaler(arg_idx);
+        op_signaler = OpSignalerT<true>(arg_idx);
     }
 
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;

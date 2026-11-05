@@ -209,12 +209,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& joint_tensor_q,
     const std::optional<ttnn::Tensor>& joint_tensor_k,
     const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     const LogicalLength& logical_n,
     const LogicalLength& logical_l,
@@ -222,7 +222,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -244,7 +244,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    const std::optional<ttnn::Tensor>& k_expand_weight,
+    const std::optional<ttnn::Tensor>& v_expand_weight) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -252,8 +254,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
 
     // Split each logical length into (scalar attribute, optional device tensor); on the tensor path the
     // attribute becomes the worst-case placeholder (see RingJointSDPAInputs).
-    const std::size_t ring_size =
-        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    // Without a cluster axis the gather spans the whole mesh.
+    const std::size_t ring_size = !cluster_axis.has_value() ? mesh_device.shape().mesh_size()
+                                  : (*cluster_axis == 0)    ? mesh_device.get_view().num_rows()
+                                                            : mesh_device.get_view().num_cols();
     const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
     const std::size_t padded_ring_l =
         joint_k.has_value() ? static_cast<std::size_t>(joint_k->logical_shape()[2]) * ring_size : 0;
@@ -312,7 +316,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         circular_kv_cache,
         logical_n_tensor,
         logical_l_tensor,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        k_expand_weight,
+        v_expand_weight);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

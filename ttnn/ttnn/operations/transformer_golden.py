@@ -1175,7 +1175,9 @@ def _ring_runtime_cache_selection(
                 f"KV cache batch index {cache_batch_idx} is outside cache batch size {input_tensor_k.shape[0]}"
             )
         input_tensor_k = input_tensor_k[cache_batch_idx : cache_batch_idx + 1]
-        input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
+        # A batch-1 V beside an indexed K cache (V unrolled for this chunk) is read from batch 0, as the op does.
+        if input_tensor_v.shape[0] != 1:
+            input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
 
     return input_tensor_k, input_tensor_v, actual_kv_length
 
@@ -1290,10 +1292,16 @@ def _ring_joint_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    k_expand_weight=None,
+    v_expand_weight=None,
     **_execution_options,
 ):
     import torch
 
+    if v_expand_weight is not None:
+        if input_tensor_v is not None:
+            raise ValueError("v_expand_weight replaces input_tensor_v")
+        input_tensor_v = _expand_mla_v(input_tensor_k, v_expand_weight)
     if joint_strategy != "rear":
         raise ValueError(f"Only joint_strategy='rear' is supported, got {joint_strategy!r}")
     if is_cross and is_causal:
@@ -1330,6 +1338,10 @@ def _ring_joint_golden(
     input_tensor_v = input_tensor_v[..., :logical_n, :]
     input_length = input_tensor_q.shape[-2]
     has_joint = joint_tensor_q is not None and joint_tensor_q.shape[-2] > 0
+    if k_expand_weight is not None:
+        if has_joint:
+            raise NotImplementedError("k_expand_weight with joint tensors is not supported by the op")
+        input_tensor_k = _expand_mla_k(input_tensor_k, k_expand_weight)
     if has_joint:
         logical_l = int(_scalar(logical_l, joint_tensor_q.shape[-2])) or joint_tensor_q.shape[-2]
         joint_tensor_q = joint_tensor_q[..., :logical_l, :]
@@ -1371,25 +1383,31 @@ def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
     return _ring_joint_golden(*args, **kwargs)
 
 
-def _ring_mla_split_kv_global_order(input_tensor_kv, query_length, kv_sources):
-    """Reorder a split-KV cache from source-major shard order into global sequence order.
-
-    Split KV stores global region g, of query_length // kv_sources rows, on source g % kv_sources
-    at local row (g // kv_sources) * region. Composed shards hold whole sources back to back.
+def _expand_mla_k(latent_k, k_expand_weight):
+    """MLA expanded K: the shared latent K [B, 1, N, latent + pe] becomes per-head K_h = [c_kv @ W_UK_h^T | k_pe]
+    [B, NH, N, nope + pe], with W_UK [1, NH, nope, latent] (wkv_b1 as stored); the PE columns are shared by all heads.
     """
     import torch
 
-    if query_length % kv_sources != 0:
-        raise ValueError(f"Split-KV query length {query_length} is not divisible by {kv_sources} KV sources")
-    region = query_length // kv_sources
-    rows = input_tensor_kv.shape[-2]
-    if rows % kv_sources != 0 or (rows // kv_sources) % region != 0:
-        raise ValueError(f"Split-KV cache of {rows} rows is not {kv_sources} sources of whole {region}-row regions")
-    source_rows = rows // kv_sources
-    regions = torch.arange(rows // region)
-    starts = (regions % kv_sources) * source_rows + (regions // kv_sources) * region
-    index = (starts.unsqueeze(1) + torch.arange(region)).reshape(-1).to(input_tensor_kv.device)
-    return input_tensor_kv.index_select(-2, index)
+    if latent_k.shape[1] != 1:
+        raise ValueError(f"k_expand_weight expects one shared latent K head, got {latent_k.shape[1]}")
+    latent = k_expand_weight.shape[-1]
+    weight = k_expand_weight.to(torch.float32)
+    c_kv = latent_k[..., :latent].to(torch.float32)
+    k_nope = torch.einsum("bknl,hdl->bhnd", c_kv, weight[0])
+    k_pe = latent_k[..., latent:].to(torch.float32).expand(-1, weight.shape[1], -1, -1)
+    return torch.cat([k_nope, k_pe], dim=-1).to(latent_k.dtype)
+
+
+def _expand_mla_v(latent_k, v_expand_weight):
+    """MLA expanded V: per-head V_h = c_kv @ W_UV_h [B, NH, N, dv] from the shared latent K [B, 1, N, latent + pe], with
+    W_UV^T [1, NH, dv, latent] (k_expand_weight's layout).
+    """
+    import torch
+
+    latent = v_expand_weight.shape[-1]
+    c_kv = latent_k[..., :latent].to(torch.float32)
+    return torch.einsum("bknl,hdl->bhnd", c_kv, v_expand_weight[0].to(torch.float32)).to(latent_k.dtype)
 
 
 def ring_mla_golden(
@@ -1405,14 +1423,8 @@ def ring_mla_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
-    _ttnn_ring_mla_kv_sources=None,
     **_,
 ):
-    # Split KV: Q composes to the whole chunk in sequence order, while KV composes source-major.
-    if _ttnn_ring_mla_kv_sources is not None:
-        input_tensor_kv = _ring_mla_split_kv_global_order(
-            input_tensor_kv, input_tensor_q.shape[-2], int(_ttnn_ring_mla_kv_sources)
-        )
     input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_kv,
         input_tensor_kv,

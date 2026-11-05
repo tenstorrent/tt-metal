@@ -6,11 +6,12 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
-#include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
 #include "ring_joint_sdpa_schedule.hpp"
+#include "ring_joint_sdpa_plan.hpp"
+#include "ring_joint_donation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -96,20 +97,25 @@ struct RingJointRuntimeDerivation {
     bool kernel_is_causal = false;
 };
 
+// Where the per-dispatch values sit in each SDPA kernel's runtime args: the reader's KV-cache slot, and the start of
+// each kernel's scalar block (RingJointScalarBlocks).
 struct RingJointRuntimeArgLayout {
     uint32_t reader_kv_cache_batch_idx = 0;
-    uint32_t reader_logical_nt = 0;
-    uint32_t reader_active_ring_iter_mask = 0;
-    uint32_t writer_logical_nt = 0;
-    uint32_t writer_active_ring_iter_mask = 0;
-    uint32_t writer_single_valid_kv_chunk_mask = 0;
-    uint32_t compute_logical_nt = 0;
-    uint32_t compute_q_pre_wrap_start_tile = 0;
-    uint32_t compute_q_pre_wrap_tile_count = 0;
-    uint32_t compute_q_post_wrap_start_tile = 0;
-    uint32_t compute_q_valid_tile_count = 0;
-    uint32_t compute_active_ring_iter_mask = 0;
+    uint32_t reader_scalars = 0;
+    uint32_t writer_scalars = 0;
+    uint32_t compute_scalars = 0;
     CoreCoord grid_size = {0, 0};
+};
+
+// The runtime args that change between dispatches of one cached program, in kernel order. The create path appends these
+// blocks and the cache-hit patch rewrites them; every core gets the same values.
+struct RingJointScalarBlocks {
+    // logical_nt, active ring-iteration mask, KV-pad Q mapping (pre-wrap start/count, post-wrap start, valid count).
+    std::array<uint32_t, 6> reader;
+    // logical_nt, active ring-iteration mask, single-valid-K-chunk mask.
+    std::array<uint32_t, 3> writer;
+    // logical_nt, KV-pad Q mapping (as the reader's), active ring-iteration mask.
+    std::array<uint32_t, 6> compute;
 };
 
 struct RingWritePlan {
@@ -141,54 +147,9 @@ ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
     };
 }
 
-struct RingJointInputParams {
-    bool has_joint_tensors = false;
-    bool joint_is_sharded = false;
-    const Tensor* joint_q = nullptr;
-    const Tensor* joint_k = nullptr;
-    const Tensor* joint_v = nullptr;
-    const Tensor* gathered_joint_k = nullptr;
-    const Tensor* gathered_joint_v = nullptr;
-    uint32_t L = 0;          // full (padded) joint sequence length across the ring
-    uint32_t L_local = 0;    // per-device joint length (padded L/P when sharded, else L)
-    uint32_t logical_l = 0;  // true (unpadded) joint token count; <= L on the sharded path
-};
-
-// Resolved joint Q/K/V params + sequence lengths for both replicated and sharded-joint paths.
-// Centralizes the optional-tensor / logical_l branching so descriptor construction and the
-// runtime planners share one definition of L (full) and L_local (per-device).
-RingJointInputParams resolve_ring_joint_input_params(
-    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    RingJointInputParams joint_input_params;
-    joint_input_params.has_joint_tensors = tensor_args.joint_q.has_value();
-    joint_input_params.joint_is_sharded = tensor_args.joint_is_sharded();
-
-    if (joint_input_params.has_joint_tensors) {
-        joint_input_params.joint_q = &tensor_args.joint_q.value();
-        joint_input_params.joint_k = &tensor_args.joint_k.value();
-        joint_input_params.joint_v =
-            tensor_args.joint_v.has_value() ? &tensor_args.joint_v.value() : joint_input_params.joint_k;
-    }
-
-    if (joint_input_params.joint_is_sharded) {
-        joint_input_params.gathered_joint_k = &tensor_args.gathered_joint_k.value();
-        joint_input_params.gathered_joint_v = &tensor_args.gathered_joint_v.value();
-        // Per-shard physical length is the (padded, tile-aligned) joint Q shard on this device.
-        // The padded total L is that shard times the ring; logical_l carries the true token count,
-        // which may be smaller than L when the joint prompt does not fill the last shard. This
-        // mirrors how the spatial path keeps logical_n separate from the padded gathered length.
-        joint_input_params.L_local = joint_input_params.joint_q->logical_shape()[2];
-        joint_input_params.L =
-            joint_input_params.L_local * static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-        joint_input_params.logical_l = static_cast<uint32_t>(args.logical_l);
-    } else if (joint_input_params.has_joint_tensors) {
-        joint_input_params.L = joint_input_params.joint_q->logical_shape()[2];
-        joint_input_params.L_local = joint_input_params.L;
-        joint_input_params.logical_l = joint_input_params.L;
-    }
-
-    return joint_input_params;
-}
+using ttnn::prim::ring_joint_plan::fused_gather_kv_tensors;
+using ttnn::prim::ring_joint_plan::resolve_ring_joint_input_params;
+using ttnn::prim::ring_joint_plan::RingJointInputParams;
 
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
@@ -272,6 +233,19 @@ struct CheckedRuntimeArgList {
     void append(const std::vector<uint32_t>& values) {
         args.append(values);
         size += values.size();
+    }
+
+    template <std::size_t N>
+    void push_block_checked(uint32_t expected_index, const std::array<uint32_t, N>& values, const char* name) {
+        TT_FATAL(
+            size == expected_index,
+            "RingJoint runtime arg block {} expected index {}, got {} before append",
+            name,
+            expected_index,
+            size);
+        for (uint32_t value : values) {
+            push_back(value);
+        }
     }
 
     template <typename T>
@@ -492,9 +466,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.joint_seq_len = joint_input_params.L;
     derivation.joint_local_padded_Nt = tt::div_up(joint_input_params.L_local, tt::constants::TILE_HEIGHT);
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
-    // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
-    // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross;
+    derivation.kernel_chunked = ttnn::prim::ring_joint_plan::kernel_chunked(args, tensor_args);
     derivation.kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
@@ -559,17 +531,9 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
     layout.reader_kv_cache_batch_idx = kReaderQWorkArgCount - 1;
-    layout.reader_logical_nt = kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
-    layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
-    layout.writer_logical_nt = kWriterBaseArgCount;
-    layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
-    layout.writer_single_valid_kv_chunk_mask = layout.writer_active_ring_iter_mask + 1;
-    layout.compute_logical_nt = kComputeRingSequencerArgCount;
-    layout.compute_q_pre_wrap_start_tile = layout.compute_logical_nt + 1;
-    layout.compute_q_pre_wrap_tile_count = layout.compute_q_pre_wrap_start_tile + 1;
-    layout.compute_q_post_wrap_start_tile = layout.compute_q_pre_wrap_tile_count + 1;
-    layout.compute_q_valid_tile_count = layout.compute_q_post_wrap_start_tile + 1;
-    layout.compute_active_ring_iter_mask = layout.compute_q_valid_tile_count + 1;
+    layout.reader_scalars = kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+    layout.writer_scalars = kWriterBaseArgCount;
+    layout.compute_scalars = kComputeRingSequencerArgCount;
     return layout;
 }
 
@@ -682,6 +646,28 @@ ag_dyn::SemaphoreArgPatch record_ring_joint_semaphore_arg_patch(
     return patch;
 }
 
+RingJointScalarBlocks ring_joint_scalar_blocks(const RingJointRuntimePlan& runtime_plan) {
+    const RingWorkMasks& masks = runtime_plan.ring_work_plan.masks;
+    const ring_joint::ChunkedQMapping& q_mapping = runtime_plan.kv_pad_q_mapping;
+    return {
+        .reader =
+            {runtime_plan.logical_nt,
+             masks.active_ring_iter_mask,
+             q_mapping.q_pre_wrap_start_tile,
+             q_mapping.q_pre_wrap_tile_count,
+             q_mapping.q_post_wrap_start_tile,
+             q_mapping.q_valid_tile_count},
+        .writer = {runtime_plan.logical_nt, masks.active_ring_iter_mask, masks.single_valid_kv_chunk_mask},
+        .compute =
+            {runtime_plan.logical_nt,
+             q_mapping.q_pre_wrap_start_tile,
+             q_mapping.q_pre_wrap_tile_count,
+             q_mapping.q_post_wrap_start_tile,
+             q_mapping.q_valid_tile_count,
+             masks.active_ring_iter_mask},
+    };
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -698,7 +684,6 @@ void apply_ring_joint_scalar_runtime_args(
     // plans here would incorrectly select device 0's halo tail when no KV-pad rotation is present.
     const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, mesh_dispatch_coordinate);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
-    const RingWorkMasks& ring_work_masks = runtime_plan.ring_work_plan.masks;
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
@@ -739,7 +724,7 @@ void apply_ring_joint_scalar_runtime_args(
                         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
                         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
                         const uint32_t input_batch_base =
-                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
+                            ag_rt::input_batch_base_pages(shape[0] == 1 ? 0 : kv_cache_batch_idx, num_heads, Ht, Wt);
                         const uint32_t idx = header_count + in * descriptor_field_count + batch_base_offset;
                         if (core_args.size() > idx) {  // skip cores that don't run this kernel
                             write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
@@ -910,34 +895,8 @@ void apply_ring_joint_scalar_runtime_args(
     if (writer_grid_args != nullptr) {
         validate_grid(*writer_grid_args);
     }
-    // These fields occupy adjacent slots in the descriptor. Validate the layout once,
-    // then check and write each complete block on every core, including inactive receivers.
-    TT_FATAL(
-        layout.reader_active_ring_iter_mask == layout.reader_logical_nt + 1 &&
-            layout.writer_active_ring_iter_mask == layout.writer_logical_nt + 1 &&
-            layout.writer_single_valid_kv_chunk_mask == layout.writer_logical_nt + 2 &&
-            layout.compute_q_pre_wrap_start_tile == layout.compute_logical_nt + 1 &&
-            layout.compute_q_pre_wrap_tile_count == layout.compute_logical_nt + 2 &&
-            layout.compute_q_post_wrap_start_tile == layout.compute_logical_nt + 3 &&
-            layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
-            layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
-        "RingJoint scalar runtime argument blocks must be contiguous");
-    const std::array reader_values = {
-        runtime_plan.logical_nt,
-        ring_work_masks.active_ring_iter_mask,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
-    const std::array writer_values = {
-        runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
-    const std::array compute_values = {
-        runtime_plan.logical_nt,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
-        ring_work_masks.active_ring_iter_mask};
+    // Written as whole blocks on every core, including inactive receivers.
+    const RingJointScalarBlocks scalars = ring_joint_scalar_blocks(runtime_plan);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
@@ -963,11 +922,11 @@ void apply_ring_joint_scalar_runtime_args(
             continue;
         }
 
-        write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
+        write_runtime_arg_block(reader_args, layout.reader_scalars, scalars.reader, "reader.scalars");
 
         auto& writer_args = (*writer_grid_args)[core.x][core.y];
-        write_runtime_arg_block(writer_args, layout.writer_logical_nt, writer_values, "writer.scalars");
-        write_runtime_arg_block(compute_args, layout.compute_logical_nt, compute_values, "compute.scalars");
+        write_runtime_arg_block(writer_args, layout.writer_scalars, scalars.writer, "writer.scalars");
+        write_runtime_arg_block(compute_args, layout.compute_scalars, scalars.compute, "compute.scalars");
     }
 }
 
@@ -976,6 +935,25 @@ void apply_ring_joint_scalar_runtime_args(
 namespace ttnn::prim {
 
 namespace {
+
+// Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which no public header exposes to a ttnn
+// op. The descriptor path has no budget check of its own: an id past it surfaces later as a bare bitset IndexError.
+constexpr uint32_t kRingJointSemaphoresPerCore = 16;
+
+// Appends a worker semaphore on `cores`; ids are indices into desc.semaphores.
+uint32_t add_ring_joint_semaphore(
+    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, const char* user) {
+    const auto id = static_cast<uint32_t>(desc.semaphores.size());
+    TT_FATAL(
+        id < kRingJointSemaphoresPerCore,
+        "ring_joint {}: semaphore {} is past the {} a core supports",
+        user,
+        id,
+        kRingJointSemaphoresPerCore);
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = initial_value});
+    return id;
+}
 
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
@@ -1124,7 +1102,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
-    const uint32_t DH = q_shape[3];
+    // Expanded K (k_expand_weight): Q and the QK run at Q's head dim (DHt_qk); DH stays the latent K's, used by every K
+    // data-movement path and CB. Equal without k_expand.
+    const bool k_expand = tensor_args.has_k_expand();
+    const uint32_t DH_qk = q_shape[3];
+    const uint32_t DH = k_expand ? static_cast<uint32_t>(k_shape[3]) : DH_qk;
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
@@ -1163,13 +1145,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-ring-iteration joint tail mask, mirroring logical_nt for the spatial path.
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
+    const uint32_t DHt_qk = DH_qk / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata(args.kv_stripe_split);
     const bool kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
+    const RingJointScalarBlocks scalar_blocks = ring_joint_scalar_blocks(runtime_plan);
     const uint32_t logical_nt = runtime_plan.logical_nt;
-    const ring_joint::ChunkedQMapping& kv_pad_q_mapping = runtime_plan.kv_pad_q_mapping;
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -1348,10 +1331,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             sdpa_fused_op_signaler->fused_op_receiver_cores_noc.size();
         sdpa_fused_op_signaler->initialized_fused_op = true;
     }
+    // Expanded-K head pairs: the slot-free credit and the data-arrived count of the slice exchange (cumulative
+    // counts, reset by every program launch). Expanded V exchanges its halves after K's on the same two.
+    uint32_t kexp_credit_sem_id = 0;
+    uint32_t kexp_data_sem_id = 0;
+    if (k_expand) {
+        kexp_credit_sem_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "expanded-K head pairs");
+        kexp_data_sem_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "expanded-K head pairs");
+    }
 
     // Single host-derived split-forwarding decision, shared with the all-gather (passed to the
     // helper below), so producer and consumer cannot disagree. Latent-V stays on the established
-    // unsplit protocol (its cache-replay consumption would deadlock waiting for a second half);
+    // unsplit protocol (its cache-replay consumption would deadlock waiting for a second half); expanded K and V
+    // gather only the latent K and split like a separate V;
     // sliding-window consumes shards via get_next_ring_id_and_consume_one_signal, which has no
     // split second-half wait.
     sdpa_fused_op_signaler->split_forwarding_enabled =
@@ -1383,15 +1375,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // In-place latent-V optimization: when the Q chunk is a single tile (Sq_chunk_t==1) the
-    // second matmul (softmax@V) is data-movement bound, so instead of materializing V from K^T
-    // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
-    // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
-    // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
-    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
-
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    uint32_t q_tiles = Sq_chunk_t * DHt_qk * q_buffer_factor;
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
@@ -1417,7 +1402,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t qk_in0_block_w = DHt;
+    const uint32_t qk_in0_block_w = DHt_qk;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
@@ -1441,6 +1426,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
 
+    // K split (kernels/ring_joint_ksplit.hpp), with the QK^T @ V output subblock and writer row group it depends on.
+    const ring_joint_plan::KSplitShape ksplit = ring_joint_plan::derive_ksplit(args, tensor_args);
+    TT_FATAL(
+        ksplit.grid == grid_size && ksplit.num_q_chunks == num_q_chunks && ksplit.max_q_per_core == max_q_per_core &&
+            ksplit.use_streaming_compute == use_streaming_compute,
+        "RingJointSDPA: the K-split plan disagrees with the program factory's core layout");
+    // The kernels keep every ring iteration's ID in arrays of this size.
+    TT_FATAL(
+        ring_size <= ring_joint::kMaxRingIterations,
+        "RingJointSDPA supports at most {} ring iterations, got {}",
+        ring_joint::kMaxRingIterations,
+        ring_size);
+    const uint32_t ksplit_count = ksplit.count;
+    const uint32_t ksplit_rows_per_split = ksplit.rows_per_split;
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1464,97 +1463,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h,
         qk_out_subblock_w);
 
-    // Keep the host phase-2 layout at one column for in-place latent V. The compute helper
-    // independently batches strided K^T rows into DST, including a short final batch.
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
-        Sq_chunk_t,
-        vDHt,
-        dst_size,
-        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
-        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
-    // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
-    // height for odd Q chunks. The writer must drain cb_out with the same row-group
-    // cadence that compute pushes, otherwise deferred-save rows can be popped and
-    // reused before the matching grouped write has safely landed.
-    const uint32_t writer_out_row_group_h =
-        use_streaming_compute
-            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
-            : out_out_subblock_h;
-    // K split and segmented accumulation apply only to chunked calls; others ignore them, so one config serves every
-    // chunk. Both need one Q chunk per core and whole output row groups (static_assert in ring_joint_sdpa.cpp).
-    // Returns why this call cannot apply them, or "".
-    const auto single_q_chunk_blocker = [&]() -> std::string {
-        if (args.is_balanced) {
-            return "is_balanced is set";
-        }
-        if (!use_streaming_compute) {
-            return "fp32_dest_acc_en is set";
-        }
-        if (B != 1) {
-            return fmt::format("the batch is {}", B);
-        }
-        if (L != 0) {
-            return fmt::format("there is a joint sequence of {} rows", L);
-        }
-        if (max_q_per_core > 1) {
-            return fmt::format("{} Q chunks share {} cores", all_heads_num_q_chunks, num_cores);
-        }
-        if (Sq_chunk_t % writer_out_row_group_h != 0) {
-            return fmt::format(
-                "the {}-tile Q chunk is not a whole number of {}-tile row groups", Sq_chunk_t, writer_out_row_group_h);
-        }
-        return {};
-    };
-
-    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
-    // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
-    // rows so each row still consumes one K sequence through its multicast. See kernels/ring_joint_ksplit.hpp.
-    uint32_t ksplit_count = 1;
-    uint32_t ksplit_rows_per_split = 0;
-    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
-    if (ksplit_requested > 1 && kernel_chunked) {
-        const std::string blocker = single_q_chunk_blocker();
-        TT_FATAL(blocker.empty(), "k_splits={} cannot be applied: {}. Set k_splits=1.", ksplit_requested, blocker);
-        TT_FATAL(
-            has_sliding_window || (gqa_grouped_kv && NHK == 1),
-            "k_splits={} cannot be applied: dense attention needs one grouped K/V head, but there are {}. Set "
-            "k_splits=1.",
-            ksplit_requested,
-            NHK);
-        // Split KV slices packed source streams, not one source's local K chunks.
-        TT_FATAL(
-            args.kv_stripe_split == 1,
-            "k_splits={} cannot be applied: kv_stripe_split is {}. Set k_splits=1.",
-            ksplit_requested,
-            args.kv_stripe_split);
-        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
-        uint32_t max_ksplit = std::min(uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount);
-        std::string sliding_limit;
-        if (has_sliding_window) {
-            // Every sliding band needs two K chunks: the oldest halo chunk can mask a Q chunk's later rows entirely.
-            const uint32_t sliding_cap = std::max(
-                1u,
-                ring_joint::chunked_sliding_halo_tile_rows(
-                    sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
-                    Sk_chunk_t / 2);
-            max_ksplit = std::min(max_ksplit, sliding_cap);
-            sliding_limit = fmt::format(", sliding window {} allows {}", sliding_window_size, sliding_cap);
-        }
-        TT_FATAL(
-            ksplit_requested <= max_ksplit,
-            "k_splits={}, but at most {} can be applied: {} (head, Q chunk) units take {} rows per band of the "
-            "{}x{} grid; the kernel caps it at {}{}.",
-            ksplit_requested,
-            max_ksplit,
-            all_heads_num_q_chunks,
-            ksplit_rows_per_split,
-            grid_size.x,
-            grid_size.y,
-            ring_joint::kKSplitMaxCount,
-            sliding_limit);
-        ksplit_count = ksplit_requested;
-    }
+    const uint32_t out_out_subblock_h = ksplit.out_subblock_h;
+    const uint32_t out_out_subblock_w = ksplit.out_subblock_w;
+    const uint32_t writer_out_row_group_h = ksplit.writer_out_row_group_h;
     log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
+
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
     // restore CBs, so no bf16 running sum spans the whole prefix.
     const bool seg_accum =
@@ -1577,7 +1490,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             num_q_chunks,
             Sq_chunk_t * tt::constants::TILE_HEIGHT,
             num_cores);
-        const std::string blocker = single_q_chunk_blocker();
+        const std::string blocker = ring_joint_plan::single_q_chunk_blocker(args, tensor_args, ksplit);
         TT_FATAL(
             blocker.empty(), "segmented_accumulation cannot be applied: {}. Turn segmented_accumulation off.", blocker);
     }
@@ -1625,8 +1538,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
     // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
     // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
+    uint32_t dht_granularity = std::min({DHt, DHt_qk, vDHt, dst_size});
+    while (dht_granularity > 1 &&
+           (DHt % dht_granularity != 0 || DHt_qk % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
         dht_granularity--;
     }
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
@@ -1657,7 +1571,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-iteration sync order described in RingWorkPlan.
     const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
-    const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
     const auto& ag_attributes = args.all_gather_operation_attributes;
     const RingAttentionRankMapping rank_mapping{
         .full_mesh = ag_attributes.full_mesh,
@@ -1672,6 +1585,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the unit count is total_pairs = all_heads_num_q_chunks / 2.
     const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
                                                               : std::min(num_cores, all_heads_num_q_chunks);
+
+    // Expanded K: W_UK is [1, NH, nope, latent]; each head-pair core holds half its head's no-PE tile rows (wuk_tiles).
+    // Without k_expand, a placeholder geometry keeps the kernels' unused arithmetic free of zero divisors.
+    const auto wuk_shape = k_expand ? tensor_args.k_expand_weight->logical_shape() : ttnn::Shape({1, 1, 64, 32});
+    const uint32_t kexp_latent_tiles = wuk_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t kexp_nope_tiles = wuk_shape[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t kexp_own_rows = kexp_nope_tiles / 2;
+    const uint32_t wuk_tiles = kexp_own_rows * kexp_latent_tiles;
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -1725,9 +1646,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         circular_kv_slab_count,
         // Slots 41-42: logical-length transport. The reader NoC-reads the live values, re-derives
         // logical_nt / logical_lt / the ring masks, and fans them to compute via cb_kv_pad_derived.
-        // Tensor accessors start at slot 43.
         static_cast<uint32_t>(has_logical_n_tensor),
         static_cast<uint32_t>(has_logical_l_tensor),
+        // Slots 43-47: expanded-K geometry (DHt_qk == DHt and placeholder W_UK geometry without it).
+        static_cast<uint32_t>(k_expand),
+        DHt_qk,
+        wuk_tiles,
+        kexp_latent_tiles,
+        kexp_nope_tiles,
+        // Slots 48-49: expanded-K head-pair exchange semaphores (0 without it).
+        // Tensor accessors start at slot 50.
+        kexp_credit_sem_id,
+        kexp_data_sem_id,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1981,39 +1911,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // build_sliding_q_work_plan so it stays in lockstep with the reader.
         circular_kv_slab_count,
         // Slots 47-48: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
-        // from cb_kv_pad_derived, which the reader fills. CB block starts at 49.
+        // from cb_kv_pad_derived, which the reader fills.
         static_cast<uint32_t>(has_logical_n_tensor),
-        static_cast<uint32_t>(has_logical_l_tensor)};
+        static_cast<uint32_t>(has_logical_l_tensor),
+        // Slots 49-52: expanded-K geometry (DHt_qk == DHt and placeholder W_UK geometry without it).
+        // CB block starts at 53.
+        static_cast<uint32_t>(k_expand),
+        DHt_qk,
+        wuk_tiles,
+        kexp_latent_tiles};
 
     std::map<std::string, std::string> defines;
-    // Both latent-V representations consume the same packed K^T entry. The
-    // materialized path transposes its V prefix into a second fixed-size FIFO
-    // entry; grouping does not depend on the Q32 in-place compute specialization.
     // Validation already limits split KV to unbalanced attention without sliding window or joint tensors.
     TT_ASSERT(args.kv_stripe_split == 1 || (!args.is_balanced && !has_sliding_window && L == 0));
-    const uint32_t grouped_sources = args.kv_stripe_split > 1 && v_shares_k_buffer && runtime_plan.kernel_chunked &&
-                                             Sk_chunk_t <= ring_joint::kMaxPackedKVChunkTiles
-                                         ? args.kv_stripe_split
-                                         : 1;
-    defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(grouped_sources);
-    // Host group is exact for scalar prefixes; metadata dispatches recompute it on device.
-    log_debug(
-        tt::LogOp,
-        "RingMLA packing: tensor_rank={} host_group={} configured_group={} active_mask={:#x} q_chunk={} v_path={}",
-        tensor_rank,
-        ring_joint::packed_kv_source_group_size(
-            grouped_sources, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask),
-        grouped_sources,
-        active_ring_iter_mask,
-        Sq_chunk_t * tt::constants::TILE_HEIGHT,
-        kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        TT_FATAL(
+            use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
@@ -2028,9 +1946,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             ? ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt)
             : 0;
     defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
-        has_sliding_window
-            ? ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
-            : 1);
+        has_sliding_window ? ring_joint::sliding_q_work_plan_source_ranges(
+                                 sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
+                           : 1);
     // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
     // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
     defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
@@ -2080,6 +1998,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
     log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
+
+    TT_FATAL(
+        !k_expand || (use_head_chain && build_kv_chains && max_q_per_core == 1 && num_q_chunks == 2),
+        "RingJointSDPA k_expand_weight needs head pairs: two Q chunks per head (got {} chunks of {} rows), "
+        "at most one Q chunk per core ({} Q chunks on {} cores) and per-head KV chains",
+        num_q_chunks,
+        Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        all_heads_num_q_chunks,
+        num_cores);
 
     uint32_t next_cb_index = 0;
     const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
@@ -2169,6 +2096,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    // Expanded K: this core's W_UK rows (pushed/popped with Q), then each K chunk's expanded no-PE rows,
+    // double-buffered: own (compute -> reader -> peer) and peer's (reader -> compute), read in place by the QK.
+    // cb_kexp_own holds exactly two slots: only the reader pops it (after the peer copy lands), compute addresses it
+    // by slot parity. Without k_expand they alias live CBs so compile-time tile-size queries stay valid.
+    const tt::DataFormat wuk_df =
+        k_expand ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.k_expand_weight->dtype()) : k_df;
+    // cb_wuk holds this core's rows of W_UK, then as many of W_UV^T (the V expansion).
+    const uint32_t cb_wuk = k_expand ? allocate_tile_cb(2 * wuk_tiles, tt::tile_size(wuk_df), wuk_df) : cb_q_in;
+    const uint32_t cb_kexp_own =
+        k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
+    const uint32_t cb_kexp_peer =
+        k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
+    // Expanded V: this core's V columns per K chunk (compute -> reader), copied into its own and the peer's cb_v_in;
+    // single-buffered, freed once both copies land.
+    const uint32_t cb_vexp_own = k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t, k_tile_size, k_df) : cb_k_in;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -2176,13 +2118,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
         cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived, cb_wuk, cb_kexp_own, cb_kexp_peer};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
     auto compute_cb_compile_time_args = cb_compile_time_args;
     compute_cb_compile_time_args.push_back(cb_attention_sink);
+    compute_cb_compile_time_args.insert(compute_cb_compile_time_args.end(), {cb_wuk, cb_kexp_own, cb_kexp_peer});
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
 
@@ -2270,8 +2213,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         enable_kv_chains && k_uses_batch_chain ? num_cores : 0);  // Shared K for separate-V/latent modes
     std::vector<ChainConfig> gqa_chain_configs(
         enable_kv_chains && gqa_grouped_kv ? num_cores : 0);  // Grouped K/V for GQA
-    // Sliding attention reads K/V independently on every core and does not build chains.
-    std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH : 0);
+    // Per-head V chain segments, indexed band * NH + head: under a K split each band streams its own K/V slice, so its
+    // V chains stay in-band. Sliding attention reads K/V independently on every core and builds no chains.
+    std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH * ksplit_count : 0);
 
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
@@ -2301,27 +2245,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
-    // Describe a core's flat Q range for K/V chain construction.
-    auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
-        auto& work = core_work.at(core_idx);
-        while (remaining > 0) {
-            const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
-            work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
-            if (use_head_chain) {
-                TT_FATAL(
-                    head_idx < head_segments.size(),
-                    "Head-chain segment index {} is outside {} configured query heads",
-                    head_idx,
-                    head_segments.size());
-                head_segments[head_idx].push_back(HeadSegmentRef{
-                    .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-            }
-            remaining -= take;
-            flat_chunk += take;
-        }
-    };
-
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
     // of rows past the last band report band 0; they own no unit.
     auto ksplit_band = [&](uint32_t core_idx) {
@@ -2332,6 +2255,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
         return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
     };
+    // Describe a core's flat Q range for K/V chain construction.
+    auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
+        auto& work = core_work.at(core_idx);
+        while (remaining > 0) {
+            const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+            const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
+            work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
+            if (use_head_chain) {
+                const uint32_t band = ksplit_count > 1 ? ksplit_band(core_idx) : 0;
+                const uint32_t segment_idx = band * NH + head_idx;
+                TT_FATAL(
+                    segment_idx < head_segments.size(),
+                    "Head-chain segment index {} is outside {} configured query heads",
+                    segment_idx,
+                    head_segments.size());
+                head_segments[segment_idx].push_back(HeadSegmentRef{
+                    .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+            }
+            remaining -= take;
+            flat_chunk += take;
+        }
+    };
+
     for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
         const uint32_t x = i % grid_size.x;
         const uint32_t y = i / grid_size.x;
@@ -2345,6 +2291,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             append_head_work(i, unit, 1);
         }
     }
+    // Slot donation (ring_joint_donation.hpp): the cores without a unit take one ring iteration of every home head
+    // pair. Needs the K split's dense layout, one batch and head pairs.
+    const ring_joint::DonationPlan donation_plan = k_expand && ksplit_count > 1 && B == 1 && num_q_chunks == 2
+                                                       ? ring_joint::make_donation_plan(
+                                                             grid_size.x,
+                                                             grid_size.y,
+                                                             ksplit_rows_per_split,
+                                                             ksplit_count,
+                                                             total_q_chunks,
+                                                             num_q_chunks,
+                                                             ring_size,
+                                                             args.kv_stripe_split)
+                                                       : ring_joint::DonationPlan{};
+    const bool donation = donation_plan.enabled;
+    auto is_spare = [&](uint32_t core_idx) { return donation && !donation_plan.visits[core_idx].empty(); };
     for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
@@ -2420,6 +2381,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         CoreCoord injector_physical = CoreCoord{0, 0};
         CoreCoord phys_start = CoreCoord{0, 0};
         CoreCoord phys_end = CoreCoord{0, 0};
+        uint32_t width = 0;  // the row's leading cores in the rectangle
     };
 
     // Pick a row-wide multicast injector among max-work cores. The recent-column FIFO spreads injectors across
@@ -2431,8 +2393,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             recent_cols.pop_front();
         }
 
+        // With slot donation the row's spares, which trail its homes, read their own K.
+        const uint32_t row_width = donation ? donation_plan.row_homes[row] : grid_size.x;
         uint32_t row_max_q = 0;
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < row_width; ++col) {
             const uint32_t ci = row * grid_size.x + col;
             row_max_q = std::max(row_max_q, core_work[ci].global_q_count);
         }
@@ -2441,7 +2405,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
 
         uint32_t injector_idx = std::numeric_limits<uint32_t>::max();
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < row_width; ++col) {
             const uint32_t ci = row * grid_size.x + col;
             if (core_work[ci].global_q_count != row_max_q) {
                 continue;
@@ -2468,10 +2432,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .row = row,
             .injector_idx = injector_idx,
             .max_q = row_max_q,
-            .num_receivers = grid_size.x - 1,
+            .num_receivers = row_width - 1,
             .injector_physical = injector_physical,
             .phys_start = device->worker_core_from_logical_core(CoreCoord{0, row}),
-            .phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row}),
+            .phys_end = device->worker_core_from_logical_core(CoreCoord{row_width - 1, row}),
+            .width = row_width,
         };
     };
 
@@ -2499,7 +2464,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             chain_max_q[ci] = selection.max_q;
         };
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < selection.width; ++col) {
             configure_core(selection.row * grid_size.x + col);
         }
     };
@@ -2595,7 +2560,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // A store-and-forward chain crossing bands would hand cores another band's K chunks.
     TT_FATAL(
-        ksplit_count == 1 || gqa_mcast_enabled || has_sliding_window,
+        ksplit_count == 1 || gqa_mcast_enabled || has_sliding_window || k_uses_batch_chain,
         "ring_joint K split requires the row-wide GQA K/V multicast ({})",
         gqa_mcast_fallback_reason);
 
@@ -2627,14 +2592,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     }
 
-    // K multicast pass: one mcast chain per logical row. Shared-K keeps the all-or-nothing policy:
-    // every row must contain work, otherwise the previously built linear chain remains active.
+    // K multicast pass: one mcast chain per logical row. A row with no Q work sits out (reads no K, joins no
+    // handshake) instead of disabling the multicast.
     bool k_mcast_enabled = false;
     std::string k_mcast_fallback_reason;
     std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
 
     if (!k_uses_batch_chain || !enable_kv_chains) {
         // No non-GQA shared-K chain to multicast.
+    } else if (!build_kv_chains) {
+        // A row may hold Q units of different batches, which need different K.
+        k_mcast_fallback_reason = "B > 1";
     } else if (num_cores < 2) {
         k_mcast_fallback_reason = "num_cores < 2";
     } else if (grid_size.x < 2) {
@@ -2644,19 +2612,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<RowWideChainMcastSelection> row_mcast_selections;
         row_mcast_selections.reserve(grid_size.y);
         std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-
-        bool all_chains_picked = true;
         for (uint32_t row = 0; row < grid_size.y; ++row) {
             const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
             if (!selection.has_value()) {
-                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
-                all_chains_picked = false;
-                break;
+                // Idle row: drop any linear-chain role so its cores neither read nor forward K.
+                for (uint32_t col = 0; col < grid_size.x; ++col) {
+                    batch_chain_configs[row * grid_size.x + col] = ChainConfig{};
+                }
+                continue;
             }
             row_mcast_selections.push_back(*selection);
         }
-
-        if (all_chains_picked) {
+        if (row_mcast_selections.empty()) {
+            k_mcast_fallback_reason = "no row has work";
+        } else {
             k_mcast_enabled = true;
 
             for (const auto& selection : row_mcast_selections) {
@@ -2675,6 +2644,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     selection.phys_end.x,
                     selection.phys_end.y);
             }
+        }
+    }
+    // A shared-K chain crossing bands would hand cores another band's K slice; the row multicast keeps it in-band.
+    // Without chains (sliding attention, B > 1) every core reads its own K slice.
+    TT_FATAL(
+        ksplit_count == 1 || !k_uses_batch_chain || !build_kv_chains || k_mcast_enabled,
+        "ring_joint K split requires the row-wide shared-K multicast ({})",
+        k_mcast_fallback_reason);
+    // A spare reads its own K, one real Q slot per step (it is in no multicast).
+    for (uint32_t i = 0; i < num_cores && k_uses_batch_chain && build_kv_chains; ++i) {
+        if (is_spare(i)) {
+            k_chain_max_q[i] = 1;
         }
     }
 
@@ -2758,9 +2739,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool use_rotated_q_split =
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
-        // Split KV grouping executes a prefix of the ring_size ordinals scheduled here: grouping
-        // requires every source active, so ordinal == ring_iter and the last executed ordinal
-        // normalizes. The group size is chosen per dispatch, so the schedule stays ring_size long.
         remainder_changes_owner && build_kv_chains && ksplit_count == 1 &&
         // Segmented accumulation keeps one Q chunk's state per core across ring iterations.
         !seg_accum &&
@@ -2772,6 +2750,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
         // Every core needs a complete unit to supply indices for padded reader slots.
         rotated_base_chunks >= 1;
+    // Expanded K's head pairs ride the head chains, which exclude the rotation; kernel runtime arg indices assume it.
+    TT_FATAL(!(k_expand && use_rotated_q_split), "RingJointSDPA k_expand_weight does not support the rotated Q split");
 
     ring_joint::RotatedQSchedule rotated_sched;
     std::vector<uint32_t> rotated_handoff_sem_ids;
@@ -2846,20 +2826,37 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_group_reject.empty() ? "ok" : rotated_group_reject);
     }
 
-    // Rotated Q split, compile-time: the maximum owned chunk count (base chunks plus one
+    // Rotated Q split, compile-time (named arg rotated_max_slots): the maximum owned chunk count (base chunks plus one
     // remainder unit: a chunk or a balanced pair), or 0 when the rotation declines. Kernels gate on `> 0` via if
-    // constexpr, so both paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
-    // kernels, which is how they read it back -- no per-kernel index to keep in sync. The
-    // TT_FATAL below pins that "last" so a future append fails loudly instead of silently
-    // handing the kernels some other value.
+    // constexpr, so both paths always compile.
     const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
     // Skip dense chunked K chunks past each device's causal end (reader and compute). Only the streaming path mirrors
     // it, and only single-Q cores, where the writer does not order saves by a per-iteration K chunk count. Split KV
-    // masks its own packed streams: the skip's Q-end and region arithmetic assume the classic ring.
-    const bool dense_causal_skip = use_streaming_compute && kernel_chunked && !has_sliding_window &&
-                                   max_q_per_core == 1 && !use_rotated_q_split && args.kv_stripe_split == 1;
-    for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
-        args->push_back(rotated_max_slots_ct);
+    // (one source per ring iteration on a full-mesh ring) takes the Q end from the device's Q-sequence slice
+    // (ring_index / kv_stripe_split) and the KV map from kv_region_Nt.
+    const bool dense_causal_skip =
+        use_streaming_compute && kernel_chunked && !has_sliding_window && max_q_per_core == 1 && !use_rotated_q_split;
+    // Each core's rank in its head pair and its peer: head_segments[band * NH + head] lists the pair's cores.
+    std::vector<uint32_t> kexp_rank(num_cores, 0);
+    std::vector<uint32_t> kexp_peer(num_cores, 0);
+    if (k_expand) {
+        for (const auto& segs : head_segments) {
+            if (segs.empty()) {
+                continue;
+            }
+            TT_FATAL(segs.size() == 2, "expanded-K head pair of {} cores (one Q chunk per core)", segs.size());
+            for (uint32_t r = 0; r < 2; ++r) {
+                kexp_rank[segs[r].core_idx] = r;
+                kexp_peer[segs[r].core_idx] = segs[1 - r].core_idx;
+            }
+        }
+        // A spare pair splits every visit's expansion the same way.
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (is_spare(i)) {
+                kexp_rank[i] = donation_plan.spare_rank[i];
+                kexp_peer[i] = donation_plan.spare_peer[i];
+            }
+        }
     }
     // Reducer's ready semaphore: one bit per sender, set once its state is staged.
     uint32_t ksplit_sem_id = 0;
@@ -2874,8 +2871,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .initial_value = 0,
         });
     }
-    const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
-        reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
+    // Slot donation: a spare's count of partials its homes have pulled (ring_joint_ksplit.hpp).
+    const uint32_t donation_pulled_sem_id =
+        donation ? add_ring_joint_semaphore(desc, core_grid_set, 0, "slot donation") : 0;
 
     // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
@@ -2890,7 +2888,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
-            build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
+            build_linear_chain(chain_segs, head_id % NH, head_chain_configs, core_work);
         }
     }
 
@@ -2918,7 +2916,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             chain_q_counts.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < head_chain_configs.size() && head_chain_configs[seg.core_idx].participates &&
-                    head_chain_configs[seg.core_idx].head == head_id) {
+                    head_chain_configs[seg.core_idx].head == head_id % NH) {
                     chain_core_indices.push_back(seg.core_idx);
                     chain_q_counts.push_back(core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
                 }
@@ -3126,6 +3124,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         defines["KV_VALID_END"] = "1";
     }
 
+    // No core holds two Q chunks (balanced zigzag hands them out in pairs, so max_q_per_core alone is not enough):
+    // accumulators stay in L1 across ring iterations and the kernels leave out the DRAM save / restore paths.
+    const bool single_q = !use_rotated_q_split && std::all_of(core_work.begin(), core_work.end(), [](const auto& work) {
+        return work.global_q_count <= 1;
+    });
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3138,21 +3141,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = core_grid_set;
-    // The kernels read rotated_max_slots as their final compile-time arg, so nothing may be
-    // appended after it (in-place patching of earlier indices is fine and does not change size).
-    TT_FATAL(
-        reader_compile_time_args.size() == ct_arg_sizes_with_rotated_last[0] &&
-            writer_compile_time_args.size() == ct_arg_sizes_with_rotated_last[1] &&
-            compute_compile_time_args.size() == ct_arg_sizes_with_rotated_last[2],
-        "rotated_max_slots must stay the last compile-time arg; args were appended after it "
-        "(reader {}->{}, writer {}->{}, compute {}->{})",
-        ct_arg_sizes_with_rotated_last[0],
-        reader_compile_time_args.size(),
-        ct_arg_sizes_with_rotated_last[1],
-        writer_compile_time_args.size(),
-        ct_arg_sizes_with_rotated_last[2],
-        compute_compile_time_args.size());
-
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
@@ -3261,9 +3249,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const KernelDescriptor::NamedCompileTimeArgs ksplit_named_args = {
         {"ksplit_count", ksplit_count},
         {"ksplit_sem_id", ksplit_sem_id},
+        {"rotated_max_slots", rotated_max_slots_ct},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
+        {"single_q", single_q ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        {"donation", donation ? 1u : 0u},
+        {"donation_pulled_sem", donation_pulled_sem_id},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3274,6 +3266,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_rotated_q_split ||
         (enable_kv_chains && ((k_uses_batch_chain && k_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)));
     compute_kernel.named_compile_time_args.emplace_back("padded_q_slots", padded_q_slots_enabled ? 1u : 0u);
+    for (auto* kernel : {&reader_kernel, &compute_kernel}) {
+        kernel->named_compile_time_args.emplace_back("cb_vexp_own", cb_vexp_own);
+    }
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
@@ -3299,6 +3294,42 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Rotation keeps a contiguous base range; only its remainder unit changes by ordinal.
         uint32_t global_q_start = use_rotated_q_split ? i * rotated_base_chunks : work.global_q_start;
         uint32_t global_q_end = global_q_start + (use_rotated_q_split ? rotated_base_chunks : work.global_q_count);
+        if (is_spare(i)) {
+            // One unit at a time, its first visit's: the kernels take each visit's unit from the donation block.
+            global_q_start = donation_plan.visits[i].front().unit;
+            global_q_end = global_q_start + 1;
+        }
+        // The donation block (ring_joint_ksplit.hpp), padded to a fixed size: reader and compute [donated steps, visit
+        // count | visit steps << 8, packed visits], the writer [visiting spare's x | y << 16, visit count, packed home
+        // cores].
+        std::vector<uint32_t> donation_args;
+        std::vector<uint32_t> donation_writer_args;
+        if (donation) {
+            const auto& visits = donation_plan.visits[i];
+            const uint32_t slot = donation_plan.donated_slot[i];
+            const bool donates = slot != ring_joint::kNoDonatedSlot;
+            // A visit takes kv_stripe_split ring iterations (one slot).
+            const auto visit_count = static_cast<uint32_t>(visits.size());
+            const uint32_t visit_steps = visit_count * args.kv_stripe_split;
+            donation_args = {
+                donates ? ring_joint::donation_steps(slot, args.kv_stripe_split) : 0u,
+                visit_count | (visit_steps << 8)};
+            uint32_t visiting_spare = 0;
+            if (donates) {
+                const auto& spare = core_work.at(donation_plan.visitor[i]).physical_core;
+                visiting_spare = static_cast<uint32_t>(spare.x) | static_cast<uint32_t>(spare.y) << 16;
+            }
+            donation_writer_args = {visiting_spare, static_cast<uint32_t>(visits.size())};
+            for (const auto& v : visits) {
+                TT_FATAL(v.unit < 256 && v.band < 256, "slot donation packs a unit and band in a byte each");
+                const auto& home = core_work.at(v.home).physical_core;
+                donation_args.push_back(
+                    ring_joint::donation_steps(v.slot, args.kv_stripe_split) | v.unit << 16 | v.band << 24);
+                donation_writer_args.push_back(static_cast<uint32_t>(home.x) | static_cast<uint32_t>(home.y) << 16);
+            }
+            donation_args.resize(ring_joint::kDonationArgWords, 0);
+            donation_writer_args.resize(ring_joint::kDonationWriterArgWords, 0);
+        }
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -3352,13 +3383,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
 
-        reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
-        reader_args.push_checked(
-            runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
-        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_start_tile);
-        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
-        reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
-        reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
+        reader_args.push_block_checked(runtime_arg_layout.reader_scalars, scalar_blocks.reader, "reader.scalars");
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -3377,19 +3402,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (ksplit_count > 1) {
             reader_args.push_back(ksplit_band(i));
         }
+        // Expanded K: W_UK's address (patched on cache hits), this core's head-pair rank, its peer's physical core.
+        if (k_expand) {
+            const auto& peer_phys = core_work[kexp_peer[i]].physical_core;
+            reader_args.push_back(tensor_args.k_expand_weight->buffer());
+            reader_args.push_back(kexp_rank[i]);
+            reader_args.push_back(peer_phys.x);
+            reader_args.push_back(peer_phys.y);
+            // W_UV^T's address, patched on cache hits like W_UK's.
+            reader_args.push_back(tensor_args.v_expand_weight->buffer());
+        }
+        reader_args.append(donation_args);
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
         CheckedRuntimeArgList writer_args;
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
-        writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_active_ring_iter_mask, active_ring_iter_mask, "writer.active_ring_iter_mask");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_single_valid_kv_chunk_mask,
-            single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
+        writer_args.push_block_checked(runtime_arg_layout.writer_scalars, scalar_blocks.writer, "writer.scalars");
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
@@ -3419,6 +3449,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // [band], then a sender's reducer core or a reducer's sender cores (physical x, y).
             const uint32_t band = ksplit_band(i);
             writer_args.push_back(band);
+            writer_args.append(donation_writer_args);
             if (work.global_q_count > 0) {
                 for (uint32_t peer = 0; peer < ksplit_count; ++peer) {
                     const bool is_peer = band + 1 < ksplit_count ? peer == ksplit_count - 1 : peer != band;
@@ -3440,25 +3471,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_args.push_back(transport_rank);
         compute_args.push_back(forward_writes_expected);
         compute_args.push_back(backward_writes_expected);
-        compute_args.push_checked(runtime_arg_layout.compute_logical_nt, logical_nt, "compute.logical_nt");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_start_tile,
-            kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_tile_count,
-            kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_post_wrap_start_tile,
-            kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_valid_tile_count,
-            kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        compute_args.push_block_checked(runtime_arg_layout.compute_scalars, scalar_blocks.compute, "compute.scalars");
         // Static multicast loop count (the reader's padded slot loop); rotated groups derive theirs per ordinal.
         uint32_t static_mcast_q_count = global_q_end - global_q_start;
         if (enable_kv_chains && !use_rotated_q_split) {
@@ -3481,6 +3494,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (ksplit_count > 1) {
             compute_args.push_back(ksplit_band(i));
         }
+        // Expanded-K head pairs: this core's rank (which no-PE rows it expands).
+        if (k_expand) {
+            compute_args.push_back(kexp_rank[i]);
+        }
+        compute_args.append(donation_args);
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
@@ -3499,12 +3517,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
-    std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k};
-    if (tensor_args.input_v.has_value()) {
-        all_gather_input_tensors.push_back(input_tensor_v);
-        all_gather_output_tensors.push_back(gathered_input_tensor_v);
-    }
+    auto [all_gather_input_tensors, all_gather_output_tensors] = fused_gather_kv_tensors(tensor_args);
     // Sharded-joint path: include joint K/V in the same fused gather so gathered_joint_k/v are
     // produced by the gather that actually runs on device. Same as spatial K/V: the AG omits each
     // device's own local slice from the gathered buffer; the SDPA reader fetches that slice from

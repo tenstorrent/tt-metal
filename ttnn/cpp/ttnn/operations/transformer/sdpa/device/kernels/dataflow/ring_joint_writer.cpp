@@ -14,7 +14,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
@@ -601,9 +600,7 @@ void kernel_main() {
 
     // Maximum owned chunk count (base chunks plus one remainder unit), or 0 when the host
     // declined the rotation. The offset clears the whole CB block, not just the CBs used here.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
-    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr uint32_t rotated_max_slots = get_named_compile_time_arg_val("rotated_max_slots");
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t rotated_iter_stride = kRotatedWriterIterWords;
 
@@ -621,6 +618,8 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
+    // No core holds two Q chunks (see the ring loop).
+    constexpr bool single_q = get_named_compile_time_arg_val("single_q") == 1;
     static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
@@ -628,7 +627,15 @@ void kernel_main() {
     constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
     const bool seg_active = seg_accum_enabled && global_q_end - global_q_start == 1;
     const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
-    const uint32_t ksplit_peer_args = argidx + 1;
+    // Slot donation (ring_joint_ksplit.hpp): [visiting spare, visit count, per visit its home] between the band and the
+    // K-split peers, each a physical x | y << 16.
+    constexpr bool donation = get_named_compile_time_arg_val("donation") == 1;
+    [[maybe_unused]] const uint32_t donation_args = argidx + 1;
+    [[maybe_unused]] const uint32_t visiting_spare = donation ? get_arg_val<uint32_t>(donation_args) : 0;
+    [[maybe_unused]] const bool donates = visiting_spare != 0;
+    [[maybe_unused]] const uint32_t donation_visits = donation ? get_arg_val<uint32_t>(donation_args + 1) : 0;
+    [[maybe_unused]] const bool is_spare = donation && donation_visits > 0;
+    const uint32_t ksplit_peer_args = argidx + 1 + (donation ? ring_joint::kDonationWriterArgWords : 0);
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -652,6 +659,8 @@ void kernel_main() {
     constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
+    // The K split's ready bits: one per sender, set on its reducer.
+    [[maybe_unused]] RotatedQHandoff ksplit_bits(get_named_compile_time_arg_val("ksplit_sem_id"));
 
     Noc noc;
 
@@ -846,66 +855,43 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    auto arrival_preview = fused_op_receiver.seq;
-    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
-    // binary so it carries none of the packed-source path.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
-        ring_size,
-        kv_local_padded_Nt,
-        logical_nt,
-        active_ring_iter_mask,
-        kv_region_Nt,
-        Sk_chunk_t,
-        has_sliding_window,
-        [&] {
-            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-        });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
-    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
-        // A packed pass consumes every member's sequencer step; only the first member's ID is used.
-        uint32_t first_packed_source_id = 0;
-        if (packed_sources) {
-            for (uint32_t source = 0; source < source_group_size; ++source) {
-                const uint32_t source_id =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-                if (source == 0) {
-                    first_packed_source_id = source_id;
-                }
-            }
-        }
+    // Sliding folds every source into one synthetic local iteration.
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1u : ring_size;
+    // With slot donation (single-Q K-split cores only) no core has per-iteration work here, so the writer goes straight
+    // to the hand-offs below, where a home serves its spare as soon as a partial is staged.
+    const uint32_t writer_ring_iterations = donation ? 0 : sdpa_ring_iterations;
+    for (uint32_t ring_iter = 0; ring_iter < writer_ring_iterations; ++ring_iter) {
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
         const uint32_t ring_id =
-            packed_sources ? first_packed_source_id
-            : has_sliding_window
+            has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
-        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
+        // With no core holding two Q chunks there is nothing to save, restore or write in the ring (K-split state stays
+        // in L1 until the epilogue); leaving that path out keeps the binary well inside the kernel config buffer.
+        if constexpr (ksplit_enabled && single_q) {
+            ASSERT(ksplit_active || global_q_end == global_q_start);
+            continue;
+        }
 
         // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
         // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
-        const bool single_valid_kv_chunk =
-            packed_sources ? packed_kv.chunk_count() == 1 : ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
+        const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         if constexpr (has_sliding_window) {
             // Sliding compute consumes every local/halo source for a Q in one pass. There is
             // therefore no intermediate state to restore or save: wait for the final result,
             // write it once, and advance directly to the next assigned Q.
-            const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            const bool single_q_chunk = single_q || (global_q_end - global_q_start == 1);
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                 const auto decoded_q =
                     decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
@@ -943,12 +929,11 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter =
-                (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             // Rotated: rotated_max_slots >= 2, so accumulators always round-trip through DRAM.
             // Deriving it from the static range would disagree with compute's per-iteration count.
-            const bool single_q_chunk = !rotated_q_split_enabled && (global_q_end - global_q_start == 1);
+            // A single_q program's cores hold at most one chunk (an idle one runs no Q loop): fold the multi-Q paths.
+            const bool single_q_chunk = single_q || (!rotated_q_split_enabled && (global_q_end - global_q_start == 1));
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
@@ -959,8 +944,6 @@ void kernel_main() {
             uint32_t rotated_has_mig_in_float = 0;
             uint32_t rotated_float_dest = kRotatedNoDest;
             if constexpr (rotated_q_split_enabled) {
-                // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
-                ASSERT(!packed_sources || active_ring_iter_mask == (ring_joint::all_sources_mask(ring_size)));
                 rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
                 const uint32_t rotated_iter_base =
                     ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
@@ -1361,51 +1344,76 @@ void kernel_main() {
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
         noc.async_write_barrier();
     };
+    // Lands the state that core (x, y) staged in its half A in this core's restore CBs (one entry each); the K-split
+    // reducer takes its senders' states this way, a home its spare's partial.
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    static_assert(
+        !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out), "K split copies out tiles raw");
+    [[maybe_unused]] auto pull_partial = [&](uint32_t x, uint32_t y) __attribute__((noinline)) {
+        UnicastEndpoint source_l1;
+        auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
+            cb.reserve_back(tiles);
+            noc.async_read(
+                source_l1,
+                CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                tiles * get_tile_size(source_cb),
+                {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
+                {});
+        };
+        CircularBuffer in_max(cb_max_in);
+        CircularBuffer in_sum(ksplit_cb_sum_in);
+        CircularBuffer in_out(cb_prev_out);
+        pull(in_max, cb_max_A, Sq_chunk_t);
+        pull(in_sum, cb_sum_A, Sq_chunk_t);
+        pull(in_out, cb_out_im_A, out_tiles);
+        noc.async_read_barrier();
+        in_max.push_back(Sq_chunk_t);
+        in_sum.push_back(Sq_chunk_t);
+        in_out.push_back(out_tiles);
+    };
+    if constexpr (donation) {
+        // A spare signals each staged visit to its home, which pulls the partial and acknowledges; popping the signal
+        // then frees half A for the spare's next visit.
+        Semaphore<> pulled(get_named_compile_time_arg_val("donation_pulled_sem"));
+        if (is_spare) {
+            CircularBuffer staged(cb_signal);
+            for (uint32_t v = 0; v < donation_visits; ++v) {
+                const uint32_t home = get_arg_val<uint32_t>(donation_args + 2 + v);
+                staged.wait_front(1);
+                ksplit_bits.signal(noc, home & 0xFFFF, home >> 16, ring_joint::kDonationOrdinal);
+                noc.async_atomic_barrier();
+                pulled.wait_min(v + 1);
+                staged.pop_front(1);
+            }
+        } else if (donates) {
+            // Only a reducer clears its K-split bits; a sender home relies on the launch re-initialising semaphores.
+            ksplit_bits.wait(ring_joint::kDonationOrdinal);
+            pull_partial(visiting_spare & 0xFFFF, visiting_spare >> 16);
+            pulled.up(noc, visiting_spare & 0xFFFF, visiting_spare >> 16, 1);
+            noc.async_atomic_barrier();
+        }
+    }
     if constexpr (ksplit_enabled) {
-        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
-        if (ksplit_active && ksplit_band + 1 < ksplit_count) {
+        if (ksplit_active && !is_spare && ksplit_band + 1 < ksplit_count) {
             // Sender: compute signals once its state sits in half A, where it stays until the program ends.
             CircularBuffer staged(cb_signal);
             staged.wait_front(1);
-            ready.signal(
+            ksplit_bits.signal(
                 noc,
                 get_arg_val<uint32_t>(ksplit_peer_args),
                 get_arg_val<uint32_t>(ksplit_peer_args + 1),
                 ksplit_band + 1);
             noc.async_atomic_barrier();
             staged.pop_front(1);
-        } else if (ksplit_active) {
+        } else if (ksplit_active && !is_spare) {
             // Reducer: land each sender's state in the restore CBs, one at a time (they hold one entry each).
-            constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-            static_assert(
-                !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out),
-                "K split copies out tiles raw");
-            UnicastEndpoint sender_l1;
             for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
-                const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);
-                ready.wait(sender + 1);
-                auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
-                    cb.reserve_back(tiles);
-                    noc.async_read(
-                        sender_l1,
-                        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
-                        tiles * get_tile_size(source_cb),
-                        {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
-                        {});
-                };
-                CircularBuffer in_max(cb_max_in);
-                CircularBuffer in_sum(ksplit_cb_sum_in);
-                CircularBuffer in_out(cb_prev_out);
-                pull(in_max, cb_max_A, Sq_chunk_t);
-                pull(in_sum, cb_sum_A, Sq_chunk_t);
-                pull(in_out, cb_out_im_A, out_tiles);
-                noc.async_read_barrier();
-                in_max.push_back(Sq_chunk_t);
-                in_sum.push_back(Sq_chunk_t);
-                in_out.push_back(out_tiles);
+                ksplit_bits.wait(sender + 1);
+                pull_partial(
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender),
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1));
             }
-            ready.reset_after_run();
+            ksplit_bits.reset_after_run();
 
             write_output_after_ring();
         }

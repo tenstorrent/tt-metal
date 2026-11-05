@@ -607,6 +607,42 @@ def test_ring_joint_golden_cross_attention_uses_only_logical_keys():
     torch.testing.assert_close(output, expected)
 
 
+@pytest.mark.parametrize("indexed", [False, True], ids=["plain", "indexed"])
+def test_ring_joint_golden_expands_mla_k_per_head(indexed):
+    """k_expand_weight: the shared latent K [c_kv | k_pe] is expanded per head as [c_kv @ W_UK_h^T | k_pe] before a
+    causal attention over the logical prefix, the op's MLA expanded-K contract."""
+    torch.manual_seed(6)
+    heads, latent, nope, pe, rows, prefix = 3, 8, 4, 2, 2, 3
+    query = torch.randn(1, heads, rows, nope + pe)
+    latent_k = torch.randn(2 if indexed else 1, 1, 6, latent + pe)
+    # As in production: the indexed latent K cache beside a batch-1 per-head V.
+    value = torch.randn(1, heads, 6, 5)
+    w_uk = torch.randn(1, heads, nope, latent)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
+    slot = {"kv_cache_batch_idx": 1} if indexed else {}
+    output, _, _ = golden(
+        query,
+        latent_k,
+        value,
+        logical_n=prefix + rows,
+        kv_actual_isl=prefix,
+        is_causal=True,
+        k_expand_weight=w_uk,
+        **slot,
+    )
+
+    b = 1 if indexed else 0
+    c_kv, k_pe = latent_k[b, 0, : prefix + rows, :latent], latent_k[b, 0, : prefix + rows, latent:]
+    key = torch.stack([torch.cat([c_kv @ w_uk[0, h].T, k_pe], dim=-1) for h in range(heads)]).unsqueeze(0)
+    query_positions = torch.arange(prefix, prefix + rows).unsqueeze(1)
+    mask = (torch.arange(prefix + rows).unsqueeze(0) <= query_positions).reshape(1, 1, rows, prefix + rows)
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query, key, value[:, :, : prefix + rows], attn_mask=mask
+    )
+    torch.testing.assert_close(output, expected, rtol=1e-4, atol=1e-5)
+
+
 def test_sdpa_decode_golden_uses_padded_per_head_sink():
     torch.manual_seed(7)
     batch, heads, dim, seq = 2, 2, 4, 3
@@ -861,34 +897,6 @@ def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
         attn_mask=causal_mask,
     )
     torch.testing.assert_close(output, expected)
-
-
-@pytest.mark.parametrize("prefix_rows", [None, 32])
-def test_ring_mla_golden_restores_split_kv_global_order(prefix_rows):
-    # SP2 x TP4 split KV: 8 sources of 4-row regions per 32-row chunk, two chunks of capacity per source.
-    torch.manual_seed(21)
-    sources, region, slabs = 8, 4, 2
-    query = torch.randn(1, 2, sources * region, 6)
-    global_kv = torch.randn(1, 1, sources * region * slabs, 6)
-    source_major = torch.empty_like(global_kv)
-    for global_region in range(sources * slabs):
-        source, slab = global_region % sources, global_region // sources
-        physical = (source * slabs + slab) * region
-        source_major[..., physical : physical + region, :] = global_kv[
-            ..., global_region * region : (global_region + 1) * region, :
-        ]
-    runtime = {} if prefix_rows is None else {"kv_actual_isl": prefix_rows}
-    logical_n = global_kv.shape[-2] if prefix_rows is None else prefix_rows + query.shape[-2]
-
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
-    actual, _ = golden(
-        query, source_major, head_dim_v=3, logical_n=logical_n, _ttnn_ring_mla_kv_sources=sources, **runtime
-    )
-    expected, _ = golden(query, global_kv, head_dim_v=3, logical_n=logical_n, **runtime)
-    torch.testing.assert_close(actual, expected)
-    # Without the reorder, source 0's second region (global rows 32..35) would stand in for global rows 4..7.
-    misordered, _ = golden(query, source_major, head_dim_v=3, logical_n=logical_n, **runtime)
-    assert not torch.allclose(misordered, expected)
 
 
 def test_flash_mla_prefill_golden_casts_kv_to_query_dtype():

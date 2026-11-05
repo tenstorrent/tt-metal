@@ -98,12 +98,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& joint_tensor_q,
     const std::optional<ttnn::Tensor>& joint_tensor_k,
     const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     // The tensor form of logical_l always selects the sharded-joint path (its placeholder is the padded
     // ring total); omit it for a replicated joint.
@@ -113,7 +113,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -138,7 +138,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // MLA expanded K: W_UK per head (see the ring_joint_scaled_dot_product_attention docstring).
+    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt,
+    const std::optional<ttnn::Tensor>& v_expand_weight = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

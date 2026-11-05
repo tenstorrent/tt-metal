@@ -12,7 +12,6 @@
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
@@ -40,6 +39,7 @@ constexpr bool reduce_trigger_supported = true;
 // specific to the matmul's shape, so each PV setup re-records it instead of reusing the last one whenever a LoFi
 // image can be live: a LoFi override, or a LoFi compute config, whose normalize_row records a LoFi image between
 // two PV setups. HiFi levels all record the same image, so HiFi over HiFi can reuse it.
+// It also sets the fidelity of the expanded-K expansion (sdpa_expand_k_chunk).
 #ifdef SDPA_MATMUL_FIDELITY
 constexpr bool sdpa_matmul_fidelity_set = true;
 constexpr MathFidelity sdpa_matmul_fidelity = static_cast<MathFidelity>(SDPA_MATMUL_FIDELITY);
@@ -166,6 +166,23 @@ static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uin
 
 static __attribute__((noinline, noclone)) void sdpa_cb_pop_front_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     CircularBuffer(cb_id).pop_front(num_tiles);
+}
+
+// Out-of-line copies for per-chunk/per-ring-step/normalize CB ops (kernel size); per-subblock and per-row-group ops
+// stay inline, where a call would cost math util.
+static __attribute__((noinline, noclone)) void sdpa_cb_wait_front_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
+    CircularBuffer(cb_id).wait_front(num_tiles);
+}
+
+static __attribute__((noinline, noclone)) void sdpa_cb_reserve_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
+    CircularBuffer(cb_id).reserve_back(num_tiles);
+}
+
+// Waits for and discards an entry compute has no work for (skipped or phase-alignment K/V chunks).
+static __attribute__((noinline, noclone)) void sdpa_cb_drain_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
+    CircularBuffer cb(cb_id);
+    cb.wait_front(num_tiles);
+    cb.pop_front(num_tiles);
 }
 
 /**
@@ -435,6 +452,71 @@ void blocked_matmul_and_pack(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    if (!skip_pack_configure) {
+        configure_row_pack_width(out_cb, subblock_w);
+    }
+    pack_contiguous_rows_nocfg(
+        out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
+    tile_regs_release();
+}
+
+/**
+ * Q@K^T block for expanded K, reading K^T rows in place: this core's no-PE half from its expansion slot (cb_own,
+ * own_slot_tiles), the peer's half from in1_cb, the k_pe rows from the latent chunk. All three share the latent K
+ * format and layout (row d at d * KT_stride + column), so the unpacker is not reconfigured between them.
+ */
+template <
+    uint32_t KT_stride,
+    uint32_t out_num_cols,
+    uint32_t own_cb,
+    uint32_t latent_cb,
+    uint32_t own_rows,
+    uint32_t latent_rows>
+#if defined(ARCH_WORMHOLE)
+__attribute__((noinline))
+#endif
+void blocked_matmul_and_pack_kexp(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t col_start,
+    uint32_t row_subblock_idx,
+    uint32_t out_col_offset,
+    uint32_t subblock_w,
+    uint32_t subblock_h,
+    uint32_t inner_dim,
+    uint32_t rank,
+    uint32_t own_slot_tiles,
+    bool skip_pack_configure = false) {
+    constexpr uint32_t nope_rows = 2 * own_rows;
+    // kt_dim: Q's row stride (inner_dim tiles per Q row), as blocked_matmul_and_pack passes for the QK.
+    const auto mm = [&](uint32_t in0_index, uint32_t cb, uint32_t kt_row_base) {
+        sdpa_matmul_block_no_mop(
+            in0_cb, cb, in0_index, kt_row_base + col_start, 0, true, subblock_w, subblock_h, inner_dim);
+    };
+    tile_regs_acquire();
+    // No-PE rows [0, nope_rows): rank 0's half first, then rank 1's; this core's half sits in its expansion slot.
+    // Each branch names its CB: SFPI 7.90 crashes (ICE in rvtt_synth_renumber) on a CB selected per iteration.
+    for (uint32_t half = 0; half < 2; ++half) {
+        const uint32_t in0_half = in0_index_start + half * own_rows;
+        if (half == rank) {
+            for (uint32_t r = 0; r < own_rows; ++r) {
+                mm(in0_half + r, own_cb, own_slot_tiles + r * KT_stride);
+            }
+        } else {
+            for (uint32_t r = 0; r < own_rows; ++r) {
+                mm(in0_half + r, in1_cb, r * KT_stride);
+            }
+        }
+    }
+    // k_pe rows [nope_rows, inner_dim), from the latent chunk's rows past its latent part.
+    for (uint32_t d = nope_rows; d < inner_dim; ++d) {
+        mm(in0_index_start + d, latent_cb, (latent_rows + d - nope_rows) * KT_stride);
     }
     tile_regs_commit();
 
@@ -818,8 +900,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
     // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
-        CircularBuffer(cb_attention_sink).wait_front(sink_per_row ? sink_row_offset + sbh : 1);
-        CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
+        sdpa_cb_wait_front_out_of_line(cb_attention_sink, sink_per_row ? sink_row_offset + sbh : 1);
+        sdpa_cb_wait_front_out_of_line(cur_max_cb_rt, sink_row_offset + sbh);
     }
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
@@ -833,10 +915,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.
             sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
 
-            CircularBuffer(col_identity_cb).wait_front(N);
-            CircularBuffer(cur_sum_cb).wait_front(1);
+            sdpa_cb_wait_front_out_of_line(col_identity_cb, N);
+            sdpa_cb_wait_front_out_of_line(cur_sum_cb, 1);
 
-            CircularBuffer(scratch_cb).reserve_back(1);
+            sdpa_cb_reserve_back_out_of_line(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
             if constexpr (use_attention_sink) {
@@ -877,9 +959,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_wait();
             pack_tile(0, scratch_cb);
             tile_regs_release();
-            CircularBuffer(scratch_cb).push_back(1);
+            sdpa_cb_push_back_out_of_line(scratch_cb, 1);
 
-            CircularBuffer(cur_sum_cb).pop_front(1);
+            sdpa_cb_pop_front_out_of_line(cur_sum_cb, 1);
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
@@ -890,10 +972,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
-            CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
-            CircularBuffer(scratch_cb).wait_front(1);
+            sdpa_cb_wait_front_out_of_line(cur_out_cb, head_dim_t_);
+            sdpa_cb_wait_front_out_of_line(scratch_cb, 1);
 
-            CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
+            sdpa_cb_reserve_back_out_of_line(normalized_out_cb, head_dim_t_);
             for (uint32_t base = 0; base < head_dim_t_; base += batch) {
                 constexpr uint32_t last_batch = head_dim_t_ % batch;
                 const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
@@ -908,10 +990,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 }
                 tile_regs_release();
             }
-            CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
+            sdpa_cb_push_back_out_of_line(normalized_out_cb, head_dim_t_);
 
-            CircularBuffer(scratch_cb).pop_front(1);
-            CircularBuffer(cur_out_cb).pop_front(head_dim_t_);
+            sdpa_cb_pop_front_out_of_line(scratch_cb, 1);
+            sdpa_cb_pop_front_out_of_line(cur_out_cb, head_dim_t_);
         }
     }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
@@ -1083,9 +1165,7 @@ template <
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
     uint32_t sliding_window_size = 0,
-    bool circular_kv_cache = false,
-    // Split-KV grouped sources: packed K columns follow packed_mask's runs instead of one local range.
-    bool packed_kv_enabled = false>
+    bool circular_kv_cache = false>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -1106,8 +1186,7 @@ static void apply_lightweight_mask_streaming(
     bool apply_sliding_window = false,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0,
-    const KVPadRotationContext& kv_pad_rotation = {},
-    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+    const KVPadRotationContext& kv_pad_rotation = {}) {
     // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
     // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
     static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
@@ -1133,9 +1212,7 @@ static void apply_lightweight_mask_streaming(
                 const uint32_t q_tile = q_subblock * sbh + row;
                 const uint32_t q_pos_u32 =
                     q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
-                const bool packed_columns = packed_kv_enabled && packed_mask.packed();
-                const uint32_t mask_cols =
-                    packed_columns ? active_Sk : (kv_pad_rotation_enabled ? num_cols : active_Sk);
+                const uint32_t mask_cols = kv_pad_rotation_enabled ? num_cols : active_Sk;
                 if constexpr (kv_pad_rotation_enabled) {
                     if (q_pos_u32 == KV_PAD_ROTATION_INVALID_TILE) {
                         l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
@@ -1153,29 +1230,7 @@ static void apply_lightweight_mask_streaming(
                     }
                 }
 
-                if (packed_columns) {
-                    uint32_t begin = 0;
-                    for (uint32_t run = 0; run < packed_mask.run_count; ++run) {
-                        const auto interval = packed_mask.runs[run];
-                        const uint32_t count = interval.column_end - begin;
-                        // Each run is contiguous globally. Stamp at most one diagonal,
-                        // then its masked suffix; no per-column division or modulo.
-                        const uint32_t visible_end = q_pos_u32 < kv_pad_rotation.logical_tile_count
-                                                         ? q_pos_u32
-                                                         : kv_pad_rotation.logical_tile_count;
-                        uint32_t visible =
-                            visible_end > interval.global_start_tile ? visible_end - interval.global_start_tile : 0;
-                        visible = visible < count ? visible : count;
-                        uint32_t masked_begin = begin + visible;
-                        if (q_pos_u32 >= interval.global_start_tile && q_pos_u32 < interval.global_start_tile + count &&
-                            q_pos_u32 < kv_pad_rotation.logical_tile_count) {
-                            l1_acc_single_tile(mask_cb, primary_diag_idx, out_cb, row_offset + masked_begin);
-                            ++masked_begin;
-                        }
-                        l1_acc_neginf_cols(mask_cb, out_cb, row_offset, masked_begin, interval.column_end, neginf_idx);
-                        begin = interval.column_end;
-                    }
-                } else if constexpr (kv_pad_rotation_enabled) {
+                if constexpr (kv_pad_rotation_enabled) {
                     for (uint32_t col = 0; col < mask_cols; col++) {
                         const uint32_t local_k_tile = kv_pad_rotation.k_local_start_tile + col;
                         if (local_k_tile >= kv_pad_kv_local_padded_Nt) {
@@ -1361,41 +1416,90 @@ inline bool sdpa_first_half_unmasked(
     return false;
 }
 
-// Packed split-KV counterpart of sdpa_first_half_unmasked. Columns [0, active_Sk/2) are unmasked
-// for every row of the Q subblock iff each of their global K tiles is strictly below the first
-// row's Q tile (no diagonal or suffix stamp) and below the logical length (no tail stamp).
-// KV-pad rotation remaps Q rows, so it keeps the conservative answer like the contiguous proof.
-template <bool kv_pad_rotation_enabled, uint32_t sliding_window_size, bool use_provided_mask>
-inline bool sdpa_packed_first_half_unmasked(
-    bool no_mask_this_iter,
-    bool apply_mask,
-    uint32_t lw_partial_tile_idx,
-    const ring_joint::PackedKVChunkMask& packed_mask,
-    uint32_t first_q_tile,
-    uint32_t logical_tile_count,
-    uint32_t active_Sk) {
-    if (no_mask_this_iter) {
-        return true;
-    }
-    if constexpr (kv_pad_rotation_enabled || sliding_window_size > 0 || use_provided_mask) {
-        return false;
-    }
-    if (apply_mask && lw_partial_tile_idx > 0) {
-        return false;
-    }
-    const uint32_t visible_end = first_q_tile < logical_tile_count ? first_q_tile : logical_tile_count;
-    const uint32_t half = active_Sk / 2;
-    const ring_joint::PackedKVMaskRun* runs = packed_mask.runs;
-    uint32_t begin = 0;
-    for (uint32_t run = 0; run < packed_mask.run_count && begin < half; ++run) {
-        const uint32_t end = runs[run].column_end < half ? runs[run].column_end : half;
-        // Runs are globally contiguous, so the run's last first-half column holds its largest tile.
-        if (runs[run].global_start_tile + (end - begin) > visible_end) {
-            return false;
+/**
+ * MLA expanded K: expand this core's half of one latent K^T chunk's no-PE rows for its head.
+ *
+ * cb_kt_in: latent [c_kv | k_pe] as plain tiles in K^T order (tile (d, kt) at d * Sk_chunk_t + kt; the QK transposes
+ * in-tile). cb_wuk: this core's half of the head's W_UK no-PE rows, latent-column-major (tile (r, d) at d * rows + r).
+ * c_kv @ W_UK^T is packed into cb_own in K^T order, rows relative to the half; the reader sends it to the peer and pops
+ * it, the peer's half arrives in cb_peer. The QK reads rows in place, so the latent chunk (k_pe rows) stays in cb_kt_in
+ * until the QK pops it.
+ *
+ * MLA expanded V: same expansion with this core's W_UV^T rows (after its W_UK rows in cb_wuk, at w_offset) into
+ * cb_vexp_own as V^T (tile (kt, c) at c * Sk_chunk_t + kt); the reader assembles both halves into cb_v_in.
+ *
+ * Entered and left in the unpack/pack state sdpa_inner_loop_step assumes (srcA cb_qkt_im, srcB cb_identity_scale_in,
+ * pack cb_normalized_out). Matmul maps in0 to srcB and in1 to srcA.
+ */
+template <
+    uint32_t Sk_chunk_t,
+    uint32_t DHt_k,
+    uint32_t DHt_qk,
+    uint32_t latent_rows,
+    uint32_t cb_kt_in,
+    uint32_t cb_wuk,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_normalized_out>
+static void sdpa_expand_k_chunk(uint32_t w_offset, uint32_t cb_own) {
+    constexpr uint32_t pe_rows = DHt_k - latent_rows;
+    static_assert(DHt_qk > pe_rows, "expanded K needs no-PE rows");
+    constexpr uint32_t nope_rows = DHt_qk - pe_rows;
+    static_assert(nope_rows % 2 == 0, "expanded-K head pairs split the no-PE rows in halves");
+    constexpr uint32_t own_rows = nope_rows / 2;
+
+    sdpa_cb_wait_front_out_of_line(cb_kt_in, DHt_k * Sk_chunk_t);
+    sdpa_cb_wait_front_out_of_line(cb_wuk, w_offset + own_rows * latent_rows);
+    sdpa_cb_reserve_back_out_of_line(cb_own, own_rows * Sk_chunk_t);
+
+    // Unconditional: the first expansion of a program runs before any QK, so the unpackers and packer still hold
+    // whatever startup configured, not cb_qkt_im / cb_identity_scale_in / cb_normalized_out.
+    reconfig_data_format(cb_wuk, cb_kt_in);
+    pack_reconfig_data_format(cb_own);
+    configure_single_tile_pack(cb_own);
+
+    // K_h no-PE tile (kt, r) = sum_d latent (kt, d) @ W_UK (r, d)^T; one DST block of rt K tiles x ct W_UK rows per
+    // acquire, block tiles adjacent in both operands. SDPA matmul helpers, so SDPA_MATMUL_FIDELITY applies.
+    constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t ct = own_rows < dst_size ? own_rows : dst_size;
+    static_assert(own_rows % ct == 0, "W_UK rows must split into DST-sized blocks");
+    constexpr uint32_t rt = [] {
+        uint32_t rows = dst_size / ct;
+        while (Sk_chunk_t % rows != 0) {
+            --rows;
         }
-        begin = runs[run].column_end;
+        return rows;
+    }();
+    sdpa_mm_init(cb_kt_in, cb_wuk, /*transpose=*/true, ct, rt, /*kt_dim=*/1);
+    for (uint32_t r0 = 0; r0 < own_rows; r0 += ct) {
+        for (uint32_t kt0 = 0; kt0 < Sk_chunk_t; kt0 += rt) {
+            tile_regs_acquire();
+            for (uint32_t d = 0; d < latent_rows; ++d) {
+                sdpa_matmul_block_no_mop(
+                    cb_kt_in,
+                    cb_wuk,
+                    d * Sk_chunk_t + kt0,
+                    w_offset + d * own_rows + r0,
+                    0,
+                    true,
+                    ct,
+                    rt,
+                    /*kt_dim=*/1);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            // DST holds the block row-major: K tile t, W_UK row c at t * ct + c. K^T rows are W_UK rows.
+            for (uint32_t t = 0; t < rt; ++t) {
+                for (uint32_t c = 0; c < ct; ++c) {
+                    pack_tile<true>(t * ct + c, cb_own, (r0 + c) * Sk_chunk_t + kt0 + t);
+                }
+            }
+            tile_regs_release();
+        }
     }
-    return true;
+    sdpa_cb_push_back_out_of_line(cb_own, own_rows * Sk_chunk_t);
+    reconfig_data_format(cb_wuk, cb_qkt_im, cb_kt_in, cb_identity_scale_in);
+    pack_reconfig_data_format(cb_own, cb_normalized_out);
 }
 
 /**
@@ -1445,8 +1549,13 @@ template <
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
     bool circular_kv_cache = false,
-    // Split-KV grouped sources; off for every other caller, so its branches compile out.
-    bool packed_kv_enabled = false>
+    // Expanded K, read in place (blocked_matmul_and_pack_kexp): cb_kt_in is then the peer half's landing CB, kx_own_cb
+    // this core's expansion output, kx_latent_cb the latent chunk holding the k_pe rows. Off (INVALID_CB) elsewhere.
+    uint32_t kx_own_cb = INVALID_CB,
+    uint32_t kx_latent_cb = INVALID_CB,
+    uint32_t kx_own_rows = 0,
+    uint32_t kx_latent_rows = 0,
+    uint32_t kx_latent_tiles_per_chunk = 0>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1474,11 +1583,14 @@ static void sdpa_inner_loop_step(
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
-    // Packed split-KV K chunk: its column layout and mask runs. Contiguous for every other caller.
-    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
     // K/V retention: the next Q chunk on this core uses the same K and V, so leave them at the
     // front of cb_kt_in / cb_v_in; the reader does not push them again.
-    const bool keep_kv = false) {
+    const bool keep_kv = false,
+    // Expanded K only: this core's rank in its head pair and its expansion output's slot in kx_own_cb.
+    [[maybe_unused]] const uint32_t kx_rank = 0,
+    [[maybe_unused]] const uint32_t kx_own_slot_tiles = 0) {
+    constexpr bool kx_in_place = kx_own_cb != INVALID_CB;
+    static_assert(!kx_in_place || !kt_inplace_v, "expanded K reads its K^T in place; V cannot alias it");
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1498,17 +1610,18 @@ static void sdpa_inner_loop_step(
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
-    CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
+    sdpa_cb_reserve_back_out_of_line(cb_qkt_im, Sq_chunk_t * KT_stride);
 
-    CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
+    sdpa_cb_reserve_back_out_of_line(cur.sum, Sq_chunk_t);
     if (save_max_cb != INVALID_CB) {
-        CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
+        sdpa_cb_reserve_back_out_of_line(save_max_cb, Sq_chunk_t);
     }
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    // Expanded K: the expansion waited for the latent chunk; the peer's half lands in cb_kt_in.
+    sdpa_cb_wait_front_out_of_line(cb_kt_in, kx_in_place ? kx_own_rows * KT_stride : DHt * KT_stride);
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
@@ -1528,47 +1641,31 @@ static void sdpa_inner_loop_step(
         // Mask plan for this q_subblock (single source of truth; reused by the mask stamp below).
         constexpr bool uses_lightweight_mask =
             sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
-        const bool packed_columns = packed_kv_enabled && packed_mask.packed();
-        const bool packed_unmasked =
-            packed_kv_enabled && packed_mask.mode == ring_joint::PackedKVMaskMode::PackedUnmasked;
-        const bool should_apply_lightweight_mask = !packed_unmasked && sdpa_lightweight_mask_stamped(
-                                                                           kv_pad_rotation_enabled,
-                                                                           is_causal_sdpa && apply_causal,
-                                                                           apply_sliding_window,
-                                                                           apply_mask && lw_partial_tile_idx > 0);
+        const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
+            kv_pad_rotation_enabled,
+            is_causal_sdpa && apply_causal,
+            apply_sliding_window,
+            apply_mask && lw_partial_tile_idx > 0);
         const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
 
         // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
         // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
-        const bool overlap_first_half_contiguous = reduce_trigger && sdpa_first_half_unmasked<
-                                                                         is_causal_sdpa,
-                                                                         kv_pad_rotation_enabled,
-                                                                         sliding_window_size,
-                                                                         use_provided_mask,
-                                                                         Sk_chunk_t>(
-                                                                         no_mask_this_iter,
-                                                                         apply_causal,
-                                                                         apply_sliding_window,
-                                                                         apply_mask,
-                                                                         lw_partial_tile_idx,
-                                                                         mask_straddle_col,
-                                                                         mask_q_start_tile,
-                                                                         mask_k_start_tile,
-                                                                         q_subblock * qkt_subblock_h,
-                                                                         active_Sk);
-        // Packed K columns are not one contiguous global range: prove the first half run by run.
-        const bool overlap_first_half =
-            packed_columns
-                ? reduce_trigger &&
-                      sdpa_packed_first_half_unmasked<kv_pad_rotation_enabled, sliding_window_size, use_provided_mask>(
-                          no_mask_this_iter,
-                          apply_mask,
-                          lw_partial_tile_idx,
-                          packed_mask,
-                          mask_q_start_tile + q_subblock * qkt_subblock_h,
-                          kv_pad_rotation.logical_tile_count,
-                          active_Sk)
-                : overlap_first_half_contiguous;
+        const bool overlap_first_half = reduce_trigger && sdpa_first_half_unmasked<
+                                                              is_causal_sdpa,
+                                                              kv_pad_rotation_enabled,
+                                                              sliding_window_size,
+                                                              use_provided_mask,
+                                                              Sk_chunk_t>(
+                                                              no_mask_this_iter,
+                                                              apply_causal,
+                                                              apply_sliding_window,
+                                                              apply_mask,
+                                                              lw_partial_tile_idx,
+                                                              mask_straddle_col,
+                                                              mask_q_start_tile,
+                                                              mask_k_start_tile,
+                                                              q_subblock * qkt_subblock_h,
+                                                              active_Sk);
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -1593,19 +1690,42 @@ static void sdpa_inner_loop_step(
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_qkt_im,
-                    q_index_offset,
-                    kt_index_offset,
-                    q_subblock,
-                    kt_subblock * actual_sbw,
-                    actual_sbw,
-                    qkt_subblock_h,
-                    in0_block_w,
-                    in0_block_w,
-                    /*skip_pack_configure=*/q_subblock == 0);
+                if constexpr (kx_in_place) {
+                    blocked_matmul_and_pack_kexp<
+                        KT_stride,
+                        KT_stride,
+                        kx_own_cb,
+                        kx_latent_cb,
+                        kx_own_rows,
+                        kx_latent_rows>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * actual_sbw,
+                        actual_sbw,
+                        qkt_subblock_h,
+                        in0_block_w,
+                        kx_rank,
+                        kx_own_slot_tiles,
+                        /*skip_pack_configure=*/q_subblock == 0);
+                } else {
+                    blocked_matmul_and_pack<true, KT_stride, KT_stride>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * actual_sbw,
+                        actual_sbw,
+                        qkt_subblock_h,
+                        in0_block_w,
+                        in0_block_w,
+                        /*skip_pack_configure=*/q_subblock == 0);
+                }
                 // Signal the first half is committed so run()#1 overlaps the second-half
                 // pack. STALL_PACK drains the L1 writes before the token retires.
                 if (overlap_first_half && kt_subblock == first_half_last_sb) {
@@ -1656,8 +1776,7 @@ static void sdpa_inner_loop_step(
                     kv_pad_chunk_size_t,
                     kv_pad_kv_local_padded_Nt,
                     sliding_window_size,
-                    circular_kv_cache,
-                    packed_kv_enabled>(
+                    circular_kv_cache>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
@@ -1673,12 +1792,11 @@ static void sdpa_inner_loop_step(
                     sliding_trailing_next_idx,
                     mask_q_start_tile,
                     mask_k_start_tile,
-                    packed_columns ? active_Sk : (kv_pad_rotation_enabled ? KT_stride : active_Sk),
+                    kv_pad_rotation_enabled ? KT_stride : active_Sk,
                     apply_sliding_window,
                     mask_straddle_col,
                     mask_straddle_jump,
-                    kv_pad_rotation,
-                    packed_mask);
+                    kv_pad_rotation);
                 end_mask_l1_accumulate();
             }
         }
@@ -1722,9 +1840,13 @@ static void sdpa_inner_loop_step(
 
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
-    if constexpr (!kt_inplace_v) {
+    if constexpr (kx_in_place) {
+        // The peer's half and the latent chunk (k_pe rows); the reader pops this core's half after sending it.
+        sdpa_cb_pop_front_out_of_line(cb_kt_in, kx_own_rows * KT_stride);
+        sdpa_cb_pop_front_out_of_line(kx_latent_cb, kx_latent_tiles_per_chunk);
+    } else if constexpr (!kt_inplace_v) {
         if (!keep_kv) {
-            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+            sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * KT_stride);
         }
     }
 
@@ -1772,7 +1894,7 @@ static void sdpa_inner_loop_step(
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        sdpa_cb_reserve_back_out_of_line(out_cb, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -1942,7 +2064,7 @@ static void sdpa_inner_loop_step(
         // SALAD correction lambda — works for both full subblocks (sbh=qktv_h) and
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
-        auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
+        auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) __attribute__((noinline)) {
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
@@ -1966,6 +2088,25 @@ static void sdpa_inner_loop_step(
             PACK((llk_pack_reconfig_l1_acc(0)));
         };
 
+        // The max differences of `sbh` rows from salad_row on, for their SALAD correction.
+        auto push_exp_max_diff = [&](uint32_t salad_row, uint32_t sbh) __attribute__((noinline)) {
+            CircularBuffer(cb_exp_max_diff).reserve_back(sbh);
+            sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(prev.max, cur.max, cb_exp_max_diff, salad_row, sbh);
+            CircularBuffer(cb_exp_max_diff).push_back(sbh);
+        };
+
+        // A row group leaves the step: normalized on the last ring iteration, else pushed for the next K chunk.
+        // Out of line (code size): called from several branches.
+        auto finish_rows = [&](uint32_t sbh) __attribute__((noinline)) {
+            if (is_last_iter) {
+                normalize_row(pushed_rows, sbh);
+            } else {
+                CircularBuffer(cur.sum).push_back(sbh);
+                CircularBuffer(out_cb).push_back(sbh * vDHt);
+                pushed_rows++;
+            }
+        };
+
         // q_subblock 1..N-1 (+ optional remainder): SALAD(prev) overlapped with matmul(cur)
         // When Sq_chunk_t is not divisible by qktv_h, the last iteration handles the
         // remainder row(s) with a smaller V matmul height.
@@ -1985,10 +2126,7 @@ static void sdpa_inner_loop_step(
 
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
-                CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
-                CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+                push_exp_max_diff(salad_row, qktv_h);
             }
 
             // V matmul for current row group — cur_h adapts for remainder
@@ -2041,46 +2179,21 @@ static void sdpa_inner_loop_step(
                     const uint32_t drain_salad_row =
                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
-                    CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
-                    CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                    push_exp_max_diff(drain_salad_row, drain_h);
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, qktv_h);
-                    } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                        pushed_rows++;
-                    }
+                    finish_rows(qktv_h);
 
                     const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
                                                                 : (qktv_q_num_subblocks - 1 - pushed_rows);
                     salad_correct_row(drain_salad_row, drain_w, drain_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, drain_h);
-                    } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                        pushed_rows++;
-                    }
+                    finish_rows(drain_h);
                 } else {
                     salad_correct_row(salad_row, w_salad, qktv_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, qktv_h);
-                    } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                        pushed_rows++;
-                    }
+                    finish_rows(qktv_h);
                 }
-            } else if (is_last_iter) {
-                normalize_row(pushed_rows, qktv_h);
             } else {
-                CircularBuffer(cur.sum).push_back(qktv_h);
-                CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                pushed_rows++;
+                finish_rows(qktv_h);
             }
 
             qktv_in0_index_offset += cur_h * KT_stride;
@@ -2095,30 +2208,15 @@ static void sdpa_inner_loop_step(
                 // perform the full SALAD correction (sub_exp + correct) here.
                 if (!is_first_iter) {
                     constexpr uint32_t drain_salad_row = 0;
-                    CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
-                    CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                    push_exp_max_diff(drain_salad_row, drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
-                if (is_last_iter) {
-                    normalize_row(pushed_rows, drain_h);
-                } else {
-                    CircularBuffer(cur.sum).push_back(drain_h);
-                    CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                    pushed_rows++;
-                }
+                finish_rows(drain_h);
             } else {
                 // Drain was hoisted into the last main-loop iteration above.
                 // For is_first_iter (no SALAD), the drain row still needs push/normalize.
                 if (is_first_iter) {
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, drain_h);
-                    } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                        pushed_rows++;
-                    }
+                    finish_rows(drain_h);
                 }
             }
         }
@@ -2127,7 +2225,7 @@ static void sdpa_inner_loop_step(
 
         if constexpr (use_attention_sink) {
             if (is_last_iter) {
-                CircularBuffer(cb_attention_sink).pop_front(1);
+                sdpa_cb_pop_front_out_of_line(cb_attention_sink, 1);
             }
         }
 
@@ -2135,9 +2233,9 @@ static void sdpa_inner_loop_step(
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
         if (!keep_kv) {
-            CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, KT_stride * v_cb_physical_width_t);
         }
-        CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
+        sdpa_cb_pop_front_out_of_line(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
 }
 
@@ -2229,7 +2327,7 @@ void sdpa_standard_v2(
     // dense mask (with padded positions neginf-filled) per chunk instead.
     constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
     if constexpr (use_padded_mask && padded_k_tiles_inner > 0 && !use_provided_mask) {
-        CircularBuffer(cb_mask_in).wait_front(1);
+        sdpa_cb_wait_front_out_of_line(cb_mask_in, 1);
     }
 
     constexpr uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
@@ -2375,7 +2473,6 @@ void sdpa_standard_v2(
                 0,   // mask_straddle_jump
                 {},  // kv_pad_rotation
                 0,   // q_base_tiles
-                {},  // packed_mask
                 keep_kv && is_last);
         };
 
@@ -2510,6 +2607,9 @@ void sdpa_standard_v2(
  * @param is_first_active_iter Set on the first ring iter that does work (decoupled from ring_iter==0 for skipped-chain
  * bounds)
  */
+// Expanded K: expansions this kernel has run, across ring iterations; its parity is the cb_kexp_own slot.
+inline uint32_t k_expand_chunk_count = 0;
+
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -2577,8 +2677,19 @@ template <
     // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
     bool causal_k_skip = false,
     uint32_t kv_region_Nt = q_local_padded_Nt,
-    // Split-KV: GROUPED_KV_SOURCE_COUNT > 1. Keeps the per-source path free of packed branches.
-    bool packed_kv_enabled = false,
+    // MLA expanded K (k_expand_weight): Q/QK are DHt_qk tiles wide, cb_kt_in carries the DHt-wide latent. A head pair
+    // expands each K chunk's no-PE rows: this core's half into cb_kexp_own from its W_UK rows in cb_wuk (popped with
+    // Q), the peer's half into cb_kexp_peer. Off (INVALID_CB) everywhere else.
+    uint32_t DHt_qk = DHt,
+    uint32_t cb_wuk = INVALID_CB,
+    uint32_t k_expand_latent_rows = 0,
+    uint32_t cb_kexp_own = INVALID_CB,
+    uint32_t cb_kexp_peer = INVALID_CB,
+    // MLA expanded V: this core's V columns of each K chunk (sdpa_expand_k_chunk's second pass), from its W_UV^T rows
+    // in cb_wuk. Off (INVALID_CB) everywhere else.
+    uint32_t cb_vexp_own = INVALID_CB,
+    // No core of the program holds two Q chunks: the DRAM round-trip paths fold away (code size).
+    bool single_q_per_core = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2597,7 +2708,7 @@ void sdpa_ring_v2(
     const uint32_t joint_n_mask_chunk_id,
     RingAccumulatorState& acc_state,
     const bool is_last_ring_iter = false,
-    const uint32_t q_per_core = 1,
+    const uint32_t q_per_core_arg = 1,
     const MaskCtx& lw_mask = {},
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
@@ -2615,22 +2726,26 @@ void sdpa_ring_v2(
     // Sliding K split only: this core's band of the work plan (ring_joint_ksplit.hpp).
     const uint32_t sliding_split_idx = 0,
     const uint32_t sliding_split_count = 1,
-    const uint32_t* packed_source_ids = nullptr,
-    const uint32_t packed_source_count = 0,
-    // Rows of newest slabs this pass appends (packed_kv_pass_rows).
-    const uint32_t packed_newest_rows = 0,
     // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
-    const uint32_t padded_q_slots = 0) {
+    const uint32_t padded_q_slots = 0,
+    // Expanded K: this core's rank in its head pair.
+    const uint32_t k_expand_rank = 0) {
+    ASSERT(!single_q_per_core || q_per_core_arg <= 1);
+    const uint32_t q_per_core = single_q_per_core ? 1 : q_per_core_arg;
     init_sdpa_streaming_semaphores();
-    const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
-    const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
-        {ring_joint::packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
-         packed_sources ? packed_source_count : 1,
-         Sk_chunk_t,
-         kv_region_Nt},
-        packed_sources ? packed_newest_rows : 0);
-    // Global end of the head slabs: every head tile lies below it.
-    const uint32_t packed_head_global_end = packed_sources ? packed_kv.head_tiles() / kv_region_Nt * chunk_size_t : 0;
+    // Expanded K: this core's half of the no-PE rows (sdpa_expand_k_chunk), and its rows of the head's W_UK.
+    constexpr bool k_expand = cb_kexp_own != INVALID_CB;
+    constexpr uint32_t k_expand_own_rows = k_expand ? (DHt_qk - (DHt - k_expand_latent_rows)) / 2 : 0;
+    // W_UK's rows, then (expanded V) as many tiles of W_UV's columns.
+    constexpr uint32_t k_expand_wuk_tiles =
+        k_expand_own_rows * k_expand_latent_rows * (cb_vexp_own != INVALID_CB ? 2 : 1);
+    // A K chunk compute skips, and its V (in-place latent V pushes none).
+    auto drain_kv_chunk = [] {
+        sdpa_cb_drain_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+        if constexpr (!kt_inplace_v) {
+            sdpa_cb_drain_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        }
+    };
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
@@ -2702,11 +2817,11 @@ void sdpa_ring_v2(
             use_attention_sink,
             cb_attention_sink>(q_prev_norm.sum, q_prev_norm.out, Sq_chunk_t, q_prev_norm.max);
         if constexpr (use_attention_sink) {
-            CircularBuffer(cb_attention_sink).pop_front(1);
+            sdpa_cb_pop_front_out_of_line(cb_attention_sink, 1);
         }
         sdpa_cb_pop_front_out_of_line(q_prev_norm.max, Sq_chunk_t);
         if (q_per_core > 1) {
-            CircularBuffer(cb_signal).reserve_back(1);
+            sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
             sdpa_cb_push_back_out_of_line(cb_signal, 1);
         }
     };
@@ -2729,7 +2844,7 @@ void sdpa_ring_v2(
                        : chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
                              logical_nt,
                              chunked.ring_index,
-                             ring_size,
+                             ring_size / (q_local_padded_Nt / kv_region_Nt),  // Q-ring size: ring / stripe split
                              chunked.kv_pad_rotation.q_pre_wrap_start_tile,
                              chunked.kv_pad_rotation.q_pre_wrap_tile_count,
                              chunked.kv_pad_rotation.q_post_wrap_start_tile,
@@ -2755,7 +2870,7 @@ void sdpa_ring_v2(
                 chunked_enabled,
                 local_padded_Nt,
                 chunk_size_t,
-                q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                kv_region_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,
@@ -2770,13 +2885,11 @@ void sdpa_ring_v2(
         if constexpr (is_causal_sdpa) {
             if constexpr (!has_sliding_window) {
                 if (is_causal_iter && k_chunk >= causal_k_limit) {
-                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                    // In-place latent-V never pushes a V entry, so only K^T needs draining.
-                    if constexpr (!kt_inplace_v) {
-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
-                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    // Expanded K expanded this chunk already (the peer may need it): drain the peer's half too.
+                    if constexpr (k_expand) {
+                        sdpa_cb_drain_out_of_line(cb_kexp_peer, k_expand_own_rows * Sk_chunk_t);
                     }
+                    drain_kv_chunk();
                     KV_chunks_processed_in_iter++;
                     return true;
                 }
@@ -2852,9 +2965,8 @@ void sdpa_ring_v2(
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
         const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
             sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
-        uint32_t per_q_valid_kv =
-            packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
-        for (uint32_t k = 0; !packed_sources && !has_sliding_window && k < num_kv_chunks; ++k) {
+        uint32_t per_q_valid_kv = has_sliding_window ? sliding_band.end - sliding_band.begin : 0;
+        for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id = ring_id;
             const uint32_t source_k_chunk = k;
             const bool is_joint = k >= num_local_k_chunks;
@@ -2890,21 +3002,6 @@ void sdpa_ring_v2(
 
         uint32_t KV_chunks_processed = 0;
 
-        // Global K bounds of this Q chunk's rows, shared by all its packed K chunks.
-        static_assert(
-            !packed_kv_enabled || Sk_chunk_t <= ring_joint::kMaxPackedKVChunkTiles,
-            "packed mask runs live on the TRISC stack; the host groups only chunks up to the cap");
-        static_assert(ring_joint::kPackedKVInvalidRowTile == KV_PAD_ROTATION_INVALID_TILE);
-        ring_joint::PackedKVRowBounds packed_row_bounds{};
-        if (packed_sources) {
-            const uint32_t mask_q_start = kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile;
-            packed_row_bounds =
-                ring_joint::packed_kv_row_bounds(Sq_chunk_t, logical_nt, packed_head_global_end, [&](uint32_t row) {
-                    return q_global_tile_for_mask_row<kv_pad_rotation_enabled>(
-                        row, mask_q_start, chunked.kv_pad_rotation);
-                });
-        }
-
         const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
         for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
@@ -2918,10 +3015,34 @@ void sdpa_ring_v2(
             }
             const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
             const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
-            const bool kv_chunk_is_joint = !packed_sources && !has_sliding_window && k_chunk >= num_local_k_chunks;
-            if (!packed_sources && !has_sliding_window &&
-                try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
+            const bool kv_chunk_is_joint = !has_sliding_window && k_chunk >= num_local_k_chunks;
+            if (!has_sliding_window && try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 continue;
+            }
+            // Expanded K: expand before the per-Q causal skip; the peer needs this core's rows even for chunks this
+            // core's Q fully masks. Whatever follows configures its own pack width.
+            uint32_t k_expand_own_slot_tiles = 0;
+            if constexpr (k_expand) {
+                // cb_kexp_own is double-buffered and popped only by the reader, so its read pointer stays at the CB
+                // base; the QK addresses this chunk's half by slot.
+                k_expand_own_slot_tiles = (k_expand_chunk_count++ & 1) * k_expand_own_rows * Sk_chunk_t;
+                // Expanded V: second pass over the same latent chunk with this core's W_UV^T rows into cb_vexp_own.
+                // One call site keeps a single copy of the expansion in the binary.
+                constexpr uint32_t expand_passes = cb_vexp_own != INVALID_CB ? 2 : 1;
+#pragma GCC unroll 1
+                for (uint32_t pass = 0; pass < expand_passes; ++pass) {
+                    sdpa_expand_k_chunk<
+                        Sk_chunk_t,
+                        DHt,
+                        DHt_qk,
+                        k_expand_latent_rows,
+                        cb_kt_in,
+                        cb_wuk,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_normalized_out>(
+                        pass * k_expand_own_rows * k_expand_latent_rows, pass == 0 ? cb_kexp_own : cb_vexp_own);
+                }
             }
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
                 continue;
@@ -2937,7 +3058,7 @@ void sdpa_ring_v2(
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
-                CircularBuffer(cb_signal).reserve_back(1);
+                sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
                 sdpa_cb_push_back_out_of_line(cb_signal, 1);
             }
 
@@ -2983,7 +3104,7 @@ void sdpa_ring_v2(
                     bool partial_tile_selected = false;
                     // Live column 0 = tile-aligned boundary this dispatch: no partial stamp.
                     if constexpr (global_n_mask_enabled) {
-                        if (!packed_sources && is_global_n_mask_chunk) {
+                        if (is_global_n_mask_chunk) {
                             lw_partial_tile_idx =
                                 lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
                             partial_tile_selected = true;
@@ -3001,13 +3122,11 @@ void sdpa_ring_v2(
             // Tile-level matmul skip for global_n, local_n, or joint_n padding.
             // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
             // Also select pre-computed subblock width for this chunk's mask type.
-            uint32_t active_Sk_param = packed_sources ? packed_kv.valid_tiles(k_chunk) : Sk_chunk_t;
-            uint32_t chunk_sbw = packed_sources && active_Sk_param != Sk_chunk_t
-                                     ? largest_factor_le(active_Sk_param, qkt_subblock_w)
-                                     : full_sbw;
-            bool narrowed_by_mask = packed_sources;
+            uint32_t active_Sk_param = Sk_chunk_t;
+            uint32_t chunk_sbw = full_sbw;
+            bool narrowed_by_mask = false;
             if constexpr (global_n_mask_enabled) {
-                if (!packed_sources && is_global_n_mask_chunk) {
+                if (is_global_n_mask_chunk) {
                     active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     chunk_sbw = global_n_sbw;
                     narrowed_by_mask = true;
@@ -3130,33 +3249,13 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
-            // Packed chunks mostly hold prefix slabs that every row of this Q chunk sees in full; the
-            // plan narrows the live width and says whether the chunk needs stamping.
-            ring_joint::PackedKVMaskRun packed_runs[packed_kv_enabled ? Sk_chunk_t : 1];
-            ring_joint::PackedKVChunkMask packed_mask;
-            if (packed_sources) {
-                const ring_joint::PackedKVChunkPlan plan = ring_joint::packed_kv_chunk_plan(
-                    packed_kv,
-                    k_chunk,
-                    packed_source_ids,
-                    chunk_size_t,
-                    packed_row_bounds,
-                    qkt_subblock_w,
-                    active_Sk_param,
-                    packed_runs);
-                if (plan.active_tiles < active_Sk_param) {
-                    active_Sk_param = plan.active_tiles;
-                    chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
-                }
-                packed_mask = plan.mask;
-            }
-
+            // Expanded K: the QK reads the expanded rows of this latent chunk in place (sdpa_expand_k_chunk).
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
-                DHt,
+                DHt_qk,
                 vDHt,
                 scale_fp32,
                 qkt_subblock_h,
@@ -3167,7 +3266,7 @@ void sdpa_ring_v2(
                 true,                               // ring_mode
                 is_causal_sdpa || chunked_enabled,  // chunked re-enables causal masking with absolute coords
                 cb_q_in,
-                cb_kt_in,
+                k_expand ? cb_kexp_peer : cb_kt_in,
                 cb_v_in,
                 cb_qkt_im,
                 cb_identity_scale_in,
@@ -3189,7 +3288,11 @@ void sdpa_ring_v2(
                 false,              // use_provided_mask
                 use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
                 circular_kv_cache,
-                packed_kv_enabled>(
+                k_expand ? cb_kexp_own : INVALID_CB,
+                cb_kt_in,
+                k_expand_own_rows,
+                k_expand_latent_rows,
+                DHt * Sk_chunk_t>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -3214,7 +3317,9 @@ void sdpa_ring_v2(
                 step_straddle_jump,
                 step_kv_pad_rotation,
                 q_base_tiles,
-                packed_mask);
+                false,  // keep_kv
+                k_expand_rank,
+                k_expand_own_slot_tiles);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
@@ -3244,7 +3349,12 @@ void sdpa_ring_v2(
         // the last pass of the last ring iteration, so nothing is popped here.
         if constexpr (!use_l1_state_fifo) {
             if (q_per_core > 1 || is_last_ring_iter) {
-                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
+                // Expanded K: the reader pushes this core's W_UK rows with Q. One Q chunk per core (host-checked),
+                // so both leave on the last ring iteration.
+                if constexpr (cb_wuk != INVALID_CB) {
+                    sdpa_cb_pop_front_out_of_line(cb_wuk, k_expand_wuk_tiles);
+                }
             }
         }
 
@@ -3288,17 +3398,11 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
-            const uint32_t padded_k_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
-            for (uint32_t k_chunk = 0; k_chunk < padded_k_chunks; ++k_chunk) {
-                if (!packed_sources && try_skip_oob_kv(ring_id, k_chunk, k_chunk >= num_local_k_chunks)) {
+            for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+                if (try_skip_oob_kv(ring_id, k_chunk, k_chunk >= num_local_k_chunks)) {
                     continue;
                 }
-                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                if constexpr (!kt_inplace_v) {
-                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
-                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                }
+                drain_kv_chunk();
                 KV_chunks_processed_in_iter++;
             }
         }
@@ -3311,13 +3415,7 @@ void sdpa_ring_v2(
              dummy_chunk <
              dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
              ++dummy_chunk) {
-            CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-            sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-            // In-place latent-V never pushes a V entry, so there is nothing extra to drain.
-            if constexpr (!kt_inplace_v) {
-                CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-            }
+            drain_kv_chunk();
         }
     }
 }

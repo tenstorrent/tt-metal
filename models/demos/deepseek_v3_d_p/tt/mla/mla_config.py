@@ -647,6 +647,17 @@ MLA_SDPA_CONFIG = {
     ],
 }
 
+# Dense chunked-prefill attention per model, matched like the tuned configs above (first match wins); ttMLA's
+# expanded_k argument overrides it. A model without an entry runs ring_mla (absorbed).
+#   expanded_k: ring_joint SDPA expands K and V per head from the gathered latent (no wkv_b2 after). Shapes without a
+#     measured head-pair schedule (ttMLA._EXPANDED_K_SDPA_CHUNKS) run ring_mla.
+MLA_ATTENTION_CONFIG = [
+    # Kimi-K2.7 (and K2.6): 64 heads.
+    {"num_heads": 64, "q_lora_rank": 1536, "chunked_only": True, "expanded_k": True},
+    # Kimi-K3: 96 heads.
+    {"num_heads": 96, "q_lora_rank": 1536, "chunked_only": True, "expanded_k": True},
+]
+
 
 def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
     """Raw matmul entry for a given weight and local sequence length (per-device).

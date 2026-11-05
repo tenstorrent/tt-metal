@@ -56,8 +56,8 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // receiver -- today a full grid row, for either the shared-K (latent-V) or the GQA-grouped family.
 // Everything here is derived identically by the program factory and all three kernels.
 //
-// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory pushes it as
-// each kernel's LAST compile-time arg, and each kernel reads it back from that position.
+// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory passes it to each
+// kernel as the named compile-time arg "rotated_max_slots".
 // ---------------------------------------------------------------------------
 
 // One semaphore holds distinct completion bits for all receiving active ordinals.
@@ -206,8 +206,8 @@ inline bool kv_chunk_starts_before_logical_end(
 
 // One past the last global tile of this device's Q rows in the current chunk. A K chunk starting at or past it is
 // fully masked for all of them. KV-pad rotation maps the Q slab through pre-/post-wrap segments.
-// Assumes one Q slab per transport rank: split KV (kv_stripe_split > 1) indexes Q slabs by
-// ring_index / kv_stripe_split, so the host keeps dense_causal_skip and K split off for it.
+// One Q slab per ring_index / ring_size pair: with split KV (kv_stripe_split > 1) callers pass the Q-sequence slice
+// (ring_index / kv_stripe_split) and the Q-ring size (ring_size / kv_stripe_split).
 template <bool kv_pad_rotation_enabled, uint32_t q_local_padded_Nt>
 inline uint32_t chunked_q_global_end_tile(
     uint32_t logical_nt,
