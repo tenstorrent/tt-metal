@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 struct KVPadRotationContext {
@@ -275,14 +276,7 @@ inline uint32_t geometric_len(uint32_t shard_tokens, uint32_t logical_n, uint32_
         return 0;
     }
     const uint32_t start = s * shard_tokens + b * kBlockTokens;
-    uint32_t end = start + kBlockTokens;
-    const uint32_t shard_end = s * shard_tokens + shard_tokens;
-    if (end > shard_end) {
-        end = shard_end;
-    }
-    if (end > logical_n) {
-        end = logical_n;
-    }
+    const uint32_t end = std::min(std::min(start + kBlockTokens, s * shard_tokens + shard_tokens), logical_n);
     return end > start ? end - start : 0;
 }
 }  // namespace sparse_blocks
