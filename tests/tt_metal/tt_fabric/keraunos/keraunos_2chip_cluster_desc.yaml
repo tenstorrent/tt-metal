@@ -6,9 +6,10 @@ arch:
   1: quasar
 chips:
   {}
+# Ids carry UMD's mock Quasar board UPI (0x50) in bits 36 and up.
 chip_unique_ids:
-  0: 4919131758592
-  1: 4919131758593
+  0: 5497558138880
+  1: 5497558138881
 ethernet_connections:
   - [{chip: 0, chan: 0}, {chip: 1, chan: 0}]
 ethernet_connections_to_remote_devices:
@@ -26,13 +27,18 @@ harvesting:
 chip_to_boardtype:
   0: quasar
   1: quasar
+# One Quasar board (one package, one chip) per test chip; the link between them is an external connection.
 boards:
   -
-    - board_id: 4919131758592
+    - board_id: 5497558138880
     - board_type: quasar
     - chips:
         - 0
+  -
+    - board_id: 5497558138881
+    - board_type: quasar
+    - chips:
         - 1
 asic_locations:
   0: 0
-  1: 1
+  1: 0
