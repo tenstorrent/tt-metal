@@ -10,7 +10,7 @@ import torch
 import models.demos.blackhole.qwen36.tt.gdn_block_state as gbs
 
 NV, DK, DV = 12, 128, 128  # TP=4 per-device GDN shapes of Qwen3.6-27B
-NUM_BLOCKS, BLOCK, HD = 10, 2048, 256
+NUM_BLOCKS, HD = 10, 256
 
 
 class _Tensor(SimpleNamespace):
@@ -63,20 +63,20 @@ def _model(n_layers=8, bmax=8):
     )
 
 
-def _specs(model, kv_dtype="bf16"):
+def _specs(model, kv_dtype="bf8", block=4096):
     """per_layer_specs as the plugin builds them: attention j -> tensor_idx j, GDN layer -> the slot of its group."""
     specs, j = [], 0
     for i, layer in enumerate(model.layers):
         if layer.is_full_attention:
-            specs.append(((NUM_BLOCKS, 1, BLOCK, HD), kv_dtype, j))
+            specs.append(((NUM_BLOCKS, 1, block, HD), kv_dtype, j))
             j += 1
         else:
             specs.append((((3, 2560), (NV, DK, DV)), ("bf16", "fp32"), (i // 4) % 2))
     return specs
 
 
-def _kv(n, dtype="bf16"):
-    shape = [NUM_BLOCKS, 1, BLOCK, HD]
+def _kv(n, dtype="bf8", block=4096):
+    shape = [NUM_BLOCKS, 1, block, HD]
     return [
         [_Tensor(name=f"k{j}", shape=shape, dtype=dtype), _Tensor(name=f"v{j}", shape=shape, dtype=dtype)]
         for j in range(n)
@@ -88,22 +88,31 @@ def test_is_mamba_entry():
     assert not gbs.is_mamba_entry(((10, 1, 2048, 256), "bf16", 0))
 
 
-def test_views_and_page_counts(fake):
+@pytest.mark.parametrize(
+    "dtype, block, rec_heads, hist_tiles",
+    [
+        ("bf8", 4096, 17, 544),  # 1024 tiles x 1088 B = 1,114,112 B = 272 fp32 / 544 bf16 pages per block
+        ("bf16", 2048, 16, 512),  # 512 tiles x 2048 B = 1 MiB = 256 fp32 / 512 bf16 pages per block
+    ],
+)
+def test_views_and_page_counts(fake, dtype, block, rec_heads, hist_tiles):
     model = _model()
-    st = gbs.GdnBlockState(model, _specs(model), _kv(2))
+    st = gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
     assert len(st.layers) == 6
     i, dn = st.layers[0]
     ps = dn._paged_state
-    # bf16 [N, 1, 2048, 256]: 512 tiles = 1 MiB per block = 256 fp32 pages = 16 heads of 16 pages.
-    assert ps.rec_pages == 256 and ps.hist_pages == 512
-    assert ps.rec_view.shape == [NUM_BLOCKS, 16, DK, DV] and ps.rec_view.dtype == "fp32"
-    assert ps.hist_view.shape == [NUM_BLOCKS, 512, 32, 32] and ps.hist_pool.name == "v0"
+    assert ps.rec_pages == rec_heads * 16 and ps.hist_pages == hist_tiles
+    assert ps.rec_view.shape == [NUM_BLOCKS, rec_heads, DK, DV] and ps.rec_view.dtype == "fp32"
+    assert ps.hist_view.shape == [NUM_BLOCKS, hist_tiles, 32, 32] and ps.hist_pool is ps.hist_view
+    assert ps.hist_view.name == "v0:view"
 
 
-def test_bf8_and_small_blocks_are_refused(fake):
+@pytest.mark.parametrize("dtype, block", [("bf8", 2048), ("bf8", 1024), ("bf16", 1024)])
+def test_blocks_without_room_for_the_state_are_refused(fake, dtype, block):
+    # BF8 2048: 136 fp32 pages (not whole 16-page heads); BF8 1024: 8.5 pages per bank; bf16 1024: 8 heads < 12.
     model = _model()
     with pytest.raises(ValueError):
-        gbs.GdnBlockState(model, _specs(model, "bf8"), _kv(2, "bf8"))  # 557056 B: not whole 16-page heads
+        gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
 
 
 def test_decode_index_follows_rows_and_skips_unchanged(fake):
@@ -114,8 +123,8 @@ def test_decode_index_follows_rows_and_skips_unchanged(fake):
     st.set_decode_blocks(ids, row_of=row_of)
     i, dn = st.layers[0]
     idx = dn._paged_state.idx.data
-    assert idx[0].tolist() == [7 * 256, 0, 0, 5 * 256, 0, 0, 0, 0]
-    assert idx[1].tolist() == [7 * 512, 0, 0, 5 * 512, 0, 0, 0, 0]
+    assert idx[0].tolist() == [7 * 272, 0, 0, 5 * 272, 0, 0, 0, 0]
+    assert idx[1].tolist() == [7 * 544, 0, 0, 5 * 544, 0, 0, 0, 0]
     n = len(fake["h2d"])
     assert n == len(st.layers)
     st.set_decode_blocks(ids, row_of=row_of)

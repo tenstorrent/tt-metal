@@ -91,6 +91,7 @@ def test_gdn_state_must_fit_the_attention_page():
         (8, 1024, False, None),
         (4, 2048, True, None),
         (4, 2048, False, 8192),
+        (4, 4096, True, 8192),
     ],
 )
 @pytest.mark.parametrize("spec_blocks", [0, K], ids=["no_mtp", "mtp_k3"])
