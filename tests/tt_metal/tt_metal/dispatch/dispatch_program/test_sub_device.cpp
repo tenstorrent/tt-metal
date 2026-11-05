@@ -232,11 +232,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceL1AllocationAvoidsInFligh
     EXPECT_GE(create_l1_sharded_buffer(mesh_device, k_busy_cores)->address(), cb_end);
     EXPECT_LT(create_l1_sharded_buffer(mesh_device, k_idle_cores)->address(), cb_end);
     {
-        // A per-bank size off the bank manager's coarser allocation granularity must still be
-        // placed clear of the CB and of the next allocation.
+        // A per-bank size off the bank manager's coarser allocation granularity reserves more than
+        // it asks for; top-down, that reservation must still end inside the free range.
         const DeviceAddr page_size = k_l1_probe_page_size + mesh_device->allocator()->get_alignment(BufferType::L1);
         auto first = create_l1_interleaved_buffer(mesh_device, page_size, true, page_size);
-        auto second = create_l1_interleaved_buffer(mesh_device, page_size, true, page_size);
+        auto second = create_l1_interleaved_buffer(mesh_device, page_size, false, page_size);
         EXPECT_GE(first->address(), cb_end);
         EXPECT_GE(second->address(), cb_end);
         EXPECT_TRUE(
