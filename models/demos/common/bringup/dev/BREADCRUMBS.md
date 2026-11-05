@@ -2571,3 +2571,13 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: profile.py's position suffix is _p<pos>, _p<pos>_last or _p<pos>_nonlast after BRINGUP_CHUNK_LAST (F248's
   harness.chunk_last); the A/B's p<pos>_nonlast item already strips "_" + its name.
 - Selftest: test_perf_ab.py::test_a_position_profile_names_its_chunk_role.
+
+## F252: no fixed agent time limit; only a stalled agent is stopped (owner 2026-11-05, DeepSeek-V4.1 P.32)
+- Problem: agents.timeout_s 14400 killed P.32 attempt 1 at 4 h while it waited on its own final `measure` (making
+  progress); a second attempt started. Owner: nothing interrupts an agent that makes progress.
+- Fix: run_agent polls every 60 s; it stops the agent only if agent_stalled(): transcript quiet for agents.stall_s (5400)
+  and no pytest / safe runner / devjob in its process group. agents.timeout_s defaults to 0 (no limit; a spec may still
+  set one explicitly). Selftest test_waste_fixes.py::test_an_agent_making_progress_is_never_stopped_only_a_stalled_one.
+- Owner rule with it (skill): measurements are checkpointed per unit; a failed or cut unit never voids the others. Still
+  to do: F251 (the position profile's counting run on a slot with history) and making an A/B side reuse every unit an
+  agent's `measure` finished on the same code (P.32's ring side re-ran its DRAM, ladder and profiles).
