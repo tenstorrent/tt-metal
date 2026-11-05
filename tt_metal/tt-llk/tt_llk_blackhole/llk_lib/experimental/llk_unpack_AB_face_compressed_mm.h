@@ -351,7 +351,10 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     if constexpr (clear_src)
     {
+        // A both-bank SrcB clear must run alone: it drops SrcA writes unpacker 0 makes while it runs.
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
     }
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
@@ -431,6 +434,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     if constexpr (ct_dim == 1 && finalize)
     {
+        // Stall_Clr_Cntrl=1 waits on the bank each publish clears and travels with
+        // the instruction, so SET_DVALID cannot make the wait target stale.
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -446,6 +451,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
