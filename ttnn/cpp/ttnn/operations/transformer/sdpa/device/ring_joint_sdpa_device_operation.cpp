@@ -726,9 +726,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool has_kv_pad_rotation = kv_pad_rotation_active(args, tensor_args);
 
     if (ag.full_mesh) {
+        // The legacy layout fills the gathered buffer exactly; a stripe split or dynamic_local_n (the buffer is
+        // the capacity) only needs it to fit, on the miss and on every hit alike.
         TT_FATAL(
-            args.kv_stripe_split > 1 ? gathered_buffer_n >= N_local_kv * args.ring_size
-                                     : gathered_buffer_n == N_local_kv * args.ring_size,
+            (args.kv_stripe_split > 1 || args.dynamic_local_n) ? gathered_buffer_n >= N_local_kv * args.ring_size
+                                                               : gathered_buffer_n == N_local_kv * args.ring_size,
             "Full-mesh RingJointSDPA gathered sequence extent must cover local extent times ring size "
             "(equal for the legacy layout); got {} vs "
             "{} * {}",
@@ -1260,22 +1262,22 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device), and on
-    // the tensor path from logical_n_tensor, so logical_n leaves the key and one program serves every length there.
+    // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device), so
+    // logical_n leaves the key and one program serves every length. The dynamic path does the same with its
+    // logical_n tensor; the static path keeps logical_n in the key (and compiled in) as before.
     const bool kv_pad_rotation_enabled = kv_pad_rotation_active(args, tensor_args);
     const auto cache_key_logical_n =
-        (kv_pad_rotation_enabled || tensor_args.has_logical_n_tensor()) ? 0 : args.logical_n;
+        (kv_pad_rotation_enabled || (args.dynamic_local_n && tensor_args.has_logical_n_tensor())) ? 0 : args.logical_n;
 
     if (args.dynamic_local_n) {
         // Q/K/V enter without their row count; the gathered buffers keep their full spec (their capacity sizes
-        // the CBs). The presence bits key the kernel build like the static branch; the salt separates the family.
+        // the CBs). The presence bits key the kernel build like the static branch.
         using ttnn::operations::common::hash_spec_without_rows;
-        constexpr uint64_t kSalt = 0x72696e675f736470ULL;  // "ring_sdp"
         return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-            kSalt,
-            hash_spec_without_rows(tensor_args.input_q, kSalt),
-            hash_spec_without_rows(tensor_args.input_k, kSalt),
-            hash_spec_without_rows(tensor_args.input_v, kSalt),
+            args.dynamic_local_n,
+            hash_spec_without_rows(tensor_args.input_q),
+            hash_spec_without_rows(tensor_args.input_k),
+            hash_spec_without_rows(tensor_args.input_v),
             tensor_args.gathered_k.tensor_spec(),
             tensor_args.gathered_v.has_value()
                 ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.gathered_v->tensor_spec())
@@ -1411,7 +1413,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
-    const uint32_t N_global = gathered_k_shape[2];
+    // Under dynamic_local_n the gathered buffer is the capacity; the work is the live length.
+    const uint32_t N_global = args.dynamic_local_n ? N_local * args.ring_size : gathered_k_shape[2];
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
