@@ -13,7 +13,14 @@ import pytest
 import ttnn
 import ttml
 
-from two_device_gradients import device, make_gradients, one_parameter, to_bf16
+from two_device_gradients import (
+    device,
+    device_operations,
+    divides_before_gathering,
+    make_gradients,
+    one_parameter,
+    to_bf16,
+)
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.usefixtures("strict_ccl_topology")]
 
@@ -90,8 +97,10 @@ def test_tp_sharded_gradient_over_the_dp_axis(dp_tp_mesh, rows, tp_dim):
     gradient = _upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(tp_dim)]).get_value()
 
     parameters, parameter = one_parameter(gradient)
-    ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=_FP32)
+    operations = device_operations(lambda: ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=_FP32))
 
+    # Two devices make each element a single add, so the values match on either route; the operations tell them apart.
+    assert divides_before_gathering(operations) == (rows == 1024)
     np.testing.assert_array_equal(
         _per_device(parameter.get_grad()), _per_device(_fp32_all_reduce_mean(gradient, [_DP_AXIS]))
     )
@@ -105,8 +114,13 @@ def test_fp32_sum_labels_the_reduced_axis_replicate(dp_tp_mesh, rows):
     values = make_gradients(rows, 1024, seed=3)
     gradient = _upload(values, [ttnn.PlacementShard(0), ttnn.PlacementReplicate()]).get_value()
 
-    fp32 = ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS], reduce_dtype=_FP32)
+    results = []
+    operations = device_operations(
+        lambda: results.append(ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS], reduce_dtype=_FP32))
+    )
+    (fp32,) = results
     bf16 = ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS])
 
+    assert divides_before_gathering(operations) == (rows == 1024)
     assert _placements(fp32) == [("Replicate",), ("Replicate",)]
     assert _placements(fp32) == _placements(bf16)
