@@ -243,6 +243,12 @@ class Ledger:
     def side_path(self) -> Path:
         return self.dir / "history_state.json"
 
+    @property
+    def metrics_path(self) -> Path:
+        """F253: the tasks' gate metrics, committed beside state.json (DeepSeek-V4.1 X.3: state.json reached 503 KB
+        again, metrics 384 KB of it: the repo's 500 KB hook refused the commit)."""
+        return self.dir / "state_metrics.json"
+
     def _exclude_side(self) -> None:
         """F180: keep history_state.json out of git (the clone's own info/exclude: no tracked file changes)."""
         import subprocess
@@ -265,6 +271,10 @@ class Ledger:
     def state(self) -> dict:
         state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         side = json.loads(self.side_path.read_text()) if self.side_path.exists() else {}
+        mets = json.loads(self.metrics_path.read_text()) if self.metrics_path.exists() else {}
+        for tid, m in mets.items():  # F253
+            if isinstance(state.get(tid), dict):
+                state[tid].setdefault("metrics", m)
         for tid, extra in side.items():
             if isinstance(state.get(tid), dict):
                 for k, v in extra.items():
@@ -291,6 +301,13 @@ class Ledger:
                 moved = {k: e.pop(k) for k in self.SIDE_KEYS if k in e}
                 if moved:
                     side[tid] = moved
+        mets = {}
+        for tid, e in state.items():  # F253: metrics in their own committed file
+            if isinstance(e, dict) and "metrics" in e:
+                mets[tid] = e.pop("metrics")
+        mtmp = self.metrics_path.with_suffix(".tmp")
+        mtmp.write_text(json.dumps(mets, indent=1, sort_keys=True) + "\n")
+        mtmp.replace(self.metrics_path)
         self._exclude_side()
         stmp = self.side_path.with_suffix(".tmp")
         stmp.write_text(json.dumps(side, sort_keys=True) + "\n")
