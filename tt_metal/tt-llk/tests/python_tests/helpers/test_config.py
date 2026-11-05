@@ -1498,6 +1498,12 @@ class TestConfig:
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
 
+        # Extra -D flags for every kernel part, e.g. LLK_EXTRA_DEFINES="INP_FLOAT32" to build
+        # the ttnn float32-input arm of kernels that branch on it.
+        for define in os.environ.get("LLK_EXTRA_DEFINES", "").split(","):
+            if define.strip():
+                OPTIONS_COMPILE += f"-D{define.strip()} "
+
         if TestConfig.gathering_build():
             # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
             gathering_options = "-DENABLE_GATHERING "
