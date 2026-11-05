@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <initializer_list>
 #include <optional>
 #include <string>
 
@@ -147,8 +148,23 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
+// b == nullptr is a scalar operand. The optional overload forwards a spec the caller already owns.
+bool is_native_L1_sharding(const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c);
+
+inline bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
+    return is_native_L1_sharding(a, b.has_value() ? &*b : nullptr, c);
+}
+
+// Null entries are skipped, so a missing operand or a missing preallocated output does not count.
+inline bool any_memory_config_sharded(std::initializer_list<const MemoryConfig*> configs) {
+    for (const MemoryConfig* config : configs) {
+        if (config != nullptr && config->is_sharded()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

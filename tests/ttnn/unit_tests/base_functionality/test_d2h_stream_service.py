@@ -202,3 +202,123 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pa
     )
 
     _run_io_loop(service, iter_mapper, global_spec, shape_list, "tensor", mesh_device)
+
+
+# ---- metadata-only acks against a host that is not reading -------------------------------------
+# The ack op forwards one record per transfer into the service core's record ring and will not overwrite a
+# slot the service has not sent yet, so a host that stops reading still sees every record in order.
+
+_ACK_RECORD_BYTES = 12  # {slot_id, pos_start, pos_end}
+
+
+def _metadata_only_service(mesh_device, fifo_pages: int) -> ttnn.D2HStreamService:
+    # The socket page is the PCIe-aligned record (<= 64 B); the ring is sized off the real page count.
+    return ttnn.D2HStreamService(
+        mesh_device,
+        global_spec=None,
+        fifo_size_bytes=fifo_pages * 64,
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=_ACK_RECORD_BYTES,
+        metadata_ring=True,
+    )
+
+
+def _ack_record(mesh_device, i: int) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.tensor([i, 1000 + i, 2000 + i], dtype=torch.int64).reshape(1, 1, 1, 3),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _read_records(service: ttnn.D2HStreamService, n: int, timeout_s: float) -> list:
+    import struct
+    import threading
+
+    out = []
+
+    def run():
+        for _ in range(n):
+            out.append(struct.unpack("<3I", service.read_metadata()))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    assert not t.is_alive(), f"host read stalled after {len(out)} of {n} records: the service core stopped acking"
+    return out
+
+
+def _fire_acks(service, mesh_device, n: int) -> list:
+    records = [_ack_record(mesh_device, i) for i in range(n)]
+    ttnn.synchronize_device(mesh_device)
+    for rec in records:
+        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(service, metadata=rec)
+    return records
+
+
+def test_metadata_acks_queue_on_the_service_core_while_the_host_is_not_reading(mesh_device):
+    fifo_pages = 4
+    service = _metadata_only_service(mesh_device, fifo_pages=fifo_pages)
+    ring = service.get_metadata_ring_slots()
+    # More acks than the socket FIFO holds, but within FIFO plus ring, so no ack op waits.
+    n = ring + fifo_pages - 2
+    keep = _fire_acks(service, mesh_device, n)
+    ttnn.synchronize_device(mesh_device)
+    records = _read_records(service, n, timeout_s=60)
+    assert records == [(i, 1000 + i, 2000 + i) for i in range(n)]
+    del keep
+
+
+def test_metadata_ack_waits_for_the_service_once_the_ring_is_full(mesh_device):
+    fifo_pages = 4
+    service = _metadata_only_service(mesh_device, fifo_pages=fifo_pages)
+    ring = service.get_metadata_ring_slots()
+    # The last few ack ops find every slot holding an unsent record and must wait for the host to free them.
+    n = ring + fifo_pages + 3
+    keep = _fire_acks(service, mesh_device, n)
+    records = _read_records(service, n, timeout_s=60)
+    ttnn.synchronize_device(mesh_device)
+    assert records == [(i, 1000 + i, 2000 + i) for i in range(n)]
+    del keep
+
+
+# ---- teardown with records the host never read ---------------------------------------------------
+# The destructor gives up waiting for the host, abandons the unread records and still stops the service before
+# releasing it, so the service core is reusable straight away.
+
+
+def _round_trip(mesh_device):
+    service = _metadata_only_service(mesh_device, fifo_pages=4)
+    keep = _fire_acks(service, mesh_device, 2)
+    assert _read_records(service, 2, timeout_s=60) == [(i, 1000 + i, 2000 + i) for i in range(2)]
+    del keep, service
+
+
+def _teardown_unread(mesh_device, fill_ring):
+    import gc
+    import time
+
+    fifo_pages = 4
+    service = _metadata_only_service(mesh_device, fifo_pages=fifo_pages)
+    # Past FIFO plus ring with no reader, the last ack ops wait on the service until teardown abandons them.
+    n = service.get_metadata_ring_slots() + fifo_pages + 3 if fill_ring else 3
+    keep = _fire_acks(service, mesh_device, n)
+    start = time.monotonic()
+    del service  # the only reference: the destructor runs here
+    gc.collect()
+    ttnn.synchronize_device(mesh_device)
+    assert time.monotonic() - start < 60, "teardown waited on records the host never read"
+    del keep
+
+
+def test_teardown_abandons_records_the_host_never_read(mesh_device):
+    _teardown_unread(mesh_device, fill_ring=False)
+    _round_trip(mesh_device)
+
+
+def test_teardown_releases_an_ack_op_waiting_on_a_full_ring(mesh_device):
+    _teardown_unread(mesh_device, fill_ring=True)
+    _round_trip(mesh_device)

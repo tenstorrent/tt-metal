@@ -54,8 +54,10 @@ inline bool bf16_dest_asinh() {
     return false;
 #endif
 }
+// Each call records replay slots 0-8, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_asinh_bf16() {
+__attribute__((noinline)) inline void calculate_asinh_bf16() {
     ckernel::sfpu::bf16::asinh::calculate_symmetric_factored_log<ckernel::sfpu::AsinhBf16Config, ITERATIONS>();
 }
 

@@ -54,10 +54,14 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         pytest.skip("Test is not supported on n300 (8,7) grid")
 
-    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "RESNET_PCC_LOG")}
+    saved = {
+        k: os.environ.get(k)
+        for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "RESNET_PCC_LOG", "TT_METAL_QSR_RESNET_FREE_CONV_WEIGHTS")
+    }
     # No TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3 -> the model runs the FULL network including layer4/avgpool/fc.
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # HS convs -> split path (off the fused conv_bmm 0x19)
     os.environ["RESNET_PCC_LOG"] = "1"  # per-op [GOLDENPCC] so the FIRST diverging op is visible on failure
+    os.environ["TT_METAL_QSR_RESNET_FREE_CONV_WEIGHTS"] = "1"  # eager run: all conv weights exceed one DRAM bank
     # ALL convs now run ON DEVICE (last host bypass removed):
     #   - stem: DRAM-slice width tile-pad slice_write fixed (op_slicing.cpp); verified by test_conv2d_stem.py.
     #   - maxpool: _MAXPOOL_ON_DEVICE=True (unpack_tilizeA_B operandB BD fix).

@@ -328,6 +328,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
         // RMSNorm doesn't use Welford in this kernel path.
         .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+        .use_two_stage_reduce = grid.use_two_stage_reduce,
         .sizes = dfb_sizes,
         .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,
         // The column mask is one tile-row wide: block_wt tiles, holding only 1.0 or 0.0 in bfloat16.

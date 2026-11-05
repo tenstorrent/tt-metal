@@ -10,7 +10,8 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <std::uint32_t Degree, bool MirrorFold>
-inline void symmetric_factored_core_dual(const float* negative, const float* positive, float split, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2)
+__attribute__((always_inline)) inline void symmetric_factored_core_dual(
+    const float* negative, const float* positive, float split, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2)
 {
     static_assert(Degree == 8);
     if constexpr (MirrorFold)
@@ -36,7 +37,7 @@ inline void symmetric_factored_core_dual(const float* negative, const float* pos
     }
 }
 
-inline vFloat selected_direct_log_core(vFloat x, const float* coefficients)
+__attribute__((always_inline)) inline vFloat selected_direct_log_core(vFloat x, const float* coefficients)
 {
     vInt exponent         = as<vInt>(vFloat(0.75f));
     exponent              = as<vInt>(x) - exponent;
@@ -54,7 +55,7 @@ inline vFloat selected_direct_log_core(vFloat x, const float* coefficients)
 }
 
 template <std::uint32_t LowerBits, std::uint32_t UpperBits, std::uint32_t AddendBits>
-inline void symmetric_direct_log_tail(vFloat x, vFloat& result, const float* coefficients)
+__attribute__((always_inline)) inline void symmetric_direct_log_tail(vFloat x, vFloat& result, const float* coefficients)
 {
     v_if (is_inf(x))
     {
