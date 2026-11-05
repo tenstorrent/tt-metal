@@ -269,6 +269,19 @@ void kernel_main() {
 #endif
                         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
                         pk_scale_half(j, 0, h, j + 1 < KPC);
+                        if (j + 1 == KPC) {
+                            // the pass's last kb: half A is final, pack it while the FPU computes half B (only
+                            // half B's scaling and packing are left after the matmuls)
+                            PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)));
+                            if (c == 0 && g < 2 * KPC) {
+                                pack_reconfig_l1_acc(g > 0 ? 1 : 0);
+                            }
+#ifndef T2_NOPACK
+                            for (uint32_t r = 0; r < h; ++r) {
+                                pack_tile<true>(r, cb_acc, r * NBLK + c);
+                            }
+#endif
+                        }
                         pk_scale_half(j, h, m - h, j + 1 < KPC);
                         continue;
                     }
@@ -287,11 +300,11 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)));  // the pack thread's SFPU passes first
-                if (c == 0 && g < 2 * KPC) {  // the block's first group overwrites the accumulators, later ones add
+                if (!split && c == 0 && g < 2 * KPC) {  // the block's first group overwrites the accumulators
                     pack_reconfig_l1_acc(g > 0 ? 1 : 0);
                 }
 #ifndef T2_NOPACK
-                for (uint32_t r = 0; r < m; ++r) {
+                for (uint32_t r = split ? h : 0; r < m; ++r) {  // split: half A went out during half B's matmuls
                     pack_tile<true>(r, cb_acc, r * NBLK + c);
                 }
 #endif
