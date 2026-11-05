@@ -108,10 +108,14 @@ struct GdnSpecStepInputs {
     Tensor dt_bias;  // [1, 1, Nv] fp32/bf16
     Tensor neg_exp_A;  // [1, 1, Nv] fp32/bf16
     Tensor weight;     // [Dv] bf16 gated-norm weight
-    // optional: [>= B, T] ROW_MAJOR (u)int32. Entry (u, t) is the first ring page of the state after token t of user u
-    // (value head h at + h*KV, KV = Dk*Dv/1024 fp32 tiles), so the per-token states can go to arbitrary pages of a
-    // pool. Absent: ring block (t*M*Nv + u*Nv + h). The initial state is still read through the ctrl page's blocks.
+    // optional: [>= B, T*Nv] ROW_MAJOR (u)int32. Entry (u, t*Nv + h) is the first ring page (KV = Dk*Dv/1024 fp32
+    // tiles) of value head h's state after token t of user u, so the per-token states can go to arbitrary pages of a
+    // pool. Absent: ring block (t*M*Nv + u*Nv + h). With it, the ctrl page's initial word of (u, h) is the first fp32
+    // ring page of that head's initial state (any page) instead of a block index.
     std::optional<Tensor> ring_page_idx;
+    // optional second fp32 pool (ring_page_idx only): ring pages >= ring's page count (in ring_page_idx and in the ctrl
+    // initial words) address ring_pool2 at (page - that count), so one user's heads can span two buffers.
+    std::optional<Tensor> ring_pool2;
 };
 
 }  // namespace ttnn::experimental::prim

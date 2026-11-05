@@ -929,9 +929,11 @@ def test_kernel_opts_timing(device, request, B, T):
     )
 
 
-# ---- ring_page_idx: the per-token states go to arbitrary pages of a pool (for example vLLM-owned spec blocks)
+# ---- ring_page_idx: per (user, token, head) state pages in one or two pools (for example vLLM-owned spec blocks)
 
 RING_KV = (Dk // 32) * (Dv // 32)  # fp32 tiles per [Dk, Dv] state block
+RING_BLOCK = 64  # fp32 pages of one cache block's K (or V) buffer in layout option 3 at block 1024
+RING_K_HEADS = 4  # two_pools: heads 0..3 in pool 0 (K), heads 4..5 in pool 1 (V)
 
 
 def _state_tiles(x):
@@ -949,145 +951,217 @@ def _random_starts(n, run, pool_pages, gen):
     return starts
 
 
-def _ring_pool(c, layout, gen, extra_slots=2):
-    """A FLOAT32 [1, P, 32, 32] page pool, the ctrl page that reads each (u, h)'s initial state from it, and the
-    [B, T] write start pages. random_pages: the default ring (initial blocks as before) followed by spare pages; token
-    states go to random spare pages at any alignment. own_blocks: each (user, token) owns one Nv-block slot at a
-    random position; user u's initial state sits in its slot of token mi[u], so that token's write lands on the pages
-    the state was read from (the vLLM spec-block pattern)."""
-    B, T, Nv = c.B, c.T, c.g.Nv
-    per = Nv * RING_KV
-    words = ctrl_page(c.g, B, T, c.mi, c.par, c.hold)
-    if layout == "random_pages":
-        base = _state_tiles(c.ring0)
-        spare = (B * T + extra_slots) * per + 29
-        starts = _random_starts(B * T, per, spare, gen)
-        ws = [[base.shape[0] + starts[u * T + t] for t in range(T)] for u in range(B)]
-        pool = torch.cat([base, torch.randn(spare, 32, 32, generator=gen)])
-    else:
-        slots = torch.randperm(B * T + extra_slots, generator=gen).tolist()
-        ws = [[slots[u * T + t] * per for t in range(T)] for u in range(B)]
-        pool = torch.randn((B * T + extra_slots) * per, 32, 32, generator=gen)
-        for u in range(B):
-            s0 = ws[u][c.mi[u]]
-            pool[s0 : s0 + per] = _state_tiles(c.state0[u])
+class RingLayout:
+    """Where the states live. ws[s][u][t][h] = (pool, first page) receiving head h's state after token t of user u in
+    write set s; init[u][h] = (pool, first page) of head h's initial state (the ctrl word). pool 0 = `ring`, pool 1 =
+    `ring_pool2`; index values of pool 1 follow pool 0's pages.
+      random_pages: pool 0 = the default ring (initial states at their usual blocks) followed by spare pages; every
+        (user, token, head) is written to its own random spare run at any alignment.
+      own_blocks: every (user, token) owns one Nv-block slot; user u's initial state sits in its slot of token mi[u],
+        so that token's write lands on the pages the state was read from (the vLLM spec-block pattern).
+      misaligned: as own_blocks, but every run starts at a random page of any alignment (layout option 3).
+      two_pools: as misaligned, but every (user, token) owns a RING_BLOCK-page run in pool 0 (heads 0..3) and one in
+        pool 1 (heads 4..5).
+    init_separate puts the initial states in runs of their own, which no write set touches."""
+
+    def __init__(self, c, kind, gen, n_sets=1, init_separate=False, extra=2):
+        B, T, Nv = c.B, c.T, c.g.Nv
+        per = Nv * RING_KV
+        n_runs = n_sets * B * T + (B if init_separate else 0)
+        hold_pages = B * Nv * RING_KV  # a held head reads pool 0's block u*Nv + h as a placeholder
+        self.base = 0
+        if kind == "random_pages":
+            self.base = _state_tiles(c.ring0).shape[0]
+            spare = (n_runs * Nv + extra) * RING_KV + 29
+            starts = _random_starts(n_runs * Nv, RING_KV, spare, gen)
+            self.pages = [self.base + spare, 0]
+            head = lambda run, h: (0, self.base + starts[run * Nv + h])
+        elif kind in ("own_blocks", "misaligned"):
+            if kind == "own_blocks":
+                pages = (n_runs + extra) * per
+                starts = [slot * per for slot in torch.randperm(n_runs + extra, generator=gen).tolist()]
+            else:
+                pages = (n_runs + extra) * per + 41
+                starts = _random_starts(n_runs, per, pages, gen)
+            self.pages = [max(pages, hold_pages), 0]
+            head = lambda run, h: (0, starts[run] + h * RING_KV)
+        else:
+            assert kind == "two_pools"
+            pa = max((n_runs + extra) * RING_BLOCK + 21, hold_pages)
+            pb = (n_runs + extra) * RING_BLOCK + 9
+            k = _random_starts(n_runs, RING_BLOCK, pa, gen)
+            v = _random_starts(n_runs, RING_BLOCK, pb, gen)
+            self.pages = [pa, pb]
+            head = lambda run, h: (
+                (0, k[run] + h * RING_KV) if h < RING_K_HEADS else (1, v[run] + (h - RING_K_HEADS) * RING_KV)
+            )
+        run_id = lambda s, u, t: (s * B + u) * T + t
+        self.ws = [
+            [[[head(run_id(s, u, t), h) for h in range(Nv)] for t in range(T)] for u in range(B)] for s in range(n_sets)
+        ]
+        if kind == "random_pages":
+            self.init = [[(0, ((c.mi[u] * B + u) * Nv + h) * RING_KV) for h in range(Nv)] for u in range(B)]
+        elif init_separate:
+            self.init = [[head(n_sets * B * T + u, h) for h in range(Nv)] for u in range(B)]
+        else:
+            self.init = [[head(run_id(0, u, c.mi[u]), h) for h in range(Nv)] for u in range(B)]
+
+    def page(self, pool_page):
+        return pool_page[1] + (self.pages[0] if pool_page[0] == 1 else 0)
+
+    def host_pools(self, c, gen):
+        pools = [torch.randn(1, n, 32, 32, generator=gen) if n else None for n in self.pages]
+        if self.base:
+            pools[0][0, : self.base] = _state_tiles(c.ring0)
+        for u in range(c.B):
+            for h in range(c.g.Nv):
+                pool, page = self.init[u][h]
+                pools[pool][0, page : page + RING_KV] = _state_tiles(c.state0[u, h])
+        return pools
+
+    def ctrl(self, c):
+        words = ctrl_page(c.g, c.B, c.T, c.mi, c.par, c.hold)
+        for u in range(c.B):
             if u not in c.hold:
+                for h in range(c.g.Nv):
+                    words[0, 1 + c.B + u * c.g.Nv + h] = self.page(self.init[u][h])
+        return words
+
+    def index_host(self, c, s=0):
+        """[B, T*Nv]: entry (u, t*Nv + h) = head h's first page after token t of user u."""
+        ws = self.ws[s]
+        return torch.tensor(
+            [[self.page(ws[u][t][h]) for t in range(c.T) for h in range(c.g.Nv)] for u in range(c.B)], dtype=torch.int32
+        )
+
+    def check(self, c, pools0, pools, ring_ref, s=0):
+        """Live users' token pages equal the default-layout ring blocks bit for bit; every other page is unchanged."""
+        B, T, Nv = c.B, c.T, c.g.Nv
+        masks = [torch.zeros(n, dtype=torch.bool) for n in self.pages]
+        for u in range(B):
+            if u in c.hold:
+                continue
+            for t in range(T):
                 for h in range(Nv):
-                    words[0, 1 + B + u * Nv + h] = s0 // RING_KV + h
-    return pool.reshape(1, -1, 32, 32), words, ws
+                    pool, page = self.ws[s][u][t][h]
+                    exp = _state_tiles(ring_ref[(t * B + u) * Nv + h])
+                    assert torch.equal(pools[pool][0, page : page + RING_KV], exp), f"user {u} token {t} head {h}"
+                    masks[pool][page : page + RING_KV] = True
+        for p, n in enumerate(self.pages):
+            if n:
+                assert torch.equal(pools[p][0, ~masks[p]], pools0[p][0, ~masks[p]]), f"pool {p}: other pages changed"
 
 
-def _ring_idx_dev(device, ws):
-    return ttnn.from_torch(
-        torch.tensor(ws, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
+def _pools_to_dev(device, pools):
+    return [
+        ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) if t is not None else None
+        for t in pools
+    ]
 
 
-def _check_ring_pool(c, pool0, pool, ws, ring_ref):
-    """Live users' token pages equal the default-layout ring blocks bit for bit; every other page is unchanged."""
-    B, T, Nv = c.B, c.T, c.g.Nv
-    per = Nv * RING_KV
-    written = torch.zeros(pool.shape[1], dtype=torch.bool)
-    for u in range(B):
-        if u in c.hold:
-            continue
-        for t in range(T):
-            exp = _state_tiles(ring_ref[(t * B + u) * Nv : (t * B + u + 1) * Nv])
-            assert torch.equal(pool[0, ws[u][t] : ws[u][t] + per], exp), f"user {u} token {t}: state pages differ"
-            written[ws[u][t] : ws[u][t] + per] = True
-    assert torch.equal(pool[0, ~written], pool0[0, ~written]), "pages outside the written states changed"
+def _pools_to_host(pools_dev):
+    return [ttnn.to_torch(t) if t is not None else None for t in pools_dev]
 
 
-@pytest.mark.parametrize("layout", ["random_pages", "own_blocks"])
+def _ring_idx_dev(device, idx_host):
+    return ttnn.from_torch(idx_host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def _use_layout(device, c, lay, gen):
+    """Point the case at the layout's pools and ctrl page. Returns (host pools, device pools)."""
+    pools0 = lay.host_pools(c, gen)
+    pools_dev = _pools_to_dev(device, pools0)
+    c.ring = pools_dev[0]
+    c.ctrl = ttnn.from_torch(lay.ctrl(c), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return pools0, pools_dev
+
+
+@pytest.mark.parametrize("layout", ["random_pages", "own_blocks", "misaligned", "two_pools"])
 @pytest.mark.parametrize("B,T,hold", [(1, 4, ()), (4, 8, (1,)), (8, 4, ())])
 def test_ring_page_idx_matches_ring(device, mode, B, T, hold, layout):
-    """ring_page_idx vs the default ring layout at TP=8 per-device heads: output, windows and every token's state
-    bit-identical; held users and unaddressed pool pages untouched."""
+    """ring_page_idx (+ ring_pool2) vs the default ring layout at TP=8 per-device heads: output, windows and every
+    token's state bit-identical; held users and unaddressed pool pages untouched."""
     g = GEOS[0]
     c = Case(device, g, B, T, seed=300 + 10 * B + T, hold=hold, par=(B + T) & 1, R=round_up32(B * T), mode=mode)
     out_ref, ring_ref, _, win_ref = c.snapshot(c.run())
     c.reseed()
-    pool0, words, ws = _ring_pool(c, layout, torch.Generator().manual_seed(B * T))
-    c.ring = ttnn.from_torch(pool0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    c.ctrl = ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    o = c.run(ring_page_idx=_ring_idx_dev(device, ws))
+    gen = torch.Generator().manual_seed(B * T)
+    lay = RingLayout(c, layout, gen)
+    pools0, pools_dev = _use_layout(device, c, lay, gen)
+    o = c.run(ring_page_idx=_ring_idx_dev(device, lay.index_host(c)), ring_pool2=pools_dev[1])
     out = ttnn.to_torch(o).reshape(-1, g.VD).float()
     win_next = ttnn.to_torch([c.win_a, c.win_b][1 - c.par]).float()
-    # a held head runs on a placeholder state (block u*Nv + h of the pool) and its output rows are discarded
+    # a held head runs on a placeholder state (block u*Nv + h of pool 0) and its output rows are discarded
     rows = [r for r in range(out.shape[0]) if r // T not in c.hold]
     assert torch.equal(out[rows], out_ref[rows]), "output differs from the default ring layout"
     assert torch.equal(win_next, win_ref), "window differs from the default ring layout"
-    _check_ring_pool(c, pool0, ttnn.to_torch(c.ring), ws, ring_ref)
+    lay.check(c, pools0, _pools_to_host(pools_dev), ring_ref)
 
 
+@pytest.mark.parametrize("layout", ["misaligned", "two_pools"])
 @pytest.mark.parametrize("vb,opts", [(4, 250), (2, 0)])
-def test_ring_page_idx_value_blocks(device, vb, opts):
-    """The value-block split (each core writes its own column tiles of the state) with ring_page_idx."""
+def test_ring_page_idx_value_blocks(device, vb, opts, layout):
+    """The value-block split (each core reads and writes its own column tiles of the state) with ring_page_idx."""
     g, B, T = GEOS[0], 4, 4
     if B * g.Nv * vb > num_cores(device):
         pytest.skip("over the grid")
     c = Case(device, g, B, T, seed=91, par=1, R=round_up32(B * T), mode=MODES[2])
     out_ref, ring_ref, _, win_ref = c.snapshot(c.run(value_blocks=vb, kernel_opts=opts))
     c.reseed()
-    pool0, words, ws = _ring_pool(c, "random_pages", torch.Generator().manual_seed(5))
-    c.ring = ttnn.from_torch(pool0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    o = c.run(value_blocks=vb, kernel_opts=opts, ring_page_idx=_ring_idx_dev(device, ws))
+    gen = torch.Generator().manual_seed(5)
+    lay = RingLayout(c, layout, gen)
+    pools0, pools_dev = _use_layout(device, c, lay, gen)
+    o = c.run(
+        value_blocks=vb,
+        kernel_opts=opts,
+        ring_page_idx=_ring_idx_dev(device, lay.index_host(c)),
+        ring_pool2=pools_dev[1],
+    )
     assert torch.equal(ttnn.to_torch(o).reshape(-1, g.VD).float(), out_ref), "output differs"
     assert torch.equal(ttnn.to_torch([c.win_a, c.win_b][1 - c.par]).float(), win_ref), "window differs"
-    _check_ring_pool(c, pool0, ttnn.to_torch(c.ring), ws, ring_ref)
+    lay.check(c, pools0, _pools_to_host(pools_dev), ring_ref)
 
 
 def test_ring_page_idx_wrong_shape_rejected(device, expect_error):
+    """The index must be [>= B, T*Nv]; a [B, T] index is refused on the host."""
     g, B, T = GEOS[0], 2, 4
     c = Case(device, g, B, T, seed=1, R=round_up32(B * T))
     with expect_error(RuntimeError, "ring_page_idx must be"):
-        c.run(ring_page_idx=_ring_idx_dev(device, [[0] * (T - 1) for _ in range(B)]))
+        c.run(ring_page_idx=_ring_idx_dev(device, torch.zeros(B, T, dtype=torch.int32)))
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
 @pytest.mark.parametrize("B,T", [(8, 4)])
 def test_ring_page_idx_trace_follows_index(device, B, T):
-    """Capture one trace with ring_page_idx = page set A, replay; rewrite only the index tensor's contents to a
-    disjoint page set B, replay again. Each replay writes exactly the indexed pages, bit-identical to the default
-    ring layout (the op reads win[par] and the initial blocks, which neither replay changes)."""
+    """two_pools layout with two disjoint write sets and initial states in runs of their own. Capture one trace with
+    write set 0, replay; rewrite only the index tensor's contents to write set 1, replay. Each replay writes exactly
+    the indexed pages, bit-identical to the default ring layout (both replays read the same initial pages and
+    win[par])."""
     g = GEOS[0]
     c = Case(device, g, B, T, seed=17, par=0, R=round_up32(B * T), mode=MODES[2])
     out_ref, ring_ref, _, _ = c.snapshot(c.run())
     c.reseed()
-    pool0, _, ws_all = _ring_pool(c, "random_pages", torch.Generator().manual_seed(9), extra_slots=3 * B * T + 2)
-    # two disjoint write sets: ws_all covers B*T slots; draw the second set from the remaining spare pages
-    per = g.Nv * RING_KV
-    used = torch.zeros(pool0.shape[1], dtype=torch.bool)
-    used[: _state_tiles(c.ring0).shape[0]] = True
-    for row in ws_all:
-        for s in row:
-            used[s : s + per] = True
-    free_runs = [p for p in range(pool0.shape[1] - per + 1) if p % per == 0 and not used[p : p + per].any()]
-    assert len(free_runs) >= B * T, "pool too small for a second page set"
-    sel = torch.randperm(len(free_runs), generator=torch.Generator().manual_seed(4))[: B * T].tolist()
-    ws_sets = [ws_all, [[free_runs[sel[u * T + t]] for t in range(T)] for u in range(B)]]
-    c.ring = ttnn.from_torch(pool0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    idx = _ring_idx_dev(device, ws_sets[0])
+    gen = torch.Generator().manual_seed(9)
+    lay = RingLayout(c, "two_pools", gen, n_sets=2, init_separate=True)
+    pools0, pools_dev = _use_layout(device, c, lay, gen)
+    idx = _ring_idx_dev(device, lay.index_host(c, 0))
 
-    c.run(ring_page_idx=idx)  # compile outside the trace, then restore the pool
-    ttnn.copy_host_to_device_tensor(ttnn.from_torch(pool0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), c.ring)
+    c.run(ring_page_idx=idx, ring_pool2=pools_dev[1])  # compile outside the trace, then restore the pools
+    for t_dev, t_host in zip(pools_dev, pools0):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(t_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), t_dev)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    o = c.run(ring_page_idx=idx)
+    o = c.run(ring_page_idx=idx, ring_pool2=pools_dev[1])
     ttnn.end_trace_capture(device, tid, cq_id=0)
     try:
-        before = ttnn.to_torch(c.ring)
-        for k, ws in enumerate(ws_sets):
-            if k > 0:
-                ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(
-                        torch.tensor(ws, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-                    ),
-                    idx,
-                )
+        before = _pools_to_host(pools_dev)
+        for s in range(2):
+            if s > 0:
+                new_idx = ttnn.from_torch(lay.index_host(c, s), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.copy_host_to_device_tensor(new_idx, idx)
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            after = ttnn.to_torch(c.ring)
-            assert torch.equal(ttnn.to_torch(o).reshape(-1, g.VD).float(), out_ref), f"replay {k}: output differs"
-            _check_ring_pool(c, before, after, ws, ring_ref)
+            after = _pools_to_host(pools_dev)
+            assert torch.equal(ttnn.to_torch(o).reshape(-1, g.VD).float(), out_ref), f"replay {s}: output differs"
+            lay.check(c, before, after, ring_ref, s)
             before = after
     finally:
         ttnn.release_trace(device, tid)
@@ -1096,24 +1170,26 @@ def test_ring_page_idx_trace_follows_index(device, B, T):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
 @pytest.mark.parametrize("B,T", [(8, 4), (4, 8)])
 def test_ring_page_idx_traced_timing(device, B, T):
-    """Traced time per call, default ring vs ring_page_idx (random pages), model mode (fast_mode, fp32_state,
+    """Traced time per call, default ring vs ring_page_idx (two_pools layout), model mode (fast_mode, fp32_state,
     value_blocks 1, kernel_opts 0). One trace holds N back-to-back calls; the host times REPS replays."""
     import time
 
     N, REPS = 64, 15
     g = GEOS[0]
     c = Case(device, g, B, T, seed=23, par=0, R=round_up32(B * T), mode=MODES[2])
-    ring_default = c.ring
-    pool0, _, ws = _ring_pool(c, "random_pages", torch.Generator().manual_seed(2))
-    ring_pool = ttnn.from_torch(pool0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    idx = _ring_idx_dev(device, ws)
+    ring_default, ctrl_default = c.ring, c.ctrl
+    gen = torch.Generator().manual_seed(2)
+    lay = RingLayout(c, "two_pools", gen)
+    _, pools_dev = _use_layout(device, c, lay, gen)
+    ctrl_pool = c.ctrl
+    idx = _ring_idx_dev(device, lay.index_host(c))
 
-    def per_call_us(ring, ridx):
-        c.ring = ring
-        c.run(ring_page_idx=ridx)
+    def per_call_us(ring, ctrl, kw):
+        c.ring, c.ctrl = ring, ctrl
+        c.run(**kw)
         tid = ttnn.begin_trace_capture(device, cq_id=0)
         for _ in range(N):
-            ttnn.deallocate(c.run(ring_page_idx=ridx))
+            ttnn.deallocate(c.run(**kw))
         ttnn.end_trace_capture(device, tid, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         times = []
@@ -1126,7 +1202,7 @@ def test_ring_page_idx_traced_timing(device, B, T):
 
     res = {"ring": [], "paged": []}
     for _ in range(2):
-        res["ring"].append(per_call_us(ring_default, None))
-        res["paged"].append(per_call_us(ring_pool, idx))
+        res["ring"].append(per_call_us(ring_default, ctrl_default, {}))
+        res["paged"].append(per_call_us(pools_dev[0], ctrl_pool, {"ring_page_idx": idx, "ring_pool2": pools_dev[1]}))
     r, p = min(res["ring"]), min(res["paged"])
-    print(f"TRACED spec B={B} T={T}: ring {r:.2f} us, ring_page_idx {p:.2f} us, ratio {p / r:.4f}")
+    print(f"TRACED spec B={B} T={T}: ring {r:.2f} us, ring_page_idx two pools {p:.2f} us, ratio {p / r:.4f}")

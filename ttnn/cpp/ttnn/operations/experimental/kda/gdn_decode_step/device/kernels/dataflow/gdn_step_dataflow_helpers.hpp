@@ -133,21 +133,63 @@ inline void write_row0_at(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, ui
     noc.async_write(dfb, acc, seg, {.offset_bytes = base + entry / 4}, {.page_id = page, .offset_bytes = entry / 4});
 }
 
-// state_page_idx ([2, >= B] ROW_MAJOR, one page per row): issue the reads of both pages into `dfb` (2 entries,
-// reserved and never pushed). The caller's next read barrier completes them.
+// state_page_idx ([2*Nv, >= B] ROW_MAJOR, one page per row): issue the reads of value head h's two pages, row h (state
+// pages) and row Nv + h (conv_hist pages), into `dfb` (2 entries, reserved and never pushed). The caller's next read
+// barrier completes them.
 template <typename Accessor>
-inline void read_state_page_idx(const Accessor& acc, DataflowBuffer& dfb, Noc& noc) {
+inline void read_state_page_idx(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t h, uint32_t Nv) {
     dfb.reserve_back(2);
     const uint32_t entry = dfb.get_entry_size();
-    noc.async_read(acc, dfb, entry, {.page_id = 0}, {.offset_bytes = 0});
-    noc.async_read(acc, dfb, entry, {.page_id = 1}, {.offset_bytes = entry});
+    noc.async_read(acc, dfb, entry, {.page_id = h}, {.offset_bytes = 0});
+    noc.async_read(acc, dfb, entry, {.page_id = Nv + h}, {.offset_bytes = entry});
 }
 
-// First page of batch row b: which = 0 -> state (fp32 tiles), which = 1 -> conv_hist (bf16 tiles).
+// Head h's first page for batch row b: which = 0 -> state (fp32 tiles), which = 1 -> conv_hist (bf16 tiles).
 inline uint32_t state_page_idx_at(DataflowBuffer& dfb, uint32_t which, uint32_t b) {
     auto lock = dfb.scoped_write_lock(2);
     auto p = lock.template get_ptr<volatile uint32_t>();
     return p[which * (dfb.get_entry_size() / 4) + b];
+}
+
+// An accessor of the same type as the interleaved accessor `a` (same memory and page size, validated on the host) at
+// the base address of another binding, so a second pool reuses the first pool's read / write code instead of
+// instantiating it again (kernel size is paid on every launch). The interleaved accessor ignores the spec object; the
+// other binding is noted as read and written for op-to-op R/W inference.
+template <typename Acc, typename Token>
+inline Acc same_layout_accessor(const Acc& a, Token token) {
+    const auto other = TensorAccessor(token);
+    tt_buf_rw::note_read_write<std::decay_t<decltype(other)>::DSpec::binding_id>();
+    return Acc(typename Acc::DSpec{}, other.get_bank_base_address(), a.get_aligned_page_size());
+}
+
+// Two-pool page space: pages [0, pages_a) are pool a's, pages from pages_a on are pool b's (page - pages_a). A run of
+// pages never straddles the two (the caller's contract). With two_pools false only pool a exists and the code is the
+// plain single-pool read.
+template <bool two_pools, typename Acc>
+inline void read_tiles_at_2(
+    const Acc& a,
+    const Acc& b,
+    uint32_t pages_a,
+    DataflowBuffer& dfb,
+    Noc& noc,
+    uint32_t page,
+    uint32_t count,
+    uint32_t dst_tile) {
+    if constexpr (two_pools) {
+        const bool in_b = page >= pages_a;
+        read_tiles_at(in_b ? b : a, dfb, noc, in_b ? page - pages_a : page, count, dst_tile);
+    } else {
+        read_tiles_at(a, dfb, noc, page, count, dst_tile);
+    }
+}
+
+template <bool two_pools, typename Acc>
+inline void read_tiles_2(
+    const Acc& a, const Acc& b, uint32_t pages_a, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t count) {
+    dfb.reserve_back(count);
+    read_tiles_at_2<two_pools>(a, b, pages_a, dfb, noc, page, count, 0);
+    noc.async_read_barrier();
+    dfb.push_back(count);
 }
 
 inline void zero_reserved(DataflowBuffer& dfb, Noc& noc, uint32_t tiles) {
@@ -303,6 +345,27 @@ inline void build_user_selectors(DataflowBuffer& sel, DataflowBuffer& mask, Noc&
         p16[tile_elem_index(b, 0)] = 0x3F80;
     }
     mask.push_back(1);
+}
+
+// Pooled conv history (state_page_idx) holds channel chunk c in both rows 2c and 2c + 1 (as the taps do), so a request
+// reads correctly from a batch row of either parity. pack_head_tile_user fills only rows 2c + (b & 1) (the NoC copy
+// keeps the source row's 64 B alignment class); this copies them to the other parity with RISC-V loads and stores.
+// `tile` counts entries from the DFB's write pointer; the reads into it must have completed.
+inline void packed_rows_mirror_parity(DataflowBuffer& dfb, uint32_t tile, uint32_t n_chunks, uint32_t b) {
+    auto lock = dfb.scoped_write_lock(tile + 1);
+    auto p = lock.template get_ptr<volatile uint32_t>();
+    const uint32_t base = tile * (dfb.get_entry_size() / 4);
+    const uint32_t par = b & 1u;
+    for (uint32_t c = 0; c < n_chunks; ++c) {
+        for (uint32_t half = 0; half < 2; ++half) {
+            // one face row = 16 bf16 = 8 words; rows 2c and 2c + 1 sit in the same face
+            const uint32_t src = base + tile_elem_index(2 * c + par, 16 * half) / 2;
+            const uint32_t dst = base + tile_elem_index(2 * c + 1 - par, 16 * half) / 2;
+            for (uint32_t w = 0; w < 8; ++w) {
+                p[dst + w] = p[src + w];
+            }
+        }
+    }
 }
 
 // Write rows [r0, r0 + nr) of `count` consecutive L1 tiles to the same rows of the destination tiles. Rows are written

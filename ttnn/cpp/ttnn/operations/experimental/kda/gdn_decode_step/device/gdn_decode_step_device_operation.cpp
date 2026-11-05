@@ -95,8 +95,8 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         const auto& ts = in.conv_taps->logical_shape();
         if (paged) {
             TT_FATAL(
-                in.conv_hist->buffer()->num_pages() >= Nv * 4,
-                "{}: conv_hist pool must hold at least Nv * 4 tiles (got {})",
+                in.conv_hist->buffer()->num_pages() >= 4,
+                "{}: conv_hist pool must hold at least 4 tiles (got {})",
                 kOp,
                 in.conv_hist->buffer()->num_pages());
         } else {
@@ -152,17 +152,46 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             idx.dtype());
         const auto& is = idx.logical_shape();
         TT_FATAL(
-            is.rank() == 2 && is[0] == 2 && is[1] >= rows,
-            "{}: state_page_idx must be [2, >= B] (got {}, B = {})",
+            is.rank() == 2 && is[0] == 2 * Nv && is[1] >= rows,
+            "{}: state_page_idx must be [2*Nv, >= B] (got {}, Nv = {}, B = {})",
             kOp,
             is,
+            Nv,
             rows);
+        const uint32_t kv_tiles = (Dk / tt::constants::TILE_HEIGHT) * (Dv / tt::constants::TILE_WIDTH);
         TT_FATAL(
-            in.state.buffer()->num_pages() >= Nv * (Dk / tt::constants::TILE_HEIGHT) * (Dv / tt::constants::TILE_WIDTH),
-            "{}: state pool must hold at least Nv * Dk * Dv / 1024 tiles (got {})",
+            in.state.buffer()->num_pages() >= kv_tiles,
+            "{}: state pool must hold at least Dk * Dv / 1024 tiles (got {})",
             kOp,
             in.state.buffer()->num_pages());
+        if (in.state_pool2.has_value()) {
+            check_tiled(*in.state_pool2, "state_pool2", {DataType::FLOAT32});
+            check_same_device(in.qkv, *in.state_pool2, kOp, "state_pool2");
+            // the kernels address both pools with one accessor type
+            TT_FATAL(
+                in.state_pool2->buffer()->buffer_type() == in.state.buffer()->buffer_type(),
+                "{}: state_pool2 must be in the same memory (DRAM / L1) as state",
+                kOp);
+            TT_FATAL(
+                in.state_pool2->buffer()->num_pages() >= kv_tiles,
+                "{}: state_pool2 must hold at least Dk * Dv / 1024 tiles",
+                kOp);
+        }
+        if (in.conv_hist_pool2.has_value()) {
+            check_tiled(*in.conv_hist_pool2, "conv_hist_pool2", {DataType::BFLOAT16});
+            check_same_device(in.qkv, *in.conv_hist_pool2, kOp, "conv_hist_pool2");
+            TT_FATAL(
+                in.conv_hist_pool2->buffer()->buffer_type() == in.conv_hist->buffer()->buffer_type(),
+                "{}: conv_hist_pool2 must be in the same memory (DRAM / L1) as conv_hist",
+                kOp);
+            TT_FATAL(
+                in.conv_hist_pool2->buffer()->num_pages() >= 4, "{}: conv_hist_pool2 must hold at least 4 tiles", kOp);
+        }
     } else {
+        TT_FATAL(
+            !in.state_pool2.has_value() && !in.conv_hist_pool2.has_value(),
+            "{}: state_pool2 / conv_hist_pool2 need state_page_idx",
+            kOp);
         TT_FATAL(
             ss.rank() == 4 && ss[0] >= rows && (a.fuse_conv || ss[0] == 1) && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
             "{}: state must be [Bmax >= B, Nv, Dk, Dv] (got {}, B = {})",
@@ -206,7 +235,9 @@ Tensor gdn_decode_step(
     uint32_t qkvz_dim,
     bool fast_mode,
     bool fp32_state,
-    const std::optional<Tensor>& state_page_idx) {
+    const std::optional<Tensor>& state_page_idx,
+    const std::optional<Tensor>& state_pool2,
+    const std::optional<Tensor>& conv_hist_pool2) {
     TT_FATAL(!fast_mode || conv_hist.has_value(), "{}: fast_mode needs the fused-conv mode (conv_hist)", kOp);
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
@@ -234,7 +265,9 @@ Tensor gdn_decode_step(
             .weight = weight,
             .conv_hist = conv_hist,
             .conv_taps = conv_taps,
-            .state_page_idx = state_page_idx});
+            .state_page_idx = state_page_idx,
+            .state_pool2 = state_pool2,
+            .conv_hist_pool2 = conv_hist_pool2});
 }
 
 }  // namespace ttnn::experimental::prim

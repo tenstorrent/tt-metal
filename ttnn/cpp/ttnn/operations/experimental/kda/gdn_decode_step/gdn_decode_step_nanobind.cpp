@@ -41,15 +41,24 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
                 differs in the last bits.
             fp32_state (bool): default False. fp32_state: keep the recurrent-state decay/add in exact fp32 on the SFPU (fast_mode only); avoids per-token state truncation.
-            state_page_idx (ttnn.Tensor, optional): fused-conv mode only. ``[2, >= B]`` ROW_MAJOR INT32 or UINT32 device
-                tensor that makes ``state`` and ``conv_hist`` page pools (for example views of vLLM-owned cache blocks).
-                Column ``b`` holds the first page of batch row ``b``: row 0 indexes the FLOAT32 tiles of ``state``
-                (row ``b``, value head ``h`` uses pages ``[idx[0][b] + h*KV, idx[0][b] + (h+1)*KV)``, KV = Dk*Dv/1024,
-                tile order as in ``[Nv, Dk, Dv]``), row 1 indexes the BFLOAT16 tiles of ``conv_hist`` (pages
-                ``idx[1][b] + 4*h + slot``). ``state`` and ``conv_hist`` may then have any tiled shape. The rows' page
+            state_page_idx (ttnn.Tensor, optional): fused-conv mode only. ``[2*Nv, >= B]`` ROW_MAJOR INT32 or UINT32
+                device tensor that makes ``state`` and ``conv_hist`` page pools (for example views of vLLM-owned cache
+                blocks). Column ``b``, row ``h`` is the first FLOAT32 page of value head ``h`` of batch row ``b``
+                (pages ``[idx[h][b], idx[h][b] + KV)``, KV = Dk*Dv/1024, tile order as in ``[Dk, Dv]``); row ``Nv + h``
+                is the first BFLOAT16 page of its packed history (pages ``idx[Nv + h][b] + slot``). Each head may sit
+                anywhere, at any page alignment. ``state`` and ``conv_hist`` may then have any tiled shape. In this mode
+                the packed history holds channel chunk c in both tile rows ``2c`` and ``2c + 1`` (as ``conv_taps``
+                does; without the index only row ``2c + (b & 1)``), and the op keeps both when it shifts in the new
+                token, so a request may sit on batch rows of either parity from step to step. The rows' page
                 ranges must not overlap. The values are read on device on every call, so a captured trace follows
                 new pages when only the contents of ``state_page_idx`` change. Default None: row ``b`` uses rows ``b``
                 of ``state`` ``[Bmax, Nv, Dk, Dv]`` and ``conv_hist`` ``[Bmax, Nv, 4, 32, 32]``.
+            state_pool2 (ttnn.Tensor, optional): with ``state_page_idx`` only. A second FLOAT32 tiled state pool: a
+                state index value ``p >= P`` (P = page count of ``state``) addresses page ``p - P`` of ``state_pool2``,
+                so the heads of one row can be split over two buffers (for example the K and V cache of a layer). A
+                head's KV pages must lie in one pool.
+            conv_hist_pool2 (ttnn.Tensor, optional): the same for the history: a BFLOAT16 tiled pool addressed by
+                history index values past the page count of ``conv_hist``.
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -75,7 +84,9 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("qkvz_dim") = 0,
         nb::arg("fast_mode") = false,
         nb::arg("fp32_state") = false,
-        nb::arg("state_page_idx") = nb::none());
+        nb::arg("state_page_idx") = nb::none(),
+        nb::arg("state_pool2") = nb::none(),
+        nb::arg("conv_hist_pool2") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail
