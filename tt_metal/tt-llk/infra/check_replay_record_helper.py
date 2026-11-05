@@ -34,7 +34,10 @@ REPO = Path(__file__).resolve().parents[3]
 SOURCE_SUFFIXES = (".h", ".hpp", ".cpp", ".cc", ".inl")
 
 # Skipped: Quasar, vendored code, build output and virtualenvs.
-EXCLUDED = re.compile(r"(^|/)([^/]*quasar[^/]*|third_party|\.venv[^/]*|build[^/]*|\.git|\.cpmcache)(/|$)", re.IGNORECASE)
+EXCLUDED = re.compile(
+    r"(^|/)([^/]*quasar[^/]*|third_party|\.venv[^/]*|build[^/]*|\.git|\.cpmcache)(/|$)",
+    re.IGNORECASE,
+)
 
 # The helpers themselves: the one lltt::record they each wrap is the point of the rule.
 HELPER_FILES = {
@@ -44,7 +47,9 @@ HELPER_FILES = {
 HELPER_NAME = "load_replay_buf"
 
 REPLAY_MACROS = ("TTI_REPLAY", "TT_REPLAY", "TT_OP_REPLAY", "TT_REPLAY_VALID")
-TOKEN = re.compile(r"\b(lltt\s*::\s*record|__builtin_rvtt_ttreplay|" + "|".join(REPLAY_MACROS) + r")\b")
+TOKEN = re.compile(
+    r"\b(lltt\s*::\s*record|__builtin_rvtt_ttreplay|" + "|".join(REPLAY_MACROS) + r")\b"
+)
 PLAYBACK_MODE = re.compile(r"^\(?\s*(0|0u|0U|false)\s*\)?$")
 
 
@@ -69,7 +74,11 @@ def strip_comments_and_strings(text: str) -> str:
             while j < n and text[j] != c:
                 j += 2 if text[j] == "\\" else 1
             j = min(j + 1, n)
-            out.append(c + re.sub(r"[^\n]", " ", text[i + 1 : j - 1]) + (c if j - i > 1 else ""))
+            out.append(
+                c
+                + re.sub(r"[^\n]", " ", text[i + 1 : j - 1])
+                + (c if j - i > 1 else "")
+            )
             i = j
         else:
             out.append(c)
@@ -144,7 +153,13 @@ def check_text(rel: str, raw: str):
             continue
         mode = args[-1] if name == "__builtin_rvtt_ttreplay" else args[3]
         if not PLAYBACK_MODE.match(mode):
-            findings.append((rel, line, f"{name} with load_mode {mode!r}: a record, or not provably a playback"))
+            findings.append(
+                (
+                    rel,
+                    line,
+                    f"{name} with load_mode {mode!r}: a record, or not provably a playback",
+                )
+            )
     return findings
 
 
@@ -152,7 +167,9 @@ def candidate_files(paths):
     if paths:
         files = [Path(p) for p in paths]
     else:
-        out = subprocess.run(["git", "ls-files"], cwd=REPO, check=True, capture_output=True, text=True).stdout
+        out = subprocess.run(
+            ["git", "ls-files"], cwd=REPO, check=True, capture_output=True, text=True
+        ).stdout
         files = [REPO / p for p in out.splitlines()]
     for f in files:
         f = f if f.is_absolute() else (REPO / f)
@@ -167,10 +184,16 @@ def candidate_files(paths):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("files", nargs="*", help="files to check (default: every tracked source file)")
+    parser.add_argument(
+        "files", nargs="*", help="files to check (default: every tracked source file)"
+    )
     args = parser.parse_args(argv)
     # A change to the checker rescans every file.
-    files = [] if any(Path(p).name == Path(__file__).name for p in args.files) else args.files
+    files = (
+        []
+        if any(Path(p).name == Path(__file__).name for p in args.files)
+        else args.files
+    )
     findings = []
     for rel, f in candidate_files(files):
         raw = f.read_text(errors="replace")
@@ -180,7 +203,10 @@ def main(argv=None) -> int:
     for rel, line, msg in findings:
         print(f"{rel}:{line}: {msg}; record through ckernel::load_replay_buf")
     if findings:
-        print(f"\n{len(findings)} replay record(s) outside load_replay_buf.", file=sys.stderr)
+        print(
+            f"\n{len(findings)} replay record(s) outside load_replay_buf.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

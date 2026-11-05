@@ -29,10 +29,10 @@ import pytest
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
-from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
 from helpers.replay_record_scan import _executable_words
 from helpers.replay_record_scan import check_elf_records as _check_elf_records
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 
 # Vendored tt-llk: parents[4] is tt_metal. A standalone checkout has no hw/inc,
