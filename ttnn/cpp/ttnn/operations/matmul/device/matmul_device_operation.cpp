@@ -1977,15 +1977,39 @@ void validate_matmul_mcast2d_config(
                 config_name,
                 program_config.per_core_N,
                 (input_tensor_b.shard_spec().value().shape[1] / in1_tile.get_width()));
-            // The in1 sender multicasts the resident shard from a single address and its CB view
-            // holds at most two K blocks, so more than one K block hangs or multicasts stale data.
+            // The in1 CB view of the shard holds at most two K blocks, and the sender multicasts the resident shard
+            // from a single address. With more than one row of cores, every K block after the first is stale data on
+            // the receivers. On a single row there is no multicast, so two K blocks still work; three or more hang.
             const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
+            const auto M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const bool single_row_of_cores = div_up(M, program_config.per_core_M) == 1;
+            const uint32_t max_k_blocks = single_row_of_cores ? 2 : 1;
+            const uint32_t num_k_blocks = div_up(K, program_config.in0_block_w);
             TT_FATAL(
-                program_config.in0_block_w == K,
-                "{}: non-DRAM sharded input B requires a single K block: in0_block_w ({}) must equal K ({} tiles)",
+                num_k_blocks <= max_k_blocks,
+                "{}: non-DRAM sharded input B supports at most {} K block(s) here, got {}: in0_block_w ({}), K ({} "
+                "tiles). Use in0_block_w = K{}",
                 config_name,
+                max_k_blocks,
+                num_k_blocks,
                 program_config.in0_block_w,
-                K);
+                K,
+                single_row_of_cores ? " or K / 2." : ".");
+            // The sender pushes the shard once, but compute pops one in1 block per batch, h-block, w-block and
+            // K-block, so any outer loop beyond a single iteration pops data that was never pushed and hangs.
+            const uint32_t batch = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+            const uint32_t num_h_blocks = program_config.per_core_M / program_config.out_block_h;
+            const uint32_t num_w_blocks = program_config.per_core_N / program_config.out_block_w;
+            TT_FATAL(
+                batch * num_h_blocks * num_w_blocks == 1,
+                "{}: non-DRAM sharded input B requires a single output block per core: batch ({}) * per_core_M / "
+                "out_block_h ({}) * per_core_N / out_block_w ({}) must be 1. Use fuse_batch=true with batch 1 and "
+                "out_block_h = per_core_M, out_block_w = per_core_N.",
+                config_name,
+                batch,
+                num_h_blocks,
+                num_w_blocks);
             TT_FATAL(
                 !attributes.transpose_b,
                 "{}: transpose_b is not supported with non-DRAM sharded input B; the shards are consumed in their "
@@ -2514,6 +2538,18 @@ void validate_matmul_mcast1d_config(
                 "{}: transpose_b is not supported with L1-sharded input B; the shards are consumed in their stored "
                 "layout",
                 config_name);
+            if (program_config.mcast_in0) {
+                // The in1 sender pushes the shard once, but compute pops one in1 block per batch, h-block, w-block
+                // and K-block, so more than one output block per core hangs.
+                validate_mcast_in0_one_output_block_per_worker(program_config, "L1-sharded input B");
+                TT_FATAL(
+                    program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
+                    "{}: mcast_in0 L1-sharded input B requires one effective activation batch, but fuse_batch={} and "
+                    "activation batch size={}",
+                    config_name,
+                    program_config.fuse_batch,
+                    get_batch_size(a_shape_padded));
+            }
             if (optional_bias.has_value()) {
                 TT_FATAL(
                     input_tensor_b.shard_spec().value().shape[1] == optional_bias.value().shard_spec().value().shape[1],

@@ -5486,30 +5486,32 @@ def test_matmul_accepts_valid_biases(device, config_kind, m, bias_h):
     assert_with_pcc(a.float() @ b.float() + bias.float(), out.float(), pcc=0.99)
 
 
-# L1 width-sharded input B: the multicast configs consume the shard in its stored layout, and the 2D config
-# supports only one K block.
+# L1 width-sharded input B: the multicast configs consume the shard in its stored layout. The 2D config supports one
+# K block (two on a single row of cores) and a single output block per core.
 _L1_SHARDED_B_N = 128
 
 
-def _l1_sharded_b_mcast2d_config(grid_y, in0_block_w):
+def _l1_sharded_b_mcast2d_config(grid_y, in0_block_w, per_core_M=1, out_block_h=None):
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(4, grid_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=1,
+        out_block_h=out_block_h,
+        per_core_M=per_core_M,
         per_core_N=1,
         transpose_mcast=False,
         fused_activation=None,
     )
 
 
-def _l1_sharded_b_mcast1d_config(in0_block_w, per_core_M):
+def _l1_sharded_b_mcast1d_config(in0_block_w, per_core_M, out_block_h=None):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
+        out_block_h=out_block_h,
         per_core_M=per_core_M,
         per_core_N=1,
         fuse_batch=True,
@@ -5555,14 +5557,41 @@ def _run_l1_sharded_b_matmul(device, m, k, b_sharded, program_config, transpose_
 
 
 @pytest.mark.parametrize(
+    "m, k, program_config, transpose_b, message",
+    [
+        (64, 128, _l1_sharded_b_mcast2d_config(2, 2), False, "K block"),  # 2 K blocks, 2 rows: wrong values
+        (64, 96, _l1_sharded_b_mcast2d_config(2, 1), False, "K block"),  # 3 K blocks, 2 rows: hung
+        (32, 128, _l1_sharded_b_mcast2d_config(1, 1), False, "K block"),  # 4 K blocks, one row: hung
+        (64, 128, _l1_sharded_b_mcast2d_config(1, 4, per_core_M=2, out_block_h=1), False, "single output block"),
+        (64, 128, _l1_sharded_b_mcast1d_config(4, 2, out_block_h=1), False, "one output block per worker"),
+        (32, 128, _l1_sharded_b_mcast2d_config(1, 4), True, "transpose_b is not supported"),
+        (32, 128, _l1_sharded_b_mcast1d_config(4, 1), True, "transpose_b is not supported"),
+    ],
+    ids=[
+        "2d_two_k_blocks",
+        "2d_three_k_blocks",
+        "2d_four_k_blocks_one_row",
+        "2d_multiple_h_blocks",
+        "1d_multiple_h_blocks",
+        "2d_transpose_b",
+        "1d_transpose_b",
+    ],
+)
+def test_matmul_l1_sharded_b_unsupported_rejected(device, m, k, program_config, transpose_b, message, expect_error):
+    with expect_error(RuntimeError, message):
+        _run_l1_sharded_b_matmul(device, m, k, b_sharded=True, program_config=program_config, transpose_b=transpose_b)
+
+
+@pytest.mark.parametrize(
     "m, k, b_sharded, program_config, transpose_b",
     [
         (64, 128, True, _l1_sharded_b_mcast2d_config(2, 4), False),  # 2D, L1-sharded b, 1 K block
+        (32, 128, True, _l1_sharded_b_mcast2d_config(1, 2), False),  # 2D, one row, L1-sharded b, 2 K blocks
         (64, 128, False, _l1_sharded_b_mcast2d_config(2, 2), False),  # 2D, DRAM b, 2 K blocks
         (64, 128, True, _l1_sharded_b_mcast1d_config(2, 2), False),  # 1D, L1-sharded b, 2 K blocks
         (32, 128, False, _l1_sharded_b_mcast2d_config(1, 4), True),  # 2D, DRAM b, transpose_b
     ],
-    ids=["2d_one_k_block", "2d_b_dram", "1d_two_k_blocks", "2d_b_dram_transpose_b"],
+    ids=["2d_one_k_block", "2d_one_row_two_k_blocks", "2d_b_dram", "1d_two_k_blocks", "2d_b_dram_transpose_b"],
 )
 def test_matmul_l1_sharded_b_supported(device, m, k, b_sharded, program_config, transpose_b):
     _run_l1_sharded_b_matmul(device, m, k, b_sharded, program_config, transpose_b)
