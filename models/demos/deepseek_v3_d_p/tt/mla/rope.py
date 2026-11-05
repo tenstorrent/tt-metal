@@ -267,7 +267,7 @@ def identity_rope_tensors_indexed(
 ) -> dict[str, ttnn.Tensor]:
     """cos = 1 / sin = 0 tables for ``rotary_embedding_indexed`` covering ONE chunk slab, for NoPE layers.
 
-    With them the op leaves its input unchanged (x * 1 + rot(x) * 0, exact for normal values at HiFi4) while still
+    With them the op leaves its input unchanged (x * 1 + rot(x) * 0, exact for normal values at HiFi2 and up) while still
     doing its fused prefix concat and row-major write. Every position has the same rotation, so the table only needs
     one SP slab: call the op with the scalar kv_actual_global = 0 and no metadata.
     """

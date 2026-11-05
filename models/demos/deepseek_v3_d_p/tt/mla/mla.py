@@ -498,14 +498,6 @@ class ttMLA:
             packer_l1_acc=True,
         )
 
-        # The NoPE identity rope (x * 1 + rot(x) * 0) is exact only at HiFi4; pinned rather than inherited.
-        self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
         self.hifi4_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1469,7 +1461,7 @@ class ttMLA:
                 rope_tensors=self._identity_rope_tensors,
                 kv_actual_isl=0,
                 metadata=None,
-                compute_kernel_config=self.hifi4_compute_kernel_config,
+                compute_kernel_config=self.default_compute_kernel_config,  # HiFi2: identity is exact (LoFi is not)
             )
         else:
             rope_kwargs = dict(rope_tensors=rope_tensors, kv_actual_isl=kv_actual_isl, metadata=metadata)

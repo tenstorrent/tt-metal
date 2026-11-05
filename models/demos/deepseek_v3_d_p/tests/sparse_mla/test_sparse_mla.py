@@ -1678,7 +1678,14 @@ def test_identity_rope_is_a_fused_concat(mesh_device, seq_len, device_params, va
         return ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
 
     tables = identity_rope_tensors_indexed(mesh_device, sp_axis=sp_axis, chunk_size_global=chunk, rope_dim=rope_dim)
-    hifi4 = ttnn.init_device_compute_kernel_config(mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4)
+    # ttMLA's default compute config (HiFi2, bf16 dest): the lowest fidelity at which the identity is exact.
+    hifi2 = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
     def run(x, pre):
         return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -1688,7 +1695,7 @@ def test_identity_rope_is_a_fused_concat(mesh_device, seq_len, device_params, va
             tables["trans_matrix"],
             kv_actual_global=0,
             cluster_axis=sp_axis,
-            compute_kernel_config=hifi4,
+            compute_kernel_config=hifi2,
             seq_subshard_axis=tp_axis,
             concat_prefix=pre,
             row_major_output=True,
