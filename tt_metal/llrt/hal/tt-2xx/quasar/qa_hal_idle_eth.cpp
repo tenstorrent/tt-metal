@@ -43,6 +43,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     static_assert(sizeof(CceNocRoutes) <= MEM_IERISC_NOC_ROUTES_SIZE);
+    static_assert(MEM_IERISC_PACKET_HEADER_POOL_SIZE == MEM_PACKET_HEADER_POOL_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
     // The addresses the idle-Ethernet firmware and kernels are linked at; every router region sits above them.
     static_assert(MEM_IERISC_SPA_ROUTES_BASE == 0x27c80 && MEM_IERISC_SPA_ROUTES_SIZE == 0x80);
