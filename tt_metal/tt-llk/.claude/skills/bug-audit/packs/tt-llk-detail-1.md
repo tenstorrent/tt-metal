@@ -831,11 +831,11 @@ The same fact is stored in several places: a hardware address in a linker-script
 - grep -nE '^constexpr [^i].*(&|\*)' and '^(const|constexpr) .*volatile' at namespace scope in tt_llk_*/common/inc/*.h: namespace-scope refs/objects without inline
 - grep -nE '^(static )?(void|std::uint32_t|uint32_t|bool|int) [a-z_0-9]+\(' tt_llk_*/common/inc tt_llk_*/llk_lib/*.h, then drop the lines preceded by a template<...> line: non-inline header functions
 - grep -rn 'WAYPOINT\|DPRINT\|ASSERT(' tt_metal/tt-llk/tt_llk_*/: debug macros from the metal layer used in standalone LLK headers
-- diff the sets of '#define [A-Z0-9_]+' between tt_metal/tt-llk/tests/hw_specific/<arch>/inc/*.h and tt_metal/hw/inc/internal/**/<arch>/*.h copies of the same header
+- grep -rn each newly used '#define [A-Z0-9_]+' in tt_metal/hw/inc/internal/tt-1xx/{wormhole,blackhole}/ (including wormhole/wormhole_b0_defines/) and, for Quasar, tt_metal/hw/inc/internal/tt-2xx/quasar/ plus tt_metal/tt-llk/tt_llk_quasar/common/inc/ (Quasar's cfg_defines.h), the headers both the test harness and metal compile against
 - setup_clangd.sh and tests/setup_*env.sh: '-I' or path entries containing an <arch> variable, checking that each expands to an existing directory
 - tests/sfpi-info.sh and toolchain version scripts: per-arch/platform checksum variables, checking that archive type (txz vs tar) and platform coverage (x86_64, aarch64) match what is downloaded
 
-**Where it clusters:** tt_metal/tt-llk/tests/helpers/ld (harness linker scripts per arch, including .debug variants); tt_metal/hw/toolchain/*.ld vs tt_metal/hw/inc/internal/**/<arch> memory-map headers; tt_metal/tt-llk/tt_llk_*/common/inc/ckernel*.h (namespace-scope constants and refs, helper functions); tt_metal/tt-llk/tt_llk_*/common/inc/sfpu (header-only helpers included by many kernels); tt_metal/tt-llk/tests/hw_specific/<arch>/inc (test-harness header copies vs vendored hw headers); tt_metal/tt-llk/tt_llk_quasar (newest arch, least-exercised build paths); tooling scripts: setup_clangd.sh, tests/setup_*env.sh, tests/sfpi-*.sh
+**Where it clusters:** tt_metal/tt-llk/tests/helpers/ld (harness linker scripts per arch, including .debug variants); tt_metal/hw/toolchain/*.ld vs tt_metal/hw/inc/internal/**/<arch> memory-map headers; tt_metal/tt-llk/tt_llk_*/common/inc/ckernel*.h (namespace-scope constants and refs, helper functions); tt_metal/tt-llk/tt_llk_*/common/inc/sfpu (header-only helpers included by many kernels); tt_metal/hw/inc/internal/tt-1xx/<arch>, tt-2xx/quasar and tt_metal/tt-llk/tt_llk_quasar/common/inc (per-arch hw headers the test harness compiles against; Quasar's cfg_defines.h is in the last); tt_metal/tt-llk/tt_llk_quasar (newest arch, least-exercised build paths); tooling scripts: setup_clangd.sh, tests/setup_*env.sh, tests/sfpi-*.sh
 
 **How fixes for this class went incomplete**
 
@@ -1095,7 +1095,7 @@ Two mechanisms recur. (1) Integer-granularity rounding: an instruction, loop or 
 - grep -nE '(convert<[^>]+>|int32_to_float|float_to_(fp16[ab]|u?int(8|16)))\(' over SFPU kernels and keep calls with no RoundMode argument; also `TTI_SFP_STOCH_RND\(\s*1`, `RoundMode::NearestStochastic` outside stochastic_round ops
 - `& 0x7FFE` or other tie-to-even bit tricks after a narrow integer conversion, in rounding ops
 
-**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); tt-llk SFPU rounding ops (ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
+**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); SFPU rounding ops (llk_sfpu/ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
 
 **How fixes for this class went incomplete**
 
@@ -1213,7 +1213,6 @@ Code that is right on one arch or boot path is silently wrong on another, becaus
 **Candidate sites** (unverified leads)
 
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h:685: load_replay_buf brackets the record window with disable/enable_gathering only under the ENABLE_GATHERING build macro, and many BH replay records bypass this helper entirely
-- tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_where.h:34: direct lltt::record(0, 6) outside load_replay_buf, so it is unprotected when gathering is enabled
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bcast.h:202: direct lltt::record outside the gathering bracket
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h:283: direct record in transpose_dest, the same kernel family already shown to wedge under gathering
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_math_reduce_custom.h:149: three direct lltt::record calls (also at 178 and 217) outside load_replay_buf; the same pattern appears in llk_math_reduce_runtime_custom.h:171
