@@ -119,6 +119,7 @@ class Qwen38Checkpoint:
     ):
         self.root = Path(root).resolve()
         self._file_guard = file_guard
+        self._admitted: dict[str, Path] = {}
         config_path = self.file("config.json")
         stable_config_path = self._guard(config_path, "before-config-read")
         try:
@@ -147,11 +148,13 @@ class Qwen38Checkpoint:
         if len(self.shards) != EXPECTED_SHARDS:
             raise ValueError(f"weight_map must contain exactly {EXPECTED_SHARDS} shards")
 
-    @lru_cache(maxsize=None)
     def file(self, name: str) -> Path:
-        """The admitted path of the checkpoint file ``name``, resolved on first use."""
+        """The admitted path of the checkpoint file ``name``, resolved on first use and pinned for this instance."""
 
-        return admit_checkpoint_file(self.root / name)
+        path = self._admitted.get(name)
+        if path is None:
+            path = self._admitted[name] = admit_checkpoint_file(self.root / name)
+        return path
 
     def _guard(self, path: Path, phase: str) -> Path:
         if self._file_guard is None:

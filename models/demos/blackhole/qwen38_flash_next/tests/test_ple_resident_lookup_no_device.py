@@ -149,6 +149,7 @@ class _SyntheticCheckpoint(Qwen38Checkpoint):
     def __init__(self, root: Path, weight_map: dict[str, str], file_guard=None) -> None:
         self.root = Path(root).resolve()
         self._file_guard = file_guard
+        self._admitted = {}
         self.weight_map = dict(weight_map)
         self.shards = tuple(sorted(set(weight_map.values())))
 
