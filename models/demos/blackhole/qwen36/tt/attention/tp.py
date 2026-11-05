@@ -1304,7 +1304,8 @@ class TPAttention:
             for o in outs:
                 ttnn.deallocate(o)
         attn = self._concat_heads(attn)
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat, memory_config=_mc), memory_config=_mc)
+        _gkw = {"dtype": ttnn.bfloat8_b} if return_gated and os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else {}
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat, memory_config=_mc), memory_config=_mc, **_gkw)
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
         if return_gated:  # token-parallel wo (layer.forward_tokpar): the caller all-to-alls [1, 1, S, NH*HD/tp]

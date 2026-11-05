@@ -423,7 +423,7 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(xh)
         a = ttnn.reshape(a, (1, 1, a.shape[-2], a.shape[-1]))
-        if out_tp and a2a_bf8:  # the out-proj consumes bf8: cast before the all-to-all (same rounding, half the bytes)
+        if out_tp and a2a_bf8 and a.dtype != ttnn.bfloat8_b:  # the out-proj consumes bf8: cast before the all-to-all
             a8_ = ttnn.typecast(a, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(a)
             a = a8_

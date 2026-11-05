@@ -2235,7 +2235,8 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_n)
         if return_gated:
             # token-parallel out-proj (layer.forward_tokpar): the caller all-to-alls the gated [1, M, value_dim_tp]
-            gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            _gdt = ttnn.bfloat8_b if os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else ttnn.bfloat16
+            gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG, dtype=_gdt)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
             return gated
