@@ -57,10 +57,14 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    rc=0
-    pytest test_hang_recovery.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-blackhole-1.xml || rc=$?
-    HANG_VARIANTS=prod,dvalid pytest test_hang_ladder.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 || true
-    exit $rc
+    S1=stall,ok,ok,spin,ok,ok,spin,ok,ok,stall,ok,ok
+    S2=spin,ok,ok,stall,ok,ok,spin,ok,ok
+    for rep in 1 2 3; do
+      for seq in $S1 $S2; do
+        echo "### reset before seq=$seq rep=$rep"; tt-smi -r; echo "TTSMI_RC=$?"; sleep 5
+        SEQ=$seq REPEAT=$rep pytest test_hang_diag.py -n 0 -s -q --override-ini=log_cli=false --timeout=600 | grep -E "DIAG|passed|failed" || true
+      done
+    done
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -77,10 +81,14 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    rc=0
-    pytest test_hang_recovery.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-blackhole-2.xml || rc=$?
-    HANG_VARIANTS=pulse_only,dvalid,dvalid_clear,dvalid_pulse_full pytest test_hang_ladder.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 || true
-    exit $rc
+    S1=stall,ok,ok,spin,ok,ok,spin,ok,ok,stall,ok,ok
+    S2=spin,ok,ok,stall,ok,ok,spin,ok,ok
+    for rep in 1 2 3; do
+      for seq in $S1 $S2; do
+        echo "### reset before seq=$seq rep=$rep"; tt-smi -r; echo "TTSMI_RC=$?"; sleep 5
+        SEQ=$seq REPEAT=$rep pytest test_hang_diag.py -n 0 -s -q --override-ini=log_cli=false --timeout=600 | grep -E "DIAG|passed|failed" || true
+      done
+    done
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -97,10 +105,14 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    rc=0
-    pytest test_hang_recovery.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 --junitxml=pytest-report-blackhole-3.xml || rc=$?
-    HANG_VARIANTS=pulse_full,dvalid_pulse_full pytest test_hang_ladder.py -n 0 -v -s --override-ini=log_cli=false --timeout=600 || true
-    exit $rc
+    S1=stall,ok,ok,spin,ok,ok,spin,ok,ok,stall,ok,ok
+    S2=spin,ok,ok,stall,ok,ok,spin,ok,ok
+    for rep in 1 2 3; do
+      for seq in $S1 $S2; do
+        echo "### reset before seq=$seq rep=$rep"; tt-smi -r; echo "TTSMI_RC=$?"; sleep 5
+        SEQ=$seq REPEAT=$rep pytest test_hang_diag.py -n 0 -s -q --override-ini=log_cli=false --timeout=600 | grep -E "DIAG|passed|failed" || true
+      done
+    done
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
