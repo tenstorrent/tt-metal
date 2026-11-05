@@ -99,9 +99,8 @@ ttsl::hash::hash_t NLPConcatHeadsDeviceOperation::compute_program_hash(
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<NLPConcatHeadsDeviceOperation>, args, tensor_args);
     }
-    constexpr uint64_t kSalt = 0x6e6c705f636f6e63ULL;  // "nlp_conc"
     return tt::tt_metal::operation::hash_operation<NLPConcatHeadsDeviceOperation>(
-        args, ttnn::operations::common::hash_spec_without_rows(tensor_args, kSalt));
+        args, ttnn::operations::common::hash_spec_without_rows(tensor_args));
 }
 
 NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation::compute_output_specs(
