@@ -18,6 +18,10 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
+    DataflowBuffer cb_in(tt::CBIndex::c_0);
+    DataflowBuffer cb_scaler(tt::CBIndex::c_2);
+    DataflowBuffer cb_out(tt::CBIndex::c_3);
+
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
@@ -26,6 +30,9 @@ void kernel_main() {
         tt::CBIndex::c_3,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        cb_in,
+        cb_scaler,
+        cb_out,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
@@ -45,5 +52,5 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler CB but never pops it (the single scaler tile is
     // reused for the whole reduction). Pop it here so the CB is left balanced.
-    DataflowBuffer(tt::CBIndex::c_2).pop_front(1);
+    cb_scaler.pop_front(1);
 }

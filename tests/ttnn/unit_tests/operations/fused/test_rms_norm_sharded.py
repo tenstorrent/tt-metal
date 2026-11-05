@@ -18,6 +18,9 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     non_rectangular_width_shard_config,
     NON_RECTANGULAR_GRID_CASES,
     NON_RECTANGULAR_GRID_IDS,
+    LINE_GRID_1D_MCAST_CASES,
+    LINE_GRID_1D_MCAST_IDS,
+    line_width_shard_config,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
@@ -363,6 +366,35 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
 
 
 @pytest.mark.parametrize(
+    ("start", "end", "h", "w", "orientation"), LINE_GRID_1D_MCAST_CASES, ids=LINE_GRID_1D_MCAST_IDS
+)
+def test_rms_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orientation):
+    torch.manual_seed(0)
+    sharded_mem_config, block_wt = line_width_shard_config(device, start, end, h, w, orientation)
+
+    torch_input_tensor = generate_input_tensor(h, w, "random", torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+
+    output_tensor = ttnn_rms_norm_sharded(device, input_tensor, block_ht=h // 32, block_wt=block_wt, subblock_w=4)
+
+    golden_output = rms_norm_golden(torch_input_tensor).to(torch.bfloat16)
+
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )
+
+
+@pytest.mark.parametrize(
     ("full_lines", "cores_in_last_line", "origin", "line_length"),
     NON_RECTANGULAR_GRID_CASES,
     ids=NON_RECTANGULAR_GRID_IDS,
@@ -373,12 +405,12 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
     ids=["row_major", "col_major"],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("h", [32, 64, 96])
 def test_rms_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype, h
 ):
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,
