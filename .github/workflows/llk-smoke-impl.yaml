@@ -123,29 +123,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          for run in $(gh run list -w pr-gate.yaml -b main -e push -s success -L 5 --json databaseId --jq '.[].databaseId'); do
-            gh run download "$run" -p 'test-durations-*' -D durations && break
-          done
-          python3 - << 'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          Path("split-durations").mkdir()
-          found = False
-          for arch in ("wormhole", "blackhole"):
-              merged = {}
-              for leg in sorted(Path("durations").glob(f"test-durations-{arch}-*/.test_durations")):
-                  merged.update(json.loads(leg.read_text()))
-              print(f"{arch}: durations for {len(merged)} tests")
-              if merged:
-                  Path(f"split-durations/{arch}.json").write_text(json.dumps(merged))
-                  found = True
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-              handle.write(f"found={str(found).lower()}\n")
-          PY
+        run: .github/scripts/llk-fetch-test-durations.sh pr-gate.yaml main push split-durations
       - name: Upload test durations for the legs
         if: steps.durations.outputs.found == 'true'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
