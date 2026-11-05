@@ -1209,3 +1209,24 @@ off, truncated under exact).
 On the fixed code (measure, ring on): p51200 rc 0 (wall 209.3 ms), p512000 rc 0 (wall 231.6 ms), test_window_ring rc 0
 (refusal ring: 2048 refused, 5056 accepted; none: 4992 refused). last, test_dram and profile were measured on the code
 before this host-only change (rc 0, above); the orchestrator's A/B re-runs them.
+
+## P.33 DECODER_CUT_TEST: prefill stopped at an even cut 128 tokens short of the end (BREADCRUMBS section)
+- What: test only, no model change. `tests/bringup/test_decoder_cut.py`: rung s10240 tokens, all 40 layers,
+  DECODER_SKIP=exact, prefill [0, 5120) and the partial chunk [5120, 10112) (cut = (10240 - 128) // 2 * 2), both
+  `begin_chunk(.., last=False)`, end passed to every `model.layer`, ids past the cut PAD_ID. Checks at the cut: the
+  encoder windows (layers 0-19, rows [9984, 10112) via `ring_host(cut)`) and layer 20's compressed KV / index keys over
+  [0, 10112), limits `e2e_limits.err_limit` on state_window_kv_L<i> / state_compress_kv_L20 / state_index_k_L20.
+- Answer to the brief's question: the model CAN end a prefill at a cut (an end not on a chunk boundary, last=False):
+  nothing had to change. Gate (8x4, 394 s incl. a ~200 s load): PASS, 22/22. Window KV L00 0.0049 (limit 0.058) ...
+  L18 0.150 (0.271); worst L14 at 0.563 of its limit; compress_kv_L20 0.180 (0.323), index_k_L20 0.112 (0.311).
+- Golden rows before the cut (DS41-209): the golden's window_kv is the ring at 10240 (rows [10112, 10240)), snapshots
+  only at 0 / 5120 / 10208; chunk_01 dumps the `kv` step only for the step-dump layers (0, 1, 2, 3, 14, 20, 21, 24).
+  The other encoder layers' rows are recomputed on the CPU: DS41Reference(numerics native, layers=[]) with only
+  attn_norm.weight / attn.wkv.weight / attn.kv_norm.weight, attn_collapse -> attn_norm -> kv on the previous layer's
+  dumped `out` rows (attn_collapse takes `pre` from the packed input; attn_hc is not needed). Bit-identical to the dump
+  on layers 2 / 3 (rel 0, gated in the test at <= one rounding) and to the 10208 snapshot's overlap (6e-7). 1.7 s.
+- Facts for decode: the decoder layers (20-39) hold no window row of [0, cut) (checked); layer 20's compressed KV has
+  0 non-zero rows past the cut (pad rows not written; `cut_diag_ckv_rows_past_cut`). The limits for the window rows
+  are the drift of the 128-row ring at the rung's end (adjacent rows), not of [cut - 128, cut) itself.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.33 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (via devjob).

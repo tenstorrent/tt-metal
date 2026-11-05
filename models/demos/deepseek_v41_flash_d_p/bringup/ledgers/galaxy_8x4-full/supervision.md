@@ -1588,3 +1588,6 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   128-row tail costs ~100 ms of wall: host overhead). Plain chunk device 171.5 / 170.4 (+1.1). P.33 written into
   tasks.yaml (deps P.32, X.3 deps += P.33); run_ds41_8x4.sh --until X.3. F252's defaults.yaml still to apply at the
   next stop (it would void P.32's accept reuse now).
+- 20:18 P.33 (cut test, test only) PASS: prefill to an even cut 128 short of the end with every chunk non-last; at the
+  cut all 20 encoder windows within limits (worst share 0.56, L14 / L16), layer 20 compressed KV 0.180 / 0.323, index
+  keys 0.112 / 0.312. No model change needed for the updated proposal's prefill. Accepted; resumed --until X.3.
