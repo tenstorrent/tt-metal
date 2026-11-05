@@ -300,10 +300,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         gb_defines.emplace("FUSE_BETA", "1");
     }
 
-    // The normalized result is staged in its own buffer only while gamma or beta still has to be
-    // applied; otherwise it is packed straight into the output. RMSNorm applies beta only in the
-    // company of gamma, so a beta without a gamma leaves it staged nowhere.
-    const bool uses_x_normed = is_rmsnorm ? (gamma.has_value()) : (gamma.has_value() || beta.has_value());
+    const bool uses_x_normed = gamma.has_value() || beta.has_value();
     // The gamma product needs a buffer of its own only when beta still has to be added to it.
     const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
 

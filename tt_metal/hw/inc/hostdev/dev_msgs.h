@@ -302,6 +302,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocInvalidTxnId = 18,
     DebugSanitizeNocSharedCmdBuf = 19,
     DebugSanitizeNocReadToRegAddr = 20,
+    DebugSanitizeNocMulticastOutsideNodeSet = 21,
 };
 
 struct debug_assert_msg_t {

@@ -8595,17 +8595,20 @@ def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config, gemm
     record_gemma4_perf_sweep_result(perf_config, result)
 
 
-# Sliding-window kernels run ~0.3-0.5 ms, so, as for GPT-OSS, the band absorbs quantization and host noise.
+# Global chunks 2048 and 4096 spread ~1.5% run to run, with occasional runs 2-3% slower.
+GEMMA4_GLOBAL_PERF_MARGIN = 0.03
+# Sliding-window kernels run ~0.25-0.5 ms and each device open lands in one of two modes ~55 us apart,
+# so the band absorbs both modes as well as quantization and host noise.
 GEMMA4_SWA_PERF_MARGIN = 0.25
-# Three-run medians on the 4x8 Blackhole Galaxy (SP=8, TP=4).
+# Mid-points of the range measured on the 4x8 Blackhole Galaxy (SP=8, TP=4) over cold- and warm-cache runs.
 # Global values use LoFi peak throughput.
 GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = {
     # (model_name, chunk_size): (expected_util, margin)
-    ("gemma4_global", 2048): (32.19, DEFAULT_PERF_MARGIN),
-    ("gemma4_global", 4096): (48.61, DEFAULT_PERF_MARGIN),
-    ("gemma4_global", 8192): (43.91, DEFAULT_PERF_MARGIN),
-    ("gemma4_swa", 2048): (2.25, GEMMA4_SWA_PERF_MARGIN),
-    ("gemma4_swa", 4096): (3.92, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_global", 2048): (31.85, GEMMA4_GLOBAL_PERF_MARGIN),
+    ("gemma4_global", 4096): (48.61, GEMMA4_GLOBAL_PERF_MARGIN),
+    ("gemma4_global", 8192): (43.91, GEMMA4_GLOBAL_PERF_MARGIN),
+    ("gemma4_swa", 2048): (2.60, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_swa", 4096): (4.45, GEMMA4_SWA_PERF_MARGIN),
     ("gemma4_swa", 8192): (6.28, GEMMA4_SWA_PERF_MARGIN),
 }
 
