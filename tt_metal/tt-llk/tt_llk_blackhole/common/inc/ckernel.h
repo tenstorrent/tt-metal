@@ -552,7 +552,12 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
 // Blocking read
 inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
+#ifdef RS_BLOCKING_MAILBOX
+    // RS backport of tt-metal #59202: wait for the message even when the caller discards it.
+    return load_blocking(&mailbox_base[thread][0]);
+#else
     return mailbox_base[thread][0];
+#endif
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)
