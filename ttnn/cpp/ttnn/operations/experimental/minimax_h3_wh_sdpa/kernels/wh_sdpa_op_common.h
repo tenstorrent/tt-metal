@@ -118,5 +118,9 @@ enum WhsArg : uint32_t {
                           // wrapping (two unreserved casters into one rectangle on a NoC hung the chip)
 #define WHS_VT_FULL 256u  // V^T is V transposed whole ([heads][128][keys], ttnn.transpose(v, -2, -1)), not tile by tile
 #define WHS_CAST_BY_IO 128u  // this reader's casts go out from the I/O kernel (its NoC), the feed only reads
+// This reader casts (data and ready words) on the buddy multicast VC: a group's second caster on a NoC, so that each
+// (NoC, VC) carries one source a group (two unreserved casters on one (NoC, VC) in a group deadlocked the NoC in
+// tt-lab-private h3-wh, notes/minimax-h3-wh-compute.md "The feed redesign"). With WHS_CAST_BY_IO only.
+#define WHS_CAST_BUDDY_VC 512u
 
 static inline uint32_t whs_key_blocks(uint32_t valid_keys) { return (valid_keys + WHS_ROWS - 1u) / WHS_ROWS; }

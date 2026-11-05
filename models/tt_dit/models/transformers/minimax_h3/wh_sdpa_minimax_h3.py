@@ -6,14 +6,17 @@ ttnn.generic_op on every device of the mesh.
 Kernels: ttnn/cpp/ttnn/operations/experimental/minimax_h3_wh_sdpa/kernels/ (contract in wh_sdpa_op_common.h).
 The cores are split into two feed groups of four whole grid columns (logical 0-3 and 4-7; neither straddles the
 physical DRAM column). Each group runs rounds of (head, first query block); its cores take consecutive 64-query
-blocks and share one K/V stream: two reader cores at the group's corners read 64-key blocks of K and V^T from DRAM
-and their I/O kernels multicast them to the group, the top-left one casting on NoC 0 (reads on NoC 1), the
-bottom-right one casting on NoC 1 (reads on NoC 0), so no cast wraps the torus and each NoC has one caster per group.
+blocks and share one K/V stream of 64-key blocks of K and V^T, block g read from DRAM by reader g % readers and
+multicast to the group by its I/O kernel. Four readers (default): (left, row 0) and (left, row 1) cast on NoC 0 and read
+on NoC 1, (right, last row) and (right, row before) cast on NoC 1 and read on NoC 0; the second caster of each NoC uses
+the buddy multicast VC, so each (NoC, VC) carries one source a group (the release's rule: two unreserved casters on
+one (NoC, VC) deadlocked the NoC). The corner casters' casts do not wrap; the second ones wrap in y inside the group's
+own columns. Each reader reads ~10 B a cycle, so two readers (readers=2: the corners only) left the core loop waiting.
 
 Inputs (DRAM interleaved, bf16, tile): Q [1, H, Nq, 128], K [1, H, Nk, 128] and V^T [1, H, 128, Nk] (V transposed
 whole); keys at and past the value of `logical_n` (read on device) are ignored. Output O [1, H, Nq, 128].
 Fixed: head dim 128, scale 1/sqrt(128), no mask. Measured on one chip at H 14, Nq 13824, Nk 110592 (108618 valid):
-134 ms on 8x9 (ttnn ring SDPA ~175 ms).
+123.4 ms on 8x9 with 4 readers, 140.2 with 2 (wh_sdpa_model_bench.py, host call included; ttnn ring SDPA ~175 ms).
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ BLOCK = 32768  # one 64-key K/V block in L1
 FLAG_NO_PATH_RESERVE = 16
 FLAG_CAST_BY_IO = 128
 FLAG_VT_FULL = 256
+FLAG_CAST_BUDDY_VC = 512
 
 # The launch token (GO) must differ from every launch before it that used the same L1 scratch: the kernels wait for the
 # GO line to equal it, and a stale equal value there lets them start before the sync lines are reset. One counter for
@@ -43,12 +47,21 @@ _GO = [random.SystemRandom().getrandbits(28)]
 
 
 class WhSdpa:
-    def __init__(self, mesh_device: ttnn.MeshDevice, *, grid: tuple[int, int] | None = None, bufs: int = 16) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        *,
+        grid: tuple[int, int] | None = None,
+        bufs: int = 16,
+        readers: int = 4,
+    ) -> None:
         self.mesh_device = mesh_device
         g = mesh_device.compute_with_storage_grid_size()
         self.gx, self.gy = grid or (g.x, g.y)
         assert self.gx == 8, "two groups of 4 columns"
+        assert readers in (2, 4)
         self.bufs = bufs
+        self.readers = readers
         self.groups = [(0, 3), (4, 7)]
         self.phys = {
             (x, y): mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
@@ -70,7 +83,11 @@ class WhSdpa:
 
     def _readers(self, gi: int) -> list[tuple[int, int]]:
         ga, gb = self.groups[gi]
-        return [(ga, 0), (gb, self.gy - 1)]
+        rc = [(ga, 0), (gb, self.gy - 1)]
+        if self.readers == 4:
+            # Second casters on each NoC, on the buddy VC: their casts wrap in y only, inside the group's columns.
+            rc += [(ga, 1), (gb, self.gy - 2)]
+        return rc
 
     def _reader_index(self, c: tuple[int, int]) -> int:
         rc = self._readers(self.core_group[c][0])
@@ -120,6 +137,8 @@ class WhSdpa:
             p0, p1 = self.phys[(ga, 0)], self.phys[(gb, self.gy - 1)]
             ri = rc.index((x, y)) if (x, y) in rc else IDLE
             flags = FLAG_VT_FULL | (FLAG_CAST_BY_IO | FLAG_NO_PATH_RESERVE if ri != IDLE else 0)
+            if ri in (2, 3):
+                flags |= FLAG_CAST_BUDDY_VC
             base = [
                 scratch.buffer_address(),
                 go,
@@ -165,8 +184,8 @@ class WhSdpa:
             c.processor, c.noc = proc, noc
             return c
 
-        # Reader 0 cores: feed (reads) on NoC 1, I/O (casts) on NoC 0. Everyone else: feed NoC 0, I/O NoC 1.
-        swap = [c for c in self.all_cores if self._reader_index(c) == 0]
+        # Readers 0 and 2 (top rows): feed (reads) on NoC 1, I/O (casts) on NoC 0. Everyone else: feed NoC 0, I/O NoC 1.
+        swap = [c for c in self.all_cores if self._reader_index(c) in (0, 2)]
         rest = [c for c in self.all_cores if c not in swap]
         P, N = ttnn.DataMovementProcessor, ttnn.NOC
         kernels = [

@@ -99,6 +99,7 @@ void kernel_main() {
                               : get_noc_multicast_addr(gx0, gy0, gx1, gy1, addr);
     };
     const bool data_casts = !(debug & WHS_DEBUG_NO_CASTS);
+    const uint32_t cast_vc = (debug & WHS_CAST_BUDDY_VC) ? NOC_MULTICAST_WRITE_VC + 1u : NOC_MULTICAST_WRITE_VC;
     uint32_t cast_next = 0;
     uint32_t forwarded = 0, q_next = 0, o_next = 0;
     while (forwarded < total || o_next < items || cast_next < my_blocks) {
@@ -114,7 +115,7 @@ void kernel_main() {
                         buffer,
                         mcast(buffer),
                         WHS_BLOCK,
-                        NOC_MULTICAST_WRITE_VC,
+                        cast_vc,
                         true,
                         true,
                         group_cores,
@@ -124,7 +125,18 @@ void kernel_main() {
                 }
             }
             const uint32_t ready_addr = whs_line(scratch, WHS_S_READY + b);
-            noc_semaphore_set_multicast_loopback_src(ready_addr, mcast(ready_addr), group_cores);
+            // The ready word follows the data on its VC, so it cannot land first.
+            ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
+                noc_index,
+                write_reg_cmd_buf,
+                ready_addr,
+                mcast(ready_addr),
+                4u,
+                cast_vc,
+                true,
+                false,
+                group_cores,
+                true);
             ++cast_next;
         }
         const uint32_t unpacked = line(scratch, WHS_S_UNPACKED);
