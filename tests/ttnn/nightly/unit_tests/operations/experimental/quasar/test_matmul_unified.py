@@ -1676,7 +1676,7 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
         # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). Off Quasar it takes the 2D
-        # factory, which cannot run it until that sets unpack_modes for the fp32 partials DFB (#61018).
+        # factory, which cannot run it until that sets unpack_modes for the fp32 partials DFB.
         ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
