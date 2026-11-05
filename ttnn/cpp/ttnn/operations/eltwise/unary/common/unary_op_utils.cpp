@@ -65,6 +65,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
         case UnaryOpType::XIELU: return "SFPU_OP_XIELU_INCLUDE";
+        case UnaryOpType::LOGIT: return "SFPU_OP_LOGIT_INCLUDE";
         case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
@@ -1156,6 +1157,37 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
     std::span<const std::uint32_t> params,
     const std::string& idst,
     std::optional<DataType> input_dtype);
+
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
+    // Wormhole only.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::LOGIT: op_name = op.get_param_if<float>(0) == -1.0f ? "logit" : ""; break;
+        default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
+}
 
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
