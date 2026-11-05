@@ -225,6 +225,16 @@ inline void init_env(int& argc, char**& argv) {
     static int provided_thread_level = MPI_THREAD_SINGLE;
 
     std::call_once(mpi_once, [&] {
+        // A second MPI_Init aborts the process, so a runtime that something else in the process started is reused.
+        // Whoever called MPI_Init owns MPI_Finalize; registering ours as well would finalize twice.
+        int already_initialized = 0;
+        MPI_Initialized(&already_initialized);
+        if (already_initialized != 0) {
+            TT_FATAL(!was_mpi_finalized(), "MPI was initialized and then finalized before TT-Metal could use it");
+            MPI_Query_thread(&provided_thread_level);
+            return;
+        }
+
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
@@ -235,15 +245,16 @@ inline void init_env(int& argc, char**& argv) {
         std::atexit([] { MPI_Finalize(); });
     });
 
-    // Validate AFTER the once-block completes: MPI is initialized exactly once and the finalizer is
-    // registered even when we reject the runtime. The Python bindings release the GIL around
+    // Validate AFTER the once-block completes: MPI is initialized exactly once and, when TT-Metal started
+    // it, the finalizer is registered even when we reject the runtime. The Python bindings release the GIL around
     // barrier / send_bytes / recv_bytes and the host-socket calls, so several Python threads may be
     // inside MPI at once (DFlash relay + collective teardown). That is only legal at
     // MPI_THREAD_MULTIPLE; MPI_Init_thread may succeed while granting a weaker level.
     TT_FATAL(
         provided_thread_level >= MPI_THREAD_MULTIPLE,
         "MPI runtime provided thread level {} but MPI_THREAD_MULTIPLE ({}) is required for concurrent "
-        "host-socket / barrier calls from multiple Python threads",
+        "host-socket / barrier calls from multiple Python threads. Code that initializes MPI before TT-Metal must "
+        "request MPI_THREAD_MULTIPLE",
         provided_thread_level,
         static_cast<int>(MPI_THREAD_MULTIPLE));
 }

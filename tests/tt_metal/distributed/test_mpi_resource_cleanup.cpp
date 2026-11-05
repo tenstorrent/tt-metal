@@ -286,6 +286,15 @@ TEST_F(MpiResourceCleanupTest, DeviceOpenWithoutLauncherLeavesNoMpiFiles) {
     expect_no_mpi_leftovers();
 }
 
+// An application that initializes MPI itself (mpi4py, for example) before its first tt-metal call. tt-metal must
+// reuse that runtime: a second MPI_Init, or a second MPI_Finalize at exit, aborts the process.
+TEST_F(MpiResourceCleanupTest, ExternallyInitializedMpiIsReused) {
+    constexpr auto timeout = std::chrono::seconds(120);
+    const auto result = run_child("GetCurrentWorldAfterExternalMpiInit", timeout);
+    expect_clean_exit(result, timeout);
+    expect_child_ran();
+}
+
 // Socket bringup runs MPI collectives, which abort the process when no launcher started MPI. It must report an
 // error instead.
 TEST_F(MpiResourceCleanupTest, H2HSocketWithoutLauncherReportsError) {
@@ -368,6 +377,23 @@ TEST(MpiResourceCleanupChild, OpenAndCloseUnitMesh) {
     ASSERT_NE(mesh_device, nullptr);
     mesh_device->close();
     mesh_device.reset();
+    mark_child_ran(*scratch);
+}
+
+TEST(MpiResourceCleanupChild, GetCurrentWorldAfterExternalMpiInit) {
+    const auto scratch = child_scratch_dir();
+    if (!scratch.has_value()) {
+        GTEST_SKIP() << "runs only as a child of MpiResourceCleanupTest";
+    }
+    int provided = 0;
+    ASSERT_EQ(MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided), MPI_SUCCESS);
+    const auto& world = DistributedContext::get_current_world();
+    ASSERT_NE(world, nullptr);
+    EXPECT_EQ(*world->size(), 1);
+    EXPECT_EQ(*world->rank(), 0);
+    world->barrier();
+    // The application owns MPI_Finalize. If tt-metal registered its own as well, the exit after this aborts.
+    EXPECT_EQ(MPI_Finalize(), MPI_SUCCESS);
     mark_child_ran(*scratch);
 }
 
