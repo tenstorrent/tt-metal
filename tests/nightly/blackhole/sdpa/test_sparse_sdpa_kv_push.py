@@ -249,9 +249,28 @@ def _segmented_traced_us(mesh_device, fn, n=20):
     return us
 
 
-# Per layer: the most each production step may take at the 1M request on one Galaxy (traced, us), measured with a
-# margin. None: report only.
-_GLM_PUSH_PERF_CEILING_US = None
+# Per layer: the most each production step may take at the 1M request on one Galaxy (traced, us): the slowest of four
+# bh_sc1_high_power CI runs (42014201179, 42014216524, 42026848687, 42026865528) plus 5%, rounded up.
+_GLM_PUSH_PERF_CEILING_US = {
+    14: {
+        "plan": 224,
+        "table gather": 83,
+        "push all rows": 448,
+        "push prefix, push grid": 450,
+        "push rest": 116,
+        "attention, full grid": 961,
+        "attention + prefix push on sub-devices": 936,
+    },
+    62: {
+        "plan": 234,
+        "table gather": 83,
+        "push all rows": 1642,
+        "push prefix, push grid": 1572,
+        "push rest": 120,
+        "attention, full grid": 908,
+        "attention + prefix push on sub-devices": 1657,
+    },
+}
 
 
 @run_for_blackhole()
