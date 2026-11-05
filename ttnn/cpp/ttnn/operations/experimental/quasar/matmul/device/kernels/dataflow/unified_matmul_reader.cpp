@@ -81,6 +81,7 @@ TT_KERNEL void reader(
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
 #ifdef B_FROM_PREFETCHER_PIPES
+    static_assert(num_reader_threads == 1, "the pipes' receiver publishes and acks every K chunk itself");
     // One accessor names every pipe; the one present on this core is bound here.
     experimental::PrefetcherPipe B_pipe(pipe::B);
     auto B_relay = B_pipe.bind_relay();

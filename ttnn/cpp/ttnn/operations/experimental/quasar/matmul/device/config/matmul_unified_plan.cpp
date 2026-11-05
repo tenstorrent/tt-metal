@@ -256,8 +256,8 @@ MatmulUnifiedPlan make_plan(
     // DM threads and buffering (fixed; see the constants). Quasar's reader threads each read every
     // QUASAR_NUM_READER_THREADS-th K chunk into their own part of the A and B DFBs, which a borrowed shard cannot be
     // split into; reader threads beyond the K chunks of a C slice would only carry padding. A DFB that only one slice
-    // ever passes through holds one.
-    plan.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
+    // ever passes through holds one. Over prefetcher pipes the reader is the pipes' receiver, which is one thread.
+    plan.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B && !plan.B_from_pipes
                                   ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
                                   : 1;
     plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, plan.num_reader_threads);

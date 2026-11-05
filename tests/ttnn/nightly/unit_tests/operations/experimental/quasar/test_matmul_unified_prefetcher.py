@@ -88,9 +88,11 @@ def _compute_kernel_config(device, fp32_dest_acc_en=True):
 
 class _Setup:
     """B in `weight_layout` on `banks` DRAM banks, the pipes delivering its N slices to the receivers (paired with the
-    banks as `pairing_layout`'s distribution needs, by default B's), and A."""
+    banks as `pairing_layout`'s distribution needs, by default B's), and A, M rows tall."""
 
-    def __init__(self, device, K, N, weight_layout, b_dtype, pipe_entries, K_chunk_tiles, pairing_layout=None, seed=0):
+    def __init__(
+        self, device, K, N, weight_layout, b_dtype, pipe_entries, K_chunk_tiles, pairing_layout=None, M=DECODE_M, seed=0
+    ):
         require_tensor_prefetcher(device)
         N_tiles = N // TILE
         self.banks, self.receivers_per_bank = _receiver_layout(device, N_tiles)
@@ -100,7 +102,8 @@ class _Setup:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.banks - 1, self.receivers_per_bank - 1))]
         )
         torch.manual_seed(seed)
-        self.a = torch.randn(1, 1, DECODE_M, K, dtype=torch.bfloat16)
+        self.M = M
+        self.a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
         self.b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
         self.golden = _quantized(self.a, ttnn.bfloat16).float() @ _quantized(self.b, b_dtype).float()
 
@@ -150,7 +153,7 @@ class _Setup:
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(self.cores, [DECODE_M, self.C_slice_N_tiles * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(self.cores, [self.M, self.C_slice_N_tiles * TILE], ttnn.ShardOrientation.ROW_MAJOR),
         )
 
 
@@ -251,11 +254,29 @@ def test_width_sharded_output_on_the_receivers(device):
     )
 
 
+def test_K_chunk_chosen_in_the_L1_C_leaves(device):
+    """The auto K chunk is chosen once C is allocated. On p100a C's L1 shards, 22 tiles tall, take the room of the K
+    chunk (8) that fits without them, and a shorter one (4) fits."""
+    setup = _Setup(
+        device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=32, M=22 * TILE
+    )
+    with tensor_prefetcher_session(device):
+        out = setup.matmul(device, program_config=None, memory_config=setup.output_width_sharded())
+        _check(ttnn.to_torch(out), setup.golden)
+
+
 def test_rejects_a_pipe_of_one_K_chunk(device, expect_error):
     """The reader publishes one K chunk while compute multiplies the previous one, so a pipe holds two."""
     setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=1, K_chunk_tiles=4)
     with expect_error(RuntimeError, "at least 2 K chunks"):
         setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
+
+
+def test_rejects_a_K_chunk_that_does_not_divide_K(device, expect_error):
+    """Rejected before the request, which is cut into K / K_chunk_tiles blocks, is queued."""
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=3, K_chunk_tiles=4)
+    with expect_error(RuntimeError, "must divide K_tiles"):
+        setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=3))
 
 
 def test_rejects_cores_other_than_the_receivers(device, expect_error):
