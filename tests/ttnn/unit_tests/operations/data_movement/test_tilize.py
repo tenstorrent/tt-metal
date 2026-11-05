@@ -1290,6 +1290,7 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
 
 _tilize_force_codegen = ttnn._ttnn.operations.data_movement.tilize_force_codegen
+_tilize_force_native = ttnn._ttnn.operations.data_movement.tilize_force_native
 
 _CODEGEN_TORCH_DTYPES = {
     ttnn.bfloat16: torch.bfloat16,
@@ -1324,6 +1325,32 @@ def test_tilize_codegen_forced_matches_input(device, shape, dtype, out_buffer):
     assert out.layout == ttnn.TILE_LAYOUT
     assert out.dtype == dtype
     assert_equal(ttnn.to_torch(x), ttnn.to_torch(out))
+
+
+# torch.equal treats -0.0 as +0.0, so signed zeros and subnormals are compared as raw bits. Codegen must match
+# native bit for bit; fp32 must also match the input, while bf16 fast tilize writes -0.0 and subnormals as +0 on
+# both paths.
+@pytest.mark.parametrize("shape", [(1, 1, 64, 64), (1, 1, 1024, 320)], ids=lambda s: "x".join(map(str, s)))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=lambda d: str(d).split(".")[-1])
+def test_tilize_codegen_forced_preserves_float_bits(device, shape, dtype):
+    skip_unless_dm_codegen_arch(device)
+    torch_dtype = _CODEGEN_TORCH_DTYPES[dtype]
+    bits_dtype = torch.int16 if torch_dtype == torch.bfloat16 else torch.int32
+    info = torch.finfo(torch_dtype)
+    specials = torch.tensor(
+        [0.0, -0.0, info.smallest_normal / 2, -info.smallest_normal / 2, info.smallest_normal, info.max, -info.max]
+        + [float("inf"), float("-inf")],
+        dtype=torch_dtype,
+    )
+    host = specials.repeat(math.prod(shape) // specials.numel() + 1)[: math.prod(shape)].reshape(shape)
+    x = ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    codegen = ttnn.to_torch(_tilize_force_codegen(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)).view(bits_dtype)
+    native = ttnn.to_torch(_tilize_force_native(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)).view(bits_dtype)
+
+    assert torch.equal(codegen, native)
+    if dtype == ttnn.float32:
+        assert torch.equal(codegen, host.view(bits_dtype))
 
 
 # More tile rows than any Wormhole or Blackhole grid has cores, on the compact row reader (4 tiles per row): 161

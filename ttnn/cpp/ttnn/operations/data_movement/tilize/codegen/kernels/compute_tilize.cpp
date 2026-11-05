@@ -17,8 +17,8 @@ void kernel_main() {
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    // tilize_init leaves the Src zero-substitution flag alone; copy_init sets it to preserve, so a bf16 -0.0 or
-    // subnormal passes the SrcA-to-DEST move bit-exact instead of flushing to +0.
+    // tilize_init leaves the Src zero-substitution flag alone; copy_init sets it to preserve. With it, fp32 keeps
+    // -0.0 and subnormals bit-exact. Fast tilize for bf16 still writes them as +0, as the native kernel does.
     copy_init(cb_in);
 
     // Same mode choice as the native kernel: fast tilize for bf16 (the math thread otherwise bounds L1-resident
