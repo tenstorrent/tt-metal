@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py), the vision encoder as the encoder service calls it,
-against the Torch reference, on one chip with the 2-layer reference of conftest.py (seeded random weights, no
-checkpoint):
+against Hugging Face's vision tower and projector, on one chip with the 2-layer reference of conftest.py (seeded random
+weights, no checkpoint):
   - test_vision_encoder_vs_ref: forward(pixels) of a seeded noise image returns its vision tokens on the chip as bf16
     [n_tokens, 6144], row-major, in DRAM, at PCC >= 0.9998 and within the tower test's relL2 bound against the
     reference run on the same patch rows (patch_rows of the pixels, in the bf16 the chip gets).
@@ -68,7 +68,8 @@ def _noise_pixels(height: int, width: int) -> np.ndarray:
 def _reference_tokens(reference, pixels: np.ndarray) -> torch.Tensor:
     """The reference's vision tokens for the pixels, from the bf16 copy of their patch rows that the chip gets."""
     pixel_values, grid_thw = patch_rows(pixels)
-    return reference(pixel_values.bfloat16().float(), grid_thw)
+    tower = reference.tower(pixel_values=pixel_values.bfloat16().float(), image_grid_thw=grid_thw)
+    return reference.projector(tower.last_hidden_state.squeeze(0))
 
 
 def _read_plain(tokens: ttnn.Tensor) -> torch.Tensor:
@@ -90,7 +91,7 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
     n_tokens = (height // FACTOR) * (width // FACTOR)
     assert ref.shape == (n_tokens, HIDDEN)
 
-    encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.hf_state_dict(), reference.config)
+    encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.weights, reference.config)
     tokens = encoder.forward(pixels)
     assert tuple(tokens.shape) == (n_tokens, HIDDEN), tuple(tokens.shape)
     assert tokens.dtype == ttnn.bfloat16 and tokens.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -113,7 +114,7 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     reference = vision_reference(NUM_LAYERS)
     hf_config = MiniMaxM3VLConfig(vision_config={"num_hidden_layers": NUM_LAYERS})
     assert vision_config(hf_config) == reference.config
-    encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.hf_state_dict(), hf_config)
+    encoder = TtMiniMaxM3VisionEncoder(mesh_device, reference.weights, hf_config)
 
     warm_up = encoder.forward(_noise_pixels(224, 224))  # load(): one image of the patch count to serve
     ttnn.deallocate(warm_up)

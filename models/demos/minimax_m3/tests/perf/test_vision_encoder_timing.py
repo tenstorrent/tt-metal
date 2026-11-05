@@ -26,9 +26,10 @@ back for a few seconds settled about 8% slower each, about 76.5 ms against 70.9 
 It asserts that the two outputs have the shape of the 576 tokens, are finite and are equal bit for bit (the same device
 ops on the same input), never a time.
 
-The model has the checkpoint's 32 layers and projector at its dimensions, with the seeded random weights of the vision
-unit tests (the vision_reference fixture of tests/conftest.py): the time does not depend on the weights' values,
-so the test needs no checkpoint and no HF_MODEL. It opens one card (1x1), as the vision unit tests do.
+The model has the checkpoint's 32 layers and projector at its dimensions, built with from_state_dict from the seeded
+random weights of the vision unit tests (unit/vision_checkpoint.py's random_vision_weights): the time does not depend
+on the weights' values, so the test needs no checkpoint and no HF_MODEL. It opens one card (1x1), as the vision unit
+tests do.
 """
 from __future__ import annotations
 
@@ -46,6 +47,7 @@ from models.demos.minimax_m3.tt.vision.image_input import num_tokens
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 
 from ..test_factory import parametrize_mesh_with_fabric
+from ..unit.vision_checkpoint import random_vision_weights
 from ..unit.vision_helpers import VISION_GRIDS, to_host
 
 # A skip of the module, not a skipif mark: parametrize_mesh_with_fabric counts the chips when the test is defined, which
@@ -80,15 +82,15 @@ def _time_calls(call, mesh_device):
 
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_vision_encoder_timing(mesh_device, device_params, vision_reference):
+def test_vision_encoder_timing(mesh_device, device_params):
     """Prints the median wall time of forward_device and of model(pixel_values, image_grid_thw) on one 672x672 image,
     and checks that both give the same finite vision tokens of the right shape."""
-    reference = vision_reference(MiniMaxM3VisionConfig().num_hidden_layers)
-    model = M3VLVisionModel.from_torch(mesh_device, reference, dtype=ttnn.bfloat16)
+    config = MiniMaxM3VisionConfig()
+    model = M3VLVisionModel.from_state_dict(mesh_device, random_vision_weights(config), config, dtype=ttnn.bfloat16)
     grid = VISION_GRIDS["h48w48"]
     grid_thw = torch.tensor([grid])
     generator = torch.Generator().manual_seed(0)
-    pixel_values = torch.randn(math.prod(grid), reference.config.patch_dim, generator=generator)
+    pixel_values = torch.randn(math.prod(grid), config.patch_dim, generator=generator)
 
     x_tt = model.push_pixel_values(pixel_values, grid_thw)
     runs = {
@@ -101,7 +103,7 @@ def test_vision_encoder_timing(mesh_device, device_params, vision_reference):
         calls = " ".join(f"{t:.2f}" for t in times_ms)
         print(f"{name} {median:.2f} ms (min {fastest:.2f}, max {slowest:.2f}), calls {calls}")
 
-    shape = (num_tokens(grid_thw), reference.config.text_hidden_size)
+    shape = (num_tokens(grid_thw), config.text_hidden_size)
     tokens = []
     for name, (_, out) in runs.items():
         assert tuple(out.shape) == (1, 1, *shape), f"{name}: vision tokens of shape {tuple(out.shape)}"

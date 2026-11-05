@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLPatchEmbed (the Conv3d patch embed as one matmul) vs the Torch reference.
+Accuracy test for M3VLPatchEmbed (the Conv3d patch embed as one matmul) vs Hugging Face's MiniMaxM3VLVisionEmbeddings.
 test_vision_module_guards.py checks on the host that from_torch takes only a Conv3d that this matmul computes.
 
 The processor already flattens each patch, so pixel_values is (L, 1176). There is no class token and no
-learned position embedding, so the reference's embed, the Conv3d alone, is the whole patch embed. Random
+learned position embedding, so the reference's embeddings, the Conv3d alone, are the whole patch embed. Random
 weights and pixel values (tests/conftest.py), no checkpoint.
 
 Run:
@@ -29,10 +29,10 @@ def test_vision_patch_embed_vs_ref(mesh_device, device_params, grid_thw, vision_
     """Patch embed matches the reference at PCC >= 0.9999 (a single matmul, nearly exact), within its relL2 bound and
     with no NaN or Inf."""
     x_in = vision_activations(grid_thw)["pixel_values"]
-    reference = vision_reference()
-    ref_out = reference.embed(x_in)
+    embeddings = vision_reference().tower.embeddings
+    ref_out = embeddings(x_in)
 
-    tt_patch_embed = M3VLPatchEmbed.from_torch(mesh_device, reference.patch_embed, dtype=ttnn.bfloat16)
+    tt_patch_embed = M3VLPatchEmbed.from_torch(mesh_device, embeddings.proj, dtype=ttnn.bfloat16)
     out = to_host(tt_patch_embed(rows_to_device(x_in, mesh_device)), mesh_device, ref_out.shape)
 
     assert_close(

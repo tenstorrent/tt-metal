@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLBlock (one full encoder layer) vs the Torch reference.
+Accuracy test for M3VLBlock (one full encoder layer) vs Hugging Face's MiniMaxM3VLVisionEncoderLayer.
 
-Runs layer 0 on the input it gets inside the reference tower (the pre_layrnorm output), with the RoPE
-cos and sin computed on host from the image grid. Random weights and pixel values (tests/conftest.py), no
-checkpoint.
+Runs layer 0 on the input it gets inside the reference tower (the pre_layrnorm output), with the cos and sin that the
+tower gives its layers; the device's RoPE tables are computed on host from the image grid, as the model does. Random
+weights and pixel values (tests/conftest.py), no checkpoint.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_block_vs_ref.py
@@ -33,10 +33,11 @@ def test_vision_block_vs_ref(mesh_device, device_params, grid_thw, vision_refere
     x_in = acts["layer0.in"].bfloat16().float()
     reference = vision_reference()
     config = reference.config
-    ref_out = reference.layers[0](x_in[None], *reference.rope(acts["grid_thw"]))[0]
+    layer = reference.tower.layers[0]
+    ref_out = layer(x_in[None], attention_mask=None, position_embeddings=acts["rope"])[0]
 
-    padded_head_dim = nearest_32(config.head_dim)  # as M3VLVisionModel.from_torch pads the heads
-    tt_block = M3VLBlock.from_torch(mesh_device, reference.layers[0], padded_head_dim, dtype=ttnn.bfloat16)
+    padded_head_dim = nearest_32(config.head_dim)  # as M3VLVisionModel pads the heads
+    tt_block = M3VLBlock.from_torch(mesh_device, layer, padded_head_dim, dtype=ttnn.bfloat16)
     cos_tt, sin_tt = rope_tensors(mesh_device, acts["grid_thw"], config, padded_head_dim)
     out = to_host(tt_block(rows_to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
 

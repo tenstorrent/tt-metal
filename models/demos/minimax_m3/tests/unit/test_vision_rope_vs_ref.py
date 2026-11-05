@@ -2,20 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Host-side checks of the 3D vision RoPE's layout on device (tt/vision/rope.py and the q and k packing in
-tt/vision/attention.py) vs the Torch reference, and of the model's RoPE tables per grid. No device.
+tt/vision/attention.py) vs Hugging Face's minimax_m3_vl, and of the model's RoPE tables per grid. No device.
 
 The device rotates q and k with ttnn.experimental.rotary_embedding_llama, which pairs lanes (2i, 2i+1) of a head, so
 the q and k rows of wqkv are packed in the head order of attention._rope_head_order, padded from 80 to 96, and
-rope.py lays out the reference's cos and sin in that order. The tests check, for square, non-square, two-frame and
-two-image grids and one with a side of 2 patches:
+rope.py lays out the cos and sin in that order. The tests check, for square, non-square, two-frame and two-image grids
+and one with a side of 2 patches:
   - the op's rotation, run on host, of q and k in that order with the cos and sin of rope_cos_sin_padded equals
-    the reference rotation bit for bit, keeps the 16 pad dims at zero and leaves q k^T as the reference's;
-  - the attention computed on host from M3VLAttention's packed weights (q and k rows reordered) equals the
-    reference attention;
+    Hugging Face's rotation (apply_rotary_pos_emb_vision with MiniMaxM3VL3DRotaryEmbedding's cos and sin) bit for
+    bit, keeps the 16 pad dims at zero and leaves q k^T as Hugging Face's;
+  - the attention computed on host from M3VLAttention's packed weights (q and k rows reordered) equals Hugging Face's
+    MiniMaxM3VLVisionAttention with eager attention;
 and that M3VLVisionModel keeps the cos and sin of a grid in DRAM for the next images of that grid and copies them to L1
 once per forward for its blocks.
 
-These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
+Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1) for the checks against Hugging Face. These tests have no
+mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py
@@ -28,7 +30,6 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
-from models.demos.minimax_m3.reference import vision as ref
 from models.demos.minimax_m3.tt.vision.attention import (
     _pack_wqkv_bias,
     _pack_wqkv_weight,
@@ -37,7 +38,10 @@ from models.demos.minimax_m3.tt.vision.attention import (
 )
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.model import ROPE_CACHE_GRIDS, M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin, rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
+
+from .vision_checkpoint import random_vision_weights
+from .vision_helpers import hf_vision_modules
 
 HEAD_DIM, PADDED_HEAD_DIM, NUM_HEADS, THETA, MERGE = 80, 96, 16, 10000.0, 2
 
@@ -55,6 +59,20 @@ ROPE_GRIDS = {
 parametrize_rope_grids = pytest.mark.parametrize("grid_thw", list(ROPE_GRIDS.values()), ids=list(ROPE_GRIDS))
 
 
+@pytest.fixture(scope="module")
+def hf_vision():
+    """Hugging Face's minimax_m3_vl modeling module."""
+    from transformers.models.minimax_m3_vl import modeling_minimax_m3_vl
+
+    return modeling_minimax_m3_vl
+
+
+def hf_rope(hf_vision, grid: torch.Tensor, head_dim: int = HEAD_DIM, theta: float = THETA) -> tuple:
+    """Hugging Face's cos and sin of the 3D RoPE for grid, each (L, rotated dims) in fp32: 78 dims for head_dim 80."""
+    rotary = hf_vision.MiniMaxM3VL3DRotaryEmbedding(head_dim, theta=theta, spatial_merge_size=MERGE)
+    return rotary(grid, device=torch.device("cpu"), dtype=torch.float32)
+
+
 def rotary_embedding_llama(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """ttnn.experimental.rotary_embedding_llama in prefill mode, on host: x * cos + (x @ trans_mat) * sin, with the
     op's one-tile transformation matrix applied to each 32-lane tile of the head dim."""
@@ -65,15 +83,15 @@ def rotary_embedding_llama(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 
 @torch.no_grad()
 @parametrize_rope_grids
-def test_vision_rope_padded_vs_ref(grid_thw):
-    """The RoPE op's rotation of q and k in the device head order equals the reference rotation, bit for bit, with
-    zero pad dims and the reference's q k^T."""
+def test_vision_rope_padded_vs_ref(grid_thw, hf_vision):
+    """The RoPE op's rotation of q and k in the device head order equals Hugging Face's rotation, bit for bit, with
+    zero pad dims and Hugging Face's q k^T."""
     grid = torch.tensor(grid_thw)
     num_patches = int(grid.prod(dim=-1).sum())
     generator = torch.Generator().manual_seed(0)
     q = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
     k = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
-    ref_q, ref_k = ref.apply_rope(q, k, *rope_cos_sin(grid, HEAD_DIM, THETA, MERGE))
+    ref_q, ref_k = hf_vision.apply_rotary_pos_emb_vision(q, k, *hf_rope(hf_vision, grid))
 
     cos, sin = rope_cos_sin_padded(
         grid, head_dim=HEAD_DIM, padded_head_dim=PADDED_HEAD_DIM, theta=THETA, spatial_merge_size=MERGE
@@ -88,7 +106,7 @@ def test_vision_rope_padded_vs_ref(grid_thw):
         torch.testing.assert_close(out[..., :HEAD_DIM], x_ref[..., perm], rtol=0, atol=0, msg=lambda m: f"{name}: {m}")
         assert torch.all(out[..., HEAD_DIM:] == 0), f"{name}: nonzero pad dims"
 
-    # q k^T over the 96 lanes against the reference's over its 80 dims, for the first 128 queries, in fp64: the
+    # q k^T over the 96 lanes against Hugging Face's over its 80 dims, for the first 128 queries, in fp64: the
     # products are exact there, so only the summation order differs.
     scores = rotated["q"][:, :, :128].double() @ rotated["k"].double().transpose(-2, -1)
     ref_scores = ref_q.transpose(1, 2)[:, :, :128].double() @ ref_k.transpose(1, 2).double().transpose(-2, -1)
@@ -97,12 +115,12 @@ def test_vision_rope_padded_vs_ref(grid_thw):
 
 @torch.no_grad()
 @pytest.mark.parametrize("grid_thw", [ROPE_GRIDS["h16w16"], ROPE_GRIDS["two_images"]], ids=["h16w16", "two_images"])
-def test_vision_attention_layout_vs_ref(grid_thw):
-    """The attention computed from M3VLAttention's packed weights equals the reference attention.
+def test_vision_attention_layout_vs_ref(grid_thw, hf_vision):
+    """The attention computed from M3VLAttention's packed weights equals Hugging Face's attention.
 
     Runs what the device runs, on host in fp64: the QKV linear with the packed weight and bias (q and k rows in the
     RoPE op's head order, heads padded to 96), the head split, the RoPE op on q and k, SDPA over the 96 lanes with
-    scale 1/sqrt(80), the head concat and the output projection with its padded weight. The reference layer has
+    scale 1/sqrt(80), the head concat and the output projection with its padded weight. Hugging Face's layer has
     bf16-valued weights, which packing keeps exactly; its softmax runs in fp32, hence the tolerance.
     """
     num_heads = 2
@@ -114,13 +132,14 @@ def test_vision_attention_layout_vs_ref(grid_thw):
         projector_hidden_size=32,
         text_hidden_size=32,
     )
-    attn = ref.MiniMaxM3VisionEncoder(config).init_random_weights(seed=0).layers[0].self_attn
-    attn = attn.to(torch.bfloat16).double()
+    tower, _ = hf_vision_modules(config, random_vision_weights(config))
+    attn = tower.layers[0].self_attn.to(torch.bfloat16).double()
     grid = torch.tensor(grid_thw)
     num_patches = int(grid.prod(dim=-1).sum())
     x = torch.randn(1, num_patches, config.hidden_size, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
-    cos, sin = rope_cos_sin(grid, HEAD_DIM, THETA, MERGE)
-    expected = attn(x, cos.double(), sin.double())[0]
+    cos, sin = hf_rope(hf_vision, grid)
+    expected, _ = attn(x, position_embeddings=(cos.double(), sin.double()))  # the output and the attention weights
+    expected = expected[0]
 
     q_proj, k_proj, v_proj = attn.q_proj, attn.k_proj, attn.v_proj
     wqkv = _pack_wqkv_weight(q_proj.weight, k_proj.weight, v_proj.weight, num_heads, HEAD_DIM, PADDED_HEAD_DIM)

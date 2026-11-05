@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-End-to-end accuracy test for M3VLVisionModel (tower, then projector) vs the Torch reference.
+End-to-end accuracy test for M3VLVisionModel (tower, then projector) vs Hugging Face's MiniMaxM3VLVisionModel and
+MiniMaxM3VLMultiModalProjector, the model built with from_state_dict from the reference's weights.
 
 Two checks per grid, from the same pixel values:
   - forward_tower (patch embed, pre_layrnorm, NUM_LAYERS blocks) vs the reference tower output;
@@ -40,7 +41,8 @@ def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, vision_refere
     pixel_values, grid = acts["pixel_values"], acts["grid_thw"]
     tower_ref, final_ref = acts["tower.out"], acts["final"]
 
-    model = M3VLVisionModel.from_torch(mesh_device, vision_reference(NUM_LAYERS), dtype=ttnn.bfloat16)
+    reference = vision_reference(NUM_LAYERS)
+    model = M3VLVisionModel.from_state_dict(mesh_device, reference.weights, reference.config, dtype=ttnn.bfloat16)
     name = f"{grid_name(grid_thw)} layers={NUM_LAYERS}"
 
     tower_tt = to_host(model.forward_tower(pixel_values, grid), mesh_device, tower_ref.shape)
@@ -63,8 +65,9 @@ def test_vision_tower_new_grid_on_cached_programs(
     allocated before each image after the first and kept, puts those copies at other addresses than the image
     before's."""
     monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.ROPE_CACHE_GRIDS", 2)
-    model = M3VLVisionModel.from_torch(
-        mesh_device, vision_reference(NUM_LAYERS), with_projector=False, dtype=ttnn.bfloat16
+    reference = vision_reference(NUM_LAYERS)
+    model = M3VLVisionModel.from_state_dict(
+        mesh_device, reference.weights, reference.config, with_projector=False, dtype=ttnn.bfloat16
     )
     grids = ((1, 16, 16), (1, 8, 32), (1, 32, 8), (1, 16, 16))
     cache_entries, held = None, []

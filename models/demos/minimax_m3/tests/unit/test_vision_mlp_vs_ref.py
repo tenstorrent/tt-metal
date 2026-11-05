@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLMLP (fc1, exact GELU, fc2) vs the Torch reference. test_vision_module_guards.py checks its weight
-shapes on the host.
+Accuracy test for M3VLMLP (fc1, exact GELU, fc2) vs Hugging Face's MiniMaxM3VLVisionMLP. test_vision_module_guards.py
+checks its weight shapes on the host.
 
 Runs layer 0's MLP, with fuse_gelu off and on, on the input it gets inside the reference tower. Random weights and
 pixel values (tests/conftest.py), no checkpoint.
@@ -31,7 +31,7 @@ def test_vision_mlp_vs_ref(mesh_device, device_params, grid_thw, fuse_gelu, visi
     fuse_gelu off and on. On, fc1's matmul applies the GELU at every grid but h18w18, h12w12 and h4w4, where fc1 keeps
     ttnn's own config."""
     x_in = vision_activations(grid_thw)["layer0.mlp.in"].bfloat16().float()
-    mlp = vision_reference().layers[0].mlp
+    mlp = vision_reference().tower.layers[0].mlp
     ref_out = mlp(x_in)
 
     tt_mlp = M3VLMLP.from_torch(mesh_device, mlp, dtype=ttnn.bfloat16)

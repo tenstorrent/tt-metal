@@ -36,17 +36,21 @@ Before any device work, on the CPU:
   - the media module's prepare, given each image as the uint8 RGB array an encoder service passes, and patch_rows
     (tt/vision/preprocess.py) must give its pixel values and grid as the goldens hold them, the image processor's,
     bit for bit;
-  - HF_MODEL must be the goldens' checkpoint: its patch embedding and pre_layrnorm must reproduce the goldens' first
-    pre_layrnorm rows, and its projector the first vision tokens from the goldens' tower output. Goldens of another
-    checkpoint fail there, not as a low PCC. These are 11 of the checkpoint's 523 vision tensors; weights that differ
-    only in the blocks fail as a low PCC.
+  - HF_MODEL must be the goldens' checkpoint: with its weights, Hugging Face's patch embedding and pre_layrnorm
+    (golden_hf_vision.load_hf_model, as the goldens were made) must reproduce the goldens' first pre_layrnorm rows,
+    and its projector the first vision tokens from the goldens' tower output. Goldens of another checkpoint fail
+    there, not as a low PCC. These are 11 of the checkpoint's 523 vision tensors; weights that differ only in the
+    blocks fail as a low PCC;
+  - load_vision_state_dict, with which the encoder reads HF_MODEL, must give each of its vision tensors the name that
+    transformers' own rules give it (golden_hf_vision.load_hf_model) and the same value in bf16, so that a tensor that
+    the loader's _remap names wrongly, two tensors of the same shape swapped for example, fails there, not as a low
+    PCC.
 
 Run:
     HF_MODEL=<checkpoint> M3_VISION_GOLDEN_DIR=<goldens> pytest models/demos/minimax_m3/tests/test_vision_accuracy.py
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 
@@ -60,13 +64,21 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
-from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
+from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings
 from models.demos.minimax_m3.vision.media import MiniMaxM3Media
 
-from .golden_hf_vision import GOLDEN_FORMAT, IMAGES, gain, load_image, sha256, token_cosine_p01
+from .golden_hf_vision import (
+    GOLDEN_FORMAT,
+    IMAGES,
+    VISION_PREFIXES,
+    gain,
+    load_hf_model,
+    load_image,
+    sha256,
+    token_cosine_p01,
+)
 from .test_factory import parametrize_mesh_with_fabric
 from .unit.vision_helpers import check_close, to_host
 
@@ -146,32 +158,43 @@ def _resized_images(goldens, media: MiniMaxM3Media) -> dict:
     return images
 
 
-def _checkpoint_reference(config: dict) -> MiniMaxM3VisionEncoder:
-    """The Torch reference's patch embedding, pre_layrnorm and projector with HF_MODEL's weights, without the blocks.
-    config: HF_MODEL's config.json."""
-    vision = dataclasses.replace(vision_config(config), num_hidden_layers=0)
-    return MiniMaxM3VisionEncoder(vision).load_hf_state_dict(load_vision_state_dict(HF_MODEL)).eval()
-
-
-def _check_checkpoint(reference, goldens, manifest):
-    """Check that HF_MODEL is the goldens' checkpoint, on the CPU: the reference's patch embedding and pre_layrnorm
-    must reproduce the goldens' first pre_layrnorm rows, and its projector the vision tokens of the goldens' first
-    PROJECTOR_ROWS tower rows."""
-    tokens = PROJECTOR_ROWS // reference.config.spatial_merge_size**2
+def _check_checkpoint(model, goldens, manifest):
+    """Check that HF_MODEL is the goldens' checkpoint, on the CPU, with Hugging Face's model holding its vision weights
+    (golden_hf_vision.load_hf_model): the patch embedding and pre_layrnorm must reproduce the goldens' first
+    pre_layrnorm rows, and the projector the vision tokens of the goldens' first PROJECTOR_ROWS tower rows."""
+    tower, projector = model.vision_tower, model.multi_modal_projector
+    tokens = PROJECTOR_ROWS // projector.spatial_merge_size**2
     failed = []
     for case, golden in goldens.items():
         rows = golden["pre_layrnorm_rows"].float()
         checks = (
-            ("pre_layrnorm", rows, reference.pre_layrnorm(reference.embed(golden["pixel_values"][: rows.shape[0]]))),
-            ("projector", golden["final"][:tokens], reference.projector(golden["tower_out"][:PROJECTOR_ROWS])),
+            ("pre_layrnorm", rows, tower.pre_layrnorm(tower.embeddings(golden["pixel_values"][: rows.shape[0]]))),
+            ("projector", golden["final"][:tokens], projector(golden["tower_out"][:PROJECTOR_ROWS])),
         )
         for what, ref, out in checks:
             _, pcc = comp_pcc(ref, out, CHECKPOINT_MIN_PCC)
             if not pcc >= CHECKPOINT_MIN_PCC:
                 failed.append(f"{what} PCC {pcc:.4f} on {case}")
     assert not failed, (
-        f"HF_MODEL={HF_MODEL} is not the checkpoint of the goldens in {GOLDEN_DIR} ({manifest['checkpoint']}), or"
-        " load_vision_state_dict reads its patch embedding, pre_layrnorm or projector wrongly: " + ", ".join(failed)
+        f"HF_MODEL={HF_MODEL} is not the checkpoint of the goldens in {GOLDEN_DIR} ({manifest['checkpoint']}): "
+        + ", ".join(failed)
+    )
+
+
+def _check_loader(model):
+    """Check, on the CPU, that load_vision_state_dict, with which the encoder reads HF_MODEL, gives each vision tensor
+    of Hugging Face's model holding HF_MODEL's weights (golden_hf_vision.load_hf_model, named by transformers' own
+    rules) under its name and with its value in bf16, as the encoder reads them, and no other vision tensor."""
+    expected = {name: value for name, value in model.state_dict().items() if name.startswith(VISION_PREFIXES)}
+    loaded = load_vision_state_dict(HF_MODEL, dtype=torch.bfloat16)
+    wrong = sorted(
+        name
+        for name in expected.keys() | loaded.keys()
+        if name not in expected or name not in loaded or not torch.equal(loaded[name], expected[name].bfloat16())
+    )
+    assert not wrong, (
+        f"load_vision_state_dict (the loader's _remap) gives {len(wrong)} of the {len(expected)} vision tensors of"
+        f" HF_MODEL={HF_MODEL} otherwise than transformers names them: " + ", ".join(wrong[:8])
     )
 
 
@@ -215,7 +238,10 @@ def test_vision_accuracy(mesh_device, device_params):
     with open(os.path.join(HF_MODEL, "config.json")) as f:
         config = json.load(f)  # the service's config, which load() passes to from_weights_path
     images = _resized_images(goldens, MiniMaxM3Media(config))
-    _check_checkpoint(_checkpoint_reference(config), goldens, manifest)
+    hf_model = load_hf_model(HF_MODEL)
+    _check_checkpoint(hf_model, goldens, manifest)
+    _check_loader(hf_model)
+    del hf_model  # its fp32 vision weights, which the device run does not need
     cores = mesh_device.compute_with_storage_grid_size()
     logger.info(f"goldens {GOLDEN_DIR} ({manifest['checkpoint']}), HF_MODEL {HF_MODEL}, cores {cores.x}x{cores.y}")
 

@@ -43,7 +43,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 # transformers' minimax_m3_vl classes are imported where they are used: they take seconds to import, and
-# tests/test_vision_accuracy.py imports IMAGES from this module without needing them.
+# tests/test_vision_accuracy.py imports this module when pytest collects it, also on hosts where it skips.
 
 REPO = Path(__file__).resolve().parents[4]
 LLAMA_PROMPTS = "models/ttt_compat/demo/sample_prompts/llama_models"

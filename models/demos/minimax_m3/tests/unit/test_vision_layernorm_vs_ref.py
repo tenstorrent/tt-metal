@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLLayerNorm vs the Torch reference.
+Accuracy test for M3VLLayerNorm vs the LayerNorm of Hugging Face's vision tower.
 
 Runs layer 0's layer_norm1 on the input it gets inside the reference tower plus an offset per row. Random
 weights and pixel values (tests/conftest.py), no checkpoint.
@@ -30,7 +30,7 @@ def test_vision_layernorm_vs_ref(mesh_device, device_params, grid_thw, vision_re
     # about 0.93.
     offset = 0.5 * torch.randn(x.shape[0], 1, generator=torch.Generator().manual_seed(0))
     x_in = (x + offset).bfloat16().float()
-    layer_norm = vision_reference().layers[0].layer_norm1
+    layer_norm = vision_reference().tower.layers[0].layer_norm1
     ref_out = layer_norm(x_in)
 
     tt_ln = M3VLLayerNorm.from_torch(mesh_device, layer_norm, dtype=ttnn.bfloat16)
