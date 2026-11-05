@@ -19,7 +19,7 @@ import sys
 
 import pytest
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
 

@@ -171,10 +171,11 @@ class RMSNorm(nn.Module):
         x_sh.deallocate(True)
         return out
 
-    def forward(self, x, out_memory_config=None):
+    def forward(self, x, out_memory_config=None, prefill=False):
         """``out_memory_config``: a width-sharded decode-matmul activation layout for the decode norm's output: the
         fused decode norm (GEMMA4_NORM_FUSED=2) writes it; the native width-sharded LayerNorm runs on its grid when
-        ``sharded_layout_program_config`` accepts it; the other paths ignore it (interleaved output)."""
+        ``sharded_layout_program_config`` accepts it; the other paths ignore it (interleaved output). ``prefill``: a
+        tile-sized prefill (32-token prompt) takes the fp32 prefill path instead of the bf16 decode paths."""
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -221,8 +222,11 @@ class RMSNorm(nn.Module):
             # Prefill (height > 32) and the no-weight per-head norms keep the
             # plain path. Sharded config is dim-specific, so rebuild if the
             # activation width ever changes.
+            # ``prefill`` keeps a tile-sized prefill (32-token prompt) on the FP32 prefill
+            # path below instead of these bf16-accumulating decode fast paths.
             if (
-                len(x.shape) == 4
+                not prefill
+                and len(x.shape) == 4
                 and x.shape[0] == 1
                 and x.shape[1] == 1
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
@@ -235,7 +239,8 @@ class RMSNorm(nn.Module):
                 gamma = self.tt_weight_full if self.with_scale else None
                 return FusedNormDecode.op(x, [gamma], self.eps, out_memory_configs=[out_memory_config])[0]
             if (
-                self.with_scale
+                not prefill
+                and self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
@@ -254,7 +259,7 @@ class RMSNorm(nn.Module):
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
 
-            is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
+            is_prefill = prefill or (len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE)
             compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
             weight = self.tt_weight_tile if is_prefill and self.tt_weight_tile is not None else self.tt_weight
             if self.with_scale:

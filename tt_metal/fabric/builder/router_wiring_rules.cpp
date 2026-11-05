@@ -159,6 +159,7 @@ bool wires_into(
 
     // A boundary producer's VC1 receiver fans out to non-self VC1 senders; its VC0 receiver crosses
     // over to downstream VC1 and feeds nothing on VC0. This is the only VC-sensitive producer role.
+    // With intermesh_vc_disabled, turn_set_for_router wires the boundary on VC0 instead.
     if (producer_role == TurnRole::INTERMESH_BOUNDARY) {
         return vc == 1;
     }
@@ -271,9 +272,11 @@ RouterVcShape router_vc_shape(
     // configuration error, not a silently five-wide router.
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
-    // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    // And it needs VC1 for its from-boundary fanout, unless intermesh_vc_disabled puts that fanout on VC0.
+    const bool intermesh_vc_disabled = vc_config && vc_config->intermesh_vc_disabled;
     TT_FATAL(
-        !z_boundary_router || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
+        !z_boundary_router || requires_vc1 || intermesh_vc_disabled,
+        "A Z-facing intermesh boundary router needs VC1, or inter-mesh traffic on VC0");
 
     RouterVcShape shape{};
 
@@ -301,11 +304,17 @@ RouterVcShape router_vc_shape(
         // No VC1 or VC2 channels are ever created, independent of the num_vcs answer above.
         vc0_senders = builder_config::get_num_used_sender_channel_count(topology);
     } else {
-        // VC0: worker + wired producers, by family. The chip's Z-port role adds nothing on
-        // VC0: an intermesh boundary's VC0 receiver forwards nowhere, so no from-boundary
-        // producer exists on VC0 regardless of the chip's role -- the role addend lands on VC1.
+        // VC0: worker + wired producers, by family. The chip's Z-port role adds nothing on VC0:
+        // an intermesh boundary's VC0 receiver forwards nowhere, so no from-boundary producer
+        // exists on VC0 -- the role addend lands on VC1 (on VC0 with intermesh_vc_disabled).
         if (z_boundary_router) {
             vc0_senders = boundary_vc0_sender_count();
+        } else if (
+            intermesh_vc_disabled && chip_z_role == ZPortRole::INTERMESH_BOUNDARY &&
+            !is_x_axis_direction(facing, express_axis)) {
+            TT_FATAL(!express_routing_enabled, "intermesh_vc_disabled does not support express routing");
+            // The Z router hands landed packets to N and S on VC0, so they get one more VC0 sender.
+            vc0_senders = non_express_vc0_sender_count() + 1;
         } else if (express_routing_enabled) {
             vc0_senders = express_vc0_sender_count();
         } else {
@@ -364,11 +373,12 @@ RouterTurnSet turn_set_for_router(
     // configuration error, not a silently five-wide router.
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
-    // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    // And it needs VC1 for its from-boundary fanout, unless intermesh_vc_disabled puts that fanout on VC0.
+    const bool intermesh_vc_disabled = vc_config && vc_config->intermesh_vc_disabled;
     TT_FATAL(
-        !z_boundary_router || enable_vc1,
-        "A Z-facing intermesh boundary router cannot be constructed without VC1: its entire "
-        "shape is the from-boundary VC1 fanout");
+        !z_boundary_router || enable_vc1 || intermesh_vc_disabled,
+        "A Z-facing intermesh boundary router needs VC1, or inter-mesh traffic on VC0: its entire "
+        "shape is the from-boundary fanout");
 
     // One emission rule for every ordinary target: VC0 always, VC1 when the VC exists.
     const auto emit_on_enabled_vcs = [&turn_set, enable_vc1](RoutingDirection dir) {
@@ -385,7 +395,14 @@ RouterTurnSet turn_set_for_router(
     // set is the full set: not a special case, a consequence.
     if (z_boundary_router) {
         for (const auto dir : k_cardinal_directions) {
-            turn_set[1].push_back(ConnectionTarget(1, dir));
+            if (intermesh_vc_disabled) {
+                // With intermesh_vc_disabled the template is on VC0 and holds only N and S.
+                if (!is_x_axis_direction(dir, express_axis)) {
+                    turn_set[0].push_back(ConnectionTarget(0, dir));
+                }
+            } else {
+                turn_set[1].push_back(ConnectionTarget(1, dir));
+            }
         }
         return turn_set;
     }

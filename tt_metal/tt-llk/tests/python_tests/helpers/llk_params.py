@@ -468,6 +468,9 @@ class DestAccumulation(Enum):
         return str(self.value).lower()
 
 
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+
+
 class L1Accumulation(Enum):
     Yes = 1
     No = 0
@@ -576,6 +579,14 @@ class MathFidelity(Enum):
     @property
     def cpp_enum_value(self):
         return f"ckernel::MathFidelity::{self.name}"
+
+
+ALL_MATH_FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
 
 
 class DestSync(Enum):
@@ -711,22 +722,12 @@ class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
-    BriscCommand0 = Unpacker + 12
-    BriscCommand1 = Unpacker + 16
-    BriscCounter = Unpacker + 20
-    BriscBread0 = Unpacker + 24
-    BriscBread1 = Unpacker + 28
 
 
 class MailboxesCoverage(Enum):
     Unpacker = 0x6DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
-    BriscCommand0 = Unpacker + 12
-    BriscCommand1 = Unpacker + 16
-    BriscCounter = Unpacker + 20
-    BriscBread0 = Unpacker + 24
-    BriscBread1 = Unpacker + 28
 
 
 class MailboxesQuasar(Enum):
@@ -741,13 +742,6 @@ class MailboxesCoverageQuasar(Enum):
     Math = Unpacker + 4
     Packer = Unpacker + 8
     Sfpu = Unpacker + 12
-
-
-class BriscCmd(Enum):
-    IDLE_STATE = 0
-    START_TRISCS = 1
-    RESET_TRISCS = 2
-    UPDATE_START_ADDR_CACHE_AND_START = 3
 
 
 format_tile_sizes = {
@@ -832,6 +826,15 @@ class BlocksCalculationAlgorithm(Enum):
     Standard = "STANDARD"
     Tilize = "TILIZE"
     Untilize = "UNTILIZE"
+
+
+class PackUntilizeBenchmark(str, Enum):
+    Functional = "functional"
+    Standard = "standard"
+    FastUntilizeBaseline = "fast_untilize_baseline"
+
+    def __str__(self):
+        return self.value
 
 
 class PerfRunType(Enum):

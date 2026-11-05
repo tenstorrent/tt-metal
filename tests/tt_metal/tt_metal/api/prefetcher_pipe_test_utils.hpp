@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include "cross_node_dfb_test_utils.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/program.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/program/dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "hostdev/remote_dfb_config_layout.h"
 
 namespace tt::tt_metal::prefetcher_pipe_test {
@@ -80,9 +86,12 @@ inline std::pair<uint32_t, uint32_t> read_pipe_credits(
 
 inline uint32_t sender_l1_staging_address(const experimental::PrefetcherPipe& pipe) {
     // The persistent arena grows bottom-up from l1_unreserved_base, so placing
-    // staging below the pipe would enter reserved firmware L1. Tests use the
-    // first address above this pipe's persistent ring + config allocation.
-    return std::max(pipe.buffer_address() + pipe.ring_size(), pipe.config_address() + pipe.config_page_size());
+    // staging below it would enter reserved firmware L1. Tests use the first
+    // address above every arena allocation on the sender core, where the sender
+    // programs place no program-local L1. An Allocator space's ring and config
+    // pages sit at the top of L1, clear of it.
+    return static_cast<uint32_t>(
+        pipe.get_device()->allocator_impl()->persistent_l1().high_water_mark(pipe.sender_cores()));
 }
 
 inline void write_sender_l1_staging(
@@ -107,6 +116,15 @@ inline void write_sender_l1_staging(
     for (const auto& core : corerange_to_cores(sender_cores)) {
         slow_dispatch::WriteToL1(device, core, staging_addr, words, CoreType::WORKER);
     }
+}
+
+// Every node of `cores` carries the same pipe slot entries, which dispatch writes as one multicast rectangle.
+inline void expect_one_multicast_rectangle(const Program& program, const CoreRange& cores) {
+    const auto groups =
+        program_dispatch::partition_cores_by_prefetcher_pipe_payload(program.impl(), CoreRangeSet(cores));
+    ASSERT_EQ(groups.size(), 1u);
+    EXPECT_EQ(groups[0].cores.ranges().size(), 1u);
+    EXPECT_EQ(groups[0].cores.num_cores(), CoreRangeSet(cores).num_cores());
 }
 
 }  // namespace tt::tt_metal::prefetcher_pipe_test
