@@ -432,10 +432,12 @@ class Case:
         pooled=True,
         dense_floor=False,
         counts=None,
+        dense_blocks=None,
+        dense_keys=True,
     ):
         """pooled=False omits pooled K / V (kept blocks only). dense_floor=True (with want_ref="slice") also computes
         the exact dense reference on the slice. counts: the block_counts input ([S * nb_pad]), also used by the
-        pooling and the reference."""
+        pooling and the reference. dense_blocks / dense_keys go to the op only (the reference uses `mask`)."""
         rt, geo = self.rt, self.geo
         tq = self._upload(q, self.seq_dims, dtype=self.q_dtype)
         tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (k, v))
@@ -453,7 +455,18 @@ class Case:
                 counts.reshape(1, 1, 1, -1), self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         )
-        out = self.call(tq, tk, tv, t_mask, t_pk, t_pv, q_blocks_per_pass=q_blocks_per_pass, block_counts=t_counts)
+        out = self.call(
+            tq,
+            tk,
+            tv,
+            t_mask,
+            t_pk,
+            t_pv,
+            q_blocks_per_pass=q_blocks_per_pass,
+            block_counts=t_counts,
+            dense_blocks=dense_blocks,
+            dense_keys=dense_keys,
+        )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
         if want_dense:
@@ -766,6 +779,57 @@ def test_empty_q_blocks(runtime, pooled, passes):
         assert (out[empty] == 0).all(), f"empty Q blocks: max |out| {out[empty].abs().max().item():.3e}"
 
 
+def dense_blocks_mask(mask, geo, S, ranges, dense_keys=True):
+    """The explicit mask that dense_blocks `ranges` stand for: a Q block whose global index s * nb_pad + qb lies in a
+    range keeps every block with a real token; with dense_keys every Q block also keeps those in the ranges."""
+    nb_pad = geo.nb_pad()
+    live = (_block_lengths(geo, S) > 0).reshape(-1).to(mask.dtype)  # [S * nb_pad]
+    dense = torch.zeros(S * nb_pad, dtype=torch.bool)
+    for start, end in ranges:
+        dense[start:end] = True
+    out = mask.clone()
+    if dense_keys:
+        out[..., dense] |= live[dense]
+    for g in torch.nonzero(dense).flatten().tolist():
+        out[g // nb_pad, :, g % nb_pad] = live
+    out[:, :, geo.nb() :] = 0  # padding Q rows
+    return out
+
+
+def _dense_ranges(name, geo, S):
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    return {
+        "start": [(0, 4)],
+        # the last real blocks through the end of the padded sequence
+        "end": [((S - 1) * nb_pad + nb - 3, S * nb_pad)],
+        # one inside shard 0, one across the padding between two shards
+        "two": [(1, 3), ((S - 2) * nb_pad + nb - 2, (S - 1) * nb_pad + 2)],
+    }[name]
+
+
+@pytest.mark.parametrize("dense_keys", [True, False], ids=["rows_keys", "rows"])
+@pytest.mark.parametrize("ranges", ["start", "end", "two"])
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_dense_blocks(runtime, geom, pooled, ranges, dense_keys):
+    """dense_blocks gives the same bits as the explicit mask it stands for, and matches that mask's reference."""
+    geo = GEOMETRIES[geom]
+    case = Case(runtime, geo)
+    dense = _dense_ranges(ranges, geo, case.S)
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=30)
+    explicit = dense_blocks_mask(mask, geo, case.S, dense, dense_keys)
+    assert not torch.equal(explicit, mask), "the ranges change nothing"
+    q, k, v = case.inputs(30)
+    r = case.run(q, k, v, explicit, want_dense=False, pooled=pooled)
+    out = case.run(
+        q, k, v, mask, want_dense=False, want_ref=False, pooled=pooled, dense_blocks=dense, dense_keys=dense_keys
+    )["sparse"]
+    tag = f"dense blocks {ranges} {'rows+keys' if dense_keys else 'rows'} {_mode(pooled)} {geom}"
+    _check(tag, {**r, "sparse": out}, _density(explicit, geo, case.S), dense_min=None, ref_min=0.999)
+    diff = (out - r["sparse"]).abs().max().item()
+    assert torch.equal(out, r["sparse"]), f"{tag}: vs the explicit mask, max |diff| {diff:.3e}"
+
+
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf8", "bf4"])
 def test_block_float_inputs(runtime, dtype, pooled):
@@ -1037,6 +1101,11 @@ INVALID = {  # id: (the one invalid argument, the TT_FATAL text it must raise)
     "q_blocks_per_pass_0": (dict(q_blocks_per_pass=0), "q_blocks_per_pass must be in"),
     "q_blocks_per_pass_33": (dict(q_blocks_per_pass=33), "q_blocks_per_pass must be in"),
     "batch_2": (dict(batch=2), "batch 1 only"),
+    "dense_empty": (dict(dense_blocks=[(3, 3)]), "dense_blocks range 0 is empty or reversed"),
+    "dense_reversed": (dict(dense_blocks=[(5, 2)]), "dense_blocks range 0 is empty or reversed"),
+    "dense_past_end": (dict(dense_blocks=[(0, 1 << 20)]), "exceeds the"),
+    "dense_overlap": (dict(dense_blocks=[(0, 4), (2, 6)]), "overlap"),
+    "dense_too_many": (dict(dense_blocks=[(2 * i, 2 * i + 1) for i in range(9)]), "at most 8 dense_blocks ranges"),
 }
 
 

@@ -143,11 +143,26 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
     // +3: block counts address (none: geometric counts). +4: head chain member count, +5: this core's first Q
     // chunk in the chain. Then the packed bf16 bias-per-token-count table (pooled_bias_gen::kTableWords words), the
-    // members (start, count) and the head group's delivery arguments.
+    // dense_blocks ranges (start, end), the members (start, count) and the head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
     const uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
     const uint32_t pooled_bias_table_base = sparse_args_base + 6;
-    const uint32_t group_members_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
+    // dense_blocks: [start, end) ranges of global blocks. A Q block in one keeps every block (its mask row is
+    // ignored); with dense_keys every Q block also keeps the blocks in them. Applied to the plan and the pooled bias.
+    constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
+    constexpr bool dense_keys = get_named_compile_time_arg_val("dense_keys") == 1;
+    const uint32_t dense_ranges_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
+    const uint32_t group_members_base = dense_ranges_base + 2 * dense_n_ranges;
+    const auto dense_lo = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r); };
+    const auto dense_hi = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r + 1); };
+    const auto in_dense = [&](uint32_t g) {
+        for (uint32_t r = 0; r < dense_n_ranges; ++r) {
+            if (g >= dense_lo(r) && g < dense_hi(r)) {
+                return true;
+            }
+        }
+        return false;
+    };
     constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
     constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
     constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
@@ -422,12 +437,29 @@ void kernel_main() {
                     live_bits[b >> 5] |= 1u << (b & 31);
                 }
             }
-            const auto row_block_bits = [&](uint32_t* words) {
-                CoreLocalMem<volatile uint32_t> row(scratch);
-                for (uint32_t w = 0; w < kBlockWords; ++w) {
-                    words[w] = 0;
+            // The shard's blocks in a dense range (dense_keys), kept by every chunk.
+            uint32_t dense_key_bits[kBlockWords];
+            for (uint32_t w = 0; w < kBlockWords; ++w) {
+                dense_key_bits[w] = 0;
+            }
+            if constexpr (dense_keys) {
+                for (uint32_t r = 0; r < dense_n_ranges; ++r) {
+                    const uint32_t g0 = ring_id * mask_nb_pad;
+                    const uint32_t lo = std::max(dense_lo(r), g0);
+                    const uint32_t hi = std::min(dense_hi(r), g0 + mask_nb);
+                    for (uint32_t g = lo; g < hi; ++g) {
+                        dense_key_bits[(g - g0) >> 5] |= 1u << ((g - g0) & 31);
+                    }
                 }
-                for (uint32_t b = 0; b < mask_nb; ++b) {
+            }
+            // Local Q block qc of a dense row keeps every block.
+            const auto row_block_bits = [&](uint32_t* words, uint32_t qc) {
+                CoreLocalMem<volatile uint32_t> row(scratch);
+                const bool dense_row = in_dense(ring_index * mask_nb_pad + qc);
+                for (uint32_t w = 0; w < kBlockWords; ++w) {
+                    words[w] = dense_row ? ~0u : dense_key_bits[w];
+                }
+                for (uint32_t b = 0; b < mask_nb && !dense_row; ++b) {
                     if (row[b] != 0) {
                         words[b >> 5] |= 1u << (b & 31);
                     }
@@ -470,7 +502,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < n_res; ++i) {
                 read_shard_slice(res_nq[i], res_qc[i]);
                 uint32_t words[kBlockWords];
-                row_block_bits(words);
+                row_block_bits(words, res_qc[i]);
                 if constexpr (plan_rec_base != 0) {
                     auto rec = plan_rec(i);
                     for (uint32_t w = 0; w < kBlockWords; ++w) {
@@ -523,7 +555,7 @@ void kernel_main() {
                     // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
                     read_shard_slice(res_nq[i], res_qc[i]);
                     uint32_t words[kBlockWords];
-                    row_block_bits(words);
+                    row_block_bits(words, res_qc[i]);
                     CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
                     for (uint32_t w = 0; w < kBlockWords; ++w) {
                         plan_words[w] = words[w];
@@ -877,6 +909,25 @@ void kernel_main() {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
                                 read_chunk_row(nq, res_qc[i]);
+                                // The plan's kept set: a dense row's blocks and the dense ranges (dense_keys) are
+                                // exact as set mask bits are.
+                                if constexpr (dense_n_ranges > 0) {
+                                    CoreLocalMem<volatile uint32_t> row(scratch);
+                                    const uint32_t g0 = row0 * 32;
+                                    const uint32_t g1 = (row0 + tiles) * 32;
+                                    if (in_dense(ring_index * mask_nb_pad + res_qc[i])) {
+                                        for (uint32_t g = g0; g < g1; ++g) {
+                                            row[g] = 1;
+                                        }
+                                    } else if constexpr (dense_keys) {
+                                        for (uint32_t r = 0; r < dense_n_ranges; ++r) {
+                                            const uint32_t hi = std::min(dense_hi(r), g1);
+                                            for (uint32_t g = std::max(dense_lo(r), g0); g < hi; ++g) {
+                                                row[g] = 1;
+                                            }
+                                        }
+                                    }
+                                }
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
                                 // Block-form row: exact iff the block's own bit is set on a block with a real token.

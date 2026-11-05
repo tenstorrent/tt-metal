@@ -1321,6 +1321,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    // dense_blocks: the range count (the ranges are runtime args) and whether every Q block also keeps them.
+    reader_kernel.named_compile_time_args.emplace_back(
+        "dense_n_ranges", static_cast<uint32_t>(args.dense_blocks.size()));
+    reader_kernel.named_compile_time_args.emplace_back("dense_keys", args.dense_keys ? 1u : 0u);
     compute_kernel.defines = kernel_defines;
     // Built at O2 to fit the kernel config buffer.
     compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
@@ -1479,7 +1483,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
         // Block-sparse args, read by the kernel at rotated_args_base. Word offsets from there:
         //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), +4 n_members, +5 my_start, then the
-        //   kPooledBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
+        //   kPooledBiasTableWords packed bf16 table, then the dense_blocks ranges (start, end)..., then members
+        //   (start, count)..., then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
         reader_args.push_back(pooled_k_buf);  // null without the pooled route; positions do not move
@@ -1519,6 +1524,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_args.push_back(sparse_my_start);
         for (uint32_t w = 0; w < kPooledBiasTableWords; ++w) {
             reader_args.push_back(pooled_bias_table[w]);
+        }
+        for (const auto& [start, end] : args.dense_blocks) {
+            reader_args.push_back(start);
+            reader_args.push_back(end);
         }
         for (const auto& [start, count] : group_members) {
             reader_args.push_back(start);
