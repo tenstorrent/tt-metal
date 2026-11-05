@@ -16,11 +16,11 @@ reinitialization with BF16 and FP32 destination storage.
 
 import torch
 from conftest import blackhole_only
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
     MathFidelity,
     format_dict,
@@ -80,11 +80,7 @@ def _prepare_dest_reuse_inputs(
         tile_dimensions=tile_dimensions,
     )
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
+    effective_dest_acc = dest_acc_for(formats.output_format)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
         effective_dest_acc,
@@ -217,11 +213,7 @@ def test_eltwise_mul_scalar_hifi(
     )
     golden_tensor = _compute_dest_reuse_golden(math_fidelity, formats, prepared)
 
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.output_format)
 
     configuration = TestConfig(
         "sources/eltwise_mul_scalar_hifi_test.cpp",

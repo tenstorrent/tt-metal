@@ -51,7 +51,9 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     resolve_traces,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -521,7 +523,7 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_556_000
+K3_CHUNKED_RT_PERF_NS = 10_319_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -554,6 +556,7 @@ def _run_chunked_prefill(
     determinism_check=False,
     profile=False,
     tight_cache=False,
+    tp_shard_kv=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -582,6 +585,8 @@ def _run_chunked_prefill(
         topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    assert not tp_shard_kv or tp > 1, f"tp_shard_kv needs a TP axis to dedup across, got tp={tp}"
     tile = ttnn.TILE_SIZE
     chunk_local = chunk_size_global // sp
 
@@ -704,6 +709,8 @@ def _run_chunked_prefill(
         active_seq_len=chunk_size_global,
         slot_num=num_users,
         layer_num=1,
+        # None, not False: False would turn off a sparse variant's dedup.
+        tp_shard_kv=True if tp_shard_kv else None,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
@@ -724,6 +731,7 @@ def _run_chunked_prefill(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=num_users,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -734,11 +742,20 @@ def _run_chunked_prefill(
     out_concat_dims[sp_axis] = -2
     cache_shard_dims = [None, None]
     cache_shard_dims[sp_axis] = 2
+    if tp_shard_kv:
+        # A mapper can't split dim 2 over both axes, so TP rides dim 1.
+        cache_shard_dims[tp_axis] = 1
 
     # ---- preload the prior prefix (trace or random) into each slot, block-cyclic ----
     if prefill_len > 0:
         logger.info(f"Preloading {prefill_len}-token prefix into {num_users} slot(s) (block-cyclic host->device)...")
-        cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
+        cache_host = torch.zeros(
+            num_users,
+            tp if tp_shard_kv else 1,
+            seq_len_cache // (tp if tp_shard_kv else 1),
+            kvpe_dim,
+            dtype=torch.bfloat16,
+        )
         for u in range(num_users):
             kv_prior = users[u]["kv_prior"]
             if trace_pe_interleave:
@@ -750,14 +767,16 @@ def _run_chunked_prefill(
                 kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
                     pe.shape[0], d
                 )
-            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, sp, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
+            stripes = sp * tp if tp_shard_kv else sp
+            bc = blockcyclic_cache_host(kv_prior, stripes, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
+            cache_host[u] = tp_stripe_major_cache(bc, sp, tp) if tp_shard_kv else bc.unsqueeze(0)
         cache_host_tt = ttnn.from_torch(
             cache_host,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
         )
-        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
+        preload_cache(cache_host_tt, tt_kvpe_cache.storage)
         ttnn.synchronize_device(mesh_device)
 
     mesh_device.enable_program_cache()
@@ -925,20 +944,17 @@ def _run_chunked_prefill(
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
     #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
-        cache_sr = ttnn.to_torch(
-            tt_kvpe_cache.storage,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        ).to(torch.float32)[
-            :, :1
-        ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
-        p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
+        cache_flat, stripes = gather_cache_natural(
+            tt_kvpe_cache.storage, mesh_device, tp_shard_kv
+        )  # [num_users, seq_cache, kvpe]
+        p = blockcyclic_positions(stripes, chunk_size_global, seq_len_cache)
         kv_lora = config.kv_lora_rank
         d = kvpe_dim - kv_lora
         for u in range(num_users):
             if users[u]["kv_post"] is None:
                 continue
             nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-            nat[p] = cache_sr[u, 0]
+            nat[p] = cache_flat[u]
             dev = nat[prefill_len : users[u]["total_len"]]
             ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
             ref_pe = ref[:, kv_lora:]
@@ -1341,9 +1357,10 @@ _CHUNKED_SCENARIOS = (
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
-    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check
+    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check, tp_shard_kv
 ):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
@@ -1400,6 +1417,7 @@ def test_mla_chunked_prefill(
         topology=topology,
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
+        tp_shard_kv=tp_shard_kv,
         **kwargs,
     )
 
@@ -1442,10 +1460,6 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
 )
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
-)
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
@@ -1454,6 +1468,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    require_high_power("kimi_k3 MLA chunked perf")
     topology = per_axis_topology(device_params["fabric_config"])
     total_ns = _run_chunked_prefill(
         request,
@@ -1469,6 +1484,19 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     logger.info(
         f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
         f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
+    )
+    emit_perf_metrics(
+        "kimi_k3_mla_chunked_50k_5k_torus-xy-8x4",
+        "Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4)",
+        {
+            "prefill_len": 50 * 1024,
+            "chunk": 5120,
+            "measured_ns": total_ns,
+            "measured_ms": total_ns / 1e6,
+            "expected_ns": K3_CHUNKED_RT_PERF_NS,
+            "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
+            "within_band": lower <= total_ns <= upper,
+        },
     )
     assert lower <= total_ns <= upper, (
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "

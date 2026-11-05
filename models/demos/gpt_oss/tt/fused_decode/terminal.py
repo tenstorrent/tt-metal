@@ -508,12 +508,14 @@ class FusedDecodeSampling(TTSampling):
         self._force_argmax_sampling = self._is_force_argmax_sampling(k_n, p, temp_n)
         self._params_key = key
 
-    def forward(self, x, tt_out_tok=None, apply_grammar=False):
+    def forward(self, x, tt_out_tok=None, apply_grammar=False, log_prob_logits=None):
         if not self.terminal.is_folded(x):
             forced = self._force_argmax_sampling
             self._force_argmax_sampling = False
             try:
-                return super().forward(x, tt_out_tok=tt_out_tok, apply_grammar=apply_grammar)
+                return super().forward(
+                    x, tt_out_tok=tt_out_tok, apply_grammar=apply_grammar, log_prob_logits=log_prob_logits
+                )
             finally:
                 self._force_argmax_sampling = forced
         # FusedSamplingGenerator converts the folded logits for grammar masks and log-probs (stock_logits).
