@@ -4,11 +4,12 @@
 """Device-time perf gates for ttnn.experimental.matmul_reduce_scatter_prefill on a Blackhole QuietBox 2.
 
 A representative set of per-device prefill shapes (TP=4 row-parallel linears of DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x,
-MiniMax-M3 and MiMo-V2, two output-chunked shapes that miss L1, and Llama-70B WO and Flux2 FF2 chunked by the cost
-model) runs traced on the whole box as a 1x4 ring, and one shape as a 1x4 line. Each case: an eager call (compile), one
-traced call, one discarded replay, then REPLAYS back-to-back replays in one real-time profiler window; the gate is the
-median device time of the op's program (the slowest chip per replay) within +/- MARGIN of the case's expected time. A
-case faster than the band fails too: update its number, so the gate stays tight.
+MiniMax-M3 and MiMo-V2, two output-chunked shapes that miss L1, Llama-70B WO and Flux2 FF2 chunked by the cost model,
+and Kimi K2.7 o_proj at decode on a thin 2D grid) runs traced on the whole box as a 1x4 ring, and one shape as a 1x4
+line. Each case: an eager call (compile), one traced call, one discarded replay, then REPLAYS back-to-back replays in
+one real-time profiler window; the gate is the median device time of the op's program (the slowest chip per replay)
+within +/- MARGIN of the case's expected time. A case faster than the band fails too: update its number, so the gate
+stays tight.
 
 A and W are replicated on every device, so the group sum is G * (A @ W) and every device's output is checked against it
 (PCC), at the cost of one host matmul per case.
@@ -25,6 +26,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_matmul_reduce_scatter_prefill_bh import (
     PCC,
+    assert_thin_wide_plan,
     line_device_params,
     quantize_like_device,
     ring_device_params,
@@ -51,7 +53,11 @@ PERF_CASES = {
     # chunked although the block fits L1 unchunked (with a 1-2 tile K-block): 3 x 1 and 3 x 2 chunks
     "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "flux2_ff2": ((1, 1, 4224, 2304), (2304, 6144), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # decode (M = 32) on the default 2D grid: a 1 x 10 thin-wide plan, W read on NoC0 (asserted, THIN_WIDE_PERF_CASES)
+    "kimi_k27_o_proj_decode_2d": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
+# the cases that must take the thin-wide plan (test_matmul_reduce_scatter_prefill_bh.assert_thin_wide_plan)
+THIN_WIDE_PERF_CASES = {"kimi_k27_o_proj_decode_2d"}
 
 # Expected device time [ns] per (topology, case): QuietBox 2 (1x4, 2 links), medians of back-to-back traced replays.
 EXPECTED_NS = {
@@ -65,6 +71,7 @@ EXPECTED_NS = {
     ("ring", "chunked_mn"): 594_000,
     ("ring", "llama_70b_wo_prefill"): 297_000,
     ("ring", "flux2_ff2"): 641_000,
+    ("ring", "kimi_k27_o_proj_decode_2d"): 62_000,
     ("line", "kimi_k27_o_proj"): 157_000,
 }
 
@@ -125,6 +132,8 @@ def run_perf_case(mesh_device, case_name, *, cluster_axis, topology, expected_ns
 
     eager = run_once()  # compile + program cache
     ttnn.synchronize_device(mesh_device)
+    if case_name in THIN_WIDE_PERF_CASES:
+        assert_thin_wide_plan(scatter_dim)
     check_replicated(eager, expected, mesh_device, cluster_axis, scatter_dim, weight_dtype)
     ttnn.deallocate(eager)
 
