@@ -2256,7 +2256,7 @@
   sp_config: sc1
 
 
-- name: "high_bw_all_gather + sparse_kv_push CCL perf + accuracy"
+- name: "high_bw_all_gather CCL perf + accuracy"
   # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
   # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
   # perf at matched per-device and matched global volume.
