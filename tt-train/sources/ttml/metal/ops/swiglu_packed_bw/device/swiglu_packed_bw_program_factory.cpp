@@ -88,18 +88,18 @@ tt::tt_metal::ProgramDescriptor SwigluPackedBwProgramFactory::create_descriptor(
     program.cbs.push_back(make_cb_descriptor(all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block));
     program.cbs.push_back(make_cb_descriptor(all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block));
 
-    auto* const packed_buf = packed.buffer();
-    auto* const dh_buf = dh.buffer();
-    auto* const dpacked_buf = output.buffer();
+    const auto& packed_tensor = packed.mesh_tensor();
+    const auto& dh_tensor = dh.mesh_tensor();
+    const auto& dpacked_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dh_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(packed_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dh_tensor).append_to(reader_ct_args);
     program.kernels.push_back(  // kReaderKernelIdx
         make_reader_kernel_descriptor(all_cores, reader_ct_args, {}, kReaderKernelPath));
 
     std::vector<uint32_t> writer_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dpacked_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dpacked_tensor).append_to(writer_ct_args);
     program.kernels.push_back(  // kWriterKernelIdx
         make_writer_kernel_descriptor(all_cores, writer_ct_args, {}, kWriterKernelPath));
 
@@ -119,8 +119,8 @@ tt::tt_metal::ProgramDescriptor SwigluPackedBwProgramFactory::create_descriptor(
     auto& writer = program.kernels[kWriterKernelIdx];
     for_each_core_with_work(split, [&](const CoreWork& work) {
         const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
-        reader.emplace_runtime_args(core, {packed_buf, dh_buf, num_blocks, start_block});
-        writer.emplace_runtime_args(core, {dpacked_buf, num_blocks, start_block});
+        reader.emplace_runtime_args(core, {packed_tensor, dh_tensor, num_blocks, start_block});
+        writer.emplace_runtime_args(core, {dpacked_tensor, num_blocks, start_block});
     });
 
     return program;

@@ -130,8 +130,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    auto* const src_buffer = device_input_tensor.buffer();
-    auto* const dst_buffer = device_output_tensor.buffer();
+    const auto& src_tensor = device_input_tensor.mesh_tensor();
+    const auto& dst_tensor = device_output_tensor.mesh_tensor();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
@@ -146,12 +146,12 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         red_dim_units,
         (uint32_t)(reduce_all),
     };
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(compile_time_args);
 
     const KernelDescriptor::CoreRuntimeArgs runtime_args = {
-        src_buffer->address(),
-        dst_buffer->address(),
+        src_tensor.address(),
+        dst_tensor.address(),
     };
     const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{{0, 0}, runtime_args}};  // single-core
 
@@ -517,8 +517,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
                 input_tensor_a.memory_config())),
         input_tensor_a.device());
 
-    tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
+    const auto& src0_tensor = input_tensor_a.mesh_tensor();
+    const auto& src1_tensor = input_tensor_b.mesh_tensor();
 
     ttnn::Shape cshape = output.logical_shape();  // C=A*B, N1MK*11KN->N1MN
 
@@ -540,8 +540,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         !core_group_2.ranges().empty(),
         "Core group 2 for matmul generic test is empty. We should never hit this case.");
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
+    const auto& dst_tensor = output.mesh_tensor();
 
     const auto &ashape = input_tensor_a.logical_shape(), bshape = input_tensor_b.logical_shape();
     uint32_t B = get_batch_size(ashape);
@@ -552,9 +552,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
+    uint32_t src0_addr = src0_tensor.address();
+    uint32_t src1_addr = src1_tensor.address();
+    uint32_t dst_addr = dst_tensor.address();
 
     auto src0_cb_index = tt::CBIndex::c_0;
     auto src1_cb_index = tt::CBIndex::c_1;
@@ -606,11 +606,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
     uint32_t last_ktile_h = 0;
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w, last_ktile_h};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core;

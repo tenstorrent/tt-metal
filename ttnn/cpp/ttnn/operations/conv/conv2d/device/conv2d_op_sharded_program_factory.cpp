@@ -521,7 +521,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
     // weight
-    tt::tt_metal::Buffer* weights_buffer = b.buffer();
+    const auto& weights_tensor = b.mesh_tensor();
 
     // bias
     tt::tt_metal::Buffer* bias_buffer = nullptr;
@@ -1345,7 +1345,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 bias_ntiles);
 
             KernelDescriptor::RTArgList sender_rt_args;
-            sender_rt_args.push_back(weights_buffer);  // 0: weight buffer address (Buffer* binding)
+            sender_rt_args.push_back(weights_tensor);  // 0: weight buffer address (Buffer* binding)
             if (bias_buffer != nullptr) {
                 sender_rt_args.push_back(bias_buffer);  // 1: bias buffer address (Buffer* binding)
             } else {

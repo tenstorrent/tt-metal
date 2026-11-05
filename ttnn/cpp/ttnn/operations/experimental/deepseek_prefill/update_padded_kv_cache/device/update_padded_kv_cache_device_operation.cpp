@@ -897,9 +897,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Bind each shared buffer once per kernel. Cache hits refresh these common bindings and the
     // metadata controls above; per-core work assignments depend only on the hashed tensor specs.
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = cache.buffer();
-    reader_kernel.emplace_common_runtime_args({src_buffer});
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = cache.mesh_tensor();
+    reader_kernel.emplace_common_runtime_args({src_tensor});
     if (has_input_window(args, input_shape[-2])) {
         // Window row r of head h reads input row h * INPUT_ROW_STRIDE_T + offset + r. A windowed call has no
         // rope / scales bindings, so the offset sits right after the source binding (index 9).
@@ -912,7 +912,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     if (has_scaled) {
         reader_kernel.emplace_common_runtime_args({tensor_args.scales->mesh_tensor()});
     }
-    writer_kernel.emplace_common_runtime_args({dst_buffer});
+    writer_kernel.emplace_common_runtime_args({dst_tensor});
     // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).
     for (KernelDescriptor* kernel : {&reader_kernel, &writer_kernel}) {
         kernel->named_compile_time_args.emplace_back(

@@ -101,8 +101,8 @@ ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
         }}},
     });
 
-    auto* const routing_weights_buffer = routing_weights.buffer();
-    auto* const local_weights_buffer = tensor_return_value.buffer();
+    const auto& routing_weights_tensor = routing_weights.mesh_tensor();
+    const auto& local_weights_tensor = tensor_return_value.mesh_tensor();
 
     const auto input_datum_size_bytes = tt::datum_size(local_weights_format);
     std::vector<uint32_t> reader_ct_args = {
@@ -111,7 +111,7 @@ ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    TensorAccessorArgs(*routing_weights_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(routing_weights_tensor).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -128,7 +128,7 @@ ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    TensorAccessorArgs(*local_weights_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(local_weights_tensor).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -148,8 +148,8 @@ ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
 
     // Buffer* triggers a binding entry; the framework patches the address on
     // cache hits without rebuilding the descriptor.
-    reader_desc.emplace_runtime_args(utilized_core, {routing_weights_buffer, device_weights_count_offset});
-    writer_desc.emplace_runtime_args(utilized_core, {local_weights_buffer});
+    reader_desc.emplace_runtime_args(utilized_core, {routing_weights_tensor, device_weights_count_offset});
+    writer_desc.emplace_runtime_args(utilized_core, {local_weights_tensor});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

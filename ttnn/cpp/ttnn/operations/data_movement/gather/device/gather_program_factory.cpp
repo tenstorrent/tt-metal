@@ -367,10 +367,6 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
     const tt::DataFormat output_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
-    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto* output_tensor_buffer = output_tensor.buffer();
-
     const uint32_t input_elem_size = tensor_args.input_tensor.element_size();
     const uint32_t input_index_elem_size = tensor_args.input_index_tensor.element_size();
     const uint32_t output_elem_size = output_tensor.element_size();
@@ -448,7 +444,7 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
         input_elem_size,
         input_index_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.input_index_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderRmSingle;
@@ -466,8 +462,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
         total_number_of_cores,
         input_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterRmSingle;
@@ -489,11 +485,15 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
             for (const auto& core : range) {
                 if (work_per_core > 0) {
                     reader_desc.emplace_runtime_args(
-                        core, {input_index_tensor_buffer, work_per_core, id, input_index_per_shard_page_size});
+                        core,
+                        {tensor_args.input_index_tensor.mesh_tensor(),
+                         work_per_core,
+                         id,
+                         input_index_per_shard_page_size});
                     writer_desc.emplace_runtime_args(
                         core,
-                        {input_tensor_buffer,
-                         output_tensor_buffer,
+                        {tensor_args.input_tensor.mesh_tensor(),
+                         output_tensor.mesh_tensor(),
                          work_per_core,
                          id,
                          input_per_shard_page_size,
@@ -524,10 +524,6 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
     const tt::DataFormat output_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
-    auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto* const input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto* const output_tensor_buffer = output_tensor.buffer();
-
     const uint32_t input_elem_size = tensor_args.input_tensor.element_size();
     const uint32_t input_index_elem_size = tensor_args.input_index_tensor.element_size();
     const uint32_t output_elem_size = output_tensor.element_size();
@@ -557,7 +553,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
     // both ends, so an unaligned row offset moves the wrong bytes. group_1 holds the larger slice when
     // the units don't divide evenly; the last core takes fewer columns when W_index is not a multiple
     // of w_unit.
-    const uint32_t alignment = std::max(input_index_tensor_buffer->alignment(), output_tensor_buffer->alignment());
+    const uint32_t alignment =
+        std::max(tensor_args.input_index_tensor.mesh_buffer().alignment(), output_tensor.mesh_buffer().alignment());
     const uint32_t w_unit = std::lcm(
         alignment / std::gcd(alignment, input_index_elem_size), alignment / std::gcd(alignment, output_elem_size));
     const auto [total_number_of_cores, core_range, core_group_1, core_group_2, units_per_core_g1, units_per_core_g2] =
@@ -576,7 +573,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
 
     // Each input CB page holds one input row. The page size is rounded up to the input buffer
     // alignment so that the second page starts at an aligned address, like the source row does.
-    const uint32_t input_cb_page_size = tt::align(input_stick_size_bytes, input_tensor_buffer->alignment());
+    const uint32_t input_cb_page_size =
+        tt::align(input_stick_size_bytes, tensor_args.input_tensor.mesh_buffer().alignment());
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = buffer_scale_factor * input_cb_page_size,
@@ -620,7 +618,7 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
         input_elem_size,
         input_index_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.input_index_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderRmMulti;
@@ -631,8 +629,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
 
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index, output_tensor_cb_index, H, W_input, W_index, input_elem_size, output_elem_size};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterRmMulti;
@@ -656,11 +654,16 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
                 const uint32_t w_per_core = std::min(w_per_group_core, W_index - w_cursor);
                 if (w_per_core > 0) {
                     reader_desc.emplace_runtime_args(
-                        core, {input_index_tensor_buffer, w_per_core, w_start, id, input_index_per_shard_page_size});
+                        core,
+                        {tensor_args.input_index_tensor.mesh_tensor(),
+                         w_per_core,
+                         w_start,
+                         id,
+                         input_index_per_shard_page_size});
                     writer_desc.emplace_runtime_args(
                         core,
-                        {input_tensor_buffer,
-                         output_tensor_buffer,
+                        {tensor_args.input_tensor.mesh_tensor(),
+                         output_tensor.mesh_tensor(),
                          w_per_core,
                          w_start,
                          id,

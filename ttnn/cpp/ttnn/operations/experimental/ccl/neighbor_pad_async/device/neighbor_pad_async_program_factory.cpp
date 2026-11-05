@@ -233,14 +233,14 @@ ProgramDescriptor build_program_descriptor_at(
     // Tensor Info
     const auto& input_tensor_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor_shape = tensor_return_value.padded_shape();
-    Buffer* input_buffer = tensor_args.input_tensor.buffer();
-    Buffer* output_buffer = tensor_return_value.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& output_tensor = tensor_return_value.mesh_tensor();
 
     // Get OP Config, topology config
     // Use the buffer's aligned page size (architecture-specific: 32B on WH, 64B on BH).
     // The interleaved address generator spaces pages at aligned_page_size intervals,
     // so NOC transfers must use this size to avoid sub-minimum or misaligned reads.
-    const uint32_t page_size = static_cast<uint32_t>(input_buffer->aligned_page_size());
+    const uint32_t page_size = static_cast<uint32_t>(input_tensor.mesh_buffer().aligned_page_size());
     uint32_t num_sticks_per_halo_dim = 1;
     for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];
@@ -508,7 +508,7 @@ ProgramDescriptor build_program_descriptor_at(
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
-    TensorAccessorArgs(*input_buffer).append_to(h_reader_compile_args);
+    TensorAccessorArgs(input_tensor).append_to(h_reader_compile_args);
     h_reader_compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
     h_reader_compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
     KernelDescriptor h_reader_kernel;
@@ -520,8 +520,8 @@ ProgramDescriptor build_program_descriptor_at(
     h_reader_kernel.config = ReaderConfigDescriptor{};
     {
         KernelDescriptor::RTArgList h_reader_crta;
-        h_reader_crta.push_back(input_buffer);
-        h_reader_crta.push_back(output_buffer);
+        h_reader_crta.push_back(input_tensor);
+        h_reader_crta.push_back(output_tensor);
         h_reader_crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
             static_cast<uint32_t>(operation_attributes.h_neighbor_semaphore.address()));
         h_reader_kernel.emplace_common_runtime_args(h_reader_crta);
@@ -532,7 +532,7 @@ ProgramDescriptor build_program_descriptor_at(
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
-    TensorAccessorArgs(*output_buffer).append_to(h_writer_compile_args);
+    TensorAccessorArgs(output_tensor).append_to(h_writer_compile_args);
     h_writer_compile_args.push_back(is_2d ? 1 : 0);                   // use_l1_intermediate
     h_writer_compile_args.push_back(is_2d ? recv_cb_index : 0);       // recv_cb_id
     h_writer_compile_args.push_back(is_2d ? 1 : 0);                   // handle_incoming_writes
@@ -547,8 +547,8 @@ ProgramDescriptor build_program_descriptor_at(
     h_writer_kernel.config = WriterConfigDescriptor{};
     {
         KernelDescriptor::RTArgList h_writer_crta;
-        h_writer_crta.push_back(input_buffer);
-        h_writer_crta.push_back(output_buffer);
+        h_writer_crta.push_back(input_tensor);
+        h_writer_crta.push_back(output_tensor);
         h_writer_crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
             static_cast<uint32_t>(operation_attributes.h_neighbor_semaphore.address()));
         h_writer_crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
@@ -698,7 +698,7 @@ ProgramDescriptor build_program_descriptor_at(
 
             // Create consolidated local copy reader kernel (uniform compile args)
             std::vector<uint32_t> local_reader_compile_args = {sender_cb_index, page_size};
-            TensorAccessorArgs(*input_buffer).append_to(local_reader_compile_args);
+            TensorAccessorArgs(input_tensor).append_to(local_reader_compile_args);
             KernelDescriptor local_reader_kernel;
             local_reader_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_reader.cpp";
@@ -707,8 +707,8 @@ ProgramDescriptor build_program_descriptor_at(
             local_reader_kernel.config = ReaderConfigDescriptor{};
             {
                 KernelDescriptor::RTArgList local_reader_crta;
-                local_reader_crta.push_back(input_buffer);   // CRTA[0]
-                local_reader_crta.push_back(output_buffer);  // CRTA[1] (unused by reader, reserved for consistency)
+                local_reader_crta.push_back(input_tensor);   // CRTA[0]
+                local_reader_crta.push_back(output_tensor);  // CRTA[1] (unused by reader, reserved for consistency)
                 local_reader_crta.push_back(0u);             // CRTA[2]: stick_start_id (always 0)
                 local_reader_crta.push_back(input_halo_dim_size);      // CRTA[3]
                 local_reader_crta.push_back(num_sticks_per_halo_dim);  // CRTA[4]: num_sticks_to_read
@@ -718,7 +718,7 @@ ProgramDescriptor build_program_descriptor_at(
 
             // Create consolidated local copy writer kernel (uniform compile args)
             std::vector<uint32_t> local_writer_compile_args = {sender_cb_index, page_size};
-            TensorAccessorArgs(*output_buffer).append_to(local_writer_compile_args);
+            TensorAccessorArgs(output_tensor).append_to(local_writer_compile_args);
             KernelDescriptor local_writer_kernel;
             local_writer_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_writer.cpp";
@@ -731,8 +731,8 @@ ProgramDescriptor build_program_descriptor_at(
                 (operation_attributes.logical_h > 0) ? (device_index * input_halo_dim_size) : 0u;
             {
                 KernelDescriptor::RTArgList local_writer_crta;
-                local_writer_crta.push_back(input_buffer);                       // CRTA[0] (unused by writer, reserved)
-                local_writer_crta.push_back(output_buffer);                      // CRTA[1]
+                local_writer_crta.push_back(input_tensor);                       // CRTA[0] (unused by writer, reserved)
+                local_writer_crta.push_back(output_tensor);                      // CRTA[1]
                 local_writer_crta.push_back(writer_stick_start_id);              // CRTA[2]
                 local_writer_crta.push_back(input_halo_dim_size);                // CRTA[3]
                 local_writer_crta.push_back(output_halo_dim_size);               // CRTA[4]
@@ -830,8 +830,8 @@ ProgramDescriptor build_program_descriptor_at(
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*output_buffer).append_to(w_reader_compile_args);
-        TensorAccessorArgs(*input_buffer).append_to(w_reader_compile_args);
+        TensorAccessorArgs(output_tensor).append_to(w_reader_compile_args);
+        TensorAccessorArgs(input_tensor).append_to(w_reader_compile_args);
         KernelDescriptor w_reader_kernel;
         w_reader_kernel.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -841,12 +841,12 @@ ProgramDescriptor build_program_descriptor_at(
         w_reader_kernel.config = ReaderConfigDescriptor{};
         {
             KernelDescriptor::RTArgList crta;
-            crta.push_back(output_buffer);
+            crta.push_back(output_tensor);
             crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
                 static_cast<uint32_t>(operation_attributes.barrier_semaphore.address()));
             crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
                 static_cast<uint32_t>(operation_attributes.w_neighbor_semaphore.address()));
-            crta.push_back(input_buffer);
+            crta.push_back(input_tensor);
             w_reader_kernel.emplace_common_runtime_args(crta);
         }
 
@@ -855,7 +855,7 @@ ProgramDescriptor build_program_descriptor_at(
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*output_buffer).append_to(w_writer_compile_args);
+        TensorAccessorArgs(output_tensor).append_to(w_writer_compile_args);
         w_writer_compile_args.push_back(0);            // use_l1_intermediate (direct-to-DRAM for W)
         w_writer_compile_args.push_back(0);            // recv_cb_id (unused)
         w_writer_compile_args.push_back(0);            // handle_incoming_writes (data goes direct to DRAM)
@@ -870,8 +870,8 @@ ProgramDescriptor build_program_descriptor_at(
         w_writer_kernel.config = WriterConfigDescriptor{};
         {
             KernelDescriptor::RTArgList crta;
-            crta.push_back(output_buffer);
-            crta.push_back(output_buffer);
+            crta.push_back(output_tensor);
+            crta.push_back(output_tensor);
             crta.push_back(  // smuggled-rta-ok: caller GlobalSemaphore, re-applied in override_runtime_arguments
                 static_cast<uint32_t>(operation_attributes.w_neighbor_semaphore.address()));
             // Use h_neighbor_semaphore (not barrier_semaphore) for W startup barrier:

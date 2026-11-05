@@ -94,8 +94,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         num_l1_banks,
         tt::tt_metal::hal::get_l1_alignment());
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -126,8 +126,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     if (!tilized) {
         compile_time_args.push_back(page_size);
     }
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(compile_time_args);
 
     const std::string kernel_path =
         tilized
@@ -193,8 +193,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         // the framework patches them on cache hits without rebuilding the descriptor.
         KernelDescriptor::RTArgList runtime_args;
         runtime_args.reserve(tilized ? 25 : 26);
-        runtime_args.push_back(src_buffer);
-        runtime_args.push_back(dst_buffer);
+        runtime_args.push_back(src_tensor);
+        runtime_args.push_back(dst_tensor);
         runtime_args.push_back(pages_handled_per_core);
         runtime_args.push_back(num_pages_per_core);
         runtime_args.push_back(semaphore_id);

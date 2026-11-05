@@ -136,18 +136,18 @@ tt::tt_metal::ProgramDescriptor MLAKVAssembleBwProgramFactory::create_descriptor
     desc.cbs.push_back(make_cb_descriptor(all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles));
 
     // ── Kernels ──
-    auto* dK_buffer = dK.buffer();
-    auto* dV_buffer = dV.buffer();
-    auto* dkv_up_buffer = dkv_up.buffer();
-    auto* dk_pe_buffer = dk_pe.buffer();
+    const auto& dK_tensor = dK.mesh_tensor();
+    const auto& dV_tensor = dV.mesh_tensor();
+    const auto& dkv_up_tensor = dkv_up.mesh_tensor();
+    const auto& dk_pe_tensor = dk_pe.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tr, Tv, H, k_HtWt, v_HtWt, Ts, block_size};
-    tt::tt_metal::TensorAccessorArgs(dK_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dV_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dK_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dV_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, block_size};
-    tt::tt_metal::TensorAccessorArgs(dkv_up_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dk_pe_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dkv_up_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dk_pe_tensor).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {Tr, H};
 
@@ -178,9 +178,9 @@ tt::tt_metal::ProgramDescriptor MLAKVAssembleBwProgramFactory::create_descriptor
         const uint32_t dkv_up_block_base_start = start_block * H * (Tn + Tv);
         const uint32_t dk_pe_block_base_start = start_block * Tr;
         reader.emplace_runtime_args(
-            core, {dK_buffer, dV_buffer, num_blocks, sb_start, dK_block_base_start, dV_block_base_start});
+            core, {dK_tensor, dV_tensor, num_blocks, sb_start, dK_block_base_start, dV_block_base_start});
         writer.emplace_runtime_args(
-            core, {dkv_up_buffer, dk_pe_buffer, num_blocks, dkv_up_block_base_start, dk_pe_block_base_start});
+            core, {dkv_up_tensor, dk_pe_tensor, num_blocks, dkv_up_block_base_start, dk_pe_block_base_start});
         compute.emplace_runtime_args(core, {num_blocks});
     });
 

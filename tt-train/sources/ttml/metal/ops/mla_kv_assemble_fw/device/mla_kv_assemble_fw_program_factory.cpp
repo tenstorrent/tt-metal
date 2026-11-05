@@ -128,18 +128,18 @@ tt::tt_metal::ProgramDescriptor MLAKVAssembleFwProgramFactory::create_descriptor
     desc.cbs.push_back(make_cb_descriptor(all_cores, kKpeCbIndex, data_format, single_tile_size, kpe_cb_num_tiles));
 
     // ── Kernels ──
-    auto* kv_up_buffer = kv_up.buffer();
-    auto* k_pe_buffer = k_pe.buffer();
-    auto* k_buffer = k.buffer();
-    auto* v_buffer = v.buffer();
+    const auto& kv_up_tensor = kv_up.mesh_tensor();
+    const auto& k_pe_tensor = k_pe.mesh_tensor();
+    const auto& k_tensor = k.mesh_tensor();
+    const auto& v_tensor = v.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {Tn, Tv, Tr, H, block_size};
-    tt::tt_metal::TensorAccessorArgs(kv_up_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(k_pe_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(kv_up_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_pe_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, k_HtWt, v_HtWt, Ts, block_size};
-    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_tensor).append_to(writer_compile_time_args);
 
     const std::map<std::string, std::string> defines;
 
@@ -164,8 +164,8 @@ tt::tt_metal::ProgramDescriptor MLAKVAssembleFwProgramFactory::create_descriptor
         const uint32_t k_tile_id_start = b_start * H * k_HtWt + sb_start * Th;
         const uint32_t v_tile_id_start = b_start * H * v_HtWt + sb_start * Tv;
         reader.emplace_runtime_args(
-            core, {kv_up_buffer, k_pe_buffer, num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
-        writer.emplace_runtime_args(core, {k_buffer, v_buffer, num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
+            core, {kv_up_tensor, k_pe_tensor, num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
+        writer.emplace_runtime_args(core, {k_tensor, v_tensor, num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
     });
 
     return desc;

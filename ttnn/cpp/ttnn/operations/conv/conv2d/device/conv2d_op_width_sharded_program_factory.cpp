@@ -582,8 +582,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     };
 
     auto full_core_grid = device->compute_with_storage_grid_size();
-    tt::tt_metal::Buffer* weights_buffer = b.buffer();
-    tt::tt_metal::Buffer* bias_buffer = bias ? bias->buffer() : nullptr;
+    const auto& weights_tensor = b.mesh_tensor();
     auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
     auto total_num_cores = all_reader_cores.size();
     act_kernel_desc.runtime_args.reserve(total_num_cores);
@@ -608,9 +607,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             KernelDescriptor::RTArgList weights_rt_args;
             weights_rt_args.reserve(4);
             weights_rt_args.push_back(static_cast<uint32_t>(core_index * weight_block_w_ntiles));
-            weights_rt_args.push_back(weights_buffer);
-            if (bias_buffer != nullptr) {
-                weights_rt_args.push_back(bias_buffer);
+            weights_rt_args.push_back(weights_tensor);
+            if (bias.has_value()) {
+                weights_rt_args.push_back(bias->mesh_tensor());
             } else {
                 weights_rt_args.push_back(uint32_t{0});
             }

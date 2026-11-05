@@ -1068,11 +1068,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
     tt::tt_metal::Buffer* pad_offset_buffer_ptr = mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
-    tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
-    tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
 
@@ -1356,7 +1353,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Trailing halo buffer address (halo mode only) is read by the reader when its halo_mode CT flag set.
         KernelDescriptor::RTArgList reader_args;
         reader_args.reserve(12);
-        reader_args.push_back(input_buffer);
+        reader_args.push_back(input_tensor.mesh_tensor());
         reader_args.push_back(cw.c_in_block_start);
         reader_args.push_back(cw.c_in_block_end);
         reader_args.push_back(cw.c_out_block_start);
@@ -1395,8 +1392,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
         writer_args.reserve(27 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
-        writer_args.push_back(out_buffer);
-        writer_args.push_back(weight_buffer);
+        writer_args.push_back(output_tensor.mesh_tensor());
+        writer_args.push_back(weight_tensor.mesh_tensor());
         if (bias_buffer != nullptr) {
             writer_args.push_back(bias_buffer);
         } else {

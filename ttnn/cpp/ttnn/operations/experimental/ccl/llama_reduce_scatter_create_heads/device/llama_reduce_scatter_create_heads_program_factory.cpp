@@ -362,7 +362,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t output_cores_per_device = ncores_output;
 
-    auto* input_tensor_buffer = input_tensor.buffer();
+    const auto& input_tensor_tensor = input_tensor.mesh_tensor();
 
     uint32_t q_base_addr = q_output_tensor.mesh_buffer().address();
     uint32_t k_base_addr = k_output_tensor.mesh_buffer().address();
@@ -387,7 +387,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         k_num_cores,
         v_num_cores);
 
-    auto* packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
+    const auto& packet_tensor = tensor_args.intermediate_packet_buffer.mesh_tensor();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
@@ -461,7 +461,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(1 * input_block_size, {{input_tensor_cb_id, cb_data_format}})
             .set_page_size(input_tensor_cb_id, input_block_size)
-            .set_globally_allocated_address(*input_tensor_buffer);
+            .set_globally_allocated_address(input_tensor_tensor);
 
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
@@ -546,7 +546,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         tt::tt_metal::CircularBufferConfig(
             num_blocks_per_packet * num_devices * input_block_size, {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_block_size)
-            .set_globally_allocated_address(*packet_buffer);
+            .set_globally_allocated_address(packet_tensor);
 
     // After reduction, the data will be packed into the accumulator cb
     /*
@@ -874,15 +874,15 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         uint32_t k_base_addr = output_tensor_k.mesh_buffer().address();
         uint32_t v_base_addr = output_tensor_v.mesh_buffer().address();
 
-        auto* input_tensor_buffer = input_tensor.buffer();
-        auto* packet_buffer = intermediate_packet_buffer.buffer();
+        const auto& input_tensor_tensor = input_tensor.mesh_tensor();
+        const auto& packet_tensor = intermediate_packet_buffer.mesh_tensor();
 
         const auto& all_cores_grid = shared_variables.core_range;
 
         auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
 
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[0], *input_tensor_buffer);
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[1], *packet_buffer);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[0], input_tensor_tensor);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[1], packet_tensor);
 
         for (const auto& core : cores) {
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);

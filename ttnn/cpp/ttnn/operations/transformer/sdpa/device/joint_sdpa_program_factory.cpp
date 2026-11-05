@@ -584,14 +584,14 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         .math_approx_mode = math_approx_mode,
     };
 
-    auto* const q_buf = input_tensor_q.buffer();
-    auto* const k_buf = input_tensor_k.buffer();
-    auto* const v_buf = input_tensor_v.buffer();
-    auto* const joint_q_buf = joint_tensor_q.buffer();
-    auto* const joint_k_buf = joint_tensor_k.buffer();
-    auto* const joint_v_buf = joint_tensor_v.buffer();
-    auto* const out_buf = output_tensor.buffer();
-    auto* const joint_out_buf = joint_output_tensor.buffer();
+    const auto& q_tensor = input_tensor_q.mesh_tensor();
+    const auto& k_tensor = input_tensor_k.mesh_tensor();
+    const auto& v_tensor = input_tensor_v.mesh_tensor();
+    const auto& joint_q_tensor = joint_tensor_q.mesh_tensor();
+    const auto& joint_k_tensor = joint_tensor_k.mesh_tensor();
+    const auto& joint_v_tensor = joint_tensor_v.mesh_tensor();
+    const auto& out_tensor = output_tensor.mesh_tensor();
+    const auto& joint_out_tensor = joint_output_tensor.mesh_tensor();
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -640,12 +640,12 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
         reader_desc.emplace_runtime_args(
             core,
-            {q_buf,
-             k_buf,
-             v_buf,
-             joint_q_buf,
-             joint_k_buf,
-             joint_v_buf,
+            {q_tensor,
+             k_tensor,
+             v_tensor,
+             joint_q_tensor,
+             joint_k_tensor,
+             joint_v_tensor,
              local_batch_start,
              local_batch_end,
              local_nh_start,
@@ -664,8 +664,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         // Writer args
         writer_desc.emplace_runtime_args(
             core,
-            {out_buf,
-             joint_out_buf,
+            {out_tensor,
+             joint_out_tensor,
              local_batch_start,
              local_batch_end,
              local_nh_start,

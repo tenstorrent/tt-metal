@@ -90,8 +90,8 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt_metal::Buffer* in0_buffer = input_tensor.buffer();
-    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
+    const auto& in0_tensor = input_tensor.mesh_tensor();
+    TT_ASSERT(in0_tensor.mesh_buffer().size() % single_tile_size == 0);
 
     tt_metal::Buffer* in1_buffer = nullptr;
     if (read_from_input_tensor_kv) {
@@ -147,7 +147,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
         .append_to(reader_compile_time_args);
 
@@ -283,7 +283,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
 
         KernelDescriptor::RTArgList reader_rt;
         reader_rt.reserve(5);
-        reader_rt.push_back(in0_buffer);
+        reader_rt.push_back(in0_tensor);
         if (in1_buffer != nullptr) {
             reader_rt.push_back(in1_buffer);
         } else {

@@ -44,22 +44,22 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const uint32_t total_size_bytes = input.mesh_buffer().aligned_size_per_bank();
     const uint32_t page_size_bytes = input.mesh_buffer().aligned_page_size();
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
-    const uint32_t input_buffer_address = src_buffer->address();
-    const uint32_t output_buffer_address = dst_buffer->address();
+    const uint32_t input_buffer_address = src_tensor.address();
+    const uint32_t output_buffer_address = dst_tensor.address();
 
     const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
-        src_buffer->alignment() == dst_buffer->alignment(),
+        src_tensor.mesh_buffer().alignment() == dst_tensor.mesh_buffer().alignment(),
         "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        src_buffer->alignment(),
-        dst_buffer->alignment());
+        src_tensor.mesh_buffer().alignment(),
+        dst_tensor.mesh_buffer().alignment());
     TT_FATAL(
-        move_chunk_size_bytes % src_buffer->alignment() == 0,
+        move_chunk_size_bytes % src_tensor.mesh_buffer().alignment() == 0,
         "Expected chunk size bytes to move to be {} byte aligned.",
-        src_buffer->alignment());
+        src_tensor.mesh_buffer().alignment());
     const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
@@ -74,7 +74,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size_bytes,
         }}},
-        .buffer = src_buffer,
+        .tensor = &src_tensor,
     });
 
     // Sharded dst CB: dynamic globally-allocated; framework rebinds on cache hit.
@@ -86,7 +86,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size_bytes,
         }}},
-        .buffer = dst_buffer,
+        .tensor = &dst_tensor,
     });
 
     std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
@@ -124,17 +124,17 @@ void MoveShardedProgramFactory::override_runtime_arguments(
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    Buffer* src_buffer = tensor_args.input_tensor.buffer();
-    Buffer* dst_buffer = tensor_return_value.buffer();
+    const auto& src_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& dst_tensor = tensor_return_value.mesh_tensor();
 
     // Same derivation as create_descriptor: the copy is expressed as chunks of the
     // dst-minus-src address delta, so all four reader args follow the addresses.
-    const uint32_t total_size_bytes = src_buffer->aligned_size_per_bank();
-    const uint32_t move_chunk_size_bytes = dst_buffer->address() - src_buffer->address();
+    const uint32_t total_size_bytes = src_tensor.mesh_buffer().aligned_size_per_bank();
+    const uint32_t move_chunk_size_bytes = dst_tensor.address() - src_tensor.address();
     TT_FATAL(
-        move_chunk_size_bytes % src_buffer->alignment() == 0,
+        move_chunk_size_bytes % src_tensor.mesh_buffer().alignment() == 0,
         "Expected chunk size bytes to move to be {} byte aligned.",
-        src_buffer->alignment());
+        src_tensor.mesh_buffer().alignment());
     const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
     for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
@@ -151,8 +151,8 @@ void MoveShardedProgramFactory::override_runtime_arguments(
 
     // Both CBs are tensor-backed; create_descriptor pushes src then dst.
     tt::tt_metal::ProgramDescriptor cb_addr_only;
-    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = src_buffer});
-    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = dst_buffer});
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.tensor = &src_tensor});
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.tensor = &dst_tensor});
     tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 

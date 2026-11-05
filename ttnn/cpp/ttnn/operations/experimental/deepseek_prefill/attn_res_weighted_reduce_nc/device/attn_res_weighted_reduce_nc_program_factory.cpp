@@ -190,9 +190,9 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
     // set would be refetched per position — G times a pass over the weight.
     // Contiguous ranges give each core ~num_tiles/Wt distinct rows, so the
     // weights are read about once per group.
-    auto* const input_buffer = tensor_args.input.buffer();
-    auto* const weight_buffer = tensor_args.weight.buffer();
-    auto* const output_buffer = tensor_return_value.buffer();
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    const auto& weight_tensor = tensor_args.weight.mesh_tensor();
+    const auto& output_tensor = tensor_return_value.mesh_tensor();
 
     for (uint32_t i = 0, start_id = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core{i % num_cores_x, i / num_cores_x};
@@ -206,8 +206,8 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_kernel_desc.emplace_runtime_args(core, {input_buffer, weight_buffer, num_tiles_per_core, start_id});
-        writer_kernel_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, start_id});
+        reader_kernel_desc.emplace_runtime_args(core, {input_tensor, weight_tensor, num_tiles_per_core, start_id});
+        writer_kernel_desc.emplace_runtime_args(core, {output_tensor, num_tiles_per_core, start_id});
         compute_kernel_desc.emplace_runtime_args(core, {num_tiles_per_core, start_id});
 
         start_id += num_tiles_per_core;

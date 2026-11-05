@@ -19,9 +19,9 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
-    auto* input_buffer = tensor_args.input.buffer();
-    tt::tt_metal::Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
+    const auto& out_tensor = output.mesh_tensor();
 
     const auto& ashape = tensor_args.input.padded_shape();
     auto num_output_blocks_total = tensor_args.input.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
@@ -53,13 +53,13 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     const uint32_t output_cb_id = tt::CBIndex::c_16;
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
         intermed_cb_id2,
         output_cb_id,
     };
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         input_cb_id,
         scalar_cb_id,
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         // (src_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/TILE_WIDTH)
         reader_kernel_desc.emplace_runtime_args(
             cores[i],
-            {input_buffer,
+            {input_tensor,
              num_blocks_per_core * LATENT_DIM,
              num_blocks_written * LATENT_DIM,
              ashape[2] / TILE_HEIGHT,
@@ -183,7 +183,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         // (dst_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/(LATENT_DIM*TILE_WIDTH))
         writer_kernel_desc.emplace_runtime_args(
             cores[i],
-            {out_buffer,
+            {out_tensor,
              num_blocks_per_core,
              num_blocks_written,
              ashape[2] / TILE_HEIGHT,

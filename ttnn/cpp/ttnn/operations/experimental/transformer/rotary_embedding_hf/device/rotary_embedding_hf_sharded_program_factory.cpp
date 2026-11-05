@@ -70,10 +70,10 @@ ProgramDescriptor create_single_tile_decode_descriptor(
     const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor;
     const uint32_t num_cos_sin_tiles = head_dim_t * batch_per_core;
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& cos_tensor = cos.mesh_tensor();
+    const auto& sin_tensor = sin.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     constexpr uint8_t input_cb_index = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
@@ -84,7 +84,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = src_buffer,
+        .tensor = &src_tensor,
     });
 
     constexpr uint8_t cos_cb_index = CBIndex::c_1;
@@ -96,7 +96,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
         }}},
-        .buffer = cos_buffer,
+        .tensor = &cos_tensor,
     });
 
     constexpr uint8_t sin_cb_index = CBIndex::c_2;
@@ -108,7 +108,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
         }}},
-        .buffer = sin_buffer,
+        .tensor = &sin_tensor,
     });
 
     constexpr uint8_t trans_mat_cb_index = CBIndex::c_3;
@@ -165,7 +165,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = dst_buffer,
+        .tensor = &dst_tensor,
     });
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -261,10 +261,10 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
     const uint32_t num_sin_cos_rows_per_core = batch_per_core;
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& cos_tensor = cos.mesh_tensor();
+    const auto& sin_tensor = sin.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     constexpr uint8_t input_cb_index = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
@@ -275,7 +275,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = src_buffer,
+        .tensor = &src_tensor,
     });
 
     constexpr uint8_t cos_cb_index = CBIndex::c_1;
@@ -287,7 +287,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
         }}},
-        .buffer = cos_buffer,
+        .tensor = &cos_tensor,
     });
 
     constexpr uint8_t sin_cb_index = CBIndex::c_2;
@@ -299,7 +299,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
         }}},
-        .buffer = sin_buffer,
+        .tensor = &sin_tensor,
     });
 
     constexpr uint8_t src_scalar_cb_index = CBIndex::c_3;
@@ -357,7 +357,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = dst_buffer,
+        .tensor = &dst_tensor,
     });
 
     std::vector<uint32_t> compute_kernel_args = {

@@ -159,7 +159,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-    Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
+    const auto& tensor_addrs_tensor = tensor_addrs.mesh_tensor();
     // tensors that with actual data
     const ttsl::Span<const Tensor> tensors(input_tensors.data(), input_tensors.size() - 1);
 
@@ -235,7 +235,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
             .data_format = tensor_addrs_data_format,
             .page_size = tensor_addrs_single_tile_size,
         }}},
-        .buffer = tensor_addrs_buffer,
+        .tensor = &tensor_addrs_tensor,
     });
 
     desc.cbs.push_back(CBDescriptor{

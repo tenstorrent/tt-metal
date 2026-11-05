@@ -256,16 +256,16 @@ tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
     // -------------------------------------------------------------------------
     // Buffer pointers
     // -------------------------------------------------------------------------
-    auto* metadata_buf = args.metadata.buffer();
-    auto* scores_buf = args.scores.buffer();
-    auto* plan_buf = plan.buffer();
-    auto* grouped_scores_buf = grouped_scores.buffer();
-    auto* k_slot_buf = k_slot.buffer();
-    auto* counts_buf = counts.buffer();
-    auto* offsets_buf = offsets.buffer();
-    auto* leids_buf = args.local_expert_ids.buffer();
-    auto* dispatched_buf = args.dispatched.buffer();
-    auto* grouped_buf = grouped.buffer();
+    const auto& metadata_tensor = args.metadata.mesh_tensor();
+    const auto& scores_tensor = args.scores.mesh_tensor();
+    const auto& plan_tensor = plan.mesh_tensor();
+    const auto& grouped_scores_tensor = grouped_scores.mesh_tensor();
+    const auto& k_slot_tensor = k_slot.mesh_tensor();
+    const auto& counts_tensor = counts.mesh_tensor();
+    const auto& offsets_tensor = offsets.mesh_tensor();
+    const auto& leids_tensor = args.local_expert_ids.mesh_tensor();
+    const auto& dispatched_tensor = args.dispatched.mesh_tensor();
+    const auto& grouped_tensor = grouped.mesh_tensor();
 
     // -------------------------------------------------------------------------
     // NOC coords used as CT args by the combined kernel
@@ -315,15 +315,15 @@ tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
         mcast_ey,                        // 22
         mcast_num_dests_including_self,  // 23
         kCbCtrl};                        // 24
-    tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dispatched_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(leids_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(scores_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(k_slot_buf).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(plan_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dispatched_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(leids_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(k_slot_tensor).append_to(combined_ct_args);
 
     auto combined_kernel_g1 = make_reader_kernel_descriptor(worker_group_1, combined_ct_args, {}, kCombinedKernelPath);
     auto combined_kernel_g2 = make_reader_kernel_descriptor(worker_group_2, combined_ct_args, {}, kCombinedKernelPath);
@@ -339,8 +339,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
         last_chunk_tiles,
         num_total_cores,   // 5 — stride (= num_workers)
         kPlanReadySemId};  // 6
-    tt::tt_metal::TensorAccessorArgs(grouped_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(writer_ct_args);
 
     auto writer_kernel_g1 = make_writer_kernel_descriptor(worker_group_1, writer_ct_args, {}, kWorkerWriterPath);
     auto writer_kernel_g2 = make_writer_kernel_descriptor(worker_group_2, writer_ct_args, {}, kWorkerWriterPath);
@@ -410,30 +410,30 @@ tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
         combined_kernel.emplace_runtime_args(
             core,
             {
-                plan_buf,            // 0
-                dispatched_buf,      // 1
-                worker_idx,          // 2 my_worker_start (interleaved tile_row)
-                tiles_this_core,     // 3 my_worker_count
-                metadata_buf,        // 4
-                counts_buf,          // 5
-                offsets_buf,         // 6
-                leids_buf,           // 7
-                worker_idx,          // 8 my_core_idx
-                my_slice_start,      // 9
-                my_slice_end,        // 10
-                scores_buf,          // 11
-                grouped_scores_buf,  // 12
-                k_slot_buf,          // 13
+                plan_tensor,            // 0
+                dispatched_tensor,      // 1
+                worker_idx,             // 2 my_worker_start (interleaved tile_row)
+                tiles_this_core,        // 3 my_worker_count
+                metadata_tensor,        // 4
+                counts_tensor,          // 5
+                offsets_tensor,         // 6
+                leids_tensor,           // 7
+                worker_idx,             // 8 my_core_idx
+                my_slice_start,         // 9
+                my_slice_end,           // 10
+                scores_tensor,          // 11
+                grouped_scores_tensor,  // 12
+                k_slot_tensor,          // 13
             });
 
         auto& writer_kernel = is_g1 ? writer_kernel_g1 : writer_kernel_g2;
         writer_kernel.emplace_runtime_args(
             core,
             {
-                grouped_buf,      // 0
+                grouped_tensor,   // 0
                 worker_idx,       // 1 my_start
                 tiles_this_core,  // 2 my_count
-                offsets_buf,      // 3
+                offsets_tensor,   // 3
             });
         worker_idx++;
     }

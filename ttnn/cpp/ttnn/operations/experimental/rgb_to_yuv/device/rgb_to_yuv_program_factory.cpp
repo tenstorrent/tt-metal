@@ -50,10 +50,10 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     const auto& input = tensor_args.input;
     auto& [y_out, u_out, v_out] = output;
 
-    Buffer* src_buf = input.buffer();
-    Buffer* y_buf = y_out.buffer();
-    Buffer* u_buf = u_out.buffer();
-    Buffer* v_buf = v_out.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& y_tensor = y_out.mesh_tensor();
+    const auto& u_tensor = u_out.mesh_tensor();
+    const auto& v_tensor = v_out.mesh_tensor();
 
     const auto* device = input.device();
 
@@ -174,7 +174,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         y_tiles,
         uv_tiles,
     };
-    TensorAccessorArgs(*src_buf).append_to(reader_ct_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
 
     std::vector<uint32_t> compute_ct_args = {
         cb_R_rm,
@@ -205,9 +205,9 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         row_bytes_uv,
         rowpage,
     };
-    TensorAccessorArgs(*y_buf).append_to(writer_ct_args);
-    TensorAccessorArgs(*u_buf).append_to(writer_ct_args);
-    TensorAccessorArgs(*v_buf).append_to(writer_ct_args);
+    TensorAccessorArgs(y_tensor).append_to(writer_ct_args);
+    TensorAccessorArgs(u_tensor).append_to(writer_ct_args);
+    TensorAccessorArgs(v_tensor).append_to(writer_ct_args);
 
     // --- Typecast defines for compute kernel ---------------------------------
     std::map<std::string, std::string> compute_defines;
@@ -246,7 +246,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     for (const auto& core : cores_vec) {
         uint32_t units = core_group_1.contains(core) ? units_per_core_g1 : units_per_core_g2;
 
-        std::vector<uint32_t> reader_rt = {src_buf->address()};
+        std::vector<uint32_t> reader_rt = {src_tensor.address()};
         reader_rt.insert(reader_rt.end(), coeffs.begin(), coeffs.end());
         reader_rt.push_back(unit_idx);
         reader_rt.push_back(units);
@@ -255,7 +255,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         SetRuntimeArgs(program, compute_id, core, {units});
 
         SetRuntimeArgs(
-            program, writer_id, core, {y_buf->address(), u_buf->address(), v_buf->address(), unit_idx, units});
+            program, writer_id, core, {y_tensor.address(), u_tensor.address(), v_tensor.address(), unit_idx, units});
 
         unit_idx += units;
     }

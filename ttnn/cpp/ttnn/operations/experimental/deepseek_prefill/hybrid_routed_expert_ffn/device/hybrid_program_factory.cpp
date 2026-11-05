@@ -65,11 +65,11 @@ namespace {
 constexpr uint32_t kCommonWeightsBase = 6;
 
 tt::tt_metal::KernelDescriptor::RTArgList routed_expert_common_args(
-    Buffer* x,
-    Buffer* counts,
-    Buffer* global_expert_idx_table,
-    Buffer* start,
-    Buffer* output,
+    const tt::tt_metal::MeshTensor& x,
+    const tt::tt_metal::MeshTensor& counts,
+    const tt::tt_metal::MeshTensor& global_expert_idx_table,
+    const tt::tt_metal::MeshTensor& start,
+    const tt::tt_metal::MeshTensor& output,
     const std::vector<Tensor>& gate,
     const std::vector<Tensor>& up,
     const std::vector<Tensor>& down,
@@ -80,8 +80,8 @@ tt::tt_metal::KernelDescriptor::RTArgList routed_expert_common_args(
     bool weights_from_table) {
     tt::tt_metal::KernelDescriptor::RTArgList args;
     args.reserve(kCommonWeightsBase + (((weights_from_table ? 0 : 3) + (fuse_bias ? 3 : 0)) * gate.size()));
-    for (Buffer* buffer : {x, counts, global_expert_idx_table, start, output}) {
-        args.push_back(buffer);
+    for (const auto* tensor : {&x, &counts, &global_expert_idx_table, &start, &output}) {
+        args.push_back(*tensor);
     }
     args.push_back(0u);  // expert_offsets, set by append_far_run
     if (!weights_from_table) {
@@ -840,11 +840,11 @@ void append_to_descriptor(
     }
 
     const auto common_args = routed_expert_common_args(
-        tensor_arguments.activations.buffer(),
-        tensor_arguments.counts.buffer(),
-        tensor_arguments.global_expert_idx_table.buffer(),
-        start_tensor.buffer(),
-        tensor_return_value.buffer(),
+        tensor_arguments.activations.mesh_tensor(),
+        tensor_arguments.counts.mesh_tensor(),
+        tensor_arguments.global_expert_idx_table.mesh_tensor(),
+        start_tensor.mesh_tensor(),
+        tensor_return_value.mesh_tensor(),
         tensor_arguments.w_gates,
         tensor_arguments.w_ups,
         tensor_arguments.w_downs,
@@ -1721,19 +1721,19 @@ void append_to_descriptor(
     // per weight role covers every expert (identical shape/layout), and the
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
-    auto* x_buffer = t.x.buffer();
-    const auto* gate_buffer = &t.gate_projs[0].mesh_buffer();
-    const auto* up_buffer = &t.up_projs[0].mesh_buffer();
-    const auto* down_buffer = &t.down_projs[0].mesh_buffer();
-    auto* counts_buffer = t.counts.buffer();
-    auto* idx_buffer = t.global_expert_idx_table.buffer();
-    auto* out_buffer = tensor_return_value.buffer();
+    const auto& x_tensor = t.x.mesh_tensor();
+    const auto& gate_tensor = t.gate_projs[0].mesh_tensor();
+    const auto& up_tensor = t.up_projs[0].mesh_tensor();
+    const auto& down_tensor = t.down_projs[0].mesh_tensor();
+    const auto& counts_tensor = t.counts.mesh_tensor();
+    const auto& idx_tensor = t.global_expert_idx_table.mesh_tensor();
+    const auto& out_tensor = tensor_return_value.mesh_tensor();
 
     // expert_region_offsets is a mandatory input (validated in the device op):
     // the writer always writes an expert's output straight into the shared
     // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
     // and the reader always reads x from the same region.
-    auto* start_buffer = t.expert_region_offsets->buffer();
+    const auto& start_tensor = t.expert_region_offsets->mesh_tensor();
     // dst_M_tiles bounds destination writes: the shared output buffer's
     // tile-row count.
     const uint32_t dst_M_tiles = tensor_return_value.padded_shape()[-2] / TILE;
@@ -1995,7 +1995,7 @@ void append_to_descriptor(
     const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
     const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
     uint32_t counts_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(counts_buffer->aligned_page_size()),
+        static_cast<uint32_t>(counts_tensor.mesh_buffer().aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     // The start-chunk table lands past the counts, 64-byte aligned because it is read straight from DRAM.
     const uint32_t far_ext_off = (counts_scratch_bytes + 63u) & ~63u;
@@ -2004,7 +2004,7 @@ void append_to_descriptor(
             far_ext_off + ((counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)) + 63u) & ~63u);
     }
     const uint32_t idx_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(idx_buffer->aligned_page_size()),
+        static_cast<uint32_t>(idx_tensor.mesh_buffer().aligned_page_size()),
         idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     descriptor.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = counts_scratch_bytes,
@@ -2036,7 +2036,7 @@ void append_to_descriptor(
     // size it to the real per-call requirement (lands the tensor's page and holds
     // every region-offset entry) rather than the old fixed MAX_GLOBAL_EXPERTS floor.
     const uint32_t start_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(start_buffer->aligned_page_size()),
+        static_cast<uint32_t>(start_tensor.mesh_buffer().aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     descriptor.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = start_scratch_bytes,
@@ -2127,16 +2127,16 @@ void append_to_descriptor(
         gu_shard_w,  // 34
         d_shard_w,   // 35
     };
-    tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(x_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(gate_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(idx_tensor).append_to(reader_ct_args);
     // `start` (= expert_region_offsets) accessor — appended last, matching the
     // reader's accessor stream. Always read: x is the shared dispatched buffer
     // and each expert's rows begin at start[global_id].
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(reader_ct_args);
 
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
     // bias tensor accessors (gate, up, down). The reader reads them at the
@@ -2228,12 +2228,12 @@ void append_to_descriptor(
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(writer_ct_args);
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(writer_ct_args);
 
     tt::tt_metal::KernelDescriptor writer_descriptor{
         .kernel_source =
@@ -2606,11 +2606,11 @@ void append_to_descriptor(
     }
 
     const auto common_args = routed_expert_common_args(
-        x_buffer,
-        counts_buffer,
-        idx_buffer,
-        start_buffer,
-        out_buffer,
+        x_tensor,
+        counts_tensor,
+        idx_tensor,
+        start_tensor,
+        out_tensor,
         t.gate_projs,
         t.up_projs,
         t.down_projs,

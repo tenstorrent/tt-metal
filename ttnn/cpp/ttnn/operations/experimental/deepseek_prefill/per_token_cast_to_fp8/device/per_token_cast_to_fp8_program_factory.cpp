@@ -102,9 +102,9 @@ KernelIds build_kernels_and_cbs(
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
     const uint32_t scale_aligned_page_bytes = output_scale.mesh_buffer().aligned_page_size();
 
-    const auto* src_buffer = &input.mesh_buffer();
-    const auto* dst_e4m3_buffer = &output_e4m3.mesh_buffer();
-    const auto* dst_scale_buffer = &output_scale.mesh_buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_e4m3_tensor = output_e4m3.mesh_tensor();
+    const auto& dst_scale_tensor = output_scale.mesh_tensor();
 
     const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
     const DataFormat fp32_df = DataFormat::Float32;
@@ -158,7 +158,7 @@ KernelIds build_kernels_and_cbs(
     // passed by both so the TensorAccessorArgs offset (<7>) and later indices line up across layouts.
     std::vector<uint32_t> reader_ct_args = {
         cb_in_idx, input_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
-    TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
     KernelIds ids;
     ids.reader = CreateKernel(
         program,
@@ -183,8 +183,8 @@ KernelIds build_kernels_and_cbs(
         tile_w,
         face_h,
         face_w};
-    TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
-    TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_e4m3_tensor).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_scale_tensor).append_to(writer_ct_args);
     ids.writer = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
