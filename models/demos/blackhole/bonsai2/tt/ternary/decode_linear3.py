@@ -203,7 +203,11 @@ class TernaryDecodeLinear3:
         )
         grid = device.compute_with_storage_grid_size()
         unit = 2 if glu else 1  # a core takes whole (gate, up) pairs
-        cores = min(self.cores, Nt // unit)
+        # the fewest cores with the same per-core maximum: fewer concurrent weight streams contend less in DRAM
+        # (traced, 130 -> 80 cores: 17408x5120 78.4 -> 68.7 us, 6144x5120 30.4 -> 26.9; GLU 5120x17408 at 109 cores:
+        # 125.8 -> 119.2)
+        per = -(-(Nt // unit) // min(self.cores, Nt // unit))
+        cores = -(-(Nt // unit) // per)
         base, extra = divmod(Nt // unit, cores)
         coords, spans, start = [], [], 0
         for c in range(cores):
