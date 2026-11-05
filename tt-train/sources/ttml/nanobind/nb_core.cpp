@@ -119,18 +119,16 @@ void py_module(nb::module_& m) {
         [](const ttml::serialization::NamedParameters& parameters,
            float max_norm,
            float p_norm_type,
-           bool error_if_nonfinite,
-           std::optional<uint32_t> cluster_axis) -> ttml::autograd::TensorPtr {
-            return ttml::core::clip_grad_norm(parameters, max_norm, p_norm_type, error_if_nonfinite, cluster_axis);
+           bool error_if_nonfinite) -> ttml::autograd::TensorPtr {
+            return ttml::core::clip_grad_norm(parameters, max_norm, p_norm_type, error_if_nonfinite);
         },
         nb::arg("parameters"),
         nb::arg("max_norm"),
         nb::arg("p_norm_type") = 2.0f,
         nb::arg("error_if_nonfinite") = false,
-        nb::arg("cluster_axis") = nb::none(),
-        "Clip gradients of parameters to a maximum norm in place. Returns the total norm before clipping. With "
-        "`cluster_axis`, parameters are tensor-parallel over that mesh axis: sharded gradients are reduced across it "
-        "and replicated ones, which must be identical on it (all-reduce partial-sum grads first), are counted once.");
+        "Clip gradients of parameters to a maximum norm in place. Returns the total norm before clipping. On a mesh, "
+        "each gradient is reduced over the mesh axes its parameter is sharded on, so replicated gradients, which must "
+        "be identical on every device (all-reduce partial-sum grads first), are counted once.");
 
     // Parameter precision (training_config.precision.master_dtype)
     m.def(
