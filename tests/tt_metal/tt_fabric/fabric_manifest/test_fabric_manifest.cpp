@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <set>
 #include <span>
 #include <string>
@@ -34,6 +36,7 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
@@ -148,7 +151,14 @@ protected:
             return;
         }
 
-        manifest_path_ = fabric_manifest_path(tt::tt_metal::MetalContext::instance().rtoptions());
+        // This rank's manifest, in the newest run's folder: the one this suite's fabric init just wrote.
+        const auto world = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+        const std::string manifest_file_name = visualizer::make_manifest_file_name(
+            static_cast<uint32_t>(*world->rank()), static_cast<uint32_t>(*world->size()));
+        const auto run_directory = visualizer::find_latest_run_directory(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(), manifest_file_name);
+        ASSERT_TRUE(run_directory.has_value()) << "no run folder holds " << manifest_file_name;
+        manifest_path_ = *run_directory / manifest_file_name;
         std::ifstream stream(manifest_path_);
         ASSERT_TRUE(stream.is_open()) << manifest_path_;
         manifest_ = json::parse(stream);
@@ -187,6 +197,11 @@ void check_top_level(
     EXPECT_EQ(manifest.at("fabric").at("config").at("fabric_config"), lower_enum_name(fabric_config));
     EXPECT_EQ(manifest.at("fabric").at("is_2d_routing"), is_2d_fabric_config(fabric_config));
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
+
+    // The run id is a UTC time and 8 hex digits, and it names the folder the manifest is in.
+    const std::string run_id = manifest.at("run").at("run_id").get<std::string>();
+    EXPECT_TRUE(std::regex_match(run_id, std::regex("[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}"))) << run_id;
+    EXPECT_EQ(manifest_path.parent_path().filename(), run_id);
 
     // Other ranks write their manifests into the same directory, and may still be writing.
     const auto temp_prefix = manifest_path.filename().string() + ".tmp.";

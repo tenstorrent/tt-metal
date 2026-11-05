@@ -46,7 +46,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 {
   "manifest_version": 1,
   "file_kind": "fabric_manifest",
-  "run":        { mpi_rank, world_size, subcontext?: { id, rank, size }, host_name, written_at,
+  "run":        { run_id, mpi_rank, world_size, subcontext?: { id, rank, size }, host_name, written_at,
                   build: { git_sha, git_sha_short, version, build_type, git_dirty } },
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
   "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, core_registers: [ ... ] },
@@ -126,6 +126,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 
 | Key | Value |
 | --- | --- |
+| `run_id` | The fabric run: the UTC time and 8 hex digits, such as `20261105T221500Z-1a2b3c4d`. Every rank of the fabric has the same one, and it names the folder the manifest is in |
 | `mpi_rank`, `world_size` | This process's MPI rank in the whole job, and the job's number of processes |
 | `subcontext` | Only when tt-run splits the job into sub-contexts (`-M`, or a rank bindings mapping), each its own fabric: `id`, and this process's `rank` within the sub-context and its `size`. Mesh and chip names are per sub-context, so files are joined within one sub-context |
 | `host_name` | The host this process runs on: the cluster id UMD stamps on the cluster descriptor, which is `TT_METAL_CLUSTER_ID` when set and otherwise the OS hostname |
