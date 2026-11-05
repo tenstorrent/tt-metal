@@ -68,10 +68,13 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     prepare_prefill_mtp_tokens,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import load_host_tail_weights
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
@@ -556,6 +559,90 @@ def test_mtp_build_ttnn_cache(
     ttnn.synchronize_device(mesh_device)
     assert _complete(), f"MTP layer {layer_idx} cache still incomplete at {path}"
     logger.info(f"MTP layer {layer_idx} cache complete at {path}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mtp_build_trunk_tail_cache(
+    variant,
+    config_only,
+    model_path,
+    weight_cache_path,
+    mesh_device,
+    device_params,
+    num_links,
+    sp_axis,
+    use_pretrained,
+):
+    """Build the trunk tail an MTP last rank loads, the final norm and the LM head, into the trunk cache
+    for this mesh (``$TT_GLM53_PREFILL_TTNN_CACHE/<variant>_<arch>_<N>dev/<mesh key>``), built the way
+    ``TtPrefillTransformer`` builds them, and check the LM head's logits against torch.
+
+    A trunk cache build writes only the embedding and the layers, so a mesh's cache lacks these until
+    this runs (or ``test_mtp_transformer_chunks.py`` does, on 8x4).
+    """
+    if weight_cache_path is None:
+        pytest.skip("no pretrained checkpoint, so no trunk cache to build")
+    path = weight_cache_path / mesh_cache_key(list(mesh_device.shape), sp_axis)
+    path.mkdir(parents=True, exist_ok=True)
+    tp_axis = 1 - sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])
+    tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+    tail = load_host_tail_weights(model_path, config_only)
+    assert tail is not None, f"checkpoint at {model_path} has no final norm / LM head"
+    norm_weight, lm_head_weight = tail
+    hidden, vocab = config_only.hidden_size, config_only.vocab_size
+
+    logger.info(f"Building the trunk tail (norm + LM head) for mesh {list(mesh_device.shape)} at {path}")
+    TtDistributedRmsNorm(
+        mesh_device=mesh_device,
+        emb_dim=hidden,
+        torch_weight=norm_weight,
+        epsilon=config_only.rms_norm_eps,
+        cluster_axis=tp_axis,
+        num_links=num_links,
+        topology=tp_topology,
+        weight_cache_path=path,
+        cache_name_prefix="norm",
+    )
+    lm_head = TtLMHead(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        emb_dim=hidden,
+        vocab_size=vocab,
+        torch_weight=lm_head_weight,
+        num_links=num_links,
+        topology=tp_topology,
+        weight_cache_path=path,
+        is_column_parallel=True,
+    )
+    init_checker(path)
+    assert TtDistributedRmsNorm.check_cache_complete(path, "norm") and TtLMHead.check_cache_complete(path)
+
+    # One tile of rows per SP chip, emb TP-sharded: the layout the MTP tail hands the head.
+    sp = mesh_device.shape[sp_axis]
+    x = torch.randn(1, 1, ttnn.TILE_SIZE * sp, hidden).to(torch.bfloat16)
+    dims = (-2, -1) if sp_axis == 0 else (-1, -2)
+    tt_x = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=dims),
+    )
+    tt_logits, _ = lm_head(tt_x, None)
+    logits = ttnn.to_torch(
+        tt_logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=dims)
+    )
+    ref = x.float() @ lm_head_weight.float().T
+    _, msg = assert_with_pcc(ref, logits.float(), 0.99)
+    logger.info(f"Trunk tail cache complete at {path}; LM head logits PCC {msg}")
 
 
 @pytest.mark.parametrize(
