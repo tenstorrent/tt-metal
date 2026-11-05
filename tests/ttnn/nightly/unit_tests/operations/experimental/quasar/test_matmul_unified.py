@@ -1716,7 +1716,7 @@ def test_auto_config_block_sharded_caps_per_core_to_output(device, a_shape, b_sh
 def test_auto_config_block_sharded_fp32_dest_acc(device, expect_error):
     """fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4). Quasar runs it on the unified
     matmul. Off Quasar the 2D factory gives the fp32 partials DFB no unpack_modes entry, so the kernel config is
-    rejected (#61018); once that stops raising, fold the case back into
+    rejected; once that stops raising, fold the case back into
     test_auto_config_block_sharded_caps_per_core_to_output."""
     torch.manual_seed(0)
     a, b = _randn(1, 128, 32), _randn(1, 32, 128)
