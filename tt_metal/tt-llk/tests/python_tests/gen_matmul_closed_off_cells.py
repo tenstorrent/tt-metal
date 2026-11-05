@@ -40,6 +40,7 @@ def cells():
             int(r["kt"]),
             int(r["throttle"]),
             r["l1"] == "True",
+            r.get("sync") == "Full",
         )
         keys.setdefault(k, []).append(r)
     per_tile, main = [], []
@@ -75,9 +76,10 @@ def blocks():
         for k in per_tile
     )
     cpp_main = "".join(
-        "    {MathFidelity::%s, true, %s, DataFormat::%s, DataFormat::%s, DataFormat::%s, %d, %d, %d, %d, %s, %d},\n"
+        "    {MathFidelity::%s, %s, %s, DataFormat::%s, DataFormat::%s, DataFormat::%s, %d, %d, %d, %d, %s, %d},\n"
         % (
             k[0],
+            "false" if k[9] else "true",
             "true" if acc else "false",
             k[1],
             k[2],
@@ -97,9 +99,10 @@ def blocks():
         for k in per_tile
     )
     py_main = "".join(
-        '    ("%s", True, %s, "%s", "%s", "%s", %d, %d, %d, %d, %s, %d),\n'
+        '    ("%s", %s, %s, "%s", "%s", "%s", %d, %d, %d, %d, %s, %d),\n'
         % (
             k[0],
+            "False" if k[9] else "True",
             acc,
             SHORT[k[1]],
             SHORT[k[2]],
