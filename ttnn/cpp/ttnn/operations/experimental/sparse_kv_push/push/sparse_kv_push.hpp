@@ -35,8 +35,8 @@ Tensor sparse_kv_push(
     const std::optional<CoreRangeSet>& core_grid = std::nullopt);
 
 // Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh: a 2D
-// torus fabric, at least 3 chips on each mesh axis and at most 32 in all, and a cache geometry the plan table and the
-// plan's reduce fit. When false the ops would raise, so callers gather the whole prefix instead.
+// fabric (FABRIC_2D or a torus on either or both axes) on a 2D mesh of 2 to 32 chips, and a cache geometry the plan
+// table and the plan's reduce fit. When false the ops would raise, so callers gather the whole prefix instead.
 bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows);
 
 // The compact buffer sparse_kv_push writes for up to distinct_rows needed rows per chip (a requester's query rows x

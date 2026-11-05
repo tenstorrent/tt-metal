@@ -49,31 +49,38 @@ CoreRangeSet to_range_set(const std::vector<CoreCoord>& cores) {
     return CoreRangeSet(ranges);
 }
 
-// Sender w serves channel w / kSendersPerChannel; channel c = link * kDirections + dir.
+// Sender w serves channel w / kSendersPerChannel; channel c = link * directions.size() + d sends towards directions[d].
+// The senders come first in the grid, so sender 0 (the sync core the fences address on every chip) is the same core on
+// every chip, however many directions a chip has.
 struct CoreLayout {
     uint32_t links = 0;
+    std::vector<FabricDirection> directions;
     std::vector<CoreCoord> senders;
     std::vector<CoreCoord> muxes;
     CoreRangeSet sender_range;
     CoreRangeSet mux_range;
 
-    uint32_t channels() const { return links * kDirections; }
+    uint32_t num_directions() const { return static_cast<uint32_t>(directions.size()); }
+    uint32_t channels() const { return links * num_directions(); }
     uint32_t num_senders() const { return static_cast<uint32_t>(senders.size()); }
+    const FabricDirection& direction_of(uint32_t channel) const { return directions[channel % num_directions()]; }
 };
 
-CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links) {
+CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links, std::vector<FabricDirection> directions) {
     TT_FATAL(links >= 1 && links <= 2, "the sparse KV push supports 1 or 2 links, got {}", links);
+    TT_FATAL(!directions.empty(), "the sparse KV push found no fabric neighbour");
     const auto cores = corerange_to_cores(grid, std::nullopt, true);
-    const uint32_t senders = links * kDirections * kSendersPerChannel;
+    const auto dirs = static_cast<uint32_t>(directions.size());
+    const uint32_t senders = links * dirs * kSendersPerChannel;
     TT_FATAL(
-        cores.size() >= cores_needed(links),
+        cores.size() >= cores_needed(links, dirs),
         "the sparse KV push needs {} sender + {} mux cores, the grid has {}",
         senders,
-        links * kDirections,
+        links * dirs,
         cores.size());
-    CoreLayout layout{.links = links};
+    CoreLayout layout{.links = links, .directions = std::move(directions)};
     layout.senders.assign(cores.begin(), cores.begin() + senders);
-    layout.muxes.assign(cores.begin() + senders, cores.begin() + cores_needed(links));
+    layout.muxes.assign(cores.begin() + senders, cores.begin() + cores_needed(links, dirs));
     layout.sender_range = to_range_set(layout.senders);
     layout.mux_range = to_range_set(layout.muxes);
     return layout;
@@ -113,16 +120,42 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed
     };
 }
 
-// The chip's four torus neighbours, in channel direction order.
-std::vector<tt::tt_metal::distributed::MeshCoordinate> torus_neighbors(
-    const tt::tt_metal::distributed::MeshDeviceView& mesh_view,
-    const tt::tt_metal::distributed::MeshCoordinate& coord) {
-    const auto [neighbors, directions] =
-        ttnn::operations::ccl::common::get_neighbors(mesh_view, coord, tt::tt_fabric::Topology::Torus, std::nullopt);
-    TT_FATAL(
-        neighbors.size() == kDirections && std::all_of(directions.begin(), directions.end(), [](bool d) { return d; }),
-        "the sparse KV push needs all four torus neighbours");
-    return neighbors;
+// The chip's fabric directions. The kernels send each requester's rows, and their completion counts, on the channel of
+// the fabric's first hop towards it, so every first hop must be one of them, or that requester would wait forever. The
+// directions must also differ: two neighbours the fabric reaches the same way mean the topology was misread (e.g. a
+// line taken for a ring).
+std::vector<FabricDirection> checked_directions(
+    const Tensor& tensor, const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    auto* mesh_device = tensor.device();
+    auto directions = fabric_directions(tensor, coord);
+    for (size_t i = 0; i < directions.size(); ++i) {
+        for (size_t j = i + 1; j < directions.size(); ++j) {
+            TT_FATAL(
+                directions[i].eth_direction != directions[j].eth_direction,
+                "the sparse KV push from chip {} reaches neighbours {} and {} in the same fabric direction",
+                coord,
+                directions[i].neighbor,
+                directions[j].neighbor);
+        }
+    }
+    const auto my_node = mesh_device->get_fabric_node_id(coord);
+    for (const auto& other : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
+        if (other == coord) {
+            continue;
+        }
+        const auto first_hop =
+            tt::tt_fabric::get_eth_forwarding_direction(my_node, mesh_device->get_fabric_node_id(other));
+        TT_FATAL(
+            first_hop.has_value() &&
+                std::any_of(
+                    directions.begin(),
+                    directions.end(),
+                    [&](const FabricDirection& d) { return d.eth_direction == static_cast<uint32_t>(*first_hop); }),
+            "the sparse KV push from chip {} has no channel on the fabric's route to chip {}",
+            coord,
+            other);
+    }
+    return directions;
 }
 
 std::vector<uint32_t> reader_compile_args(
@@ -172,12 +205,13 @@ std::vector<uint32_t> writer_compile_args(
 std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint32_t sender, uint32_t my_rank) {
     const uint32_t channel = sender / kSendersPerChannel;
     return {
-        channel / kDirections,  // link
-        channel % kDirections,  // direction
+        channel / layout.num_directions(),  // link
+        layout.direction_of(channel).eth_direction,
         my_rank,
         sender % kSendersPerChannel,
         kSendersPerChannel,
-        layout.links};
+        layout.links,
+        layout.directions.front().eth_direction};  // the channels of the first direction also carry this chip's rows
 }
 
 std::vector<uint32_t> writer_runtime_args(
@@ -191,8 +225,8 @@ std::vector<uint32_t> writer_runtime_args(
     const auto sync_core = mesh_device->worker_core_from_logical_core(layout.senders[0]);
     std::vector<uint32_t> rt = {
         sender,
-        channel % kDirections,
-        channel / kDirections,
+        layout.direction_of(channel).eth_direction,
+        channel / layout.num_directions(),
         sub,
         my_rank,
         static_cast<uint32_t>(sync_core.x),
@@ -249,8 +283,8 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t num_devices = mesh_view.shape().mesh_size();
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
-    const auto neighbors = torus_neighbors(mesh_view, coord);
-    const auto layout = core_layout(params.core_grid, params.num_links);
+    const auto layout =
+        core_layout(params.core_grid, params.num_links, checked_directions(tensor_args.input_tensor, coord));
     const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
@@ -326,8 +360,8 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
         rt.append(mux.get_fabric_mux_run_time_args(
             *mesh_device,
             mesh_device->get_fabric_node_id(coord),
-            mesh_device->get_fabric_node_id(neighbors[c % kDirections]),
-            c / kDirections,
+            mesh_device->get_fabric_node_id(layout.direction_of(c).neighbor),
+            layout.direction_of(c).links[c / layout.num_directions()],
             desc,
             layout.muxes[c]));
         mux_kernel.emplace_runtime_args(layout.muxes[c], rt);
