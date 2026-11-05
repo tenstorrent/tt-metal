@@ -12,7 +12,7 @@ namespace {
 
 // Resource metadata preserves an eight-wide face and its one-row, two-column grid.
 TEST(BindingTokenFaceMetadata, EightWideFaces) {
-    const LLKMetadata metadata{.format = DataFormat::Float16_b, .tile = Tile({16, 16}, {16, 8})};
+    const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 16}, {16, 8}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
         ::testing::AllOf(
@@ -24,7 +24,7 @@ TEST(BindingTokenFaceMetadata, EightWideFaces) {
 
 // Resource metadata preserves an eight-wide face in a two-row, two-column grid.
 TEST(BindingTokenFaceMetadata, SquareEightWideFaces) {
-    const LLKMetadata metadata{.format = DataFormat::Float16_b, .tile = Tile({16, 16}, {8, 8})};
+    const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 16}, {8, 8}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
         ::testing::AllOf(
@@ -36,7 +36,7 @@ TEST(BindingTokenFaceMetadata, SquareEightWideFaces) {
 
 // Resource metadata preserves the existing geometry for sixteen-wide faces.
 TEST(BindingTokenFaceMetadata, SixteenWideFaces) {
-    const LLKMetadata metadata{.format = DataFormat::Float16_b, .tile = Tile({16, 32}, {8, 16})};
+    const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 32}, {8, 16}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
         ::testing::AllOf(

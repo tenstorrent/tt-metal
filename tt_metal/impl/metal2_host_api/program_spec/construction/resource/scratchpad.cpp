@@ -20,8 +20,7 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-std::optional<LLKMetadata> LLKMetadataFromScratchpad(
-    const ScratchpadSpec& spec, [[maybe_unused]] uint32_t l1_alignment) {
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec, uint32_t l1_alignment) {
     if (!spec.data_format_metadata.has_value()) {
         TT_FATAL(
             !spec.tile_format_metadata.has_value(),
@@ -31,7 +30,7 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(
         return std::nullopt;
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
-    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+    return make_llk_metadata(*spec.data_format_metadata, tile, l1_alignment);
 }
 
 }  // namespace

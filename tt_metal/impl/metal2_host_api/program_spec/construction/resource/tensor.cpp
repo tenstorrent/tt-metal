@@ -29,8 +29,8 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec, [[maybe_unused]] uint32_t l1_alignment) {
-    return LLKMetadata{.format = datatype_to_dataformat_converter(spec.data_type()), .tile = spec.tile()};
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec, uint32_t l1_alignment) {
+    return make_llk_metadata(datatype_to_dataformat_converter(spec.data_type()), spec.tile(), l1_alignment);
 }
 
 }  // namespace
