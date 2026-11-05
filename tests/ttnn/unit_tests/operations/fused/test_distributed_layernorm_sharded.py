@@ -11,7 +11,6 @@ processed as chunks) on one device, and the all-gather is stood in for by reshar
 per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
 on-device pre/post all-gather op path is exercised.
 """
-
 import ttnn
 import torch
 import pytest
@@ -28,6 +27,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     make_sharded_norm_mem_config,
     to_poisoned_sharded,
 )
+
 from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
