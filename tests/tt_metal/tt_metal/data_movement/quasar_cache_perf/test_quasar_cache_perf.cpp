@@ -25,8 +25,6 @@ constexpr std::uint32_t BASE_ADDR = 100 * 1024;
 // zone duration by it, to amortize fixed per-run overhead (April used 100).
 constexpr std::uint32_t NUM_ITERATIONS = 100;
 
-bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
-
 // Runs one write pass of `size_bytes` via `write_path` (0=uncached,1=cached+flush)
 // on a single DM core, then reads back and verifies the byte pattern landed.
 bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
@@ -93,9 +91,6 @@ static const std::vector<std::uint32_t> kSizesBytes = {8, 16, 24, 32, 64, 128, 2
 }  // namespace unit_tests::dm::quasar_cache_perf
 
 TEST_F(QuasarCacheWrite, SizeSweep) {
-    if (unit_tests::dm::quasar_cache_perf::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
     bool pass = true;
     // mode: 0=uncached 1B, 1=uncached 8B, 2=cached+range flush (April), 3=cached+fast flush
     for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {
