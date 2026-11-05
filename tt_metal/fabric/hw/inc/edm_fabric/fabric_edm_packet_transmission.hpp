@@ -110,31 +110,15 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
         return;
     }
 #endif
-    if constexpr (enable_deadlock_avoidance) {
-        auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-        auto end_trid = start_trid + NUM_TRANSACTION_IDS;
-        for (int i = start_trid; i < end_trid; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
-        }
-    } else {
-        for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
+    // The channel's own transaction IDs (its range from the host), with or without deadlock avoidance.
+    const uint32_t start_trid = RX_CH_TRID_STARTS[rx_channel_id];
+    const uint32_t end_trid = start_trid + RX_CH_NUM_TRIDS[rx_channel_id];
+    for (uint32_t i = start_trid; i < end_trid; i++) {
+        if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+        } else {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
         }
     }
 }

@@ -65,10 +65,6 @@ FORCE_INLINE uint32_t index_add(uint32_t index, uint32_t n) {
     }
 }
 
-// The slots per completion group of a ring of NUM_SLOTS slots: a quarter of the ring, at most 4, a power of 2.
-template <uint32_t NUM_SLOTS>
-constexpr uint32_t completion_group_size_for = NUM_SLOTS < 8 ? 1 : (NUM_SLOTS < 16 ? 2 : 4);
-
 // The oldest uncredited slot: `waiting` slots before the next one to retire.
 template <uint32_t NUM_SLOTS>
 FORCE_INLINE uint32_t oldest_uncredited(uint32_t next_index, uint32_t waiting) {
@@ -79,14 +75,21 @@ FORCE_INLINE uint32_t oldest_uncredited(uint32_t next_index, uint32_t waiting) {
 // Transaction IDs
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Every slot of a completion group carries its group's ID; groups past NUM_IDS reuse the IDs in order (Completions).
-template <uint32_t GROUP_SIZE, uint32_t FIRST_ID, uint32_t NUM_IDS>
+// Every slot of a completion group carries its group's ID: the group's own when the channel has an ID per group, else
+// shared by mask (Completions).
+template <uint32_t GROUP_SIZE, uint32_t FIRST_ID, uint32_t NUM_IDS, uint32_t NUM_GROUPS>
 struct CompletionGroupTrids {
     static_assert(GROUP_SIZE == 1 || GROUP_SIZE == 2 || GROUP_SIZE == 4);
-    static_assert(is_power_of_2(NUM_IDS));
+    static_assert(NUM_IDS >= 1 && FIRST_ID + NUM_IDS <= NOC_MAX_TRANSACTION_ID + 1);
+    static constexpr bool shared = NUM_IDS < NUM_GROUPS;
+    static_assert(!shared || is_power_of_2(NUM_IDS), "groups share transaction IDs by mask: a power of 2 of them");
     static FORCE_INLINE uint8_t of_slot(uint32_t index) {
         const uint32_t group = index / GROUP_SIZE;
-        return static_cast<uint8_t>(FIRST_ID + group % NUM_IDS);
+        if constexpr (shared) {
+            return static_cast<uint8_t>(FIRST_ID + (group & (NUM_IDS - 1)));
+        } else {
+            return static_cast<uint8_t>(FIRST_ID + group);
+        }
     }
 };
 
@@ -128,10 +131,13 @@ struct ReceiverChannel {
     using Routing = Routing1D;
 #endif
 
-    // One slot per group under first-level acks: held completion credits there stall bubble flow control.
-    static constexpr uint32_t completion_group_size = first_level_ack ? 1 : completion_group_size_for<num_slots>;
-    // One transaction ID per completion group, from the channel's own range.
-    using CompletionTrids = CompletionGroupTrids<completion_group_size, RX_CH_TRID_STARTS[rx], NUM_TRANSACTION_IDS>;
+    // From the host: one slot per group under first-level acks (held completion credits stall bubble flow control).
+    static constexpr uint32_t completion_group_size = RX_CH_COMPLETION_GROUP_SIZE[rx];
+    static_assert(!first_level_ack || completion_group_size == 1, "first-level acks credit every slot: groups of 1");
+    static constexpr uint32_t completion_groups = (num_slots + completion_group_size - 1) / completion_group_size;
+    // The channel's own transaction IDs, from the host: one per completion group, or shared by mask when fewer.
+    using CompletionTrids =
+        CompletionGroupTrids<completion_group_size, RX_CH_TRID_STARTS[rx], RX_CH_NUM_TRIDS[rx], completion_groups>;
 
     static FORCE_INLINE uint32_t slot_addr(uint32_t index) { return first_slot_addr + index * channel_buffer_size; }
     static FORCE_INLINE uint32_t index_after(uint32_t index) { return index + 1 == num_slots ? 0 : index + 1; }
@@ -428,7 +434,8 @@ FORCE_INLINE bool receive(
 // - A ring is credited in aligned completion groups, which never wrap, so the remote sender credits its producer once
 //   per group instead of per slot.
 // - Proof: each slot's NoC commands carry its group's transaction ID and the NIU counts each ID's outgoing writes, so
-//   one status read proves a group free. Two groups sharing an ID only make a proof wait longer, never wrong.
+//   one status read proves a group free. Groups sharing an ID (a channel with fewer IDs than groups) only make a proof
+//   wait longer, never wrong.
 // - Due: while packets arrive, once more than a group waits (never the slot retired this pass); on an idle pass, a full
 //   group at once, a partial one (traffic stopped mid-group) after IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes in a
 //   row. So a channel holds back at most a group minus one slot, and not for long.

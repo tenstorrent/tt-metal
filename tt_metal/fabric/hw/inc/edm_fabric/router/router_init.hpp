@@ -372,13 +372,13 @@ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
 // Teardown
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Receiver channel CH's transaction IDs (RX_CH_TRID_STARTS[CH], NUM_TRANSACTION_IDS of them; the receiver tags its
-// slots' commands with the same IDs, CompletionGroupTrids) as the library's tracker, used here only to wait for all of
-// them.
+// Receiver channel CH's transaction IDs (RX_CH_NUM_TRIDS[CH] of them from RX_CH_TRID_STARTS[CH]; the receiver tags
+// its slots' commands with the same IDs, CompletionGroupTrids) as the library's tracker, used here only to wait for all
+// of them.
 template <size_t CH>
 using TeardownTrids = WriteTransactionIdTracker<
     RECEIVER_NUM_BUFFERS_ARRAY[CH],
-    NUM_TRANSACTION_IDS,
+    RX_CH_NUM_TRIDS[CH],
     RX_CH_TRID_STARTS[CH],
     tt::tt_fabric::edm_to_local_chip_noc,
     tt::tt_fabric::edm_to_downstream_noc>;

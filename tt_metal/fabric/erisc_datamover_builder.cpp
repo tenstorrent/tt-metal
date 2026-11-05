@@ -30,6 +30,7 @@
 #include <fmt/format.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_trid_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
@@ -1246,24 +1247,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS"] =
             bubble_flow_control_injection_min_free_slots;
     }
-    // NoC transaction IDs per receiver channel; the receiver channels take consecutive ranges of them. A lone receiver
-    // channel without bubble flow control takes 16, one per completion group of its slots.
-    const uint32_t num_transaction_ids = (!final_enable_deadlock_avoidance && num_receiver_channels == 1)
-                                             ? 16
-                                             : (final_enable_deadlock_avoidance ? 8 : 4);
-    // The ranges come from the NoC's 16 transaction IDs. A router with deadlock avoidance (a ring or torus axis) and
-    // three receiver channels (VC0, VC1 and VC2) would need 24.
-    constexpr uint32_t noc_transaction_ids = 16;
+    // VC1 and VC2 together on a ring or torus axis (deadlock avoidance) have not been brought up.
     TT_FATAL(
-        num_receiver_channels * num_transaction_ids <= noc_transaction_ids,
-        "VC1 + VC2 on ring/torus routers is not supported yet: router at fabric node {}, Ethernet channel {} has {} "
-        "receiver channels of {} NoC transaction IDs each ({} available)",
+        !(final_enable_deadlock_avoidance && num_receiver_channels == builder_config::num_max_receiver_channels),
+        "VC1 + VC2 on ring/torus routers is not supported yet: router at fabric node {}, Ethernet channel {}",
         this->local_fabric_node_id,
-        this->my_eth_channel,
-        num_receiver_channels,
-        num_transaction_ids,
-        noc_transaction_ids);
-    named_args["NUM_TRANSACTION_IDS"] = num_transaction_ids;
+        this->my_eth_channel);
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
@@ -1467,6 +1456,48 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
+    }
+    // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
+    // from the channel's final slot count and first-level acks (fabric_trid_allocator.hpp). Unused channels: 1 / 0 / 0.
+    {
+        namespace trids = tt::tt_fabric::trid_allocator;
+        std::vector<trids::ReceiverChannel> receivers;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
+            for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
+                receivers.push_back(
+                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), first_level_ack});
+            }
+        }
+        TT_FATAL(
+            receivers.size() == num_receiver_channels,
+            "receiver transaction IDs: {} receiver channels by VC, {} on the router",
+            receivers.size(),
+            num_receiver_channels);
+        const trids::Assignment ids = trids::assign_transaction_ids(receivers);
+        TT_FATAL(
+            !ids.error.has_value(),
+            "receiver transaction IDs at fabric node {}, Ethernet channel {}: {}",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            ids.error.value_or(""));
+        for (size_t c = 0; c < builder_config::num_max_receiver_channels; ++c) {
+            const bool used = c < ids.channels.size();
+            named_args[fmt::format("RX_CH_{}_COMPLETION_GROUP_SIZE", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].group_size) : 1;
+            named_args[fmt::format("RX_CH_{}_NUM_TRIDS", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
+            named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
+            if (used) {
+                log_debug(
+                    tt::LogFabric,
+                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {}",
+                    this->local_fabric_node_id,
+                    this->my_eth_channel,
+                    c,
+                    ids.channels[c].reason);
+            }
+        }
     }
     named_args["EDM_NOC_VC"] = config.edm_noc_vc;
 
