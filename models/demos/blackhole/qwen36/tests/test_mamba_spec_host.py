@@ -1137,3 +1137,30 @@ def test_chain_audit_twin_reads_the_pages_of_its_own_staging():
     book.set_step([later], torch.zeros(B, dtype=torch.int64), [u for u in range(B) if u != 3])
     assert torch.equal(book.ctrl_rows([1] * B, 0, words, start_col=[1] * B, pages=snap), staged)
     assert not torch.equal(book.ctrl_rows([1] * B, 0, words, start_col=[1] * B), staged)
+
+
+def test_model_aux_builder_passes_the_snapshot_through_the_block_state():
+    """Qwen36Model._vfy_aux_host with a SpecGdnBlockState (not the bare book): the chain-audit snapshot reaches
+    SpecBlockBook.ctrl_rows."""
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+    lay = _layout(4, 2048, 8, "two_pool")
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.book = sbs.SpecBlockBook(lay, 1, B, T, "none")
+    w = torch.arange(1, B * T + 1).reshape(B, T) + 20
+    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), range(B))
+    snap = st.book.start_pages_snapshot()
+    words = spec_ctrl_words(B, lay.nv)
+    model = SimpleNamespace(
+        _vfy_fused=True,
+        _vfy_gdn=[SimpleNamespace(_spec_win_par=0)],
+        _spec_blocks=st,
+        _vfy_ctrl_words=words,
+        _vfy_B=B,
+        _vfy_T=T,
+        rope=SimpleNamespace(max_seq_len=4096),
+    )
+    out = Qwen36Model._vfy_aux_host(
+        model, list(range(B * T)), [1] * B, rope_delta=0, predict=True, hold=(), gdn_pages=snap
+    )
+    assert int(out.shape[0]) == 3

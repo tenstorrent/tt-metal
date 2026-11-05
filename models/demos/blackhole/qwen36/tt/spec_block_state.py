@@ -693,8 +693,8 @@ class SpecGdnBlockState:
             self.book.resolve_moves(counts)
             self.moves_counts = None
 
-    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
-        return self.book.ctrl_rows(mi, parity, words, hold, start_col)
+    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None, pages=None):
+        return self.book.ctrl_rows(mi, parity, words, hold, start_col, pages)
 
     def step_start_blocks(self, u):
         return self.book.step_start_blocks(u)
