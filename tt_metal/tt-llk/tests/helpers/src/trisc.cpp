@@ -105,7 +105,17 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM)
+        // As tt-metal's trisck.cc: the init runs with icache prefetch, START_PERF_MEASURE("TILE_LOOP") turns it off
+        ckernel::icache_prefetch_init_begin();
+#if defined(LLK_TRISC_MATH)
+        ckernel::icache_prefetch_head_start();
+#endif
+#endif
         run_kernel(temp_args);
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM)
+        ckernel::icache_prefetch_init_end();
+#endif
 
         ckernel::fence_compiler();
 
