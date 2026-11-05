@@ -93,11 +93,13 @@ def _from_torch_dtype(real_from_torch, torch_dtype):
 
 
 def _mark_stand_in(replacement, original):
-    try:
-        replacement._precompile_original = original
-    except (AttributeError, TypeError):
-        pass
-    return replacement
+    # A fresh function per install: one stand-in serves several names (randn and rand, layer_norm and
+    # group_norm), and each name must restore to its own original.
+    def stand_in(*args, **kwargs):
+        return replacement(*args, **kwargs)
+
+    stand_in._precompile_original = original
+    return stand_in
 
 
 # Names the stand-ins are installed under; _restore_leaked_stand_ins looks for leaked copies of these.
@@ -166,9 +168,13 @@ class _RebindPatch:
         self._patched = []
 
     def __enter__(self):
+        self._patched = []
         home = sys.modules.get(self._home_module)
         self._orig = getattr(home, self._attr, None) if home is not None else None
-        if self._orig is None:
+        # Already a stand-in: the same function is exposed under another home module and an earlier patch
+        # rebound it. Patching again would record the stand-in as the original.
+        if self._orig is None or hasattr(self._orig, "_precompile_original"):
+            self._orig = None
             return self
         replacement = _mark_stand_in(self._build(self._orig), self._orig)
         key = (self._home_module, self._attr)
