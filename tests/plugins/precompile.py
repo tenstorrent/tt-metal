@@ -19,7 +19,9 @@ Knobs (environment):
   PRECOMPILE_WAIT=1               wait for the compile queue to empty before the real run
                                   (default 0: start the real run as soon as the dry run ends)
   PRECOMPILE_WORKERS=N            build threads (0 = all cores)
-  PRECOMPILE_JIT_SERVER=h:p[,h:p] send kernels to JIT compile server(s)
+  PRECOMPILE_JIT_SERVER=h:p[,h:p] send kernels to JIT compile server(s); after the first refused or lost
+                                  connection, or a reply slower than TT_METAL_JIT_SERVER_TIMEOUT_S
+                                  (default 240), the rest build locally
   PRECOMPILE_REMOTE_MIN_KERNELS=N use the server only once N kernels are queued (default 10)
   PRECOMPILE_REAL_ALLOC=0         mock buffer addresses in the dry run (default 1: real allocator, so
                                   kernels that bake addresses into compile-time args match the real run)
@@ -466,6 +468,7 @@ def _stats_dict(stats):
         "kernels_built": stats.kernels_built,
         "kernels_preempted": stats.kernels_preempted,
         "kernels_remote": stats.kernels_remote,
+        "kernels_remote_fallback": stats.kernels_remote_fallback,
         "kernels_failed": stats.kernels_failed,
         "kernels_dropped": stats.kernels_dropped,
         "kernels_pending": stats.kernels_pending,

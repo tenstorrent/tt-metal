@@ -69,6 +69,7 @@ void py_graph_module(nb::module_& m) {
             .def_ro("kernels_built", &CompileSessionStats::kernels_built)
             .def_ro("kernels_preempted", &CompileSessionStats::kernels_preempted)
             .def_ro("kernels_remote", &CompileSessionStats::kernels_remote)
+            .def_ro("kernels_remote_fallback", &CompileSessionStats::kernels_remote_fallback)
             .def_ro("kernels_failed", &CompileSessionStats::kernels_failed)
             .def_ro("kernels_dropped", &CompileSessionStats::kernels_dropped)
             .def_ro("kernels_pending", &CompileSessionStats::kernels_pending)
