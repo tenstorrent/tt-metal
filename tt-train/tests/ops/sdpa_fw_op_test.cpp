@@ -27,7 +27,7 @@
 #include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
 #include "metal/ops/common/ring_sdpa_utils.hpp"
-#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
@@ -2186,6 +2186,50 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
     EXPECT_NE(
         ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_RingPrimitive_SingleDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    const std::array<std::size_t, 4> q_shape{1U, 2U, 64U, 64U}, kv_shape{1U, 1U, 64U, 64U};
+    for (const auto mask_type : {metal::AttentionMaskType::Causal, metal::AttentionMaskType::None}) {
+        SCOPED_TRACE(mask_type == metal::AttentionMaskType::Causal ? "causal" : "none");
+        std::vector<ttnn::Tensor> first_buffers;
+        std::size_t entries = 0U;
+        for (uint32_t run = 0U; run < 2U; ++run) {
+            const uint32_t seed = 11U + 3U * run;
+            const auto q = round_to_bf16(test_utils::make_uniform_xarray<float>(q_shape, -1.0F, 1.0F, seed));
+            const auto k = round_to_bf16(test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 1U));
+            const auto v = round_to_bf16(test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 2U));
+            const auto query = core::from_xtensor(q, device);
+            const auto key = core::from_xtensor(k, device);
+            const auto value = core::from_xtensor(v, device);
+            // Invoke the ring factory itself, including its runtime-argument override on the second call.
+            const auto [output, intermediates] = ttnn::prim::ttml_ring_sdpa_fw(
+                query, key, value, /*ring_size=*/1U, /*ring_axis=*/0U, /*step=*/0U, mask_type);
+            const std::vector<ttnn::Tensor> buffers{query, key, value, output, intermediates};
+            if (run == 0U) {
+                first_buffers = buffers;
+                entries = device->num_program_cache_entries();
+            } else {
+                EXPECT_EQ(device->num_program_cache_entries(), entries);
+                for (std::size_t i = 0; i < buffers.size(); ++i) {
+                    EXPECT_NE(buffers[i].buffer()->address(), first_buffers[i].buffer()->address());
+                }
+            }
+            const xt::xarray<float> mask = mask_type == metal::AttentionMaskType::Causal
+                                               ? generate_mask(q)
+                                               : xt::xarray<float>(xt::ones<float>({1UL, 1UL, 64UL, 64UL}));
+            const auto [expected, expected_lse] = sdpa_split_heads_naive_with_intermediates(q, k, v, mask);
+            const auto actual = core::to_xtensor(output);
+            const auto actual_lse = core::to_xtensor(intermediates);
+            EXPECT_TRUE(xt::allclose(actual, expected, 2e-2F, 2e-2F));
+            EXPECT_LT(test_utils::relative_l2(actual, expected), 1e-2F);
+            EXPECT_LT(xt::amax(xt::abs(actual_lse - expected_lse))(), 3e-2F);
+        }
+    }
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_RingChunking_SingleDevice) {
