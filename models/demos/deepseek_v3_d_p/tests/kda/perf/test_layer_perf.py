@@ -86,8 +86,10 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
-# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.521, "untraced": 2.14}
+# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Host dispatch varies more
+# from run to run than the device does, hence the untraced gate's wider margin.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.334, "untraced": 1.52}
+_GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
@@ -131,6 +133,11 @@ def _perf_reference_ms(layout: str, traced: bool = True) -> float:
     return _PERF_REFERENCE_MS[sku][layout]
 
 
+def _perf_margin(layout: str, traced: bool = True) -> float:
+    """Return the wall-time margin for a gated layout."""
+    return _GALAXY_UNTRACED_PERF_MARGIN if layout == "SP8xTP4" and not traced else _PERF_MARGIN
+
+
 def _device_perf_reference_ms(layout: str) -> float | None:
     """Return the device-time reference for a device-gated layout on its KDA_PERF_SKU, or None if it has none."""
     skus = sorted(sku for sku, references in _DEVICE_PERF_REFERENCE_MS.items() if layout in references)
@@ -158,7 +165,7 @@ class _Slots:
     slot: ttnn.Tensor
 
     @classmethod
-    def allocate(cls, mesh_device: ttnn.MeshDevice, config, tensor_parallel_axis: int) -> "_Slots":
+    def allocate(cls, mesh_device: ttnn.MeshDevice, config, layer: ttKDA, tensor_parallel_axis: int) -> "_Slots":
         geometry = KdaContractGeometry.from_kda_config(
             config,
             mesh_shape=tuple(mesh_device.shape),
@@ -166,8 +173,13 @@ class _Slots:
             tp_axis=tensor_parallel_axis,
         )
         states = KdaStates.allocate(mesh_device, geometry, layer_ids=(_SLAB_LAYER_IDX,), num_slots=1)
-        states.zero_slot(0)
-        return cls(states=states, slot=device_scalar(mesh_device, 0))
+        slot = device_scalar(mesh_device, 0)
+        # The slabs come uninitialized and the gated chunk starts mid-request, so it imports the slot: store a zero
+        # carry there first.
+        zero = _allocate_state(layer)
+        states.export_layer(zero, slot, _SLAB_LAYER_IDX)
+        deallocate_state(zero)
+        return cls(states=states, slot=slot)
 
     def deallocate(self) -> None:
         self.states.deallocate()
@@ -203,22 +215,23 @@ def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, ma
 
 
 @pytest.mark.parametrize(
-    "layout,sku",
+    "layout,sku,traced",
     [
-        ("SP8xTP1", _LOUDBOX_PERF_SKU),
-        ("TP4-linear", _LOUDBOX_PERF_SKU),
-        ("TP4-ring", _QUIETBOX_PERF_SKU),
+        ("SP8xTP1", _LOUDBOX_PERF_SKU, True),
+        ("TP4-linear", _LOUDBOX_PERF_SKU, True),
+        ("TP4-ring", _QUIETBOX_PERF_SKU, True),
         # The Galaxy gate needs no KDA_PERF_SKU opt-in.
-        ("SP8xTP4", None),
+        ("SP8xTP4", None, True),
+        ("SP8xTP4", None, False),
     ],
 )
-def test_synthetic_performance_uses_two_sided_margin(layout, sku, monkeypatch, expect_error) -> None:
+def test_synthetic_performance_uses_two_sided_margin(layout, sku, traced, monkeypatch, expect_error) -> None:
     if sku is None:
         monkeypatch.delenv("KDA_PERF_SKU", raising=False)
     else:
         monkeypatch.setenv("KDA_PERF_SKU", sku)
-    reference_ms = _perf_reference_ms(layout)
-    margin = _PERF_MARGIN
+    reference_ms = _perf_reference_ms(layout, traced)
+    margin = _perf_margin(layout, traced)
     _assert_within_margin(layout, reference_ms * (1 - 0.99 * margin), reference_ms, margin)
     _assert_within_margin(layout, reference_ms * (1 + 0.99 * margin), reference_ms, margin)
     with expect_error(AssertionError, "outside performance range"):
@@ -466,7 +479,7 @@ def test_synthetic_kimi_k3_perf(
         cache_weights=False,
         shard_hidden_over_tp=True,
     )
-    slots = _Slots.allocate(mesh_device, case.config, tensor_parallel_axis)
+    slots = _Slots.allocate(mesh_device, case.config, layer, tensor_parallel_axis)
     assert (layer.active_seq_len_local, layer.config.num_heads) == (
         PREFILL_CHUNK_TOKENS_PER_CHIP,
         _GALAXY_HEADS_PER_CHIP,
@@ -509,7 +522,7 @@ def test_synthetic_kimi_k3_perf(
         "median_trace_wall_ms": median_wall_ms,
         "timing_sample_count": _TIMING_SAMPLES,
         "reference_trace_wall_ms": reference_ms,
-        "perf_margin_pct": _PERF_MARGIN * 100.0,
+        "perf_margin_pct": _perf_margin(layout, traced) * 100.0,
         "device_samples_ms": device_samples_ms,
         "median_device_ms": median_device_ms,
         "reference_device_ms": device_reference_ms,
@@ -521,7 +534,7 @@ def test_synthetic_kimi_k3_perf(
     if device_reference_ms is not None:
         gated_ms, gated_reference_ms, gated_margin = median_device_ms, device_reference_ms, _DEVICE_PERF_MARGIN
     else:
-        gated_ms, gated_reference_ms, gated_margin = median_wall_ms, reference_ms, _PERF_MARGIN
+        gated_ms, gated_reference_ms, gated_margin = median_wall_ms, reference_ms, _perf_margin(layout, traced)
     within_band = (
         abs(gated_ms - gated_reference_ms) <= gated_reference_ms * gated_margin if gated_reference_ms else None
     )
@@ -543,7 +556,7 @@ def test_synthetic_kimi_k3_perf(
     if device_reference_ms is not None:
         _assert_within_margin(f"{layout} median device", median_device_ms, device_reference_ms, _DEVICE_PERF_MARGIN)
     else:
-        _assert_within_margin(f"{layout} median trace wall", median_wall_ms, reference_ms, _PERF_MARGIN)
+        _assert_within_margin(f"{layout} median trace wall", median_wall_ms, reference_ms, gated_margin)
 
 
 @pytest.mark.parametrize(
