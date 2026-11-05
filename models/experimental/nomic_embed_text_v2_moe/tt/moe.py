@@ -54,6 +54,9 @@ class TtNomicMoELayer(LightweightModule):
             # On the generated norm's ND layout nothing is reshaped, since a reshape of an ND tensor copies it:
             # each sequence is whole tiles there (nd_norm_layout), so (B, 1, S, H) is the flat token axis page for
             # page. router_front_end reads it as it stands, and the combine writes (B, 1, S, H) in that layout.
+            routed = self.experts.route_dispatch(x, self.router.weight)
+            if routed is not None:
+                return self.experts(x, None, nd_layout, batch=batch, routed=routed)
             routing, x_rows = self.router(x, self.experts.dispatch_table_config(x))
             out = self.experts(x, routing, nd_layout, x_rows, batch=batch)
             routing.deallocate()

@@ -381,6 +381,40 @@ class TtNomicExperts(LightweightModule):
             ttnn.deallocate(index)
         return dispatched
 
+    def route_dispatch(
+        self, x: ttnn.Tensor, router_weight: ttnn.Tensor, live: Sequence[ttnn.Tensor] = ()
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None:
+        """router_front_end, routing_metadata and the gather in one op (ttnn.operations.nomic_moe_route_dispatch):
+        (dispatched, combine_index, combine_weights, expert_counts) for a one-pass layer of a window the generated
+        glue takes; None elsewhere, or where the op refuses the call, and the three ops run instead.
+
+        dispatched is placed and widened by spare tile rows exactly as dispatch places and widens it."""
+        tokens = x.shape[0] * x.shape[-2]
+        if (
+            not self.tt_config.generated_route_dispatch
+            or len(self._windows(tokens)) != 1
+            or not self._generated_glue(tokens)
+        ):
+            return None
+        from ttnn.operations._op_contract import SupportRefusal
+        from ttnn.operations.nomic_moe_route_dispatch import nomic_moe_route_dispatch
+
+        live = (*live, x)
+        slot_rows = ttnn.TILE_SIZE * (ttnn.core.divup(self.top_k * tokens, ttnn.TILE_SIZE) + self.num_experts - 1)
+        spare = self._spare_tile_rows(slot_rows, self.hidden, l1_floor(live, self.tt_config), tokens)
+        rows = slot_rows + spare * ttnn.TILE_SIZE
+        memory_config = self.routed_memory_config(
+            rows // ttnn.TILE_SIZE * self.hidden // ttnn.TILE_SIZE,
+            ttnn.tile_size(ttnn.bfloat16),
+            live,
+            self.footprint(self.hidden, self.intermediate, ttnn.bfloat16, self.tt_config.expert_intermediate_dtype),
+            core_bytes=self._gathered_core_bytes(rows, tokens),
+        )
+        try:
+            return nomic_moe_route_dispatch(x, router_weight, spare_tile_rows=spare, memory_config=memory_config)
+        except SupportRefusal:
+            return None
+
     def _generated_dispatch(
         self, x_rows: ttnn.Tensor, index: ttnn.Tensor, memory_config: ttnn.MemoryConfig
     ) -> ttnn.Tensor | None:
@@ -573,10 +607,11 @@ class TtNomicExperts(LightweightModule):
     def forward(
         self,
         x: ttnn.Tensor,
-        routing: Routing,
+        routing: Routing | None,
         memory_config: ttnn.MemoryConfig | None = None,
         x_rows: ttnn.Tensor | None = None,
         batch: int = 1,
+        routed: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """(1, 1, T, H) -> (1, 1, T, H): each token through its top-k experts only, the bias included.
 
@@ -592,6 +627,8 @@ class TtNomicExperts(LightweightModule):
             routing: TtNomicRouter's scores, from which routing_metadata selects; it stays the caller's to free.
             memory_config: where a one-pass layer writes its output; activation_memory_config by default.
             x_rows: x's dispatch_table when the caller has built it, which the forward frees.
+            routed: route_dispatch's (dispatched, combine_index, combine_weights, expert_counts) for a one-pass
+                layer, which the forward frees; routing and x_rows are then unused.
 
         Returns:
             ttnn.Tensor: (1, 1, T, H).
@@ -599,30 +636,36 @@ class TtNomicExperts(LightweightModule):
         if x.dtype != ttnn.bfloat16:
             raise ValueError(f"the routed pass takes bfloat16 activations, got {x.dtype}")
         windows = self._windows(x.shape[0] * x.shape[-2])
-        if x_rows is None:
+        if routed is not None and len(windows) != 1:
+            raise ValueError("route_dispatch's outputs cover a one-pass layer only")
+        if routed is None and x_rows is None:
             x_rows = self.dispatch_table(x, routing)
         results = []
         for window, (token_start, num_tokens) in enumerate(windows):
-            (
-                gather_index,
-                combine_index,
-                combine_weights,
-                expert_counts,
-            ) = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
-                scores=routing.scores,
-                top_k=self.top_k,
-                num_experts=self.num_experts,
-                token_start=token_start,
-                num_tokens=num_tokens,
-            )
             last = window == len(windows) - 1
-            live = (x, *routing, *results, combine_index, combine_weights)
-            dispatched = self.dispatch(x_rows, gather_index, (*live, expert_counts))
-            ttnn.deallocate(gather_index)
-            if last:
-                ttnn.deallocate(x_rows)
+            if routed is not None:
+                dispatched, combine_index, combine_weights, expert_counts = routed
+                live = (x, combine_index, combine_weights)
             else:
-                live += (x_rows,)
+                (
+                    gather_index,
+                    combine_index,
+                    combine_weights,
+                    expert_counts,
+                ) = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
+                    scores=routing.scores,
+                    top_k=self.top_k,
+                    num_experts=self.num_experts,
+                    token_start=token_start,
+                    num_tokens=num_tokens,
+                )
+                live = (x, *routing, *results, combine_index, combine_weights)
+                dispatched = self.dispatch(x_rows, gather_index, (*live, expert_counts))
+                ttnn.deallocate(gather_index)
+                if last:
+                    ttnn.deallocate(x_rows)
+                else:
+                    live += (x_rows,)
             activated = self.grouped_w1(
                 dispatched,
                 expert_counts,
