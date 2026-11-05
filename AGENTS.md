@@ -17,17 +17,23 @@ TTNN operations/utilities. Do not copy Gemma-specific implementation branches
 from the generic tt_transformers framework into the autoport. Validate that serving
 registers and imports this run's autoport adapter, rather than a stock adapter.
 
-Use this machine for local TT work. Serialize all local device commands and check
-for device owners before reset. No other machines are granted for this run: every
-stage runs on this machine, and no CI workflow is dispatched. Use default batches and
-evals from the selected skills, with the goal-12 inputs in
+Use this machine for local TT work; it is the primary device. Serialize all local
+device commands and check for device owners before reset. Up to six QB2 CI machines
+are granted as a secondary device (`qb2-ci` in `bringup/agentic_evals/inputs.json`):
+dispatch, track and collect those runs yourself, following its instructions file, and
+balance work between the local device and CI as the agentic-serving skill says. Use
+default batches and evals from the selected skills, with the goal-12 inputs in
 `bringup/agentic_evals/inputs.json`. Read current release eval names, versions,
 timeouts and output limits from the pinned release spec and its harness sources; the
 model spec alone may not contain the eval limits. Do not reuse the old
 implementation's layout/precision/serving settings as evidence.
 
-Keep this execution checkout without a remote. Do not push branches, create issue
-comments or send messages.
+The operator authorizes pushing the dedicated branches `mvasiljevic/gemma4-31b-goal12-v3`
+in tt-metal and tt-inference-server for CI. Publish from separate checkouts with
+remotes; keep this execution checkout without a remote. Use source-only commits,
+dispatch immutable SHAs, and keep weights, credentials, private logs, profiler dumps
+and collected results out of publication commits. Never update main or stable. Do not
+create issue comments or send messages.
 
 Pipeline worker: gpt-6-astra, medium effort, personal ChatGPT login in
 /home/mvasiljevic/.codex-gemma4-v3. Do not substitute enterprise credentials or

@@ -5,8 +5,20 @@
     16,
     32
   ],
-  "mode": "light",
-  "stage_budget_hours": 24,
+  "mode": "extended",
+  "stage_budget_hours": 48,
   "run_timeout_hours": 12,
-  "release_spec": "https://github.com/tenstorrent/tt-inference-server/blob/411057222c2dc5a4268e693b0bd57bc0e2571f38/release_model_spec.json"
+  "release_spec": "https://github.com/tenstorrent/tt-inference-server/blob/411057222c2dc5a4268e693b0bd57bc0e2571f38/release_model_spec.json",
+  "compute": [
+    {
+      "name": "qb2-ci",
+      "device_type": "p300x2",
+      "submit": "gh workflow run manual-tt-shield-dispatch.yml -R tenstorrent/tt-agentic-bringup-qb2 -f model=gemma-4-31B-it -f runner-label=bh-qb-ge -f device-type=p300x2 -f workflow=agentic -f tt-metal-git-ref=<sha> -f inference-server-git-ref=<sha> -f run-full-evals=false -f run-ai-summary=false -f create-issue-comment=false",
+      "status": "gh run list -R tenstorrent/tt-agentic-bringup-qb2 --workflow manual-tt-shield-dispatch.yml --json databaseId,status,conclusion,createdAt,displayTitle",
+      "collect": "gh run download <run-id> -R tenstorrent/tt-agentic-bringup-qb2 -D doc/agentic_evals/runs/<arm>",
+      "max_parallel": 6,
+      "job_timeout_hours": 18,
+      "instructions": "/home/mvasiljevic/gemma4-31b-pipeline-v3/device-instructions.md"
+    }
+  ]
 }
