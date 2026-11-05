@@ -14,7 +14,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad, round_up_to_tile
+from ttml.common.utils import apply_precision, no_grad, round_up_to_tile
 from ttml.models import RunnerType
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
@@ -23,7 +23,7 @@ from transformers import AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from .completer_common import apply_precision, deallocate_tensors, async_read_to_host
+from .completer_common import deallocate_tensors, async_read_to_host
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42

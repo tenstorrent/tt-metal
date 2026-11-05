@@ -114,8 +114,9 @@ def _ttml_main() -> None:
 
     device_config, raw = _load_device_config()
     # A typo under training_config.precision stops the run here rather than after the model is built.
-    ttml.core.validate_precision_config(raw.get("training_config") or {})
-    precision = raw["training_config"].get("precision")
+    raw_training_config = raw.get("training_config") or {}
+    ttml.core.validate_precision_config(raw_training_config)
+    precision = raw_training_config.get("precision")
     mesh_device = _open_ttml_device(device_config)
 
     model_id = raw["training_config"]["model_id"]

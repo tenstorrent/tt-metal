@@ -24,7 +24,7 @@ import ttml
 import ttnn
 from safetensors.numpy import save_file
 from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, SequentialScheduler
-from ttml.common.utils import create_optimizer, no_grad, validate_clip_grad_norm
+from ttml.common.utils import apply_precision, create_optimizer, no_grad, validate_clip_grad_norm
 
 from .callback import TrainerCallback
 
@@ -1017,8 +1017,7 @@ class GRPOTrainer:
         tokenizer = completer.tokenizer
         self.model = tt_model
 
-        if self.precision is not None:
-            ttml.core.apply_precision_config({"precision": self.precision}, tt_model.parameters())
+        apply_precision(tt_model, self.precision)
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         if grpo_cfg.use_clip_grad_norm:
             validate_clip_grad_norm(tt_model)

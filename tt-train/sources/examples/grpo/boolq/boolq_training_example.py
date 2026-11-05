@@ -122,8 +122,9 @@ if __name__ == "__main__":
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     # A typo under training_config.precision stops the run here rather than after the model is built.
-    ttml.core.validate_precision_config(raw.get("training_config") or {})
-    precision = raw["training_config"].get("precision")
+    raw_training_config = raw.get("training_config") or {}
+    ttml.core.validate_precision_config(raw_training_config)
+    precision = raw_training_config.get("precision")
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
     logging.info(

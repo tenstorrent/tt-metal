@@ -191,6 +191,18 @@ def initialize_device(yaml_config: dict):
     ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
+def apply_precision(model, precision: dict | None):
+    """Apply the YAML's ``training_config.precision`` block, given as a dict, to *model*'s parameters with
+    ``ttml.core.apply_precision_config``. ``None`` applies nothing; any dict is applied, so ``{}`` clears the stored
+    reduce dtype and the gradient accumulation dtype. Call it right after building the model, before loading weights
+    and creating the optimizer: loading keeps each parameter's stored dtype, so fp32 master weights get the loaded
+    values unrounded. Calling it again with the same block changes nothing. Returns the master dtype applied, if any.
+    """
+    if precision is None:
+        return None
+    return ttml.core.apply_precision_config({"precision": precision}, model.parameters())
+
+
 def create_optimizer(model, yaml_config: dict):
     """Create an optimizer from the optimizer config YAML.
 

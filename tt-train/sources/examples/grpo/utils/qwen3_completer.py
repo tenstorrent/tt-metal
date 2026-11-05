@@ -28,7 +28,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad, round_up_to_tile, build_causal_mask
+from ttml.common.utils import apply_precision, no_grad, round_up_to_tile, build_causal_mask
 from ttml.models import RunnerType
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 
@@ -38,7 +38,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from .completer_common import apply_precision, deallocate_tensors, async_read_to_host
+from .completer_common import deallocate_tensors, async_read_to_host
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache

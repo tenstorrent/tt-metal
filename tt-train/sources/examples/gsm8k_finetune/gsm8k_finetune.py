@@ -336,7 +336,8 @@ def train():
         print("*********************************\n\n")
 
     # A typo under training_config.precision stops the run here rather than after the model is built.
-    ttml.core.validate_precision_config(yaml_config.get("training_config") or {})
+    raw_training_config = yaml_config.get("training_config") or {}
+    ttml.core.validate_precision_config(raw_training_config)
     training_config = TrainingConfig(yaml_config)
     scheduler_config = SpeedrunSchedulerConfig.from_yaml(yaml_config)
 
@@ -374,7 +375,7 @@ def train():
     tt_model = tt_model_factory.create_model()
     # Before the weights load, so they load in the stored dtype: an fp32 file keeps its bits in fp32 master weights.
     # SFTTrainer applies the same block again below, which then changes nothing.
-    ttml.core.apply_precision_config(yaml_config["training_config"], tt_model.parameters())
+    ttml.core.apply_precision_config(raw_training_config, tt_model.parameters())
     print("Loading from safetensors...")
     tt_model.load_from_safetensors(safetensors_path)
 
@@ -444,7 +445,7 @@ def train():
         # SpeedrunScheduler uses a 0-based step index; the optimizer's lr is max_lr, so lr_at / max_lr is the factor.
         lr_lambda=lambda step: sched.lr_at(step) / scheduler_config.max_lr,
         attention_mask=causal_mask,
-        precision=yaml_config["training_config"].get("precision"),
+        precision=raw_training_config.get("precision"),
     )
 
     print(f"Starting training for max {training_config.steps} steps...")

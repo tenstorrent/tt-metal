@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 import ttml
 from ttml.common.profiler_utils import profiler_marker
 from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
-from ttml.common.utils import no_grad, validate_clip_grad_norm
+from ttml.common.utils import apply_precision, no_grad, validate_clip_grad_norm
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
 
@@ -518,8 +518,7 @@ class SFTTrainer:
                 )
             return optimizer
 
-        if precision is not None:
-            ttml.core.apply_precision_config({"precision": precision}, self.model.parameters())
+        apply_precision(self.model, precision)
 
         if isinstance(optimizer, dict):
             return ttml.optimizers.create_optimizer(optimizer, self.model.parameters())

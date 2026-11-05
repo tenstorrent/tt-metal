@@ -29,7 +29,7 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import save_file
 from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
-from ttml.common.utils import no_grad, round_up_to_tile
+from ttml.common.utils import apply_precision, no_grad, round_up_to_tile
 from ttml.models import RunnerType
 from ttml.models.llama import LlamaConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
@@ -148,8 +148,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
 
         tt_model = LlamaHfExport(llama_cfg)
         # Before the weights load, so fp32 master weights get the loaded values unrounded.
-        if precision is not None:
-            ttml.core.apply_precision_config({"precision": precision}, tt_model.parameters())
+        apply_precision(tt_model, precision)
 
         if enable_ddp:
             autograd_ctx.initialize_parallelism_context(
