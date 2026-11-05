@@ -1489,13 +1489,21 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                 used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
             named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
             if (used) {
+                const trids::ChannelIds& ch = ids.channels[c];
                 log_debug(
                     tt::LogFabric,
-                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {}",
+                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in groups "
+                    "of {}{}: {} groups, IDs {}..{} ({})",
                     this->local_fabric_node_id,
                     this->my_eth_channel,
                     c,
-                    ids.channels[c].reason);
+                    receivers[c].slots,
+                    ch.group_size,
+                    receivers[c].first_level_ack ? " (first-level acks)" : "",
+                    ch.groups,
+                    ch.start,
+                    ch.start + ch.num_ids - 1,
+                    ch.num_ids >= ch.groups ? "one per group" : fmt::format("shared: group & {}", ch.num_ids - 1));
             }
         }
     }

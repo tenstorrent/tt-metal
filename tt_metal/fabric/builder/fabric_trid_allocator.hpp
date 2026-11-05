@@ -18,7 +18,6 @@
 //      for the writes of the groups sharing its ID: credits come later, never early.
 //   4. Every channel keeps at least one ID. Ranges are consecutive from 0, in receiver channel order; IDs left over
 //      stay unused.
-// Standard library only.
 
 #pragma once
 
@@ -43,7 +42,6 @@ struct ChannelIds {
     std::size_t groups = 0;      // ceil(slots / group_size)
     std::size_t num_ids = 0;     // IDs in the channel's range; fewer than groups: shared by mask (a power of 2)
     std::size_t start = 0;       // the range's first ID
-    std::string reason;
 };
 
 struct Assignment {

@@ -4,6 +4,8 @@
 
 #include "tt_metal/fabric/builder/fabric_trid_allocator.hpp"
 
+#include <fmt/format.h>
+
 namespace tt::tt_fabric::trid_allocator {
 
 // Named rather than anonymous: the library builds this file in a unity batch with its neighbours.
@@ -17,13 +19,6 @@ std::size_t floor_power_of_2(std::size_t n) {
         p *= 2;
     }
     return p;
-}
-
-std::string describe(const ChannelIds& c, const ReceiverChannel& in) {
-    return std::to_string(in.slots) + " slots in groups of " + std::to_string(c.group_size) +
-           (in.first_level_ack ? " (first-level acks)" : "") + ": " + std::to_string(c.groups) + " groups, IDs " +
-           std::to_string(c.start) + ".." + std::to_string(c.start + c.num_ids - 1) +
-           (c.num_ids >= c.groups ? " (one per group)" : " (shared: group & " + std::to_string(c.num_ids - 1) + ")");
 }
 
 }  // namespace trid_detail
@@ -56,8 +51,10 @@ Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels) 
             }
         }
         if (largest == nullptr) {
-            result.error = std::to_string(channels.size()) + " receiver channels need more than " +
-                           std::to_string(noc_transaction_ids) + " transaction IDs at one each";
+            result.error = fmt::format(
+                "{} receiver channels need more than {} transaction IDs at one each",
+                channels.size(),
+                noc_transaction_ids);
             return result;
         }
         const std::size_t next = trid_detail::is_power_of_2(largest->num_ids)
@@ -67,11 +64,9 @@ Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels) 
         largest->num_ids = next;
     }
     std::size_t start = 0;
-    for (std::size_t i = 0; i < result.channels.size(); i++) {
-        ChannelIds& c = result.channels[i];
+    for (ChannelIds& c : result.channels) {
         c.start = start;
         start += c.num_ids;
-        c.reason = trid_detail::describe(c, channels[i]);
     }
     result.used_ids = start;
     return result;
