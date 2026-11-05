@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <filesystem>
-
 #include <nlohmann/json_fwd.hpp>
 
 namespace tt::llrt {
@@ -20,20 +18,12 @@ namespace manifest {
 struct ManifestFacts;
 }  // namespace manifest
 
-// Version of the fabric manifest schema that will be emitted.
-constexpr int FABRIC_MANIFEST_VERSION = 1;
-
 // The manifest's JSON for `facts`. It reads nothing but `facts`: the types and vocabulary blocks are derived from them.
 nlohmann::ordered_json make_manifest_json(const manifest::ManifestFacts& facts);
 
-// Standard per-rank path for the fabric manifest.
-std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions);
-
-// Removes this rank's manifest from an earlier run.
-void remove_stale_fabric_manifest(const tt::llrt::RunTimeOptions& rtoptions);
-
-// Writes this rank's fabric manifest, which includes facts about the fabric that are fixed for the run.
-// This requires the fabric routers to be compiled.
+// Writes this rank's fabric manifest, which includes facts about the fabric that are fixed for the run, into this run's
+// folder: <logs_dir>/generated/fabric/runs/<run_id>/. Rank 0 makes the run id and broadcasts it, so every rank of the
+// fabric must call this. This requires the fabric routers to be compiled.
 void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::RunTimeOptions& rtoptions);
 
 }  // namespace tt::tt_fabric

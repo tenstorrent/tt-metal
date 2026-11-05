@@ -85,7 +85,12 @@ on `manifest_version`.
 
 Set `TT_METAL_FABRIC_GENERATE_MANIFEST=1`. Each MPI rank writes:
 
-`<logs_dir>/generated/fabric/fabric_manifest_rank_<rank + 1>_of_<world_size>.json`
+`<logs_dir>/generated/fabric/runs/<run_id>/fabric_manifest_rank_<rank + 1>_of_<world_size>.json`
+
+Each fabric init is a run with its own folder. Rank 0 makes the run id, the UTC time and 8 random hex digits such as
+`20261105T221500Z-1a2b3c4d`, and broadcasts it to the fabric's other ranks, so a run's manifests share one folder name
+on every host. Run ids sort by time, so the newest run is the last folder by name. Old runs' folders stay until the
+user removes them.
 
 The rank and size are the whole job's (`MPI_COMM_WORLD`), even when tt-run splits the job into sub-contexts, so every
 rank's file has its own name.
@@ -95,7 +100,6 @@ rank's file has its own name.
 - The file is written after the routers are compiled and launched, and before the host waits for router sync, so a
 run that hangs during bring-up still leaves a manifest. A file on disk doesn't mean the routers reached sync.
 - It's written to a temporary name and renamed into place, so a reader never sees a partial file.
-- Fabric init deletes a stale manifest at that path whether or not the option is set.
 - Mock clusters (`TT_METAL_MOCK_CLUSTER_DESC_PATH`) write manifests without hardware.
 - When the manifest code can't describe what fabric built, fabric init fails with `Failed to write fabric manifest ...`
   and a message starting with `Fabric manifest:` that names what to update (see "Changing fabric" below).

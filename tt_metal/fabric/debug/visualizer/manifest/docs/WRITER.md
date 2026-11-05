@@ -9,18 +9,22 @@ changes the manifest format, so it goes with a change to `fabric_manifest_schema
 
 `write_fabric_manifest` (`fabric_manifest.hpp`) is what fabric init calls ([BUILDER_HOOKS.md](BUILDER_HOOKS.md)). It:
 
-1. **Builds the facts.** `ManifestFacts` gets `run`, `fabric` and `arch` from the describe file
+1. **Agrees on the run id.** Rank 0 makes it and broadcasts it over the current world, which is this fabric's ranks
+   (a job tt-run splits into sub-contexts has a fabric, and so a run, per sub-context). Every rank of the fabric must
+   call `write_fabric_manifest`.
+2. **Builds the facts.** `ManifestFacts` gets `run`, `fabric` and `arch` from the describe file
    ([DESCRIBE.md](DESCRIBE.md)), and `meshes` from the topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)). The fabric
    routers must already be compiled, so the builder context exists.
-2. **Makes the JSON** with `make_manifest_json`.
-3. **Writes the file** to this rank's path (`fabric_manifest_path`) under a temporary name, `<path>.tmp.<pid>`, then
-   renames it into place, so a reader never sees a partial file. On a failure it removes the temporary file.
+3. **Makes the JSON** with `make_manifest_json`.
+4. **Writes the file** to this rank's path in the run's folder, `<logs_dir>/generated/fabric/runs/<run_id>/` (the path
+   helpers are in `common/fabric_visualizer_files.hpp`), under a temporary name, `<path>.tmp.<pid>`, then renames it
+   into place, so a reader never sees a partial file. On a failure it removes the temporary file.
 
 Any failure is rethrown as `Failed to write fabric manifest <path> (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip)`,
 followed by the message starting with `Fabric manifest:` that says what went wrong.
 
-`remove_stale_fabric_manifest` deletes this rank's file from an earlier run. Fabric init calls it whether or not
-generation is on, so a manifest on disk always belongs to the run that wrote it.
+Each run writes into a folder of its own, so a manifest on disk always belongs to the run named by its folder and its
+`run.run_id`.
 
 ## The JSON
 
@@ -28,8 +32,8 @@ generation is on, so a manifest on disk always belongs to the run that wrote it.
 
 | Key                | Written by                | From                                                                                |
 | ------------------ | ------------------------- | ----------------------------------------------------------------------------------- |
-| `manifest_version` | N/A                       | `FABRIC_MANIFEST_VERSION` (`fabric_manifest.hpp`)                                   |
-| `file_kind`        | N/A                       | Always `"fabric_manifest"`, so a tool can tell the manifest from other fabric files |
+| `manifest_version` | N/A                       | `k_manifest_version` (`common/fabric_visualizer_files.hpp`), which readers check    |
+| `file_kind`        | N/A                       | `k_manifest_file_kind`, `"fabric_manifest"`, so a tool can tell the manifest apart  |
 | `run`              | `make_run_json`           | `ManifestFacts::run`                                                                |
 | `fabric`           | `make_fabric_json`        | `ManifestFacts::fabric`                                                             |
 | `arch`             | `make_arch_json`          | `ManifestFacts::arch`                                                               |
@@ -90,5 +94,6 @@ list here.
 
 1. Change the writer, and the names in `fabric_manifest_names.hpp` if a key's spelling changes.
 2. Update `fabric_manifest_schema.json` and [FORMAT.md](FORMAT.md).
-3. If readers can't take the new shape as it is, bump `FABRIC_MANIFEST_VERSION`.
+3. If readers can't take the new shape as it is, bump `k_manifest_version` in `common/fabric_visualizer_files.hpp`,
+   and the schema's `manifest_version` with it.
 4. For a new label key, add a list to `k_vocabulary_lists` and the same name to the schema's `vocabulary`.
