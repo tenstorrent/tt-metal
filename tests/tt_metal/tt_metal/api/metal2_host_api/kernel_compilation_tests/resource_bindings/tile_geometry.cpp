@@ -214,6 +214,47 @@ INSTANTIATE_TEST_SUITE_P(
         GeometryCase{"PerNode", std::nullopt, 32, 32, 4, false, false, true}),
     [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
 
+class BindingTokenGeometryWormhole : public test_helpers::ProgramSpecTestGen1,
+                                     public ::testing::WithParamInterface<GeometryCase> {
+protected:
+    distributed::MeshDevice& fixture_device() { return *mesh_device_; }
+};
+
+// Wormhole DFB shape queries compile in data movement and all compute stages.
+TEST_P(BindingTokenGeometryWormhole, DfbTensorShape) {
+    const GeometryCase geometry = GetParam();
+    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// Wormhole scratchpad shape queries compile in data movement and all compute stages.
+TEST_P(BindingTokenGeometryWormhole, ScratchpadTensorShape) {
+    const GeometryCase geometry = GetParam();
+    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// Wormhole common and per-node tensor shape queries compile in data movement and all compute stages.
+TEST_P(BindingTokenGeometryWormhole, TensorBindingTensorShape) {
+    const GeometryCase geometry = GetParam();
+    const std::string source =
+        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResourceShapes,
+    BindingTokenGeometryWormhole,
+    ::testing::Values(
+        GeometryCase{"Default", std::nullopt, 32, 32, 4, false, false},
+        GeometryCase{"Partial", Tile({16, 32}), 16, 32, 2, true, false},
+        GeometryCase{"Narrow", Tile({32, 16}), 32, 16, 2, false, true},
+        GeometryCase{"PerNode", std::nullopt, 32, 32, 4, false, false, true}),
+    [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
+
 std::string MakeNonPublicCustomFaceQuerySource(const GeometryCase& geometry, const char* token) {
     const Tile tile = geometry.tile.value_or(Tile{});
     const auto face = tile.get_face_shape();
