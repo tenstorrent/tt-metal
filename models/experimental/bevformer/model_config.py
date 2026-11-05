@@ -303,15 +303,9 @@ FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
 # do not amortize it.
 DCN_SHARDED_INPUT_STAGES = (2,)
 
-# Height slices for the stem conv on base's 6 x 928 x 1600 images in DRAM, and for the max pool on
-# its output when layer1 runs on the whole batch: the fewest that fit L1. Height slices run faster
-# than width slices on both, and they leave room for STEM_ACT_BLOCK_H.
-STEM_CONV_HEIGHT_SLICES = 4
-STEM_MAXPOOL_HEIGHT_SLICES = 6
-
-# conv2d's act_block_h overrides: the stem conv's, the whole-batch non-DCN 3x3 conv2's of the
-# bottlenecks and the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these
-# slice counts.
+# conv2d's act_block_h overrides: the stem conv's on one camera in L1, the whole-batch non-DCN 3x3
+# conv2's of the bottlenecks and the DRAM levels' FPN output convs'. The FPN's larger blocks overflow
+# L1 at its slice counts.
 STEM_ACT_BLOCK_H = 128
 CONV2_ACT_BLOCK_H = 32
 FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
@@ -329,8 +323,6 @@ def tt_resnet_kwargs():
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
-        stem_conv_height_slices=STEM_CONV_HEIGHT_SLICES,
-        stem_maxpool_height_slices=STEM_MAXPOOL_HEIGHT_SLICES,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
