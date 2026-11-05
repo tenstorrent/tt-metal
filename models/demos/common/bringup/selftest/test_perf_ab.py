@@ -856,3 +856,22 @@ def test_begin_chunk_passes_last_only_to_a_model_that_takes_it(monkeypatch):
     with pytest.raises(RuntimeError):
         harness.begin_chunk(Without(), [], 0)
     assert got == [True, "plain", False]
+
+
+def test_a_position_profile_names_its_chunk_role(monkeypatch):
+    """F249 (DeepSeek-V4.1 P.32): one gate times the same position as a last and as a non-last chunk; without the role
+    in the suffix both wrote *_p51200 and the second overwrote the first."""
+    from models.demos.common.bringup.testing import harness
+
+    role = lambda: {None: "", True: "_last", False: "_nonlast"}[harness.chunk_last()]  # noqa: E731
+    monkeypatch.delenv(harness.CHUNK_LAST_ENV, raising=False)
+    assert role() == ""
+    monkeypatch.setenv(harness.CHUNK_LAST_ENV, "1")
+    assert role() == "_last"
+    monkeypatch.setenv(harness.CHUNK_LAST_ENV, "0")
+    assert role() == "_nonlast"
+    import inspect
+
+    from models.demos.common.bringup.testing import profile
+
+    assert 'f"_p{pos}{role}"' in inspect.getsource(profile.run_profile)
