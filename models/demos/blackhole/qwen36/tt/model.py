@@ -6343,6 +6343,10 @@ class Qwen36Model:
                     start = int(start_positions[u]) if start_positions is not None else 0
                     if gdn_resume is not None:
                         plan = self._plan_block_resume(actual, start, (gdn_resume, u))
+                        if os.environ.get("QWEN36_PREFIX_CACHE_DEBUG", "0") == "1":
+                            logger.info(
+                                f"[mamba-resume] len={actual} vllm_start={start} gdn_hit={plan[0] if plan else 0}"
+                            )
                     else:
                         cont = self._maybe_partial_chunk(step_tokens, actual - max(start, 0), actual)
                         plan = self._plan_prefix_prefill(toks[:, :actual], actual, start, cont=cont)
