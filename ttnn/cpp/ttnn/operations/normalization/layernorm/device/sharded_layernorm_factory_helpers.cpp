@@ -83,7 +83,9 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
-                "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false",
+                "subblock_wt={}, but subblock width must be at most 4 tiles with fp32_dest_acc_en=True (rms_norm and "
+                "layer_norm use it by default) and dst_full_sync_en=False; use a smaller subblock_w or set "
+                "fp32_dest_acc_en=False",
                 subblock_wt);
         } else {
             TT_FATAL(

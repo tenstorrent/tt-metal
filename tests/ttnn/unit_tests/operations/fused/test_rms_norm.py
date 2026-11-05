@@ -255,3 +255,27 @@ def test_rms_norm_default_compute_config(arch, math_approx_mode, fp32_dest_acc_e
     assert config.math_fidelity == ttnn.MathFidelity.HiFi4
     assert config.math_approx_mode == math_approx_mode
     assert config.fp32_dest_acc_en == fp32_dest_acc_en
+
+
+def test_rms_norm_default_config_subblock_limit(device, expect_error):
+    if not ttnn.rmsnorm_default_compute_config(device.arch()).fp32_dest_acc_en:
+        pytest.skip("the default config on this arch has fp32_dest_acc_en=False")
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 2048), core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH
+    )
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 2048)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    def program_config(subblock_w):
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 1), subblock_w=subblock_w, block_h=1, block_w=8, inplace=False
+        )
+
+    ttnn.rms_norm(input_tensor, epsilon=1e-6, memory_config=memory_config, program_config=program_config(4))
+    with expect_error(RuntimeError, "fp32_dest_acc_en"):
+        ttnn.rms_norm(input_tensor, epsilon=1e-6, memory_config=memory_config, program_config=program_config(8))
