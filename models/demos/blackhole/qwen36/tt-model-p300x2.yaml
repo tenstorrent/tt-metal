@@ -223,8 +223,9 @@ card:
     `batch` serves up to 32 concurrent requests on a different engine: the ttnn decode path of the previous package, all
     users in one decode batch, full sampling.
 
-    Known issue: on the test machine, one card dropped off PCIe about once per 20 heavy waves of 32 requests with
-    8K-token prompts, on the previous package as well; `tt-smi -r` or a reboot brings it back.
+    Known issue: on the test machine, one card dropped off PCIe under heavy 32-request prefill: about once per 20 waves
+    with 8K-token prompts, and once in the tt-inference-server run below at 2K-token prompts; also on the previous
+    package. `tt-smi -r` or a reboot brings it back.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
 
@@ -277,8 +278,17 @@ card:
     Run 2026-11-02, tt-inference-server 0.21.0 `--workflow benchmarks`; the model's default sampling (temperature 1.0, top_k 20, top_p 0.95).
 
     #### `batch`
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 152.1 | 30.1 | 33.2 | 32.2 |
+    | 128 | 128 | 32 | 256 | 4972.1 | 48.7 | 20.5 | 367.1 |
+    | 128 | 1024 | 1 | 4 | 153.1 | 30.1 | 33.2 | 33.0 |
+    | 128 | 1024 | 32 | 128 | 5063.8 | 43.3 | 23.1 | 663.3 |
+    | 1024 | 128 | 1 | 4 | 239.3 | 30.1 | 33.3 | 31.5 |
+    | 1024 | 128 | 32 | 128 | 7735.5 | 50.3 | 19.9 | 290.0 |
+    | 2048 | 128 | 1 | 4 | 335.7 | 32.0 | 31.2 | 29.1 |
 
-    (pending: the tt-inference-server run of this profile)
+    Run 2026-11-05, tt-inference-server 0.21.0 `--workflow benchmarks`; the model's default sampling (temperature 1.0, top_k 20, top_p 0.95). The run stopped at ISL 2048 / concurrency 32, when one card dropped off PCIe; the points after it were not measured. Chip 1 throttled to 800-860 MHz from the ISL 128 / OSL 1024 / concurrency 32 point on.
 
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
