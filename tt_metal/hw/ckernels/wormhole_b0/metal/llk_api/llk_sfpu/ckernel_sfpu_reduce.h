@@ -479,10 +479,11 @@ static_assert(
  */
 template <HorizontalFold fold>
 inline void record_horizontal_reduce_stage() {
-    lltt::record(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>());
-    horizontal_reduce_rotate_first();
-    horizontal_reduce_rotate_step();
-    horizontal_reduce_fold<fold>();
+    load_replay_buf(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>(), [] {
+        horizontal_reduce_rotate_first();
+        horizontal_reduce_rotate_step();
+        horizontal_reduce_fold<fold>();
+    });
 }
 
 /**
@@ -1206,10 +1207,11 @@ template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_max_min_int32() {
     _init_sfpu_config_reg();
 
-    lltt::record(0, COL_MAX_MANUAL_REPLAY_LEN);
-    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);
+    load_replay_buf(0, COL_MAX_MANUAL_REPLAY_LEN, [] {
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);
+    });
 }
 
 /**
@@ -1225,10 +1227,11 @@ template <PoolType pool_type>
 inline void init_reduce_max_min_int32_signed() {
     _init_sfpu_config_reg();
 
-    lltt::record(0, COL_MAX_INT32_SIGNED_REPLAY_LEN);
-    _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG6, p_sfpu::LREG5>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();
+    load_replay_buf(0, COL_MAX_INT32_SIGNED_REPLAY_LEN, [] {
+        _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
+        _emit_int32_signed_cswap_<p_sfpu::LREG6, p_sfpu::LREG5>();
+        _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();
+    });
 }
 
 /**
@@ -1274,22 +1277,23 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // When clearing high bits (UInt16 in 32-bit dest), two extra SFPAND ops mask the garbage high bits
     // of the manually loaded face-1 columns (LREG0/LREG1) before the compare-and-swap, so the buffer
     // grows from 9 to 11 instructions.
-    lltt::record<lltt::NoExec>(0, col_max_loadmacro_replay_len<clear_high_bits>());
-    TTI_INCRWC(0, 4, 0, 0);
-    TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
-    TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, 16);
-    TTI_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, 18);
-    if constexpr (clear_high_bits) {
-        TTI_SFPAND(0, CLEAR_REG, p_sfpu::LREG1, 0);
-        TTI_SFPAND(0, CLEAR_REG, p_sfpu::LREG0, 0);
-    }
-    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
-    TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
+    load_replay_buf(0, col_max_loadmacro_replay_len<clear_high_bits>(), [] {
+        TTI_INCRWC(0, 4, 0, 0);
+        TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
+        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, 16);
+        TTI_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, 18);
+        if constexpr (clear_high_bits) {
+            TTI_SFPAND(0, CLEAR_REG, p_sfpu::LREG1, 0);
+            TTI_SFPAND(0, CLEAR_REG, p_sfpu::LREG0, 0);
+        }
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
+        TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
 
-    // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_2, 0);
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_1, 0);
+        // Dummy loads to increment dest counters
+        TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_2, 0);
+        TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_1, 0);
+    });
 }
 
 /**
@@ -1327,38 +1331,38 @@ inline void init_reduce_sum_avg() {
     if constexpr (is_integer_mode) {
         // Integer replay buffer: 6 sequential instructions (1-cycle SFPIADD latency, no NOPs needed)
         // Positions 0-2 form a natural half-reduce for LREG0-3 (reusable via replay(0, 3))
-        lltt::record(0, COL_SUM_INT_REPLAY_LEN);
+        load_replay_buf(0, COL_SUM_INT_REPLAY_LEN, [] {
+            // Upper face column summation (LREG0-3)
+            TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
+            TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, 4);  // LREG1 = LREG1 + LREG2
+            TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
 
-        // Upper face column summation (LREG0-3)
-        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, 4);  // LREG1 = LREG1 + LREG2
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
-
-        // Lower face column summation (LREG4-7)
-        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG6, 4);  // LREG6 = LREG6 + LREG7
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4);  // LREG5 = LREG5 + LREG6
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);  // LREG4 = LREG4 + LREG5
+            // Lower face column summation (LREG4-7)
+            TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG6, 4);  // LREG6 = LREG6 + LREG7
+            TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4);  // LREG5 = LREG5 + LREG6
+            TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);  // LREG4 = LREG4 + LREG5
+        });
     } else {
         // Float replay buffer: 10 instructions total
         // Positions 0-5: Full reduce, interleaved to eliminate NOPs (B hides A's 2-cycle latency)
         // Positions 6-9: Half reduce for LREG0-3 only, with NOP for dependent SFPADD chain
-        lltt::record(0, COL_SUM_FLOAT_REPLAY_LEN);
+        load_replay_buf(0, COL_SUM_FLOAT_REPLAY_LEN, [] {
+            // Full reduce (positions 0-5): interleaved upper/lower face summation
+            TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
+            TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG6, 0);  // B1 (hides A1 latency)
+            TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // A2
+            TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0);  // B2 (hides A2 latency)
+            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
+            TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // B3 (hides A3 latency)
 
-        // Full reduce (positions 0-5): interleaved upper/lower face summation
-        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
-        TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG6, 0);  // B1 (hides A1 latency)
-        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // A2
-        TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0);  // B2 (hides A2 latency)
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
-        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // B3 (hides A3 latency)
-
-        // Half reduce (positions 6-9): upper face only, NOP required for 2-cycle SFPADD latency
-        // Reorders A1/A3/A2 so A1 and A3 (disjoint outputs) issue back-to-back; only A3's latency before A2 needs a
-        // NOP.
-        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
-        TTI_SFPNOP;  // Cover A3 latency (A1 is already available)
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // A2
+            // Half reduce (positions 6-9): upper face only, NOP required for 2-cycle SFPADD latency
+            // Reorders A1/A3/A2 so A1 and A3 (disjoint outputs) issue back-to-back; only A3's latency before A2 needs a
+            // NOP.
+            TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
+            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
+            TTI_SFPNOP;  // Cover A3 latency (A1 is already available)
+            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // A2
+        });
     }
 
     // Row SUM/AVG butterfly-stage window, recorded once here (hoisted out of the per-tile row body).

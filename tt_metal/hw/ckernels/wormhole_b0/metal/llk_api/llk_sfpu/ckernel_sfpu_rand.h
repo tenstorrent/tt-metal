@@ -113,8 +113,7 @@ template <bool NORMALIZE_PER_ROW>
 inline void rand_rows() {
     constexpr std::uint32_t row_instruction_count = NORMALIZE_PER_ROW ? 17 : 16;
 
-    TTI_REPLAY(0, row_instruction_count, 1, 1);
-    rand_row<NORMALIZE_PER_ROW>();
+    load_replay_buf<Exec>(0, row_instruction_count, [] { rand_row<NORMALIZE_PER_ROW>(); });
 #pragma GCC unroll 7
     for (int d = 1; d < 8; d++) {
         TTI_REPLAY(0, row_instruction_count, 0, 0);

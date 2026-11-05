@@ -54,7 +54,7 @@ constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 // fused [bf16|u16] key, and the fused tie-complement operand.
 constexpr std::uint32_t TOPK_LO16_MASK = 0x0000FFFF;
 
-// All lanes enabled, CC result true. A macro, not a function: some sites sit inside lltt::record windows.
+// All lanes enabled, CC result true. A macro, not a function: some sites sit inside replay-record windows.
 #define TOPK_SFPENCC_ALL_LANES_ON() TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI)
 
 // Rank-stamped keys carry a TAG_BITS-wide rank tag in the value word's low bits: 16 for bf16 values
@@ -231,16 +231,17 @@ inline void _topk_fuse_tile_()
 
     // 9-slot body: one 32-lane vector per replay. The XOR complement runs only in lanes selected
     // by the value-sign test; the AND mask and the OR must be unconditional, hence the bracketing.
-    lltt::record<lltt::Exec>(0, 9);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);   // value [bf16|0x0000]
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 128); // index [garbage|u16]
-    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);                       // L1 &= 0x0000FFFF (#50215)
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // complement enabled lanes
-    TOPK_SFPENCC_ALL_LANES_ON();                     // all lanes back on
-    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // L0 |= L1 -> packed key
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-    TTI_INCRWC(0, 2, 0, 0); // next 32-lane vector (Matrix-unit issue, free vs the SFPU port)
+    load_replay_buf<Exec>(0, 9, [] {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);    // value [bf16|0x0000]
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 128);  // index [garbage|u16]
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);                        // L1 &= 0x0000FFFF (#50215)
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // complement enabled lanes
+        TOPK_SFPENCC_ALL_LANES_ON();                      // all lanes back on
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);    // L0 |= L1 -> packed key
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_INCRWC(0, 2, 0, 0);  // next 32-lane vector (Matrix-unit issue, free vs the SFPU port)
+    });
     for (int i = 1; i < 64; i++)
     {
         lltt::replay(0, 9);
@@ -266,17 +267,18 @@ inline void _topk_defuse_tile_(const int num_tiles)
     // 10-slot body. The sign test runs on the packed word BEFORE its halves are cleared: bit 31
     // is the fused value's sign (the network moves whole words raw), so the same predicate as the
     // fuse selects the same lanes — the complement is self-inverse.
-    lltt::record<lltt::Exec>(0, 10);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0); // packed [bf16|idx']
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // un-complement lo16
-    TOPK_SFPENCC_ALL_LANES_ON();
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0); // L1 = [0x0000|u16 idx]
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // L0 = [bf16|0x0000] (exact bf16 pack)
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, index_store_mode, ADDR_MOD_3, 128); // index region restored
-    TTI_INCRWC(0, 2, 0, 0);
+    load_replay_buf<Exec>(0, 10, [] {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);  // packed [bf16|idx']
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // un-complement lo16
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0);  // L1 = [0x0000|u16 idx]
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0);  // L0 = [bf16|0x0000] (exact bf16 pack)
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, index_store_mode, ADDR_MOD_3, 128);  // index region restored
+        TTI_INCRWC(0, 2, 0, 0);
+    });
     {
         const int n = 32 * num_tiles;
         for (int i = 1; i < n; i++)
@@ -692,17 +694,17 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
         constexpr int replay_count = 5;
         if (init_replay)
         {
-            lltt::record<lltt::Exec>(replay_start, replay_count);
+            load_replay_buf<Exec>(replay_start, replay_count, [] {
+                // Step 4
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-            // Step 4
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                // Step 3
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-            // Step 3
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-            TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-            TTI_SFPTRANSP(0, 0, 0, 0);
+                TTI_SFPTRANSP(0, 0, 0, 0);
+            });
 
             init_replay = false;
         }
@@ -992,8 +994,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             // Groups of 16 datums being sorted at the same time
                             if (init_load)
                             {
-                                lltt::record<lltt::Exec>(0, ldst_count);
-                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                                load_replay_buf<Exec>(0, ldst_count, [] {
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                                });
                                 init_load = false;
                             }
                             else
@@ -1011,8 +1014,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 constexpr int replay_count = 4;
                                 if (init_phase)
                                 {
-                                    lltt::record<lltt::Exec>(16, replay_count);
-                                    bitonic_topk_ph0_st1_to_1<STABLE_SORT, TIE_ORDER>();
+                                    load_replay_buf<Exec>(
+                                        16, replay_count, [] { bitonic_topk_ph0_st1_to_1<STABLE_SORT, TIE_ORDER>(); });
                                     init_phase = false;
                                 }
                                 else
@@ -1022,8 +1025,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             if (init_store)
                             {
-                                lltt::record<lltt::Exec>(8, ldst_count);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                                load_replay_buf<Exec>(8, ldst_count, [] {
+                                    bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                                });
                                 init_store = false;
                             }
                             else
@@ -1048,8 +1052,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 constexpr int replay_count = 6;
                                 if (init_phase)
                                 {
-                                    lltt::record<lltt::Exec>(16, replay_count);
-                                    bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                    load_replay_buf<Exec>(
+                                        16, replay_count, [] { bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>(); });
                                     init_phase = false;
                                 }
                                 else
@@ -1075,8 +1079,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 constexpr int replay_count = 9;
                                 if (init_phase)
                                 {
-                                    lltt::record<lltt::Exec>(16, replay_count);
-                                    bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
+                                    load_replay_buf<Exec>(
+                                        16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>(); });
                                     init_phase = false;
                                 }
                                 else
@@ -1389,11 +1393,12 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 // Groups of 8 datums being sorted at the same time
                                 if (init_rebuild)
                                 {
-                                    lltt::record<lltt::Exec>(0, rebuild_win_ld8);
-                                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                    bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
-                                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                    bitonic_topk_inc_x8_dest(64, false);
+                                    load_replay_buf<Exec>(0, rebuild_win_ld8, [ld_offset] {
+                                        bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
+                                        bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                        bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
+                                        bitonic_topk_inc_x8_dest(64, false);
+                                    });
                                     init_rebuild = false;
                                 }
                                 else
@@ -1425,14 +1430,17 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 // Groups of 16 datums being sorted at the same time
                                 if (init_rebuild)
                                 {
-                                    lltt::record<lltt::Exec>(0, rebuild_win_ph1);
-                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(ld_offset, ld_dist);
-                                    bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(ld_offset, ld_dist);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
-                                    TTI_INCRWC(0, 8, 0, 0);
+                                    load_replay_buf<Exec>(0, rebuild_win_ph1, [ld_offset, ld_dist] {
+                                        bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(
+                                            ld_offset, ld_dist);
+                                        bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                        bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(
+                                            ld_offset, ld_dist);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                        TTI_INCRWC(0, 8, 0, 0);
+                                    });
                                     init_rebuild = false;
                                 }
                                 else
@@ -1462,14 +1470,15 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                lltt::record<lltt::Exec>(0, rebuild_win_ph2);
-                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, ld_offset);
-                                bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, ld_offset);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
+                                load_replay_buf<Exec>(0, rebuild_win_ph2, [ld_offset] {
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, ld_offset);
+                                    bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
+                                    bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, ld_offset);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                });
                                 init_rebuild = false;
                             }
                             else
@@ -1498,15 +1507,17 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                lltt::record<lltt::Exec>(0, ldst_count);
-                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                                load_replay_buf<Exec>(0, ldst_count, [] {
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                                });
                                 bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_rebuild, 8);
-                                lltt::record<lltt::Exec>(13, rebuild_win_st12);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
-                                TTI_INCRWC(0, 8, 0, 0);
+                                load_replay_buf<Exec>(13, rebuild_win_st12, [] {
+                                    bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                    TTI_INCRWC(0, 8, 0, 0);
+                                });
                             }
                             else
                             {
@@ -1571,11 +1582,13 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     {
                         if (init_rebuild)
                         {
-                            lltt::record<lltt::Exec>(0, ldst_count);
-                            bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                            load_replay_buf<Exec>(0, ldst_count, [] {
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                            });
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_rebuild, 8);
-                            lltt::record<lltt::Exec>(17, ldst_count);
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                            load_replay_buf<Exec>(17, ldst_count, [] {
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                            });
                         }
                         else
                         {

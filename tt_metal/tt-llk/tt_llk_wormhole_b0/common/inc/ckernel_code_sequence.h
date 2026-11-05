@@ -131,10 +131,9 @@ public:
             step(step, std::integral_constant<std::size_t, 0> {});
         };
 
-        // The only arch-divergent code in this file: Blackhole disables instruction gathering around the
-        // record window via ckernel::load_replay_buf; Wormhole has no gathering and records directly.
-        lltt::record(m_replay_base, CodeLen);
-        emit_all();
+        // Every record goes through ckernel::load_replay_buf; on Blackhole it also disables instruction
+        // gathering around the record window.
+        load_replay_buf(m_replay_base, CodeLen, emit_all);
     }
 
 private:
