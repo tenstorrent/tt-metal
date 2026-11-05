@@ -454,15 +454,18 @@ def _d2d_drain_op(inbound, sockets):
     )
 
 
-def _d2d_recv(inbound, sockets) -> tuple:
+def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
     """Return ``(activation, extra segments, decoded metadata)``. The extras are the persistent
-    ``sockets.extras`` when set, freshly allocated otherwise; the list itself is always the caller's."""
+    ``sockets.extras`` when set, freshly allocated otherwise; the list itself is always the caller's.
+    ``stage_metadata`` is handed the drained metadata before the blocking host read of it."""
     t0 = time.perf_counter()
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
         act, extras = sockets.tokens, list(sockets.extras or [])
     else:
         act, *extras, sockets.metadata = _d2d_drain_op(inbound, sockets)
+    if stage_metadata is not None:
+        stage_metadata(sockets.metadata)
     meta = _decode_metadata(sockets.metadata, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_chunks_str(meta)}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -924,6 +927,9 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Staging the traced runtime's metadata ahead of the host read puts its dispatch in the wait for
+    # the upstream rank instead of between the read and the replay.
+    stage_metadata = getattr(runtime, "stage_metadata", None) if FORWARD_CHUNKS == 1 else None
 
     def forward_shutdown():
         if outbound.activation is not None:
@@ -952,7 +958,9 @@ def run_request_loop(
                         max_seq_len=MAX_SEQ_LEN,
                     )
             else:
-                inp, mtp_id_segments, meta = _d2d_recv(inbound.activation, sockets)
+                inp, mtp_id_segments, meta = _d2d_recv(
+                    inbound.activation, sockets, stage_metadata if sockets.drain_trace is not None else None
+                )
                 mtp_tokens = None
         except BaseException:
             # Release the downstream ranks before failing, whatever stopped this one.

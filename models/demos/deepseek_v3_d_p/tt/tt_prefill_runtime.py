@@ -199,6 +199,7 @@ class TtPrefillRuntime:
         self._extras_are_caller_filled = False
         self._trace_metadata = None
         self._trace_metadata_msg = None
+        self._metadata_staged = False
         self._trace_d2h_service = None
         self._trace_output = None
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
@@ -840,6 +841,15 @@ class TtPrefillRuntime:
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
 
+    def stage_metadata(self, metadata_msg: ttnn.Tensor) -> None:
+        """Populate the persistent metadata from metadata_msg ahead of prefill_chunk, so its eager ops are
+        dispatched while the caller still waits on the chunk's host-side metadata read. Safe as soon as
+        the previous chunk's replay and send are enqueued: both are ahead of it on cq 0 and the send
+        copies the record into the socket within its own op."""
+        assert self._trace_captured, "stage_metadata() writes the persistent metadata a capture reads"
+        self._metadata_from_msg(metadata_msg)
+        self._metadata_staged = True
+
     def _stage_trace_inputs(
         self,
         input_tensor: ttnn.Tensor,
@@ -870,7 +880,10 @@ class TtPrefillRuntime:
         if not self._input_is_caller_filled:
             ttnn.copy(model_input, self._trace_input)
             ttnn.deallocate(model_input)
-        self._metadata_from_msg(metadata_msg)
+        if self._metadata_staged:
+            self._metadata_staged = False
+        else:
+            self._metadata_from_msg(metadata_msg)
 
     @property
     def trace_output(self) -> Optional[ttnn.Tensor]:
