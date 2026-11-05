@@ -276,6 +276,13 @@ constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync,
 constexpr bool matmul_tile_mop = false;
 #endif
 
+// main's form writes the address mods exactly as main does (the bias register too); the other forms skip that write
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_bias_write = matmul_kt_key == 0;
+#else
+constexpr bool matmul_bias_write = false;
+#endif
+
 // keys production selects the forms by (partials format, its row MOP rule) and no fused post flip: see matmul_prod_keys.py
 #ifdef MATMUL_PROD_KEYS
 constexpr bool matmul_prod_keys = true;
@@ -309,9 +316,9 @@ constexpr bool matmul_half_end_fold_k = false;
 #endif
 #ifdef ARCH_BLACKHOLE
 #ifdef MATMUL_PACK_KEYS
-#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT
+#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT, matmul_bias_write
 #else
-#define MATMUL_INIT_KEYS 0, 0
+#define MATMUL_INIT_KEYS 0, 0, matmul_bias_write
 #endif
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS

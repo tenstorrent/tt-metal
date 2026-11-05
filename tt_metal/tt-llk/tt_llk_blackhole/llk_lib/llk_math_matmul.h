@@ -38,7 +38,7 @@ inline bool math_matmul_init_reuse_a = true;
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0, bool skip_mod5 = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0, bool skip_mod5 = false, bool bias_write = false>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -70,7 +70,7 @@ inline void matmul_configure_addrmod(
         .srcb = {.incr = 8, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
-        .set_no_bias(ADDR_MOD_0);
+        .set_with_bias<bias_write>(ADDR_MOD_0);
 
     if constexpr (skip_mod5)
     {
@@ -85,7 +85,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = fidelity_increment, .clr = 0},
         }
-            .set_no_bias(ADDR_MOD_5);
+            .set_with_bias<bias_write>(ADDR_MOD_5);
     }
     else if constexpr (is_high_fidelity(math_fidelity))
     {
@@ -96,7 +96,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 0, .cr = 1},
             .fidelity = {.incr = 1, .clr = 0},
         }
-            .set_no_bias(ADDR_MOD_5);
+            .set_with_bias<bias_write>(ADDR_MOD_5);
     }
 
     if constexpr (THROTTLE_LEVEL)
@@ -108,7 +108,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = 0, .clr = 1, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
         }
-            .set_no_bias(ADDR_MOD_6);
+            .set_with_bias<bias_write>(ADDR_MOD_6);
     }
 
     if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
@@ -120,7 +120,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
                 .dest = {.incr = 8, .clr = 0, .cr = 0},
             }
-                .set_no_bias(ADDR_MOD_1);
+                .set_with_bias<bias_write>(ADDR_MOD_1);
         }
         else
         {
@@ -129,7 +129,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
                 .dest = {.incr = 8, .clr = 0, .cr = 0},
             }
-                .set_no_bias(ADDR_MOD_1);
+                .set_with_bias<bias_write>(ADDR_MOD_1);
         }
     }
     else
@@ -142,7 +142,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 40, .clr = 0, .cr = 0},
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set_no_bias(ADDR_MOD_1);
+                .set_with_bias<bias_write>(ADDR_MOD_1);
         }
         else if (is_in1_32x16)
         {
@@ -151,7 +151,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 8, .clr = 0, .cr = 0},
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set_no_bias(ADDR_MOD_1);
+                .set_with_bias<bias_write>(ADDR_MOD_1);
         }
         else
         {
@@ -162,7 +162,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_1);
+                    .set_with_bias<bias_write>(ADDR_MOD_1);
             }
             else
             {
@@ -172,7 +172,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_1);
+                    .set_with_bias<bias_write>(ADDR_MOD_1);
             }
         }
     }
@@ -185,14 +185,14 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 24, .clr = 0, .cr = 0},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set_no_bias(ADDR_MOD_2);
+            .set_with_bias<bias_write>(ADDR_MOD_2);
     }
     else if (is_in1_32x16)
     {
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
         }
-            .set_no_bias(ADDR_MOD_2);
+            .set_with_bias<bias_write>(ADDR_MOD_2);
     }
     else if (is_in0_16x32 || is_in0_32x16)
     {
@@ -205,7 +205,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 0},
                     .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_2);
+                    .set_with_bias<bias_write>(ADDR_MOD_2);
             }
             else
             {
@@ -214,7 +214,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 0},
                     .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_2);
+                    .set_with_bias<bias_write>(ADDR_MOD_2);
             }
         }
         else
@@ -226,7 +226,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_2);
+                    .set_with_bias<bias_write>(ADDR_MOD_2);
             }
             else
             {
@@ -235,7 +235,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 0, .clr = 0, .cr = 1},
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_2);
+                    .set_with_bias<bias_write>(ADDR_MOD_2);
             }
         }
     }
@@ -246,7 +246,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 32, .clr = 0, .cr = 1},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set_no_bias(ADDR_MOD_2);
+            .set_with_bias<bias_write>(ADDR_MOD_2);
     }
 
     if (is_in0_16x32)
@@ -260,7 +260,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = 1, .cr = 0},
                 }
-                    .set_no_bias(ADDR_MOD_4);
+                    .set_with_bias<bias_write>(ADDR_MOD_4);
             }
             else
             {
@@ -270,7 +270,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = row_form ? 0 : 1, .cr = row_form ? 1 : 0},
                 }
-                    .set_no_bias(ADDR_MOD_4);
+                    .set_with_bias<bias_write>(ADDR_MOD_4);
             }
         }
         else
@@ -282,7 +282,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
-                    .set_no_bias(ADDR_MOD_4);
+                    .set_with_bias<bias_write>(ADDR_MOD_4);
             }
             else
             {
@@ -291,7 +291,7 @@ inline void matmul_configure_addrmod(
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
-                    .set_no_bias(ADDR_MOD_4);
+                    .set_with_bias<bias_write>(ADDR_MOD_4);
             }
         }
     }
@@ -302,7 +302,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 16, .clr = 0, .cr = 1},
             .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
-            .set_no_bias(ADDR_MOD_4);
+            .set_with_bias<bias_write>(ADDR_MOD_4);
     }
     else if (is_in1_32x16)
     {
@@ -311,7 +311,7 @@ inline void matmul_configure_addrmod(
             .srcb = {.incr = 8, .clr = 0, .cr = 0},
             .dest = {.incr = 16, .clr = 0, .cr = 1},
         }
-            .set_no_bias(ADDR_MOD_4);
+            .set_with_bias<bias_write>(ADDR_MOD_4);
     }
     else
     {
@@ -322,7 +322,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set_no_bias(ADDR_MOD_4);
+                .set_with_bias<bias_write>(ADDR_MOD_4);
         }
         else
         {
@@ -332,7 +332,7 @@ inline void matmul_configure_addrmod(
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
             }
-                .set_no_bias(ADDR_MOD_4);
+                .set_with_bias<bias_write>(ADDR_MOD_4);
         }
     }
 }
@@ -1141,7 +1141,19 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL      = 0,
+    bool row_mop            = false,
+    bool tile_mop           = false,
+    int in1_order           = 0,
+    bool tiny_16_rows       = false,
+    bool end_fold           = false,
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold       = false,
+    std::uint32_t key_ct    = 0,
+    std::uint32_t key_rt    = 0,
+    bool bias_write         = false>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1170,7 +1182,7 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
         // throttling is only a throughput cap, and the throttled sequence wedges there.
@@ -1196,13 +1208,13 @@ inline void _llk_math_matmul_init_(
     }
     else if constexpr (row_mop)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, true>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, true, bias_write>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         matmul_configure_row_mop<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
@@ -1210,18 +1222,18 @@ inline void _llk_math_matmul_init_(
     {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, 0, false, bias_write>(transpose);
             matmul_configure_mop_rows<math_fidelity, row_end_fold>(blk_ct, blk_rt);
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order, false, bias_write>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
             matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
@@ -1398,7 +1410,19 @@ inline void matmul_configure_mop_switch(
 }
 
 // _llk_math_matmul_init_ for a throttle switch: the last init of the kernel ran the other form with the same operands
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL      = 0,
+    bool row_mop            = false,
+    bool tile_mop           = false,
+    int in1_order           = 0,
+    bool tiny_16_rows       = false,
+    bool end_fold           = false,
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold       = false,
+    std::uint32_t key_ct    = 0,
+    std::uint32_t key_rt    = 0,
+    bool bias_write         = false>
 inline void _llk_math_matmul_init_switch_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1451,13 +1475,13 @@ inline void _llk_math_matmul_init_switch_(
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order, false, bias_write>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
             matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);

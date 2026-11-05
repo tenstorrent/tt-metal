@@ -151,6 +151,20 @@ struct addr_mod_t
         TTI_SETC16(addr_mod_src_reg_addr[mod_index], srca.val() | (srcb.val() << 8));
         TTI_SETC16(addr_mod_dest_reg_addr[mod_index], dest.val() | (fidelity.val() << 13));
     }
+
+    // bias true writes the bias register too, as main's set does: the address mods of main's form are written exactly as main writes them.
+    template <bool bias>
+    __attribute__((always_inline)) inline void set_with_bias(const std::uint8_t mod_index) const
+    {
+        if constexpr (bias)
+        {
+            set(mod_index);
+        }
+        else
+        {
+            set_no_bias(mod_index);
+        }
+    }
 };
 
 struct addr_mod_pack_t
