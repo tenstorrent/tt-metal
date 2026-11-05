@@ -184,18 +184,20 @@ def test_small_m_col_parallel_addcmul(mesh_device: ttnn.MeshDevice) -> None:
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
+    [((4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
     ids=mesh_device_config_to_string,
     indirect=True,
 )
 @pytest.mark.parametrize("input_fractured", [False, True], ids=["replicated_input", "k_fractured_input"])
-@pytest.mark.parametrize("chunks", [None, 4], ids=["no_chunks", "chunks4"])
+@pytest.mark.parametrize("chunks", [None, 20], ids=["no_chunks", "chunks20"])
 def test_small_m_col_parallel_tp(mesh_device: ttnn.MeshDevice, input_fractured: bool, chunks) -> None:
-    """TP=4 column parallel. A K-fractured input is all-gathered stand-alone, then each device runs the
-    single-chip small-M matmul on its local N slice (Klein modulation layout: replicated input, N/TP local)."""
-    tp_axis = 1
+    """TP=4 column parallel on the BH Galaxy mesh (TP on axis 0, as FLUX 3 Klein runs). A K-fractured input is
+    all-gathered stand-alone, then each device runs the single-chip small-M matmul on its local N slice. With
+    20 chunks and N = 20 * 3072 this is exactly Klein's merged modulation projection."""
+    tp_axis = 0
     tp = mesh_device.shape[tp_axis]
-    K, N = 3072, 3072 * 4
+    K = 3072
+    N = 3072 * (chunks or 4)
     torch_model = _torch_linear(K, N)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     tt_model = ColParallelLinear(
@@ -222,9 +224,12 @@ def test_small_m_col_parallel_tp(mesh_device: ttnn.MeshDevice, input_fractured: 
 
     outputs = tt_output if isinstance(tt_output, list) else [tt_output]
     assert len(outputs) == (chunks or 1)
-    # Device d holds columns [d*N/tp, (d+1)*N/tp), split locally into the chunks.
+    # The device at mesh coordinate (r, c) holds columns [d*N/tp, (d+1)*N/tp) with d its TP-axis coordinate,
+    # split locally into the chunks.
     per_chunk = [[ttnn.to_torch(t) for t in ttnn.get_device_tensors(o)] for o in outputs]
+    cols = mesh_device.shape[1]
     n_local = N // tp
-    for d in range(tp):
-        local = torch.cat([per_chunk[c][d] for c in range(len(outputs))], dim=-1)
+    for i in range(len(per_chunk[0])):
+        d = divmod(i, cols)[tp_axis]
+        local = torch.cat([per_chunk[c][i] for c in range(len(outputs))], dim=-1)
         assert_quality(torch_output[..., d * n_local : (d + 1) * n_local], local, pcc=PCC)
