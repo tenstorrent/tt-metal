@@ -300,7 +300,8 @@ def test_find_run_waits_for_the_commit_it_wants():
     found = bw.find_run(cur, _find_args(wait_minutes=5), False, sleep=naps.append)
     assert found["commit_sha"] == "c3" and "stale" not in found
     assert len(naps) == 2
-    assert all(params[-1] == "c3" for _, params in cur.executed)
+    # executed[0] is the size reference; the rest are the run lookups.
+    assert all(params[-1] == "c3" for _, params in cur.executed[1:])
 
 
 def test_find_run_falls_back_to_an_older_commit_and_says_it_is_stale():
@@ -328,3 +329,59 @@ def test_find_run_with_an_empty_commit_list_finds_no_baseline():
     cur = CursorMock(one=("merge_baseline-20260928-9-wormhole", "dequeued", "t"))
     assert bw.find_run(cur, _find_args(commits=""), False) is None
     assert cur.executed == []
+
+
+def test_typical_rows_takes_the_largest_of_the_recent_runs():
+    cur = CursorMock(one=(114707,))
+    assert bw.typical_rows(cur, bw.VIEW, "blackhole", "merge_baseline", False) == 114707
+    sql, params = cur.executed[0]
+    assert "COUNT(*)" in sql and "MAX(N)" in sql
+    assert params == ("blackhole", "merge_baseline", False)
+
+
+def test_typical_rows_is_zero_when_there_is_no_history():
+    assert (
+        bw.typical_rows(CursorMock(one=None), bw.VIEW, "quasar", "nightly", False) == 0
+    )
+
+
+def test_pick_run_refuses_a_run_that_is_short_of_a_shard():
+    short = ("merge_baseline-20261105-1-blackhole", "c3", "t", 71504)
+    assert (
+        bw.pick_run(
+            CursorMock(many=[short]),
+            bw.VIEW,
+            "blackhole",
+            "merge_baseline",
+            False,
+            None,
+            ["c3"],
+            min_rows=103236,
+        )
+        is None
+    )
+
+
+def test_pick_run_keeps_a_run_that_is_complete():
+    whole = ("merge_baseline-20261105-2-blackhole", "c3", "t", 114707)
+    run = bw.pick_run(
+        CursorMock(many=[whole]),
+        bw.VIEW,
+        "blackhole",
+        "merge_baseline",
+        False,
+        None,
+        ["c3"],
+        min_rows=103236,
+    )
+    assert run["run_id"] == whole[0]
+
+
+def test_find_run_prefers_an_older_whole_run_over_a_short_one():
+    short = ("merge_baseline-20261105-1-wormhole", "c3", "t", 50)
+    older = ("merge_baseline-20261104-1-wormhole", "c2", "t", 100)
+    cur = SequenceCursor([[short], [older]])
+    cur._one = (100,)  # the largest recent run, so the floor is 90
+    found = bw.find_run(cur, _find_args(), False, sleep=lambda s: None)
+    assert found["commit_sha"] == "c2"
+    assert found["stale"] is True and found["expected_commit"] == "c3"

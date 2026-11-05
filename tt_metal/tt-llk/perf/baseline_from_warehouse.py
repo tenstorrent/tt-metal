@@ -19,6 +19,14 @@ _BATCH = 20000
 # one run per queue attempt, so this ceiling on candidate runs is never reached.
 _MAX_RUNS = 500
 
+# A run is one file per architecture, merged from its shards. A shard that never
+# measured leaves its tests out of it, and the comparer cannot regress a point it has
+# no baseline row for, so a short run reads as clean over everything it is missing.
+# Measure a candidate against the largest of the recent runs of its kind, which a
+# short one never is, and refuse the ones that fall short of it.
+_MIN_SHARE = 0.9
+_RECENT_RUNS = 20
+
 
 DENSE = {
     "FORMAT_INPUT_A": "formats.input_A",
@@ -76,6 +84,18 @@ def connect():
     )
 
 
+def typical_rows(cursor, view, arch, pipeline, speed_of_light):
+    """Rows in the largest of the recent runs of this kind, or 0 when there are none."""
+    cursor.execute(
+        f"SELECT MAX(N) FROM (SELECT COUNT(*) AS N FROM {view} "
+        "WHERE ARCH = %s AND PIPELINE = %s AND SPEED_OF_LIGHT = %s "
+        f"GROUP BY RUN_ID ORDER BY MAX(RUN_TS) DESC LIMIT {_RECENT_RUNS})",
+        (arch, pipeline, speed_of_light),
+    )
+    row = cursor.fetchone()
+    return int(row[0]) if row and row[0] else 0
+
+
 def pick_run(
     cursor,
     view,
@@ -84,11 +104,13 @@ def pick_run(
     speed_of_light,
     exclude_workflow_run=None,
     commits=None,
+    min_rows=0,
 ):
     """Newest run of this pipeline, arch and mode, other than the run being gated.
 
     With ``commits`` (newest first), only runs at those commits count, and the
-    newest commit wins over the newest upload.
+    newest commit wins over the newest upload. A run holding fewer than ``min_rows``
+    rows is short of a shard and does not count at all.
     """
     where = "ARCH = %s AND PIPELINE = %s AND SPEED_OF_LIGHT = %s"
     params = (arch, pipeline, speed_of_light)
@@ -99,13 +121,21 @@ def pick_run(
         where += f" AND COMMIT_SHA IN ({', '.join(['%s'] * len(commits))})"
         params += tuple(commits)
     cursor.execute(
-        f"SELECT RUN_ID, ANY_VALUE(COMMIT_SHA), MAX(RUN_TS) FROM {view} "
+        f"SELECT RUN_ID, ANY_VALUE(COMMIT_SHA), MAX(RUN_TS), COUNT(*) FROM {view} "
         f"WHERE {where} GROUP BY RUN_ID ORDER BY MAX(RUN_TS) DESC "
         f"LIMIT {_MAX_RUNS if commits else 1}",
         params,
     )
     rows = cursor.fetchall() if commits else [cursor.fetchone()]
     rows = [r for r in rows if r]
+    if min_rows:
+        short = [r for r in rows if r[3] < min_rows]
+        for r in short:
+            print(
+                f"::warning::{r[0]} holds {r[3]} rows, under the {min_rows} "
+                "a complete run of this kind holds; not used as a baseline"
+            )
+        rows = [r for r in rows if r not in short]
     if not rows:
         return None
     if commits:
@@ -119,9 +149,16 @@ def find_run(cursor, a, sol, sleep=time.sleep):
     """The run at the first of ``--commits``, waited for; else the newest of the
     others, marked stale. Empty ``--commits``: none. No ``--commits``: the newest."""
 
-    def pick(commits=None):
+    def pick(commits=None, min_rows=0):
         return pick_run(
-            cursor, a.view, a.arch, a.pipeline, sol, a.exclude_workflow_run, commits
+            cursor,
+            a.view,
+            a.arch,
+            a.pipeline,
+            sol,
+            a.exclude_workflow_run,
+            commits,
+            min_rows,
         )
 
     if a.commits is None:
@@ -129,17 +166,18 @@ def find_run(cursor, a, sol, sleep=time.sleep):
     commits = [c.strip() for c in a.commits.split(",") if c.strip()]
     if not commits:
         return None
+    floor = int(typical_rows(cursor, a.view, a.arch, a.pipeline, sol) * _MIN_SHARE)
     want = commits[0]
     deadline = time.monotonic() + a.wait_minutes * 60
     while True:
-        run = pick([want])
+        run = pick([want], floor)
         if run:
             return run
         if time.monotonic() >= deadline:
             break
         print(f"no {a.pipeline} run at {want} yet; checking again")
         sleep(a.poll_seconds)
-    run = pick(commits[1:]) if len(commits) > 1 else None
+    run = pick(commits[1:], floor) if len(commits) > 1 else None
     if run:
         print(f"::warning::no {a.pipeline} run at {want}; using {run['commit_sha']}")
         run.update(stale=True, expected_commit=want)
