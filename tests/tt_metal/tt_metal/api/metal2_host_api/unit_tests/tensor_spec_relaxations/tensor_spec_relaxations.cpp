@@ -32,7 +32,7 @@ TensorSpec make_spec(Shape shape, Layout layout = Layout::TILE, DataType dtype =
 // Like make_spec, but padded to a non-default TensorLayout alignment. This is the shape of a legacy
 // over-padded tensor: TensorLayout::fromPaddedShape gives a TILE tensor padded past the next tile
 // boundary its padded H/W as its alignment.
-TensorSpec make_aligned_spec(Shape shape, Alignment alignment, Layout layout = Layout::TILE) {
+TensorSpec make_aligned_spec(Shape shape, const Alignment& alignment, Layout layout = Layout::TILE) {
     MemoryConfig memory_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(layout), memory_config, alignment);
     return TensorSpec(std::move(shape), std::move(tensor_layout));
