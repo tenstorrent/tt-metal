@@ -23,24 +23,8 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint32_t kSliceWriteRmShardedWriterAddressArgIdx = 0;
 constexpr uint32_t kSliceWriteRmShardedWriterPageOffsetArgIdx = 9;
 constexpr uint8_t kSliceWriteRmShardedInputCbIndex = static_cast<uint8_t>(tt::CBIndex::c_0);
-
-// The writer's RTA 0 is the output Buffer* (patched on a program-cache hit); everything else is a plain value.
-void emplace_slice_write_rm_sharded_writer_args(
-    KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* output_buffer) {
-    KernelDescriptor::RTArgList runtime_args;
-    runtime_args.reserve(args.size());
-    for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
-        if (arg_idx == kSliceWriteRmShardedWriterAddressArgIdx) {
-            runtime_args.push_back(output_buffer);
-        } else {
-            runtime_args.push_back(args[arg_idx]);
-        }
-    }
-    kernel.emplace_runtime_args(core, runtime_args);
-}
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const Tensor& input_tensor,
@@ -325,7 +309,7 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
         reader_kernel.runtime_args.emplace_back(core, all_runtime_args[i].first);
-        emplace_slice_write_rm_sharded_writer_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
+        emplace_slice_write_runtime_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
         i++;
     }
 
