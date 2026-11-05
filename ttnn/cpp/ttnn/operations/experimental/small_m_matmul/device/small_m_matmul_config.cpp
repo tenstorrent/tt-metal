@@ -217,6 +217,9 @@ SmallMMatmulConfig auto_select_config(
         {{2, 192, 72}, {6, 1, 1, 4, 2}},    // 64x6144x2304
         {{2, 192, 24}, {3, 1, 1, 8, 3}},    // 64x6144x768
         {{1, 160, 40}, {5, 1, 1, 4, 3}},    // 32x5120x1280
+        {{1, 84, 756}, {3, 4, 1, 4, 2}},  // 32x2688x24192  AUTOTUNE -4.5% MiniMax-H3 adaLN TP4 (BH Galaxy)
+        {{16, 96, 72}, {6, 1, 2, 2, 3}},  // 512x3072x2304  AUTOTUNE -18.1% FLUX3-Klein qkv TP4 (BH Galaxy)
+        {{16, 96, 96}, {3, 2, 2, 4, 3}},  // 512x3072x3072  AUTOTUNE -2.0% FLUX3-Klein proj_out TP4 (BH Galaxy)
     };
     if (auto it = (G == kTableBanks) ? kTable.find({Mt, Kt, Nt}) : kTable.end(); it != kTable.end()) {
         // Every table entry is a MEASURED unfused winner, so an unfused lookup is returned unconditionally --
