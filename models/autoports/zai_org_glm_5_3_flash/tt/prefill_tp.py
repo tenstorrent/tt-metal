@@ -4019,8 +4019,11 @@ def _conv_history(qkv_tile, carry, rows, end_f):
     new = ttnn.matmul(ttnn.typecast(sel, BF16), qkv_tile, memory_config=DRAM, dtype=BF16)  # [1,1,3,3W]
     old_t = ttnn.to_layout(ttnn.reshape(carry, (1, 1, 3, w3)), ttnn.TILE_LAYOUT)
     kept = ttnn.matmul(ttnn.typecast(osel, BF16), old_t, memory_config=DRAM, dtype=BF16)
-    out = ttnn.add(new, kept)
-    for t_ in (rows_t, idx3, sel, osel, new, old_t, kept):
+    # the predecessor term only when the window reaches before the chunk start (end < 3): a SELECT, never a product
+    # with a zero weight (a NaN / Inf in a padded or stale row of the carry tile would survive 0 x it)
+    before = ttnn.lt(end_f, 3.0)  # [1, 1, 1, 1] fp32 0 / 1
+    out = ttnn.where(before, ttnn.add(new, kept), new)
+    for t_ in (rows_t, idx3, sel, osel, new, old_t, kept, before):
         ttnn.deallocate(t_)
     return ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), (1, 3, w3))
 
@@ -4441,7 +4444,13 @@ class EpMoe:
             self.gate_up, self.down = list(xsl[1]), list(xsl[2])
             self.e_loc = self.e_all
         else:
-            self.e_loc = self.e_all // ndev
+            from models.autoports.zai_org_glm_5_3_flash.tt.ep_experts import xsl_group
+
+            # GLM53_TP_XSL_GROUP = g (the decode stack's hybrid experts, tt/ep_experts.py): chip k holds slice k % g of
+            # its group's experts [e_loc (k // g), + e_loc), e_loc = E / (ndev / g); the prefill runs them as EP over
+            # the groups on the 8-tile slices (xffn, the XSL geometry) and the FFN reduce-scatter sums the slices
+            self.group = xsl_group(ndev)
+            self.e_loc = self.e_all // (ndev // self.group) if self.group else self.e_all // ndev
             gu, dn = moe.gate_up, moe.down
             slots = getattr(gu, "slots", None)
             if slots is not None:  # EpList: slot i holds expert e_loc r + i on chip r
@@ -4458,7 +4467,10 @@ class EpMoe:
         rm = lambda v, mp: ttnn.from_torch(v, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,  # noqa: E731
                                            memory_config=DRAM, mesh_mapper=mp)  # fmt: skip
         lo = torch.zeros(ndev, 32, dtype=torch.int32)
-        lo[:, 0] = 0 if self.xsl else torch.arange(ndev, dtype=torch.int32) * self.e_loc
+        grp = getattr(self, "group", 0)
+        lo[:, 0] = (0 if self.xsl else
+                    (torch.arange(ndev, dtype=torch.int32) // grp if grp else torch.arange(ndev, dtype=torch.int32))
+                    * self.e_loc)  # fmt: skip
         self.lo = rm(lo, ttnn.ShardTensorToMesh(self.mesh, dim=0) if ndev > 1 else None)
         self.idx_table = rm(torch.arange(self.ep, dtype=torch.int32).reshape(1, -1), repl)
         # GLM53_PF_MOE_FID (P3, default HiFi2 = the plan's prefill policy): the bfloat4_b expert weights carry 3
@@ -4503,7 +4515,8 @@ class EpMoe:
         # combine (no untilize pass). GLM53_PF_MOE_XFFN_MG = tile rows per M group (4)
         # default: xffn for XSL slices <= 8 tiles wide (the TP8 geometry: MoE -46 % per 2,048-row chunk, PCC 0.99998;
         # TP2 served-config TF checked with xffn forced); wider slices (TP2 / TP4) re-read weights per tile row -> mfs
-        narrow = self.xsl and int(self.down[0].shape[-2]) <= 8 * TILE
+        # (the hybrid's per-chip tensors are 8-tile slices too: the XSL geometry, EP over the groups -> xffn + rm)
+        narrow = (self.xsl or getattr(self, "group", 0)) and int(self.down[0].shape[-2]) <= 8 * TILE
         self.ffn = os.environ.get("GLM53_PF_MOE_FFN", "") or ("xffn" if narrow else "mfs")
         self.xffn_mg = int(os.environ.get("GLM53_PF_MOE_XFFN_MG", "4"))
         self.xffn_xsplit = os.environ.get("GLM53_PF_MOE_XFFN_XSPLIT", "0") == "1"
@@ -4512,8 +4525,8 @@ class EpMoe:
         if self.ffn == "xffn":
             if self.xsl:
                 self.combine = "rm"
-            elif (
-                os.environ.get("GLM53_PF_MOE_XFFN_EP", "0") == "1"
+            elif os.environ.get("GLM53_PF_MOE_XFFN_EP", "0") == "1" or getattr(
+                self, "group", 0
             ):  # the L3 accuracy fix candidate (2026-10-24): EP through
                 # xffn too -- moe_fused_swiglu inflates every expert row by ~1.04; other-chip pairs weigh 0 in the rm
                 # combine (w x local) and the expert rows are zero-filled first (no unwritten row can carry a NaN)
