@@ -40,10 +40,14 @@ constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
 
+// CCE-local PF_CTRL_TILE_ID, a strap: bit 0 is the CCE, bits 3:1 the HSIO tile.
+constexpr uintptr_t kPfCtrlTileIdAddr = 0x03200008;
+
 // What halt() posts to the router postcode word.
 enum class HaltCode : uint32_t {
     RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
     RemoteRegValueTooWide = 0xCCEEF002,  // detail: the value's upper 32 bits
+    NotOnCce0 = 0xCCEEF003,              // detail: PF_CTRL_TILE_ID
 };
 
 // Stops this hart on a fault that ASSERT, compiled out without watcher, would let pass: stores @p detail to the first
@@ -56,6 +60,14 @@ enum class HaltCode : uint32_t {
         MEM_IERISC_FABRIC_POSTCODES_BASE + MEM_IERISC_UNCACHED_BASE)) = static_cast<uint32_t>(code);
     ASSERT(false);
     while (true) {
+    }
+}
+
+// Halts unless this hart is on CCE0, the only CCE sram_local_addr() handles. Reads an MMIO register: call once.
+inline void check_on_cce0() {
+    const uint32_t tile_id = *reinterpret_cast<const volatile uint32_t*>(kPfCtrlTileIdAddr);
+    if ((tile_id & 0x1) != 0) {
+        halt(HaltCode::NotOnCce0, tile_id);
     }
 }
 
