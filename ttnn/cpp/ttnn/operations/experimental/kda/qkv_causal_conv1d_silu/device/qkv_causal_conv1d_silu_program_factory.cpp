@@ -524,7 +524,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         attrs.sequence_parallel_axis,
         attrs.sequence,
         // The writer stages the exchanged rows, so it needs the same chronology as the reader.
-        {reader_kernel_name, writer_kernel_name});
+        {reader_kernel_name, writer_kernel_name},
+        // The history exchange gives each device its own fabric connections.
+        exchange ? kda_factory_detail::ChronologyPrograms::per_device
+                 : kda_factory_detail::ChronologyPrograms::per_sp_rank);
     if (exchange) {
         add_history_exchange(workload, attrs, in, predecessor_name, outputs[3], dist.cores, exchange_core, Ct);
     }
