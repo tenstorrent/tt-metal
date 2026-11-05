@@ -188,12 +188,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
             untied_sections);
         head_dim = static_cast<uint32_t>(q_logical_width / tied_sections);
     } else {
-        const uint32_t untied_sections = num_q_heads + 2 * num_kv_heads_val;
+        // 64-bit: a uint32 sum can wrap to 0, pass the bound and then divide by zero.
+        const uint64_t untied_sections = uint64_t{num_q_heads} + 2 * uint64_t{num_kv_heads_val};
         TT_FATAL(
             untied_sections <= q_width,
             "num_q_heads ({}) + 2 * num_kv_heads ({}) exceeds the fused width ({})",
             num_q_heads,
-            2 * num_kv_heads_val,
+            num_kv_heads_val,
             q_width);
         TT_FATAL(
             q_logical_width % untied_sections == 0,
