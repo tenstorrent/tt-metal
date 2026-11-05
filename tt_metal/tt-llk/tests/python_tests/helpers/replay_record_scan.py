@@ -46,8 +46,8 @@ def _executable_words(elf_path):
 # register the compiler picked for the bit mask.
 CFG0_CSR = 0x7C0
 FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
-# disable_gathering() is csrrs, fence, csrrs, csrrc, fence, three TTNOPs, plus scheduling slack.
-DISABLE_WINDOW_WORDS = 16
+# disable_gathering() is csrrs, 20 nops, fence, csrrs, csrrc, fence, three TTNOPs, plus scheduling slack.
+DISABLE_WINDOW_WORDS = 48
 # Walk from a record to its enable_gathering() csrrc: counts Tensix words (RISC-V code is
 # scheduled among them) and follows unconditional jumps (GCC cross-jumps common body tails).
 BODY_WALK_LIMIT_WORDS = 512
@@ -85,7 +85,7 @@ REPLAY_OPCODE_LUI_IMM = (
     TT_OPCODE_REPLAY << 12
 )  # lui immediate placing 0x04 in bits 31:24
 RUNTIME_RECORD_COMPOSE_WORDS = 12
-RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
+RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 64
 
 
 # RISC-V opcodes whose instruction writes rd (bits 11:7).
