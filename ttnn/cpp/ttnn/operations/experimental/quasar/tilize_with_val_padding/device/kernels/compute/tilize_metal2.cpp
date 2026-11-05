@@ -4,10 +4,7 @@
 
 // Metal 2.0 fork of tilize.cpp. Identical compute logic; the CB indices and loop counts
 // are sourced from Metal 2.0 named bindings (dfb::in / dfb::out) and named compile-time args
-// instead of positional CTAs / hardcoded CB indices. The legacy tilize.cpp is retained for the
-// not-yet-ported multi_core_default / multi_core_sharded factories; delete this fork's twin (or
-// the legacy copy) once all tilize_with_val_padding factories that instantiate tilize.cpp are on
-// Metal 2.0.
+// instead of positional CTAs / hardcoded CB indices.
 
 #include <cstdint>
 
@@ -26,6 +23,8 @@ void kernel_main() {
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
 
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
     compute_kernel_lib::tilize<
         per_core_block_tile_cnt,
         dfb::in,
@@ -33,5 +32,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(per_core_block_cnt);
+        fp32_mode>(in, out, per_core_block_cnt);
 }

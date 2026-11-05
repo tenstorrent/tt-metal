@@ -506,8 +506,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     }
     // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
     // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue. The in-loop path pairs gate / up tiles within
-    // one DST subblock, so an odd subblock_w (a pair straddling two subblocks) takes the epilogue too.
-    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias && subblock_w % 2 == 0;
+    // one DST subblock, so an odd subblock_w (a pair straddling two subblocks) takes the epilogue too. Quasar always
+    // takes the epilogue: the pack-thread path drives the SFPU with WH/BH-only instructions and is compiled out there.
+    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias && subblock_w % 2 == 0 && !is_quasar;
     // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
     // keep silu_tile's.
     const bool swiglu_block_float_output =

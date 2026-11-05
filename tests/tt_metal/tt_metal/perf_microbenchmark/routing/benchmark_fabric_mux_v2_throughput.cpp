@@ -14,7 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"

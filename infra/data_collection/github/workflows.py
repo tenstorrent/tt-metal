@@ -808,6 +808,11 @@ def deduplicate_tests_by_full_name(tests):
 
             # If found one with elapsed time > 0, use it; otherwise use the first one
             selected_test = test_with_elapsed_time if test_with_elapsed_time else test_list[0]
+            # A hang test report has no duration, so a timed duplicate wins; keep its hang tag on the winner.
+            if any((test.tags or {}).get("failure_type") == "hang" for test in test_list):
+                selected_test = selected_test.model_copy(
+                    update={"tags": {**(selected_test.tags or {}), "failure_type": "hang"}}
+                )
             deduplicated_tests.append(selected_test)
 
     return deduplicated_tests
