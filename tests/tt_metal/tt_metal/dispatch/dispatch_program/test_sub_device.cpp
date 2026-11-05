@@ -50,6 +50,7 @@
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -131,6 +132,138 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->remove_sub_device_manager(sub_device_manager_1);
+}
+
+constexpr uint32_t k_in_flight_cb_size = 64 * 1024;
+constexpr DeviceAddr k_l1_probe_page_size = 1024;
+
+static std::shared_ptr<distributed::MeshBuffer> create_l1_interleaved_buffer(
+    distributed::MeshDevice* mesh_device, DeviceAddr size_per_bank, bool bottom_up) {
+    const uint32_t num_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
+    distributed::ReplicatedBufferConfig replicated_config = {.size = size_per_bank * num_banks};
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = k_l1_probe_page_size,
+        .buffer_type = BufferType::L1,
+        .bottom_up = bottom_up,
+    };
+    return distributed::MeshBuffer::create(replicated_config, local_config, mesh_device);
+}
+
+// Returns {lowest address, bytes per bank} of the global L1 window, found by probing from both ends.
+static std::pair<DeviceAddr, DeviceAddr> probe_global_l1_window(distributed::MeshDevice* mesh_device) {
+    DeviceAddr base = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true)->address();
+    DeviceAddr top =
+        create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, false)->address() + k_l1_probe_page_size;
+    return {base, (top - base) / k_l1_probe_page_size * k_l1_probe_page_size};
+}
+
+// Enqueues, without waiting, a program holding one large CB on `cores`; returns the end of its CB region.
+static DeviceAddr enqueue_program_with_large_cb(
+    distributed::MeshDevice* mesh_device,
+    distributed::MeshCommandQueue& cq,
+    distributed::MeshWorkload& workload,
+    const CoreRange& cores) {
+    Program program = create_blank_program(*mesh_device, cores);
+    uint32_t cb_index = tt::CBIndex::c_0;
+    CircularBufferConfig cb_config = CircularBufferConfig(k_in_flight_cb_size, {{cb_index, tt::DataFormat::Float16_b}})
+                                         .set_page_size(cb_index, 2048);
+    CreateCircularBuffer(program, CoreRangeSet(cores), cb_config);
+
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    distributed::MeshCoordinateRange device_range(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    const auto& cb = workload.get_programs().at(device_range).impl().circular_buffers().front();
+    return cb->address() + cb->size();
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceL1AllocationAvoidsInFlightCBs) {
+    auto* mesh_device = devices_[0].get();
+    CoreRange busy_cores({0, 0}, {1, 1});
+    CoreRange idle_cores({2, 2}, {2, 2});
+    SubDevice sub_device_1(std::array{CoreRangeSet(busy_cores)});
+    SubDevice sub_device_2(std::array{CoreRangeSet(idle_cores)});
+    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+    auto [l1_base, l1_size_per_bank] = probe_global_l1_window(mesh_device);
+
+    distributed::MeshWorkload workload;
+    DeviceAddr cb_end =
+        enqueue_program_with_large_cb(mesh_device, mesh_device->mesh_command_queue(), workload, busy_cores);
+    ASSERT_LT(l1_base, cb_end);
+
+    // Nothing has synchronized, so the program may still be using its CBs.
+    {
+        auto buffer = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true);
+        EXPECT_GE(buffer->address(), cb_end);
+    }
+    EXPECT_THROW(create_l1_interleaved_buffer(mesh_device, l1_size_per_bank, false), std::exception);
+    {
+        ShardSpecBuffer shard_spec(CoreRangeSet(idle_cores), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        distributed::ReplicatedBufferConfig replicated_config = {.size = k_l1_probe_page_size};
+        distributed::DeviceLocalBufferConfig local_config = {
+            .page_size = k_l1_probe_page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = true,
+        };
+        auto buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device);
+        EXPECT_LT(buffer->address(), cb_end);
+    }
+
+    distributed::Finish(mesh_device->mesh_command_queue());
+    {
+        auto buffer = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true);
+        EXPECT_EQ(buffer->address(), l1_base);
+    }
+    EXPECT_NO_THROW(create_l1_interleaved_buffer(mesh_device, l1_size_per_bank, false));
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestL1AllocationIgnoresInFlightCBsWithoutConcurrency) {
+    auto* mesh_device = devices_[0].get();
+    if (mesh_device->num_hw_cqs() > 1) {
+        GTEST_SKIP() << "Needs a single command queue";
+    }
+    auto [l1_base, l1_size_per_bank] = probe_global_l1_window(mesh_device);
+
+    distributed::MeshWorkload workload;
+    DeviceAddr cb_end = enqueue_program_with_large_cb(
+        mesh_device, mesh_device->mesh_command_queue(), workload, CoreRange({0, 0}, {1, 1}));
+    ASSERT_LT(l1_base, cb_end);
+
+    // One sub-device on one queue runs in order, so later work cannot race the program's CBs.
+    {
+        auto buffer = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true);
+        EXPECT_EQ(buffer->address(), l1_base);
+    }
+    EXPECT_NO_THROW(create_l1_interleaved_buffer(mesh_device, l1_size_per_bank, false));
+    distributed::Finish(mesh_device->mesh_command_queue());
+}
+
+TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestMultiCQL1AllocationAvoidsInFlightCBs) {
+    auto* mesh_device = device_.get();
+    auto [l1_base, l1_size_per_bank] = probe_global_l1_window(mesh_device);
+
+    distributed::MeshWorkload workload;
+    auto& cq = mesh_device->mesh_command_queue(1);
+    DeviceAddr cb_end = enqueue_program_with_large_cb(mesh_device, cq, workload, CoreRange({0, 0}, {1, 1}));
+    ASSERT_LT(l1_base, cb_end);
+
+    {
+        auto buffer = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true);
+        EXPECT_GE(buffer->address(), cb_end);
+    }
+    EXPECT_THROW(create_l1_interleaved_buffer(mesh_device, l1_size_per_bank, false), std::exception);
+
+    distributed::Finish(cq);
+    {
+        auto buffer = create_l1_interleaved_buffer(mesh_device, k_l1_probe_page_size, true);
+        EXPECT_EQ(buffer->address(), l1_base);
+    }
+    EXPECT_NO_THROW(create_l1_interleaved_buffer(mesh_device, l1_size_per_bank, false));
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
@@ -262,8 +395,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     // sub-device 3 and 4 are supersets of sub-device 1 and 2 respectively
     SubDevice sub_device_3(std::array{CoreRangeSet(std::vector{CoreRange({0, 0}, {2, 2}), CoreRange({5, 5}, {5, 5})})});
-    SubDevice sub_device_4(std::array{
-        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4}), CoreRange({6, 6}, {6, 6})})});
+    SubDevice sub_device_4(
+        std::array{CoreRangeSet(
+            std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4}), CoreRange({6, 6}, {6, 6})})});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
     mesh_device->load_sub_device_manager(sub_device_manager_1);
