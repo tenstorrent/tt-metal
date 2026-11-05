@@ -254,6 +254,17 @@ inline void matmul(
     }
 }
 
+// periods x (paired handshakes of both sources, then b_only SrcB ones), the same order on both sides (period <= ZMASK_BITS)
+template <bool PRODUCE>
+inline void ab_then_b(const std::uint32_t paired, const std::uint32_t b_only, const std::uint32_t periods)
+{
+    LLK_ASSERT(paired + b_only <= ZMASK_BITS, "a period fits the zmask");
+    if (paired + b_only != 0)
+    {
+        stream<PRODUCE>(SRC_AB, SRC_B, plan_ab_then_b_pattern(paired, b_only), paired + b_only, periods);
+    }
+}
+
 // periods x (one SrcB handshake and a_count SrcA ones): the producer gives B first, the consumer takes it back last
 template <bool PRODUCE>
 inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
@@ -438,6 +449,40 @@ inline void _perf_math_stream_clear_valid(std::uint32_t iterations)
     }
 #endif
     _perf_math_loop_clear_valid<clear_a, clear_b>(iterations);
+}
+
+// periods x (paired handshakes of both sources, then b_only SrcB ones) for the run type RUN_TYPE: one MOP stream on Wormhole
+// isolate runs, else the RISC-V loop
+template <PerfRunType RUN_TYPE>
+inline void _perf_unpack_stream_ab_then_b(const std::uint32_t paired, const std::uint32_t b_only, const std::uint32_t periods)
+{
+#if defined(ARCH_WORMHOLE)
+    if constexpr (perf_mock_mop<RUN_TYPE>())
+    {
+        return llk_perf_mock::ab_then_b<true>(paired, b_only, periods);
+    }
+#endif
+    for (std::uint32_t period = 0; period < periods; ++period)
+    {
+        _perf_unpack_loop_set_valid<true, true>(paired);
+        _perf_unpack_loop_set_valid<false, true>(b_only);
+    }
+}
+
+template <PerfRunType RUN_TYPE>
+inline void _perf_math_stream_ab_then_b(const std::uint32_t paired, const std::uint32_t b_only, const std::uint32_t periods)
+{
+#if defined(ARCH_WORMHOLE)
+    if constexpr (perf_mock_mop<RUN_TYPE>())
+    {
+        return llk_perf_mock::ab_then_b<false>(paired, b_only, periods);
+    }
+#endif
+    for (std::uint32_t period = 0; period < periods; ++period)
+    {
+        _perf_math_loop_clear_valid<true, true>(paired);
+        _perf_math_loop_clear_valid<false, true>(b_only);
+    }
 }
 
 template <PerfRunType RUN_TYPE>
