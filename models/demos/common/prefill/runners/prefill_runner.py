@@ -1023,6 +1023,9 @@ def run_request_loop(
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
         _TS["end"] = time.time()
+        from models.demos.deepseek_v3_d_p.utils.sub_device_trace import REPLAY_TS
+
+        _TS.update(REPLAY_TS)
         print(f"[d2dts] r={rank} c={c - 1} " + " ".join(f"{k}={v:.6f}" for k, v in _TS.items()), flush=True)
     _drain_and_log_e2e(runtime, rank, outbound, first, c, t0)
 

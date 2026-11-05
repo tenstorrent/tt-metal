@@ -33,7 +33,11 @@ referenced across the end/begin split; trace replay reproduces them at the same 
 `CapturedCall` below applies the same idea to a single call: one region, one trace id.
 """
 
+import time
+
 import ttnn
+
+REPLAY_TS = {}
 
 
 class SubDeviceTraceController:
@@ -186,8 +190,11 @@ class SubDeviceTraceController:
         This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
+        REPLAY_TS["rep0"] = time.time()
         self._replay_steps(self._program, variant)
+        REPLAY_TS["rep1"] = time.time()
         ttnn.synchronize_device(self.mesh_device)
+        REPLAY_TS["sync"] = time.time()
 
     def _replay_steps(self, program, variant):
         for kind, payload in program:
