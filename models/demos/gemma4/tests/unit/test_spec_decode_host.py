@@ -913,6 +913,7 @@ def test_auto_draft_len_batched_env_override_wins(monkeypatch, expect_error):
     _policy_the_cost_table_is_consumed_as_measured(expect_error)
     _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length()
     _policy_prose_dwells_on_its_record_and_random_text_stays_plain()
+    _policy_a_short_runs_credit_is_shrunk_toward_its_fresh_pool()
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
@@ -4037,3 +4038,75 @@ def test_the_lane_sampler_uploads_lane_frames_and_reads_every_columns_draws(monk
     # one column's plan on the lane engine is refused by name
     with pytest.raises(ValueError, match="LaneSamplingPlan"):  # allow-pytest.raises (pure)
         sampler.upload(S, serving_sampling_rows((2, 2), [1], [10], sampling))
+
+
+def _policy_a_short_runs_credit_is_shrunk_toward_its_fresh_pool(expect_error=None):
+    """A run of one or two samples reading below its pool does not price a record a fresh pool measured over
+    hundreds of steps: the credit is the run's samples shrunk toward the pool's credit until the run has
+    ``RUN_SHRINK_SAMPLES`` of its own (the one step of a probe to the next draft length read 3.0 tokens a row
+    against a pool of 4.3 and held the 12B QB2 at the plain step for a 40-question run where the record measured
+    1.45x, 2026-11-04). A short run reading above its pool decides at once (prose after random text); a run that
+    is long enough speaks for itself; without a fresh measured pool the run's own samples are the credit;
+    between runs the pool's credit is unchanged."""
+    from models.demos.gemma4.tt.spec_policy import RUN_SHRINK_SAMPLES
+
+    plain, width = 28.0, 32768
+    policy = _served(SpecPolicy(SpecPolicyConfig.from_env({}), 5), widths=(width,))
+    rows = [policy.new_row() for _ in range(5)]
+    cal = policy.calibration
+    big, small = ("step", (5, 5), width), ("step", (5, 3), width)
+    for _ in range(199):  # the (5,5) pool: 199 clean steps at 4.3 tokens a row
+        cal.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+        for r in rows:
+            policy.observe(r, 3, 5)
+    cal.end_run()
+    assert cal.tokens_per_row(big) == pytest.approx(4.3)  # between runs: the last run's whole mean
+    for _ in range(40):  # the batch moved to the (5,3): 40 clean steps at 3.2
+        cal.note_step(small, 70.0, 3.2 * 5, True, 70.0, 5, None)
+        for r in rows:
+            policy.observe(r, 2, 3)
+    # one brief switch to the (5,5) whose single counted step read 3.0: a run of one
+    cal.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert cal.run_samples(big) == 1
+    shrunk = (3.0 + 4.3 * (RUN_SHRINK_SAMPLES - 1)) / RUN_SHRINK_SAMPLES
+    assert cal.tokens_per_row(big) == pytest.approx(shrunk, rel=1e-3)
+    costs = {(5, 5): 83.0, (5, 3): 70.0}
+    cands = [
+        RecordCandidate(s, width, c, 0.0, tokens_per_row=cal.tokens_per_row(("step", s, width)))
+        for s, c in costs.items()
+    ]
+    ranked = rank_records(policy._tag_runs(cands), rows, plain)
+    assert ranked[0].shape == (5, 5) and ranked[0].gain == pytest.approx(shrunk * plain / 83.0, rel=1e-3)
+    assert ranked[0].gain >= policy.config.min_gain  # the record a fresh pool measured at 1.45x stays entered
+    policy.last_k = 3
+    choice = policy.decide(cands, rows, plain, 5)
+    assert choice is not None and choice.shape == (5, 5) and choice.reason == "gain"
+    # the run's own samples take over once it has RUN_SHRINK_SAMPLES of them
+    for _ in range(RUN_SHRINK_SAMPLES - 1):
+        cal.note_step(big, 83.0, 3.0 * 5, True, 83.0, 5, None)
+    assert cal.run_samples(big) == RUN_SHRINK_SAMPLES and cal.tokens_per_row(big) == pytest.approx(3.0)
+    # a short run reading ABOVE its pool is the credit at once (the regime change the run exists to catch)
+    cal.end_run()
+    cal.note_step(small, 70.0, 3.9 * 5, False, 70.0, 5, "switch")
+    assert cal.run_samples(small) == 1 and cal.tokens_per_row(small) == pytest.approx(3.9)
+    # a run a reseed opened (a trial, a retry, an entry: its first counted step is a clean one) reads its own
+    # steps however low, so random text is declined at once as before
+    cal.end_run()
+    cal.note_step(big, 83.0, 1.0 * 5, True, 83.0, 5, None)
+    assert cal.run_samples(big) == 1 and cal.tokens_per_row(big) == pytest.approx(1.0)
+    # a pool too stale to stand in leaves a short run's own sample as the credit
+    stale = Calibration(8, pool_stale=4)
+    for _ in range(10):
+        stale.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+    stale.end_run()
+    for _ in range(6):
+        stale.note_step(("plain", 32768), plain, 5, True, plain, 5, None)
+    stale.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert stale.tokens_per_row(big) == pytest.approx(3.0)
+    # a pool below min_samples does not stand in either
+    thin = Calibration(8, pool_stale=1000)
+    for _ in range(3):
+        thin.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+    thin.end_run()
+    thin.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert thin.tokens_per_row(big) == pytest.approx(3.0)
