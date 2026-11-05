@@ -564,7 +564,15 @@ inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
 {
     constexpr addr_mod_t::addr_mod_dest_t dest {.incr = 0, .clr = 0, .cr = 1};
     constexpr addr_mod_t::addr_mod_fidelity_t fidelity {.incr = 0, .clr = 1};
-    TT_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (dest_tile_stride & DEST_INCR_MASK) | dest.val() | (fidelity.val() << 13));
+    // the reuse-a rows step one tile (64 DEST rows): an immediate write is 8 cycles of TRISC time cheaper per init than composing the word
+    if (dest_tile_stride == 64)
+    {
+        TTI_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (64u & DEST_INCR_MASK) | dest.val() | (fidelity.val() << 13));
+    }
+    else
+    {
+        TT_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (dest_tile_stride & DEST_INCR_MASK) | dest.val() | (fidelity.val() << 13));
+    }
 }
 
 // Record MVMUL 1 to 15 of a full 32x32 tile; the MOP issues the 16th, which ends the phase, the tile or the row.
