@@ -21,7 +21,6 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
-#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -340,13 +339,8 @@ LoweredKernel LowerKernel(
 
     // Make the local accessor name -> DFB device slot map for this kernel
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    KernelResourceBindings resource_bindings =
+    const KernelResourceBindings resource_bindings =
         ResolveKernelResourceBindings(kernel_spec, collected, resources, l1_alignment);
-    for (auto& [name, handle] : resource_bindings.dfbs) {
-        if (handle.llk_metadata) {
-            handle.llk_metadata = resolve_llk_metadata_tile_size(*handle.llk_metadata, l1_alignment);
-        }
-    }
     const tt::tt_metal::DataflowBufferBindingHandleMap& dfb_handles = resource_bindings.dfbs;
     const tt::tt_metal::SemaphoreBindingHandleMap& semaphore_handles = resource_bindings.semaphores;
 
@@ -386,10 +380,7 @@ LoweredKernel LowerKernel(
         /*base_named_rta_words=*/NamedSectionWords(named_rtas.size(), array_args.runtime),
         /*base_cta_offset=*/vararg_cta_count);
 
-    // Create TensorBindingHandles for this kernel
-    for (auto& handle : ta_bindings.handles) {
-        handle.llk_metadata = resolve_llk_metadata_tile_size(handle.llk_metadata, l1_alignment);
-    }
+    // Tensor binding handles for this kernel.
     const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
     // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
@@ -401,11 +392,6 @@ LoweredKernel LowerKernel(
         collected.scratchpad_by_name,
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset,
         l1_alignment);
-    for (auto& handle : sp_bindings.handles) {
-        if (handle.llk_metadata) {
-            handle.llk_metadata = resolve_llk_metadata_tile_size(*handle.llk_metadata, l1_alignment);
-        }
-    }
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
 

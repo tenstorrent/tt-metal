@@ -56,15 +56,13 @@ TEST(TileStorageBytes, RejectsTf32Storage) {
 
 // Binding metadata resolves tile bytes with the supplied target alignment.
 TEST(TileStorageBytes, BindingMetadataUsesTargetAlignment) {
-    const LLKMetadata metadata =
-        resolve_llk_metadata_tile_size(LLKMetadata{.format = tt::DataFormat::Bfp8_b, .tile = Tile({1, 16})}, 64);
+    const LLKMetadata metadata = make_llk_metadata(tt::DataFormat::Bfp8_b, Tile({1, 16}), 64);
     EXPECT_EQ(metadata.tile_size_bytes, 80u);
 }
 
 // Binding metadata preserves TF32 format queries without inventing an unsupported storage size.
 TEST(TileStorageBytes, Tf32BindingHasNoStorageSize) {
-    const LLKMetadata metadata =
-        resolve_llk_metadata_tile_size(LLKMetadata{.format = tt::DataFormat::Tf32, .tile = Tile{}}, 16);
+    const LLKMetadata metadata = make_llk_metadata(tt::DataFormat::Tf32, Tile{}, 16);
     EXPECT_EQ(metadata.tile_size_bytes, 0u);
 }
 

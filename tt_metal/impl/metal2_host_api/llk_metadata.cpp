@@ -13,11 +13,11 @@
 
 namespace tt::tt_metal {
 
-LLKMetadata resolve_llk_metadata_tile_size(LLKMetadata metadata, uint32_t l1_alignment) {
+LLKMetadata make_llk_metadata(DataFormat format, const Tile& tile, uint32_t l1_alignment) {
     // TF32 metadata is usable for format queries but has no supported Tile storage encoding.
-    metadata.tile_size_bytes =
-        metadata.format == DataFormat::Tf32 ? 0 : detail::tile_size_bytes(metadata.tile, metadata.format, l1_alignment);
-    return metadata;
+    const uint32_t tile_size_bytes =
+        format == DataFormat::Tf32 ? 0 : detail::tile_size_bytes(tile, format, l1_alignment);
+    return LLKMetadata{.format = format, .tile = tile, .tile_size_bytes = tile_size_bytes};
 }
 
 std::string serialize_llk_metadata(const LLKMetadata& metadata) {
