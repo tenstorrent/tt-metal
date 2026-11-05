@@ -9,6 +9,7 @@
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
 
 #include "api/debug/assert.h"
+#include "api/debug/waypoint.h"
 #include "internal/tt-2xx/quasar/noc_nonblocking_api.h"    // init_wr_cmd_buf, noc_local_xy
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"  // addrgen src/dest loops
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"  // overlay:: cmdbuf API
@@ -69,8 +70,10 @@ inline void idma_copy_rows(
         overlay::push_both_addrgen_0();
         overlay::issue_cmdbuf_0();
     }
+    WAYPOINT("IDAW");
     while (!overlay::idma_acked_cmdbuf_0()) {
     }
+    WAYPOINT("IDAD");
     init_wr_cmd_buf(noc_local_xy());
 }
 
