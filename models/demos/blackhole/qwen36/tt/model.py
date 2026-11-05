@@ -6452,18 +6452,22 @@ class Qwen36Model:
     def _plan_block_resume(self, L, start, src):
         """QWEN36_MAMBA_SPEC: the _prefill_with_prefix_cache plan that resumes at vLLM's start from
         src = (GdnBlockState, request index), with no snapshot saves; None = recompute from 0. Recompute when there is
-        nothing to resume (start 0), when _prefill_range cannot resume there (start not 128-aligned, fewer than 3
-        tokens after it), or without the chunk trace. Recomputing a prefix whose KV is cached rewrites the same
-        values."""
+        nothing to resume (start 0), when _prefill_range cannot resume there (start not 128-aligned or not on a KV
+        block boundary, fewer than 3 tokens after it), or without the chunk trace. Recomputing a prefix whose KV is
+        cached rewrites the same values."""
         if self._prefix_cache is not None or self._chunk_state_cache is not None:
             raise RuntimeError("QWEN36_MAMBA_SPEC keeps GDN state in vLLM blocks; the GDN snapshot stores must be off")
         A = self._PREFIX_ALIGN
-        if start <= 0 or start % A or L - start < 3 or self._chunked_trace_id is None:
+        block = paged_block_size(self)
+        if start <= 0 or start % A or start % block or L - start < 3 or self._chunked_trace_id is None:
             return None
         chunk = self._chunked_chunk_size or 2048
         n = L - start
-        # As _plan_prefix_prefill: a 1-2 token tail after the last full chunk would run eagerly; split 128 earlier.
-        points = [start + (n // chunk) * chunk - A] if n > chunk and 0 < n % chunk < 3 else []
+        # A 1-2 token tail after the last full chunk runs eagerly. Splitting one block earlier lets the last segment
+        # (one block plus the tail) replay the short trace. Every segment must start on a block boundary:
+        # paged_fill_cache writes from the first row of the segment's first block.
+        split = n > chunk and 0 < n % chunk < 3 and block < chunk
+        points = [start + (n // chunk) * chunk - max(A, block)] if split else []
         return start, src, points, 1 << 62, start, set(), False
 
     def _prefill_with_prefix_cache(self, toks, pt_row, L, plan):

@@ -93,10 +93,16 @@ class _Ledger:
                 self.blocks[dst] = self.blocks.get(src)
 
 
-def _plan(L, start):
-    """Qwen36Model._plan_block_resume of a model with the chunk trace captured (chunk 2048)."""
+def _plan(L, start, block):
+    """Qwen36Model._plan_block_resume of a model with the chunk trace captured (chunk 2048) and a paged KV cache of
+    `block`-token blocks."""
     me = SimpleNamespace(
-        _prefix_cache=None, _chunk_state_cache=None, _PREFIX_ALIGN=128, _chunked_trace_id=1, _chunked_chunk_size=2048
+        _prefix_cache=None,
+        _chunk_state_cache=None,
+        _PREFIX_ALIGN=128,
+        _chunked_trace_id=1,
+        _chunked_chunk_size=2048,
+        _paged_kv_caches=[[SimpleNamespace(shape=(8, 1, block, 256))]],
     )
     return Qwen36Model._plan_block_resume(me, L, start, ("blocks", 0))
 
@@ -218,7 +224,7 @@ class _Harness:
             assert 0 not in blocks, (r, nc, blocks)
             read = nc > 0
             if prefill and nc > 0:
-                if _plan(nc + ns, nc) is None:
+                if _plan(nc + ns, nc, self.block) is None:
                     read = False
                     self.recomputes.append((r, nc, nc + ns))
                 else:
@@ -322,30 +328,34 @@ def test_evicted_boundary_state_is_not_hit(tmp_path, layout):
 
 
 def test_chunked_prefill_resumes_every_chunk(tmp_path, layout):
-    # A per-step budget of one 2048-token chunk: at block 2048 the chunks end on block boundaries; at block 4096 two
-    # chunks share a block (the second resumes from the state the first wrote there, no copy between them).
+    # A per-step budget of one 2048-token chunk: at block 2048 the chunks end on block boundaries and every chunk
+    # resumes; at block 4096 every second chunk starts inside a block and recomputes from 0 (its K/V fill would start
+    # at the block's first row).
     h = _harness(tmp_path, layout, budget=2048)
     bs = h.block
     a = _prompt(7, 3 * bs + 200)
     h.add("a", a)
     h.run()
-    starts = [s for r, s, _ in h.resumes if r == "a"]
-    assert starts == list(range(2048, len(a), 2048)), starts
-    assert not h.recomputes
+    ends = list(range(2048, len(a), 2048))
+    assert [s for r, s, _ in h.resumes if r == "a"] == [s for s in ends if s % bs == 0]
+    assert [s for r, s, _ in h.recomputes if r == "a"] == [s for s in ends if s % bs]
 
 
 @pytest.mark.parametrize(
-    "L, start, plan_start, split",
+    "L, start, block, plan_start, split",
     [
-        (5000, 0, None, None),  # nothing to resume
-        (5000, 4096, 4096, None),
-        (4098, 4096, None, None),  # 2 tokens after the hit: recompute
-        (4096 + 2049, 4096, 4096, 4096 + 2048 - 128),  # a 1-token tail after a full chunk: split 128 earlier
-        (5000, 4000, None, None),  # not 128-aligned
+        (5000, 0, 2048, None, None),  # nothing to resume
+        (5000, 4096, 2048, 4096, None),
+        (4098, 4096, 2048, None, None),  # 2 tokens after the hit: recompute
+        (4096 + 2049, 4096, 64, 4096, 4096 + 2048 - 128),  # a 1-token tail after a full chunk: split 128 earlier
+        (4096 + 2049, 4096, 1024, 4096, 4096 + 2048 - 1024),  # ... one block earlier
+        (4096 + 2049, 4096, 2048, 4096, None),  # block = chunk: no earlier block boundary, the tail runs eagerly
+        (5000, 4000, 64, None, None),  # not 128-aligned
+        (5000, 3072, 2048, None, None),  # not on a block boundary
     ],
 )
-def test_plan_block_resume(L, start, plan_start, split):
-    plan = _plan(L, start)
+def test_plan_block_resume(L, start, block, plan_start, split):
+    plan = _plan(L, start, block)
     if plan_start is None:
         assert plan is None
         return
