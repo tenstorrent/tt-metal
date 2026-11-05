@@ -116,6 +116,7 @@ struct PlanInputs {
     // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
     // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
     uint64_t staging_floor = 0;
+    bool w_dram_sharded = false;  // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
 };
 
 // Planner constants the factory needs too.

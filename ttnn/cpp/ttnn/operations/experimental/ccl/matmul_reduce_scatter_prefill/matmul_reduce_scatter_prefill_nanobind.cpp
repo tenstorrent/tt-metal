@@ -80,7 +80,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): A, rank 2-4 with leading dims 1, bfloat16 or bfloat8_b, TILE, DRAM or L1
                 interleaved.
-            weight (ttnn.Tensor): W (K, N), bfloat16, bfloat8_b or bfloat4_b, TILE, DRAM or L1 interleaved.
+            weight (ttnn.Tensor): W (K, N), bfloat16, bfloat8_b or bfloat4_b, TILE, DRAM or L1 interleaved, or DRAM
+                width-sharded with every shard spanning all of K.
 
         Keyword Args:
             cluster_axis (int): the mesh axis of the group (0 or 1).
