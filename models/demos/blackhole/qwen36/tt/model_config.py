@@ -447,6 +447,18 @@ class Qwen36ModelArgs(ModelArgs):
 
         if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
             return True
+        # Dense checkpoints whose dim does not exceed the base heuristic's 4096 (Qwen3.5-9B / the FLUX.3 Klein pup:
+        # dim 4096) hit the same double-gather on a (1,N) mesh: the TP config DRAM-shards the GDN / attention
+        # in-projections, so layer.py fuses the norm all-gather into the AGMM in-proj; the base rule would pre-gather
+        # in DistributedNorm and the AGMM gather again (K mismatch), and the spec-feed final norm needs the
+        # fractured output. Decode keeps the base rule. (Ported from nwoodall/flux3-klein-bringup.)
+        if (
+            self.moe_num_experts <= 0
+            and self.is_multichip
+            and mode == Mode.PREFILL
+            and getattr(self, "gdn_qkvz_weight_memcfg", None) is not None
+        ):
+            return True
         return super().is_distributed_norm(mode)
 
     @property
