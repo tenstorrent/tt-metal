@@ -59,7 +59,7 @@ EXPECTED_NS = {
     ("ring", "deepseek_v3_o_proj"): 211_000,
     ("ring", "minimax_m3_o_proj_bf8b_act"): 102_000,
     ("ring", "mimo_v2_o_proj"): 206_000,
-    ("ring", "kimi_k3_dense_ffn"): 527_500,
+    ("ring", "kimi_k3_dense_ffn"): 506_000,
     ("ring", "glm5_q_a_proj"): 53_500,
     ("ring", "chunked_n"): 549_500,
     ("ring", "chunked_mn"): 594_000,
