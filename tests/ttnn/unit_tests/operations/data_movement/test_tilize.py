@@ -1330,7 +1330,10 @@ def test_tilize_codegen_forced_matches_input(device, shape, dtype, out_buffer):
 # torch.equal treats -0.0 as +0.0, so signed zeros and subnormals are compared as raw bits. Codegen must match
 # native bit for bit; fp32 must also match the input, while bf16 fast tilize writes -0.0 and subnormals as +0 on
 # both paths.
-@pytest.mark.parametrize("shape", [(1, 1, 64, 64), (1, 1, 1024, 320)], ids=lambda s: "x".join(map(str, s)))
+# One shape per codegen route, so each compute chunk width is checked against native.
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 64, 64), (1, 1, 1024, 320), (1, 1, 32, 1024)], ids=lambda s: "x".join(map(str, s))
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=lambda d: str(d).split(".")[-1])
 def test_tilize_codegen_forced_preserves_float_bits(device, shape, dtype):
     skip_unless_dm_codegen_arch(device)
