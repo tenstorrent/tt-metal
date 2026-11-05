@@ -1026,8 +1026,9 @@ def test_sparse_mla_indexer_reuse_chunked(
     """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
     weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit.
-    On the 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
-    gathers the whole prefix, so this also checks the push against the gather, for one layer and one chunk.
+    Where the push runs (any 2D fabric, see sparse_kv_push_supported) run B receives its KV rows through the sparse KV
+    push (sparse_kv_push.py) where run A gathers the whole prefix, so this also checks the push against the gather, for
+    one layer and one chunk.
     test_sparse_mla_push_layers_chunked covers the push across layers and chunks."""
     config = config_only
     config.max_seq_len = seq_len
@@ -1078,7 +1079,7 @@ def test_sparse_mla_indexer_reuse_chunked(
     ttnn.synchronize_device(mesh_device)
 
 
-# Two production-size chunks (5120) on the 8x4 TorusXY mesh, where the sparse KV push runs.
+# Two production-size chunks (5120) on the production 8x4 TorusXY mesh (the push runs on any 2D fabric).
 SPARSE_PUSH_LAYERS_CASES = [
     c for c in _sparse_cases([10240], anchor_only=True) if "glm_5_2" in c.id and "shape-8x4" in c.id
 ]
