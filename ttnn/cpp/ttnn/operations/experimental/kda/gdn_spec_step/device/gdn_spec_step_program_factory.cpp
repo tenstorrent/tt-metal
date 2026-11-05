@@ -163,6 +163,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const m2::TensorParamName NEA{"nea"};
     const m2::TensorParamName WEIGHT{"weight"};
     const m2::TensorParamName OUT{"out"};
+    const m2::TensorParamName RIDX{"ring_page_idx"};
+    const bool ring_paged = in.ring_page_idx.has_value();
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -249,6 +251,11 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     std::vector<Dfb> compute_out = {
         {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
+    if (ring_paged) {
+        // the user's row of ring_page_idx (T words), one aligned page
+        writer_local.push_back(
+            {"ridx_w", 1, static_cast<uint32_t>(in.ring_page_idx->buffer()->aligned_page_size()), u32});
+    }
     // VSPLIT: acc_mine = this block's last-token pre-norm output tiles (compute -> writer); acc_x = the head's full
     // pre-norm row, every block's tiles at offset s*Vs (writer -> compute, filled over the NoC by all VB blocks)
     std::vector<Dfb> writer_out;
@@ -436,6 +443,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
         writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
     }
+    if (ring_paged) {
+        writer.tensor_bindings.push_back(m2::TensorBinding{RIDX, "ridx"});
+        writer.compiler_options.defines.emplace("GDN_RING_PAGE_IDX", "1");
+    }
     writer.compile_time_args = {
         {"Kt", Kt},
         {"Vt", Vt},
@@ -601,6 +612,11 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {NEA, nea},
         {WEIGHT, weight},
         {OUT, output}};
+    if (ring_paged) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RIDX, .spec = in.ring_page_idx->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(RIDX, in.ring_page_idx->mesh_tensor());
+    }
 
     m2::ProgramSpec spec{
         .name = "gdn_spec_step",
