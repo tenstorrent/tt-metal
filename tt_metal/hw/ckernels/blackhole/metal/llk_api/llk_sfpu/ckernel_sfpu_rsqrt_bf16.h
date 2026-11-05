@@ -29,8 +29,10 @@ inline bool bf16_dest_rsqrt() {
     return false;
 #endif
 }
+// Each call records replay slots 0-15, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_rsqrt_bf16() {
+__attribute__((noinline)) inline void calculate_rsqrt_bf16() {
     ckernel::sfpu::bf16::rsqrt::calculate_newton_root<ckernel::sfpu::RsqrtBf16Config, ITERATIONS>();
 }
 inline void init_rsqrt_bf16() { ckernel::sfpu::bf16::rsqrt::init_newton_root<ckernel::sfpu::RsqrtBf16Config>(); }

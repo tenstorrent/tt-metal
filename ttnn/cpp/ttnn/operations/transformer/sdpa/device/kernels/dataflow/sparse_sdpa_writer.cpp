@@ -10,7 +10,7 @@
 // Uses the object-based NoC + circular-buffer APIs.
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>  // tt::constants::TILE_WIDTH
+#include "api/tile_constants.h"  // tt::constants::TILE_WIDTH
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar

@@ -60,6 +60,7 @@ void validate_sharded_input(
 
     const auto num_cores = shard_grid.num_cores();
     const uint64_t W_phys = tensor.padded_shape()[-1];
+    TT_FATAL(W_phys > 0, "Sharded input must have a non-zero width, got shape {}", tensor.padded_shape());
     const uint64_t H_phys = tensor.physical_volume() / W_phys;
     const auto memory_layout = tensor.memory_config().memory_layout();
 

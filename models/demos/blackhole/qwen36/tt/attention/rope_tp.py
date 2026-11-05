@@ -12,6 +12,7 @@ import itertools
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 
 def build_rope_tables(device, rope_dim, max_seq_len, theta):
@@ -345,10 +346,10 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
     """
-    # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
-    _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]
+    # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified), DRAM above.
+    _L1 = tpc.prefill_act_mem(seq_len, ttnn.L1_MEMORY_CONFIG)
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)
     roped = ttnn.experimental.rotary_embedding_hf(x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
     ttnn.deallocate(x_rope)
