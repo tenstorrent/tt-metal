@@ -12,7 +12,7 @@ inline void (*rtos_context_switch_ptr)();
 inline void (*toggle_macpcs_ptr)(uint32_t);
 #if defined(ARCH_BLACKHOLE)
 volatile inline uint32_t* flag_disable = (uint32_t*)(GET_MAILBOX_ADDRESS_DEV(aerisc_run_flag));
-#else
+#elif !defined(ARCH_QUASAR)
 volatile inline uint32_t* flag_disable = (uint32_t*)(uintptr_t)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 #endif
 
@@ -57,5 +57,8 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #endif
 }
 
+#if !defined(ARCH_QUASAR)
+// A Keraunos CCE has no base firmware, and its LAUNCH_ERISC_APP_FLAG placeholder (0) is the reset vector.
 inline __attribute__((always_inline)) void disable_erisc_app() { flag_disable[0] = 0; }
+#endif
 }  // namespace internal_
