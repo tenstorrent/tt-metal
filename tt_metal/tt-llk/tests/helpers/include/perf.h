@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "perf_mock_plan.h"
 #include "tensor_shape.h"
 
 // === L1 layout for perf tests ===
@@ -44,11 +45,12 @@ enum class PerfRunType
     UNPACK_ISOLATE,
     MATH_ISOLATE,
     PACK_ISOLATE,
+    L1_CONGESTION,
     SFPU_ISOLATE
 };
 
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
-// UNPACK_ISOLATE's math mock. Every other caller (other run types, Blackhole, Quasar) keeps the RISC-V loop mocks below.
+// UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>
 constexpr bool perf_mock_mop()
 {
@@ -73,11 +75,6 @@ namespace llk_perf_mock
 constexpr std::uint32_t SRC_A  = 1;
 constexpr std::uint32_t SRC_B  = 2;
 constexpr std::uint32_t SRC_AB = SRC_A | SRC_B;
-
-constexpr std::uint32_t REPLAY_HANDSHAKES = 32 / 2;        // the replay buffer's 32 instructions, a STALLWAIT and a flip each
-constexpr std::uint32_t MOP_LOOP_MAX      = (1u << 7) - 1; // the MOP expander's 7 bit loop counters
-constexpr std::uint32_t ZMASK_BITS        = 32;            // template 0's zmask: one handshake kind per iteration
-constexpr std::uint32_t MAX_MOPS          = 32;            // template 1 MOPs one segments() pushes back to back
 
 // The producer (unpack mock) waits on TDMA for the sources to be cleared, the consumer (math mock) on MATH for them to be valid
 template <bool PRODUCE>
@@ -119,76 +116,46 @@ inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const 
     TT_MOP_CFG(mask_hi);
 }
 
-// A loop count for the MOP expander's 7 bit loop counters that divides n: n itself up to 127, else its largest power of two
-// factor (at most 64), times 3 when that still fits and divides
-inline std::uint32_t mop_loops(const std::uint32_t n)
-{
-    if (n <= MOP_LOOP_MAX)
-    {
-        return n;
-    }
-    std::uint32_t loops = std::min(n & (~n + 1), (MOP_LOOP_MAX + 1) / 2);
-    if (loops * 3 <= MOP_LOOP_MAX && (n / loops) % 3 == 0)
-    {
-        loops *= 3;
-    }
-    return loops;
-}
-
-// periods x (a burst of `burst` handshakes of kind `once` and a run of `run` handshakes of kind `each`), the producer giving
-// the burst first and the consumer taking it back last, in at most MAX_MOPS MOPs of template 1, pushed back to back: the
+// plan's periods x (a burst of `burst` handshakes of kind `once` and a run of `run` handshakes of kind `each`), the producer
+// giving the burst first and the consumer taking it back last, in at most MAX_MOPS MOPs of template 1, pushed back to back: the
 // mock's RISC-V is done pushing long before the stream ends. A period of up to REPLAY_HANDSHAKES is replayed whole from the
 // replay buffer by the inner loop (up to 127 x 127 periods per MOP). SPLIT (the consumer only) also replays a period of up to
 // 2 x REPLAY_HANDSHAKES - burst whole: its period - REPLAY_HANDSHAKES leading `each` handshakes, then the buffer's
-// REPLAY_HANDSHAKES suffix. A longer period replays the burst around the run (up to 127 periods per MOP). Returns false if
-// it does not fit.
-template <bool PRODUCE, bool SPLIT = false>
-inline bool segments(const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run, const std::uint32_t periods)
+// REPLAY_HANDSHAKES suffix. A longer period replays the burst around the run (up to 127 periods per MOP). The plan
+// (plan_segments) must fit.
+template <bool PRODUCE>
+inline void emit_segments(const SegmentPlan& plan, const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run)
 {
-    static_assert(!SPLIT || !PRODUCE, "split replays the run's head before the burst, which only the consumer takes last");
     constexpr std::uint32_t HALF = REPLAY_HANDSHAKES;
     const std::uint32_t period   = burst + run;
-    if (run == 0 || burst == 0 || burst > HALF || periods == 0 || (period > HALF && run > MOP_LOOP_MAX))
-    {
-        return false;
-    }
-    const bool split = SPLIT && period > HALF && period + burst <= 2 * HALF, whole = period <= HALF || split;
-    const std::uint32_t inner = whole ? mop_loops(periods) : run;
-    const std::uint32_t outer = whole ? mop_loops(periods / inner) : mop_loops(periods);
-    const std::uint32_t mops  = whole ? periods / inner / outer : periods / outer;
-    if (mops > MAX_MOPS)
-    {
-        return false;
-    }
     // the replay buffer, slots 0 ..: the whole period (split: HALF handshakes, the run's first period - HALF dropped), or the burst
-    const std::uint32_t buffered = whole ? (split ? HALF : period) : burst;
-    TT_REPLAY(0, 2 * buffered, 0, 1);
-    for (std::uint32_t i = 0; i < buffered; i++)
+    TT_REPLAY(0, 2 * plan.buffered, 0, 1);
+    for (std::uint32_t i = 0; i < plan.buffered; i++)
     {
-        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (split ? HALF - burst : run) ? each : once));
+        const std::uint32_t kind  = !plan.whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (plan.split ? HALF - burst : run) ? each : once));
         ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
         ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
     }
-    const std::uint32_t replay = TT_OP_REPLAY(0, 2 * buffered, 0, 0);
-    if (whole) // inner loop: the period, replayed (split: the run's first period - HALF, then the buffer); no start or end instructions
+    const std::uint32_t replay = TT_OP_REPLAY(0, 2 * plan.buffered, 0, 0);
+    if (plan.whole) // inner loop: the period, replayed (split: the run's first period - HALF, then the buffer); no start or end instructions
     {
-        ckernel::ckernel_template tmpl(outer, inner, split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay, split ? replay : TT_OP_NOP);
+        ckernel::ckernel_template tmpl(
+            plan.outer, plan.inner, plan.split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay, plan.split ? replay : TT_OP_NOP);
         tmpl.set_last_outer_loop_instr(replay);
         tmpl.set_last_inner_loop_instr(replay);
         tmpl.program(); // syncs on the MOPs in flight first
     }
     else // inner loop: the run, STALLWAIT and flip alternating; the burst replayed before (producer) or after (consumer) it
     {
-        ckernel::ckernel_template tmpl(outer, inner, wait_op<PRODUCE>(each), flip_op<PRODUCE>(each));
+        ckernel::ckernel_template tmpl(plan.outer, plan.inner, wait_op<PRODUCE>(each), flip_op<PRODUCE>(each));
         tmpl.set_start_op(PRODUCE ? replay : TT_OP_NOP);
         tmpl.set_end_op(PRODUCE ? TT_OP_NOP : replay);
         tmpl.program();
     }
-    for (std::uint32_t i = 0; i < mops; i++)
+    for (std::uint32_t i = 0; i < plan.mops; i++)
     {
         TTI_MOP(1, 0, 0);
     }
-    return true;
 }
 
 // count handshakes of one kind, 128 per MOP
@@ -244,50 +211,36 @@ template <bool PRODUCE>
 inline void matmul(
     const std::uint32_t loop_factor, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t ct_dim, const std::uint32_t num_blocks)
 {
-    if (loop_factor == 0 || rt_dim == 0 || kt_dim == 0 || ct_dim == 0 || num_blocks == 0)
+    const MatmulPlan plan = plan_matmul(PRODUCE, loop_factor, rt_dim, kt_dim, ct_dim, num_blocks);
+    if (plan.route == Route::NONE)
     {
         return; // like the loop mocks: no work
     }
     LLK_ASSERT(
         static_cast<std::uint64_t>(loop_factor) * num_blocks * kt_dim * ((std::min(ct_dim, rt_dim) + 1) / 2) <= 0xFFFFFFFFu,
         "the handshake counts fit 32 bits");
-    const std::uint32_t reuse       = ct_dim >= rt_dim ? SRC_B : SRC_A;
-    const std::uint32_t reload      = ct_dim >= rt_dim ? SRC_A : SRC_B;
-    const std::uint32_t reuse_loop  = std::min(ct_dim, rt_dim);
-    const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
-    std::uint32_t pattern           = 0;
-    std::uint32_t period            = 0;
-    for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += 2)
+    const std::uint32_t reuse  = ct_dim >= rt_dim ? SRC_B : SRC_A;
+    const std::uint32_t reload = ct_dim >= rt_dim ? SRC_A : SRC_B;
+    if (plan.route == Route::SEGMENTS)
     {
-        const std::uint32_t burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
-        if (period + burst + reload_loop <= ZMASK_BITS)
-        {
-            pattern |= ((1u << burst) - 1) << (PRODUCE ? period : period + reload_loop);
-        }
-        period += burst + reload_loop;
+        return emit_segments<PRODUCE>(plan.seg, reuse, plan.seg_burst, reload, plan.reload_loop);
     }
-    const std::uint32_t steps = loop_factor * num_blocks * kt_dim;
-    if ((reuse_loop == 1 || reuse_loop % 2 == 0) &&
-        segments<PRODUCE, !PRODUCE>(reuse, std::min(static_cast<std::uint32_t>(2), reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
+    if (plan.route == Route::STREAM)
     {
-        return;
-    }
-    if (period <= ZMASK_BITS)
-    {
-        return stream<PRODUCE>(reload, reuse, pattern, period, steps);
+        return stream<PRODUCE>(reload, reuse, plan.pattern, plan.period, plan.steps);
     }
     // a kt step longer than the zmask: one MOP per burst and one per reload run
     program<PRODUCE>(reload, reuse, 0);
-    for (std::uint32_t step = 0; step < steps; step++)
+    for (std::uint32_t step = 0; step < plan.steps; step++)
     {
-        for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += 2)
+        for (std::uint32_t reuse_iter = 0; reuse_iter < plan.reuse_loop; reuse_iter += 2)
         {
-            const std::uint32_t burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
+            const std::uint32_t burst = std::min(REUSE_BURST, plan.reuse_loop - reuse_iter);
             if constexpr (PRODUCE)
             {
                 TT_MOP(0, burst - 1, (1u << burst) - 1);
             }
-            for (std::uint32_t left = reload_loop; left != 0;)
+            for (std::uint32_t left = plan.reload_loop; left != 0;)
             {
                 const std::uint32_t count = std::min(left, static_cast<std::uint32_t>(128));
                 TT_MOP(0, count - 1, 0);
@@ -305,13 +258,14 @@ inline void matmul(
 template <bool PRODUCE>
 inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
 {
-    if (segments<PRODUCE>(SRC_B, 1, SRC_A, a_count, periods))
+    const SrcbReusePlan plan = plan_srcb_reuse(PRODUCE, a_count, periods);
+    if (plan.route == Route::SEGMENTS)
     {
-        return;
+        return emit_segments<PRODUCE>(plan.seg, SRC_B, 1, SRC_A, a_count);
     }
-    if (a_count < 32)
+    if (plan.route == Route::STREAM)
     {
-        return stream<PRODUCE>(SRC_A, SRC_B, PRODUCE ? 1 : 1u << a_count, a_count + 1, periods);
+        return stream<PRODUCE>(SRC_A, SRC_B, plan.pattern, a_count + 1, periods);
     }
     program<PRODUCE>(SRC_A, SRC_B, 0);
     for (; periods != 0; periods--)
