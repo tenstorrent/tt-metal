@@ -474,11 +474,9 @@ public:
 
     bool add_forbidden_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool add_forbidden_constraint(const PlacedMesh& placed);
+    // Seat `mesh_id` only on a footprint holding every ASIC in `asics`; calls for one mesh intersect.
     bool add_required_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool add_required_constraint(const PlacedMesh& placed);
-    // Seat `mesh_id` only on a footprint containing every ASIC in `asics` (--mesh-pinning-file pools).
-    bool add_required_containing_constraint(
-        MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool exclude_mapping(const AssignedMeshes& assigned);
 
 private:
@@ -503,8 +501,6 @@ private:
     std::size_t pending_index_ = 0;
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_forbidden_;
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_required_;
-    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>>
-        extra_required_containing_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> yielded_footprints_;
 
     // Live SAT session. next() is another model from it when the mode and host cap still match.
@@ -544,8 +540,6 @@ private:
         const std::set<tt::tt_metal::experimental::PhysicalNodeId>& placement_asic_allowlist);
     void invalidate_pending_solve();
     std::set<const Candidate*> seats_matching(
-        MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const;
-    std::set<const Candidate*> seats_containing(
         MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const;
     bool apply_extra_constraints(MappingConstraints<MeshId, const Candidate*>& constraints) const;
     std::vector<std::map<MeshId, const Candidate*>> excluded_seat_maps() const;

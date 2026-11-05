@@ -3335,6 +3335,7 @@ void SatPlacementEnumerationSession::invalidate_pending_solve() {
     }
 }
 
+// Seats of `mesh_id` whose footprint holds every ASIC in `asics` (exactly that footprint when the sizes match).
 std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerationSession::seats_matching(
     GlobalMeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const {
     std::set<const Candidate*> seats;
@@ -3346,43 +3347,9 @@ std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerati
         return seats;
     }
     for (const Candidate& candidate : pool_it->second->candidates()) {
-        if (candidate.asic_count() != asics.size()) {
-            continue;
-        }
-        bool match = true;
-        for (std::size_t i = 0; i < candidate.asic_count(); ++i) {
-            if (!asics.contains(candidate.asic(i))) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
-            seats.insert(&candidate);
-        }
-    }
-    return seats;
-}
-
-// Seats of `mesh_id` whose footprint includes every ASIC in `asics`.
-std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerationSession::seats_containing(
-    GlobalMeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const {
-    std::set<const Candidate*> seats;
-    if (pools_ == nullptr) {
-        return seats;
-    }
-    const auto pool_it = pools_->find(mesh_id);
-    if (pool_it == pools_->end()) {
-        return seats;
-    }
-    for (const Candidate& candidate : pool_it->second->candidates()) {
-        if (candidate.asic_count() < asics.size()) {
-            continue;
-        }
         std::size_t found = 0;
         for (std::size_t i = 0; i < candidate.asic_count(); ++i) {
-            if (asics.contains(candidate.asic(i))) {
-                ++found;
-            }
+            found += asics.contains(candidate.asic(i)) ? 1 : 0;
         }
         if (found == asics.size()) {
             seats.insert(&candidate);
@@ -3405,14 +3372,8 @@ bool SatPlacementEnumerationSession::apply_extra_constraints(
     for (const auto& [mesh_id, asics] : extra_required_) {
         const std::set<const Candidate*> seats = seats_matching(mesh_id, asics);
         if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
-            return false;
-        }
-    }
-    for (const auto& [mesh_id, asics] : extra_required_containing_) {
-        const std::set<const Candidate*> seats = seats_containing(mesh_id, asics);
-        if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
             log_warning(
-                tt::LogFabric, "Mesh-host-rank pinning: no seat for mesh {} holds its pinned ASICs", mesh_id.get());
+                tt::LogFabric, "SAT joint placement: no seat for mesh {} holds its required ASICs", mesh_id.get());
             return false;
         }
     }
@@ -3491,15 +3452,6 @@ bool SatPlacementEnumerationSession::add_required_constraint(
 
 bool SatPlacementEnumerationSession::add_required_constraint(const PlacedMesh& placed) {
     return add_required_constraint(placed.mesh_id, placed.placement.asics);
-}
-
-bool SatPlacementEnumerationSession::add_required_containing_constraint(
-    MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) {
-    extra_required_containing_.emplace_back(mesh_id, asics);
-    if (ready_) {
-        invalidate_pending_solve();
-    }
-    return true;
 }
 
 bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assigned) {

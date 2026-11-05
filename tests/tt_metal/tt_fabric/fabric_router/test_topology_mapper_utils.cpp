@@ -694,6 +694,54 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
             EXPECT_EQ(warning.find("outside the seated physical mesh"), std::string::npos) << warning;
         }
     }
+
+    // Two meshes with three pinned host ranks: pins on one mesh intersect, pins on different meshes are independent.
+    {
+        MeshGraphDescriptor two_mgd{std::string(R"(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)")};
+        const MeshId mesh1{1};
+        const MeshHostRankId rank1{1};
+        auto two_ranks = fabric_ranks_for_host_grid(mesh, 1, 4, 1, 2);
+        two_ranks.merge(fabric_ranks_for_host_grid(mesh1, 1, 4, 1, 2));
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = {*config.hostname_to_asics.at("host2").begin()};
+        config.mesh_host_rank_pinnings[{mesh, rank1}] = {*config.hostname_to_asics.at("host3").begin()};
+        config.mesh_host_rank_pinnings[{mesh1, rank0}] = {*config.hostname_to_asics.at("host0").begin()};
+        const auto mapping = map_multi_mesh_to_physical(psd, two_mgd, config, /*pinnings=*/{}, {}, two_ranks);
+        ASSERT_TRUE(mapping.success) << mapping.error_message;
+        EXPECT_EQ(mapping.stats.placement_sat_attempts, 1u);
+        const auto rank_asics = [&](MeshId m, MeshHostRankId r) {
+            std::set<tt::tt_metal::experimental::PhysicalNodeId> asics;
+            for (const auto& [node, rank] : two_ranks.at(m)) {
+                if (rank == r) {
+                    asics.insert(mapping.fabric_node_to_physical.at(node));
+                }
+            }
+            return asics;
+        };
+        EXPECT_EQ(rank_asics(mesh, rank0), config.hostname_to_asics.at("host2"));
+        EXPECT_EQ(rank_asics(mesh, rank1), config.hostname_to_asics.at("host3"));
+        EXPECT_EQ(rank_asics(mesh1, rank0), config.hostname_to_asics.at("host0"));
+        EXPECT_EQ(rank_asics(mesh1, rank1), config.hostname_to_asics.at("host1"));
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipeline) {
