@@ -443,13 +443,19 @@ def klein_rows():
         grid = klein_core_grid(M)
         # qkv (chunks=3) and proj_mlp (packed SwiGLU): explicit core_grid + use_heuristic_mmcfg,
         # force_transpose left at ColParallelLinear's default True.
-        for op, N, extra in (("qkv", 3 * KLEIN_HIDDEN // KLEIN_TP, {}), ("proj_mlp", 2 * KLEIN_MLP // KLEIN_TP, {"fuse_swiglu": True})):  # fmt: skip
+        klein_ops = (
+            ("qkv", 3 * KLEIN_HIDDEN // KLEIN_TP, {}),
+            ("proj_mlp", 2 * KLEIN_MLP // KLEIN_TP, {"fuse_swiglu": True}),
+        )
+        for op, N, extra in klein_ops:
             with arch_context("BH"):
                 fab = matmul.get_fabric_agmm_config(M, KLEIN_HIDDEN, N, 1, _cc(ARCH["BH"]["full_grid"]))
             path = "agmm"
             if fab is not None and op == "proj_mlp":
                 path = "FABRIC"
-            label, g, blk, tr = resolve_agmm("BH", M, KLEIN_HIDDEN, N, dbs=None, core_grid=grid, use_heuristic=True, **extra)
+            label, g, blk, tr = resolve_agmm(
+                "BH", M, KLEIN_HIDDEN, N, dbs=None, core_grid=grid, use_heuristic=True, **extra
+            )
             _, _, flags = per_core_flags(M, N, g, blk, tr)
             rows.append(Row("Klein", "BH", case, op, path, M, KLEIN_HIDDEN, N, g, blk, label, flags))
         if "early" in case:
@@ -467,7 +473,8 @@ def klein_rows():
         if label == "mmrs v2.3 rules":
             label += " (extrapolated: N=3072 family not in fit)"
         _, _, flags = per_core_flags(M, KLEIN_HIDDEN, g, blk, tr)
-        rows.append(Row("Klein", "BH", f"early M={M}", "proj_out", f"mmrs(win={win})", M, K, KLEIN_HIDDEN, g, blk, label, flags))  # fmt: skip
+        path = f"mmrs(win={win})"
+        rows.append(Row("Klein", "BH", f"early M={M}", "proj_out", path, M, K, KLEIN_HIDDEN, g, blk, label, flags))
     return rows
 
 
@@ -492,10 +499,11 @@ def sdpa_rows():
         bucket = next(r for r in H3_LADDER_4X8 if r >= m_sp * H3_SP) // H3_SP
         for pad, s in (("sp*tile", m_sp), ("bucket", bucket)):
             measured = H3_SDPA_MEASURED.get(s)
-            q, k = measured if measured else (max(TILE, min(256, s // TILE * TILE)), max(TILE, min(512, s // TILE * TILE)))
+            fallback = (max(TILE, min(256, s // TILE * TILE)), max(TILE, min(512, s // TILE * TILE)))
+            q, k = measured or fallback
             items = H3_HEADS_LOCAL * math.ceil(s / q)
             per_core = math.ceil(items / cores)
-            rows.append((f"{dur} {pad}", s, "measured" if measured else "FALLBACK", (q, k), items, per_core, per_core * q))
+            rows.append((f"{dur} {pad}", s, "table" if measured else "FALLBACK", (q, k), items, per_core, per_core * q))
     return rows
 
 
@@ -509,7 +517,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     rows = h3_rows() + klein_rows()
-    hdr = f"{'model':5} {'arch':4} {'case':22} {'op':8} {'path':15} {'M':>6} {'K':>5} {'N':>5} {'grid':6} {'blocking':18} source / flags"
+    hdr = (
+        f"{'model':5} {'arch':4} {'case':22} {'op':8} {'path':15} {'M':>6} {'K':>5} {'N':>5} {'grid':6} "
+        f"{'blocking':18} source / flags"
+    )
     print(f"# matmul config audit (stubs={'on' if STUBBED else 'off'})")
     print(hdr)
     print("-" * len(hdr))

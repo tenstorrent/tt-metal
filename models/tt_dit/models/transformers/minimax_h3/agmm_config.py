@@ -21,6 +21,8 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import os
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -79,11 +81,36 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 }
 
 
-def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
+# Set to 1 to restore the divisor borrowing below on Blackhole too, for an on-device A/B of the
+# rules fallback against it.
+_LEGACY_DIVISOR_ENV = "MINIMAX_H3_AGMM_DIVISOR_FALLBACK"
+
+
+def agmm_block_size(k: int, n: int, m: int, *, rules_fallback: bool = False) -> tuple[int, int, int] | None:
     """Block sizes for an all-gather matmul of this `(K, N)` at sequence length `M`, or None to let
-    the generic path decide. Uses the largest swept `per_core_M` that divides the runtime one.
+    the generic path decide.
+
+    A runtime `per_core_M` that was swept gets its own entry. Any other one -- every 768P production
+    length: 13 to 47 M tiles per core, past the swept 1..12 -- either borrows the entry of the largest
+    swept `per_core_M` dividing it, or, with `rules_fallback`, returns None so that `get_agmm_config`
+    resolves the shape with the v3 rule engine (`utils/agmm_rules.py`).
+
+    Borrowing keys on divisibility, not on similarity, so it degrades badly off the swept range: a
+    prime `per_core_M` such as 37 (H3 15 s bucketed, 13952 rows) or 13 (5 s to_out) borrows the
+    `per_core_M = 1` entry, an M_block of 2 walking 19 blocks per core. The v3 rules were fitted on
+    these same three H3 projections from M = 320 to 15,356 and land within 5% of the swept optimum
+    on 86/89 blind shapes, so on Blackhole -- the only arch they cover -- they are the better fallback.
+    Pass `rules_fallback=is_blackhole()` only from call sites whose `force_transpose` matches the op's
+    own `M > N` choice (the H3 attention and block do; the token refiner's ff1 does not), since
+    `get_agmm_config` skips the rules otherwise and would land on its generic fallback.
+    Not yet A/B'd on device at the production lengths: `MINIMAX_H3_AGMM_DIVISOR_FALLBACK=1` restores
+    the borrowing for that comparison.
     """
     per_core_m = _per_core_m(m, n)
+    if (k, n, per_core_m) in AGMM_BLOCK_SIZES:
+        return AGMM_BLOCK_SIZES[(k, n, per_core_m)]
+    if rules_fallback and os.environ.get(_LEGACY_DIVISOR_ENV) != "1":
+        return None
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
