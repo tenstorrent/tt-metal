@@ -336,8 +336,8 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
-        python3 -m pytest -vvv --tb=short \
-          "models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference[torusxy-mesh-8x4]"
+        python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
         # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
         python3 -m pytest -vvv --tb=short \
           tests/ttnn/unit_tests/operations/experimental/test_attn_res_determinism.py -k "torusxy-mesh-8x4"

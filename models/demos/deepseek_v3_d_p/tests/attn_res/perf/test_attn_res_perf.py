@@ -93,8 +93,9 @@ _GALAXY = "SP8xTP4"
 # Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41501648694,
 # 41501662481 and 41501677551. Production prefill runs untraced, so untraced is held to the traced reference where
 # it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
-# its own reference and, following the host CPU, a wider band. Galaxies off the pool can sit outside the band; run
-# them with ATTN_RES_PERF_REPORT_ONLY=1.
+# its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
+# the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
+# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 394.0, "ordinary": 118.0},
     "untraced": {"boundary": 394.0, "ordinary": 150.0},
@@ -112,7 +113,7 @@ _REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP4xTP4")
 _CHUNK_TOKENS = {"SP4xTP4": PER_CHIP_TOKENS * 8}
 _MARGIN = {
     "traced": {"boundary": 0.05, "ordinary": 0.05},
-    "untraced": {"boundary": 0.05, "ordinary": 0.10},
+    "untraced": {"boundary": 0.10, "ordinary": 0.10},
 }
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
