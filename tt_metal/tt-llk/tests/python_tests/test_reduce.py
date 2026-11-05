@@ -4,7 +4,7 @@
 import math
 
 import torch
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
@@ -67,8 +67,12 @@ REDUCE_TILE_DIMENSIONS = [
 
 
 def _fidelities_for_format(formats):
-    """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
-    if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
+    """LoFi fails for Float16_b/Float32 inputs, and it drops more of a Float16 mantissa than of a Float16_b one — exclude at parametrize time."""
+    if formats.input_format in [
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+    ]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
     return ALL_MATH_FIDELITIES
 
@@ -164,6 +168,7 @@ def _run_reduce_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    src_A_transform=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
     skip_ttsim_partial_face_bfp_zero_write(
@@ -179,6 +184,8 @@ def _run_reduce_test(
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
     )
+    if src_A_transform is not None:
+        src_A = src_A_transform(src_A.float()).to(src_A.dtype)
     # One resident scaler tile, as in production.
     src_B = _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type)
 
@@ -303,6 +310,75 @@ def test_reduce(
         math_fidelity,
         is_reduce_to_one,
         tile_dimensions,
+    )
+
+
+# Default stimuli are uniform(0.1, 1.1).
+FLOAT16_STIMULI = {
+    "uniform": None,
+    # Powers of two have a zero low byte, which Src zero substitution would flush.
+    "pow2": lambda x: torch.exp2(torch.round(torch.log2(2 * x))),
+    "wide": lambda x: x * 1000,
+    "mixed": lambda x: x - 0.6,
+}
+
+
+def _float16_stimuli(pool_type):
+    if pool_type == ReducePool.Max:
+        # GMPOOL takes the max with Dest, which starts at zero, so a negative
+        # MAX result reads back as 0 on every format; MAX stimuli stay positive.
+        return ["uniform", "pow2", "wide"]
+    if pool_type == ReducePool.Sum:
+        return ["uniform", "pow2", "mixed"]
+    return ["uniform"]
+
+
+def _float16_fidelities(formats, stimulus):
+    # The non-uniform stimuli probe data values, not the fidelity phases.
+    if stimulus == "uniform":
+        return _fidelities_for_format(formats)
+    return [MathFidelity.HiFi4]
+
+
+# Only a Float16 SrcA takes the fp32-Dest path in llk_math_reduce.h, and it needs a 32-bit Dest,
+# which REDUCE_SWEEP would select only for a Float32 output; force dest_acc for every output.
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16, output)
+        for output in [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ]
+    ],
+    dest_acc=[DestAccumulation.Yes],
+    reduce_dim=REDUCE_DIMS,
+    pool_type=POOL_TYPES,
+    math_fidelity=_float16_fidelities,
+    is_reduce_to_one=_reduce_to_one_for_format,
+    tile_dimensions=REDUCE_TILE_DIMENSIONS,
+    stimulus=_float16_stimuli,
+)
+def test_reduce_float16_to_float32(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    is_reduce_to_one,
+    tile_dimensions,
+    stimulus,
+):
+    _run_reduce_test(
+        formats,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        is_reduce_to_one,
+        tile_dimensions,
+        src_A_transform=FLOAT16_STIMULI[stimulus],
     )
 
 
