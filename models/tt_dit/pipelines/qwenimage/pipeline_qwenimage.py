@@ -751,8 +751,15 @@ class QwenImagePipeline(PipelineAPIMixin):
             first_step=first_step if inpaint else None,
             traced=traced,
         )
-        context = [tensor.from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
-        latents = tensor.from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
+        # Traced, the first step's inputs stay on the host: the tracer writes them into the captured
+        # ones, which needs no program, while copying a device tensor would compile one on the
+        # first request.
+        context = [
+            tensor.from_torch(c, device=d, on_host=traced) for c, d in zip(torch_contexts, self._devices, strict=True)
+        ]
+        latents = tensor.from_torch_to_devices(
+            latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None], on_host=traced
+        )
         ropes = [
             self._checkpoint.rope_tables(
                 latents_height=size.latents_height,
@@ -762,6 +769,7 @@ class QwenImagePipeline(PipelineAPIMixin):
                 padded_spatial_sequence_length=layout.padded_sequence_length,
                 device=device,
                 sp_axis=self._sp_axis,
+                on_host=traced,
             )
             for length, device in zip(prompt_sequence_lengths, self._devices, strict=True)
         ]
