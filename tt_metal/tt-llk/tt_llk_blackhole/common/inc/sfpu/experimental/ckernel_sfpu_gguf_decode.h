@@ -25,6 +25,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "ckernel.h"
 #include "experimental/ckernel_gguf_page.h"
@@ -179,7 +180,7 @@ sfpi_inline vFloat ue4m3_half(const vUInt x7)
     return v;
 }
 
-sfpi_inline int pidx(const int a, const int b, const int h)
+constexpr int pidx(const int a, const int b, const int h)
 {
     return (a * 2 + b) * 2 + h;
 }
@@ -909,9 +910,46 @@ sfpi_inline void params()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Phase 2: codes. LO_BITS-wide low plane (output o: word-vector lo_base + o / (32 / LO_BITS), field o % (32 / LO_BITS))
-// plus an optional HI_BITS-wide high plane; Q3_K stores 3-bit fields instead (q3k_code). Pair pages (Q3_K, Q5_K, Q1_0)
-// hold two tiles; CP selects the tile.
+// Phase 2: codes. A linear format's code is one B-bit field (Q8_0 8; Q6_K 6, ql | qh << 4; Q5_K, Q5_0, Q5_1 5; Q4_* 4;
+// Q3_K 3; Q2_K, TQ2_0, Q2_0 2; Q1_0 1) in the tile's B code word-vectors (pair pages Q5_K, Q3_K, Q1_0, Q5_0, Q5_1: tile
+// CP's from word-vector B CP). Stream position k is row o = mrow(k) = 16 h + 8 a + i, with (a, h, i) = (k / 16,
+// k / 8 % 2, k % 8); mrow is its own inverse. When B divides 32, row o is field o % F of word o / F (F = 32 / B fields
+// a word). Otherwise (B = 6, 5, 3) stream position k < F B is field k % F of word k / F, and the last two rows take the
+// words' top 32 - F B = 2 bits: bit j of that string (word 0 bits 30, 31, word 1 bits 30, 31, ..) is bit j % B of
+// stream position F B + j / B.
+
+template <int FMT>
+struct mfield
+{
+    static constexpr int B     = traits<FMT>::lo + traits<FMT>::hi;
+    static constexpr int F     = 32 / B;
+    static constexpr int clean = 32 % B == 0 ? 32 : F * B; // stream positions with their field in one word
+};
+
+constexpr int mrow(const int k)
+{
+    return 16 * (k / 8 % 2) + 8 * (k / 16) + k % 8;
+}
+
+template <int FMT, int CP>
+constexpr int mbase()
+{
+    return traits<FMT>::pair ? CP * mfield<FMT>::B : 0;
+}
+
+template <int FMT, int CP>
+constexpr int mword(const int k)
+{
+    using M = mfield<FMT>;
+    return mbase<FMT, CP>() + (32 % M::B == 0 ? mrow(k) / M::F : k / M::F);
+}
+
+template <int FMT>
+constexpr int mlsb(const int k)
+{
+    using M = mfield<FMT>;
+    return M::B * (32 % M::B == 0 ? mrow(k) % M::F : k % M::F);
+}
 
 // Field f (LO bits wide) of word w, as an unsigned value: two shifts, one for the top field (no mask constant).
 template <int LO>
@@ -925,94 +963,46 @@ sfpi_inline vUInt field(const vUInt w, const int f)
     return (w << static_cast<unsigned>(32 - LO - LO * f)) >> static_cast<unsigned>(32 - LO);
 }
 
-// Field extraction from code words already in LRegs: lo_w holds output o's low-plane word, hi_w its high-plane word.
-// Programmable constant 1 (code_init): the high-plane field's mask at bits LO .. LO + HI - 1, or Q8_0's 0x80.
-template <int FMT>
-sfpi_inline vUInt code_from(const int o, const vUInt lo_w, const vUInt hi_w)
+// Code of row o, unsigned, from DEST (B not dividing 32).
+template <int FMT, int CP>
+sfpi_inline vUInt code_of(const int o)
 {
-    using T = traits<FMT>;
-    vUInt q = field<T::lo>(lo_w, o % (32 / T::lo));
-    if constexpr (T::hi > 0)
+    using M     = mfield<FMT>;
+    const int k = mrow(o);
+    if (k < M::clean)
     {
-        // The field's bits moved to bits LO .. LO + HI - 1, the others masked off.
-        const int at = T::hi * (o % (32 / T::hi)) - T::lo;
-        vUInt hs     = hi_w;
-        if (at > 0)
-        {
-            hs = hi_w >> static_cast<unsigned>(at);
-        }
-        else if (at < 0)
-        {
-            hs = hi_w << static_cast<unsigned>(-at);
-        }
-        q = q | (hs & sfpi::as<vUInt>(sfpi::vConstIntPrgm1));
+        return bits(ldu(CO + mword<FMT, CP>(k)), mlsb<FMT>(k), M::B);
     }
-    if constexpr (FMT == Q8_0)
+    const int j0 = M::B * (k - M::clean);
+    vUInt q      = 0;
+#pragma GCC unroll 4
+    for (int j = j0; j < j0 + M::B; j = j / 2 * 2 + 2)
     {
-        q = q ^ sfpi::as<vUInt>(sfpi::vConstIntPrgm1); // int8 -> offset binary; M = -128 S
+        const int n       = (j / 2 * 2 + 2 < j0 + M::B ? j / 2 * 2 + 2 : j0 + M::B) - j;
+        const vUInt piece = bits(ldu(CO + mbase<FMT, CP>() + j / 2), M::F * M::B + j % 2, n);
+        q                 = q | (j == j0 ? piece : piece << static_cast<unsigned>(j - j0));
     }
     return q;
 }
 
-template <int FMT>
-sfpi_inline void code_init()
+// Code of row o, unsigned; w holds the row's code word when B divides 32. Q8_0: offset binary (M = -128 S) through
+// programmable constant 1 = 0x80.
+template <int FMT, int CP>
+sfpi_inline vUInt code_at(const int o, const vUInt w)
 {
-    using T = traits<FMT>;
-    if constexpr (T::hi > 0)
+    using M = mfield<FMT>;
+    if constexpr (32 % M::B != 0)
     {
-        sfpi::vConstIntPrgm1 = ((1 << T::hi) - 1) << T::lo;
+        return code_of<FMT, CP>(o);
     }
     else if constexpr (FMT == Q8_0)
     {
-        sfpi::vConstIntPrgm1 = 0x80;
-    }
-}
-
-// Q3_K code of output o, 3-bit fields: group g = o / 8 < 3 at bit 3 (o % 8) of word g, group
-// 3 in the top byte of words 0..2 (w0, w1, w2; for g < 3 all three are word g).
-sfpi_inline vUInt q3k_code(const int o, const vUInt w0, const vUInt w1, const vUInt w2)
-{
-    const int k = o % 8;
-    if (o < 24)
-    {
-        return bits(w0, 3 * k, 3);
-    }
-    if (k < 6)
-    {
-        return bits(k < 2 ? w0 : k < 4 ? w1 : w2, 24 + 3 * (k % 2), 3);
-    }
-    if (k == 6)
-    {
-        return (w0 >> 30u) | (bits(w1, 30, 1) << 2u);
-    }
-    return (w1 >> 31u) | ((w2 >> 30u) << 1u);
-}
-
-template <int FMT>
-sfpi_inline vUInt code_at(const int o, const int s, const vUInt l0, const vUInt l1, const vUInt hw)
-{
-    if constexpr (FMT == Q3_K)
-    {
-        return q3k_code(o, l0, l1, hw);
+        return field<M::B>(w, o % M::F) ^ sfpi::as<vUInt>(sfpi::vConstIntPrgm1);
     }
     else
     {
-        return code_from<FMT>(o, s < 2 ? l0 : l1, hw);
+        return field<M::B>(w, o % M::F);
     }
-}
-
-template <int FMT, int CP>
-sfpi_inline int lo_wv(const int o)
-{
-    using T = traits<FMT>;
-    return (T::pair ? CP * T::lo : 0) + o / (32 / T::lo);
-}
-
-template <int FMT, int CP>
-sfpi_inline int hi_wv(const int o)
-{
-    using T = traits<FMT>;
-    return (T::pair ? 2 * T::lo + CP : T::lo) + o / (32 / (T::hi > 0 ? T::hi : 1));
 }
 
 // IQ4_NL value table: round(P4(q)) with P4 = minimax fit whose constant term is the integer -127 (max error 0.4397,
@@ -1057,9 +1047,10 @@ template <int FMT, int CP>
 sfpi_inline void body()
 {
     using T = traits<FMT>;
-    if constexpr (T::linear && FMT != Q3_K)
+    using M = mfield<FMT>;
+    if constexpr (FMT == Q8_0)
     {
-        code_init<FMT>();
+        sfpi::vConstIntPrgm1 = 0x80;
     }
     vFloat c1  = 0.0f;
     vFloat c0r = 0.0f;
@@ -1074,26 +1065,14 @@ sfpi_inline void body()
 #pragma GCC unroll 2
         for (int h = 0; h < 2; h++)
         {
-            // The 8 outputs of (a, h) read at most two low-plane words (one unless 8-bit) and one high-plane word; Q3_K
-            // reads its group's word, or all three for group 3.
+            // When B divides 32, the 8 outputs of (a, h) read one code word (two for 8-bit codes); otherwise code_of
+            // reads each output's code from DEST.
             const int o0 = 16 * h + 8 * a;
-            vUInt l0, l1, hw;
-            if constexpr (FMT == Q3_K)
+            vUInt l0, l1;
+            if constexpr (32 % M::B == 0)
             {
-                const int g = o0 / 8;
-                l0          = ldu(CO + 3 * CP + (g < 3 ? g : 0));
-                l1          = g < 3 ? l0 : ldu(CO + 3 * CP + 1);
-                hw          = g < 3 ? l0 : ldu(CO + 3 * CP + 2);
-            }
-            else
-            {
-                l0 = ldu(CO + lo_wv<FMT, CP>(o0));
-                l1 = T::lo == 8 ? ldu(CO + lo_wv<FMT, CP>(o0 + 4)) : l0;
-                hw = l0;
-                if constexpr (T::hi > 0)
-                {
-                    hw = ldu(CO + hi_wv<FMT, CP>(o0));
-                }
+                l0 = ldu(CO + mbase<FMT, CP>() + o0 / M::F);
+                l1 = M::B == 8 ? ldu(CO + mbase<FMT, CP>() + (o0 + 4) / M::F) : l0;
             }
 #pragma GCC unroll 2
             for (int b = 0; b < 2; b++)
@@ -1113,8 +1092,8 @@ sfpi_inline void body()
                     const int ob = oa + 2;
                     if constexpr (T::linear)
                     {
-                        const vFloat xa   = ufloat(code_at<FMT>(oa, s, l0, l1, hw));
-                        const vFloat xb   = ufloat(code_at<FMT>(ob, s, l0, l1, hw));
+                        const vFloat xa   = ufloat(code_at<FMT, CP>(oa, s < 2 ? l0 : l1));
+                        const vFloat xb   = ufloat(code_at<FMT, CP>(ob, s < 2 ? l0 : l1));
                         const vFloat va   = xa * S + M;
                         const vFloat vb   = xb * S + M;
                         sfpi::dst_reg[oa] = va;
@@ -1122,8 +1101,8 @@ sfpi_inline void body()
                     }
                     else if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
                     {
-                        const vFloat xa = ufloat(code_from<FMT>(oa, l0, hw));
-                        const vFloat xb = ufloat(code_from<FMT>(ob, l0, hw));
+                        const vFloat xa = ufloat(field<4>(l0, oa % 8));
+                        const vFloat xb = ufloat(field<4>(l0, ob % 8));
                         vFloat pa       = xa * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
                         vFloat pb       = xb * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
                         pa              = pa * xa + sfpi::vConstFloatPrgm2;
@@ -1154,9 +1133,11 @@ sfpi_inline void body()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Q4_0, Q4_1 and Q4_K: body() through SFPLOADMACRO, with the same arithmetic. Per output, a macro on the output's row
-// runs q >> 28, its conversion to fp32, S q + M into LReg16 and the store of LReg16, while the regular instruction
-// after the macro moves the output's field to the top of the code word. ttsim does not model the macros: under
+// body() of the linear formats but Q8_0 and TQ1_0 through SFPLOADMACRO, with the same arithmetic. Per output, a macro
+// on the output's row runs q >> (32 - B), its conversion to fp32, S q + M into LReg16 and the store of LReg16, while
+// the regular instruction after the macro moves the output's field to the top of its code word. Each output takes
+// three slots: the macro, the shift and one without a Simple instruction, where the macro's Round-unit shift runs (a
+// Simple and a Round instruction in one cycle must not both write LRegs 0..7). ttsim does not model the macros: under
 // DISABLE_SFPLOADMACRO these formats use body().
 
 #ifdef DISABLE_SFPLOADMACRO
@@ -1166,12 +1147,15 @@ constexpr bool LOADMACRO = true;
 #endif
 
 template <int FMT>
-constexpr bool macro_body = LOADMACRO && (FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K);
+constexpr bool macro_q4 = FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K;
+
+template <int FMT>
+constexpr bool macro_body = LOADMACRO && traits<FMT>::linear && FMT != Q8_0 && FMT != TQ1_0;
 
 constexpr std::uint32_t LOAD_NONE      = 11; // SFPLOAD mode that loads nothing: the macro only takes the row
 constexpr std::uint32_t SHIFT_IMM_OF_C = 5;  // SFPSHFT: VD = LReg[VC] shifted by the immediate
 
-// Instruction templates: 0 = x >> 28 (amount in LReg14), 1 = int to fp32, 2 / 3 = S x + M with S, M in L4, L5 /
+// Instruction templates: 0 = x >> (32 - B) (amount in LReg14), 1 = int to fp32, 2 / 3 = S x + M with S, M in L4, L5 /
 // L6, L7. Macro b (column half b) runs the shift, cast, MAD (into LReg16) and store of LReg16 1, 2, 3 and 5
 // instructions after it.
 template <int FMT>
@@ -1179,7 +1163,7 @@ inline void macro_init()
 {
     if constexpr (macro_body<FMT>)
     {
-        sfpi::vConstIntPrgm2 = -28;
+        sfpi::vConstIntPrgm2 = mfield<FMT>::B - 32;
         TTI_SFPSHFT2(0, 14, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(0, 13, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
         TTI_SFPMAD(4, 0, 5, 14, sfpi::SFPMAD_MOD1_OFFSET_NONE);
@@ -1199,11 +1183,10 @@ inline void macro_init()
     }
 }
 
-// Output field i of code word 2h + a (L3) through macro i % 2, with L0..L2 in turn. Each output takes three slots: the
-// macro, the shift and one without a Simple instruction, where its Round-unit shift runs (a Simple and a Round
-// instruction in one cycle must not both write LRegs 0..7); that slot loads the next code word or S, M when due. S, M
-// of the next a load once the MADs reading the old ones have run; the last store runs before the body returns.
-sfpi_inline void body_macro()
+// Q4_0, Q4_1 and Q4_K: output field i of code word 2h + a (L3) through macro i % 2, with L0..L2 in turn. The third slot
+// loads the next code word or S, M when due. S, M of the next a load once the MADs reading the old ones have run; the
+// last store runs before the body returns.
+sfpi_inline void body_macro_q4()
 {
     TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * CO);
     TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 0, 0)));
@@ -1247,6 +1230,223 @@ sfpi_inline void body_macro()
     {
         TTI_SFPNOP;
     }
+}
+
+// The other macro formats: an issue stream planned at compile time (make_mplan), output by output in stream order k.
+// Code-word and S / M loads go into third slots once their register is free and before their first reader, into extra
+// slots where no third slot is left. v alternates L0 / L1, code words L3 / L2 (one load per word), S / M of column half
+// b sit in L4 / L5 (b = 0) and L6 / L7 (b = 1).
+
+enum : int
+{
+    MS_NOP,
+    MS_MACRO, // macro x (column half), v = LReg y, row z
+    MS_SHIFT, // v x = word register y << z
+    MS_LOAD,  // register x, SFPLOAD mode y, row z
+};
+
+enum : int
+{
+    MT_WORD,
+    MT_PARAM,
+};
+
+enum : int
+{
+    MA_NONE,
+    MA_SHIFT, // stream position dep's shift has run
+    MA_MAD,   // stream position dep's MAD has run
+};
+
+struct mslot
+{
+    int kind, x, y, z;
+};
+
+struct mtask
+{
+    int kind, k, reg, row, after, dep, late, done;
+};
+
+constexpr int MSLOTS = 144;
+
+struct mplan
+{
+    mslot s[MSLOTS];
+    int n;
+};
+
+// Task x may run in slot t: its register is free.
+constexpr bool mready(const mtask& x, const int* T, const int t)
+{
+    switch (x.after)
+    {
+        case MA_SHIFT:
+            return T[x.dep] >= 0 && t > T[x.dep] + 1;
+        case MA_MAD:
+            return T[x.dep] >= 0 && t > T[x.dep] + 4;
+        default:
+            return true;
+    }
+}
+
+// Last slot task x may take if stream position knext's macro issues in slot tnext and every later one 3 slots on:
+// before its position's macro, or for the second S / M load up to that position's third slot.
+constexpr int mdeadline(const mtask& x, const int tnext, const int knext)
+{
+    return tnext + 3 * (x.k - knext) + (x.late ? 2 : -1);
+}
+
+// The ready task with the earliest deadline (S / M loads first on ties, else in creation order); -1 if none.
+constexpr int mpick(const mtask* tk, const int nt, const int* T, const int t, const int knext)
+{
+    int best = -1;
+    for (int i = 0; i < nt; i++)
+    {
+        if (tk[i].done >= 0 || !mready(tk[i], T, t))
+        {
+            continue;
+        }
+        if (best < 0)
+        {
+            best = i;
+            continue;
+        }
+        const int d  = mdeadline(tk[i], t + 1, knext);
+        const int db = mdeadline(tk[best], t + 1, knext);
+        if (d < db || (d == db && tk[i].kind == MT_PARAM && tk[best].kind != MT_PARAM))
+        {
+            best = i;
+        }
+    }
+    return best;
+}
+
+template <int FMT, int CP>
+constexpr mplan make_mplan()
+{
+    using M = mfield<FMT>;
+    mplan p {};
+    mtask tk[48] {};
+    int nt = 0;
+    int wreg[32] {};
+    // Code words, one load per change of word, alternating L3 / L2.
+    for (int k = 0, r = 2; k < M::clean; k++)
+    {
+        if (k == 0 || mword<FMT, CP>(k) != mword<FMT, CP>(k - 1))
+        {
+            r       = 5 - r;
+            int dep = -1;
+            for (int j = 0; j < k; j++)
+            {
+                dep = wreg[j] == r ? j : dep;
+            }
+            tk[nt++] = {MT_WORD, k, r, CO + mword<FMT, CP>(k), dep < 0 ? MA_NONE : MA_SHIFT, dep, 0, -1};
+        }
+        wreg[k] = r;
+    }
+    // S, M of column half b = k % 2 whenever its scale group (a, h) changes.
+    for (int k = 0, last[2] = {-1, -1}, group[2] = {-1, -1}; k < M::clean; k++)
+    {
+        const int b = k % 2, a = k / 16, h = traits<FMT>::has_h ? k / 8 % 2 : 0;
+        if (group[b] != 2 * a + h)
+        {
+            const int after = last[b] < 0 ? MA_NONE : MA_MAD;
+            tk[nt++]        = {MT_PARAM, k, 4 + 2 * b, PS + pidx(a, b, h), after, last[b], 0, -1};
+            tk[nt++]        = {MT_PARAM, k, 5 + 2 * b, PM + pidx(a, b, h), after, last[b], 1, -1};
+        }
+        last[b]  = k;
+        group[b] = 2 * a + h;
+    }
+    int T[32] {};
+    for (int k = 0; k < 32; k++)
+    {
+        T[k] = -1;
+    }
+    const auto issue = [&](const int i)
+    {
+        if (i < 0)
+        {
+            p.s[p.n++] = {MS_NOP, 0, 0, 0};
+            return;
+        }
+        tk[i].done     = p.n;
+        const int mode = tk[i].kind == MT_WORD ? sfpi::SFPLOAD_MOD0_FMT_INT32 : sfpi::SFPLOAD_MOD0_FMT_SRCB;
+        p.s[p.n++]     = {MS_LOAD, tk[i].reg, mode, tk[i].row};
+    };
+    for (int k = 0; k < M::clean; k++)
+    {
+        // Extra slots until every task of position k but its second S / M loads has run.
+        for (;;)
+        {
+            bool due = false;
+            for (int i = 0; i < nt; i++)
+            {
+                due = due || (tk[i].done < 0 && tk[i].k <= k && !tk[i].late);
+            }
+            if (!due)
+            {
+                break;
+            }
+            issue(mpick(tk, nt, T, p.n, k));
+        }
+        T[k]       = p.n;
+        p.s[p.n++] = {MS_MACRO, k % 2, k % 2, mrow(k)};
+        p.s[p.n++] = {MS_SHIFT, k % 2, wreg[k], 32 - M::B - mlsb<FMT>(k)};
+        issue(mpick(tk, nt, T, p.n, k + 1));
+    }
+    for (int i = 0; i < 4; i++)
+    {
+        p.s[p.n++] = {MS_NOP, 0, 0, 0};
+    }
+    return p;
+}
+
+template <int FMT, int CP>
+constexpr mplan mplan_v = make_mplan<FMT, CP>();
+
+template <int FMT, int CP, int I>
+sfpi_inline void mslot_issue()
+{
+    constexpr mslot s = mplan_v<FMT, CP>.s[I];
+    if constexpr (s.kind == MS_MACRO)
+    {
+        TTI_SFPLOADMACRO((s.x << 2) | s.y, LOAD_NONE, ADDR_MOD_7, 2 * s.z);
+    }
+    else if constexpr (s.kind == MS_SHIFT)
+    {
+        TTI_SFPSHFT(s.z, s.y, s.x, SHIFT_IMM_OF_C);
+    }
+    else if constexpr (s.kind == MS_LOAD)
+    {
+        TTI_SFPLOAD(s.x, s.y, ADDR_MOD_7, 2 * s.z);
+    }
+    else
+    {
+        TTI_SFPNOP;
+    }
+}
+
+template <int FMT, int CP, int... I>
+sfpi_inline void mslots_issue(std::integer_sequence<int, I...>)
+{
+    (mslot_issue<FMT, CP, I>(), ...);
+}
+
+// The split rows (B not dividing 32) through body()'s arithmetic, then the planned stream.
+template <int FMT, int CP>
+sfpi_inline void body_macro()
+{
+    using M = mfield<FMT>;
+#pragma GCC unroll 2
+    for (int k = M::clean; k < 32; k++)
+    {
+        const int o      = mrow(k);
+        const int pi     = pidx(o / 8 % 2, o % 2, traits<FMT>::has_h ? o / 16 : 0);
+        const vFloat x   = ufloat(code_of<FMT, CP>(o));
+        sfpi::dst_reg[o] = x * sfpi::dst_reg[PS + pi] + sfpi::dst_reg[PM + pi];
+    }
+    mslots_issue<FMT, CP>(std::make_integer_sequence<int, mplan_v<FMT, CP>.n> {});
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1437,9 +1637,13 @@ inline void _calculate_gguf_decode_body_()
     {
         tq1_0_body<TI>();
     }
+    else if constexpr (macro_body<FMT> && macro_q4<FMT>)
+    {
+        body_macro_q4();
+    }
     else if constexpr (macro_body<FMT>)
     {
-        body_macro();
+        body_macro<FMT, traits<FMT>::pair ? TI % 2 : 0>();
     }
     else
     {
