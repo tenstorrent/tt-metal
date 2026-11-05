@@ -165,9 +165,6 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
 
-      # --perf-splits weighs each test by the durations the last green nightly of the same
-      # mode measured, fetched once here so every job of this run cuts the same list. On any
-      # failure the legs fall back to perf_split_costs*.json.
       - name: Fetch test durations from the nightly
         id: durations
         continue-on-error: true
@@ -284,7 +281,6 @@ jobs:
           archive: false
           retention-days: 1
           if-no-files-found: error
-      # With offload the board does not compile, so the compile time of the shard is this file.
       - name: Upload test durations
         if: ${{ inputs.offload-compile }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only checks for the --perf-splits cut and the per-test durations it reads."""
 
 from __future__ import annotations
 
@@ -45,7 +44,6 @@ def test_a_test_without_a_duration_weighs_the_mean(tmp_path, monkeypatch):
     path = tmp_path / "blackhole.json"
     path.write_text(json.dumps({TESTS[0]: 1.0, TESTS[1]: 1.0, TESTS[2]: 4.0}))
     monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
-    # perf_b weighs 2 s, the mean; t[3]'s midpoint is at 4 s of 8 s, in the second chunk.
     assert _cut(_items(*TESTS), 2, 2) == TESTS[2:]
 
 
@@ -59,7 +57,6 @@ def test_without_durations_the_module_table_is_used(env, monkeypatch):
         TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
     )
     monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
-    # Neither module is in the table, so each weighs 1 s in total.
     assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
     assert _cut(_items(*TESTS), 2, 2) == TESTS[3:]
 

@@ -113,9 +113,6 @@ jobs:
           print(f"Hardware legs: {len(kept)} (dropped {len(rows) - len(kept)} simulator legs)")
           PY
 
-      # pytest-split (--splits) cuts by test count unless it finds .test_durations. Take
-      # them from the newest green push run on main, once here, so every leg cuts the
-      # same list. On any failure the legs cut by test count, as before.
       - name: Fetch test durations from main
         id: durations
         continue-on-error: true
@@ -188,7 +185,6 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
-          # Each leg writes the durations of its own tests; main's push runs feed the split.
           PYTEST_ADDOPTS: --store-durations --clean-durations
         run: |
           ${{ matrix.test-group.cmd }}
