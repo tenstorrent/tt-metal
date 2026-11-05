@@ -15,8 +15,8 @@ stop page ends every kernel so the device closes normally.
 """
 
 import itertools
+import os
 import time
-
 import pytest
 import torch
 from loguru import logger
@@ -133,10 +133,11 @@ class PersistentMoE:
 
     The layer table holds each layer's buffer addresses in the row layout the op reads; the op itself is launched
     on layer 0's tensors, whose layouts every layer shares. Call it with ``(layer, row)`` to run that layer on one
-    ``[D]`` row, and :meth:`stop` once to end the kernels.
+    ``[D]`` row, and :meth:`stop` once to end the kernels. ``h2d_mode`` is the H2D sockets' mode: under
+    ``DEVICE_PULL`` a host write is a memcpy into pinned memory and the control kernel reads the page over PCIe.
     """
 
-    def __init__(self, device, moes, socket_core):
+    def __init__(self, device, moes, socket_core, h2d_mode=ttnn.H2DMode.HOST_PUSH):
         self.device = device
         self.hidden = moes[0].hidden
         self.row_bytes = self.hidden * 2
@@ -195,7 +196,7 @@ class PersistentMoE:
                     ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, c), socket_core),
                     ttnn.BufferType.L1,
                     page_bytes,
-                    ttnn.H2DMode.HOST_PUSH,
+                    h2d_mode,
                 )
                 socket.set_page_size(page_bytes)
                 self.h2d.append(socket)
@@ -229,6 +230,7 @@ class PersistentMoE:
             persistent_socket_core=socket_core,
             persistent_h2d_socket_addresses=[s.get_config_buffer_address() for s in self.h2d],
             persistent_d2h_socket_address=self.d2h.get_config_buffer_address(),
+            persistent_h2d_device_pull=h2d_mode == ttnn.H2DMode.DEVICE_PULL,
         )
 
     def _send(self, layer: int, row: torch.Tensor):
@@ -294,8 +296,9 @@ def _load_layers(device, config):
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH, ttnn.H2DMode.DEVICE_PULL], ids=["push", "pull"])
 @torch.no_grad()
-def test_moe_persistent_tp12(mesh_device):
+def test_moe_persistent_tp12(mesh_device, h2d_mode):
     device, config, socket_core = _setup(mesh_device)
     layers, moes = _load_layers(device, config)
 
@@ -322,7 +325,7 @@ def test_moe_persistent_tp12(mesh_device):
         ttnn.deallocate(out)
     ttnn.synchronize_device(device)
 
-    moe_op = PersistentMoE(device, moes, socket_core)
+    moe_op = PersistentMoE(device, moes, socket_core, h2d_mode)
     outs = []
     try:
         for s, layer in enumerate(STEPS):
@@ -375,12 +378,16 @@ def test_moe_persistent_tp12_perf(mesh_device):
     - one-shot eager: upload, ``decode_static`` dispatched op by op, read chip 0;
     - one-shot traced: upload, replay that layer's trace, read chip 0 -- the model's decode today;
     - one-shot traced, device only: back-to-back replays with no host I/O, total / count;
-    - persistent: the H2D page in, the reduced row out of the D2H socket.
+    - persistent: the H2D page in, the reduced row out of the D2H socket; with HOST_PUSH and DEVICE_PULL sockets.
+
+    ``MOE_PERF_WARMUP`` / ``MOE_PERF_STEPS`` override the step counts, e.g. to keep a device-profiler capture
+    (``TT_METAL_STREAMING_PROFILER=1``) small.
     """
     device, config, socket_core = _setup(mesh_device)
     _, moes = _load_layers(device, config)
     hidden = config.hidden_size
-    warmup, steps = 20, 270
+    warmup = int(os.environ.get("MOE_PERF_WARMUP", 20))
+    steps = int(os.environ.get("MOE_PERF_STEPS", 270))
     order = [STEPS[i % len(STEPS)] for i in range(warmup + steps)]
     torch.manual_seed(0)
     rows = torch.randn(len(order), hidden).to(torch.bfloat16)
@@ -450,15 +457,28 @@ def test_moe_persistent_tp12_perf(mesh_device):
         ttnn.deallocate(t)
     ttnn.synchronize_device(device)
 
-    moe_op = PersistentMoE(device, moes, socket_core)
-    persistent = []
-    try:
-        for i, layer in enumerate(order):
-            start = time.perf_counter()
-            moe_op(layer, rows[i])
-            persistent.append(time.perf_counter() - start)
-    finally:
-        moe_op.stop()
-    results.append(_latency("persistent (H2D page + loop + D2H row)", persistent[warmup:]))
+    out = torch.zeros(hidden, dtype=torch.bfloat16)
+    for mode, mode_name in ((ttnn.H2DMode.HOST_PUSH, "push"), (ttnn.H2DMode.DEVICE_PULL, "pull")):
+        moe_op = PersistentMoE(device, moes, socket_core, mode)
+        persistent = []
+        sends = []
+        try:
+            for i, layer in enumerate(order):
+                start = time.perf_counter()
+                moe_op._send(layer, rows[i])
+                sent = time.perf_counter()
+                moe_op.d2h.read_tensor(out)
+                persistent.append(time.perf_counter() - start)
+                sends.append(sent - start)
+        finally:
+            moe_op.stop()
+        results.append(_latency(f"persistent, H2D {mode_name} (page + loop + D2H row)", persistent[warmup:]))
+        results.append(_latency(f"  of which host writes to {len(moe_op.h2d)} H2D sockets", sends[warmup:]))
+        results.append(
+            _latency("  of which waiting on the D2H row", [p - s for p, s in zip(persistent[warmup:], sends[warmup:])])
+        )
+        # The next launch's sockets and scratch take the same L1.
+        del moe_op
+        ttnn.synchronize_device(device)
 
     logger.info("MoE TP12 per-token latency, layers interleaved " + str(STEPS) + ":\n" + "\n".join(results))

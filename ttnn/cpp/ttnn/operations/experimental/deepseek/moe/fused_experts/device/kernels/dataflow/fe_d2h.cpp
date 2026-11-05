@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/socket_api.h"
 
 // The persistent op's output to the host (RISCV_1 of the root chip's control core, NoC 1). Iteration i's
@@ -45,21 +46,25 @@ void kernel_main() {
         // The stop comes only once every page's shards are in, so a count that is still short at the
         // stop means there is no such page.
         bool stopped = false;
-        while (true) {
-            invalidate_l1_cache();
-            if (*count >= num_out_cores * (page + 1u)) {
-                break;
-            }
-            const uint32_t s = *stop;
-            if ((s & kStopBit) != 0u && (s & ~kStopBit) == page) {
-                stopped = true;
-                break;
+        {
+            DeviceZoneScopedN("FE_D2H_SHARDS_WAIT");
+            while (true) {
+                invalidate_l1_cache();
+                if (*count >= num_out_cores * (page + 1u)) {
+                    break;
+                }
+                const uint32_t s = *stop;
+                if ((s & kStopBit) != 0u && (s & ~kStopBit) == page) {
+                    stopped = true;
+                    break;
+                }
             }
         }
         if (stopped) {
             break;
         }
 
+        DeviceZoneScopedN("FE_D2H_PUSH");
         socket_reserve_pages(d2h, 1);
         uint32_t src = staging_addr + (page & 1u) * row_bytes;
         uint64_t dst = pcie_base + d2h.write_ptr;

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Rust host runtime (``host_rs/``, the ``dsv41_host`` extension) from Python.
 
-With ``DEEPSEEK_V41_RUST_HOST=1`` the model hands its per-step host work to native threads that never take the GIL:
+With the Rust host runtime on (the default; ``DEEPSEEK_V41_RUST_HOST=0`` turns it off, and so does a missing
+``dsv41_host`` extension) the model hands its per-step host work to native threads that never take the GIL:
 
 * :class:`RustEngramLookup` is :class:`~.engram_lookup.EngramHostLookup` with the hashing, the per-session token
   histories and the table reads in Rust (bit-exact; the checkpoint-derived constants still come from
@@ -33,8 +34,11 @@ _module = None
 
 
 def enabled() -> bool:
-    """Whether ``DEEPSEEK_V41_RUST_HOST`` asks for the Rust host runtime."""
-    return os.environ.get("DEEPSEEK_V41_RUST_HOST", "0") not in ("0", "", "false", "False")
+    """Whether the Rust host runtime is used: the default, unless ``DEEPSEEK_V41_RUST_HOST`` turns it off, or the
+    extension is not built (then the Python lookup and the traced-replay path serve, as they always did)."""
+    if os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") in ("0", "", "false", "False"):
+        return False
+    return _EXTENSION.is_file()
 
 
 def module():

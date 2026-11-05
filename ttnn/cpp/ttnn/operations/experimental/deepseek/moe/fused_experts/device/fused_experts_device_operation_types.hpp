@@ -41,6 +41,9 @@ struct FusedPersistentParams {
     // Per chip of the mesh, in row-major order.
     std::vector<uint32_t> h2d_socket_config_addresses;
     uint32_t d2h_socket_config_address{};
+    // The H2D sockets are DEVICE_PULL: the host only stages each page in pinned host RAM, and the control
+    // core reads it over PCIe. Otherwise HOST_PUSH, the page already in the control core's L1.
+    bool h2d_device_pull{};
 };
 
 // Non-tensor parameters of the fused routed-expert FFN.

@@ -109,7 +109,11 @@ snippet), ``p`` pauses the scroll,
   user turn is fed; anything else (a first turn, a foreign client, an edited
   history) rewinds the session and re-prefills from the request, so a client that
   keeps its own full history always stays consistent with the server.
-* ``max_tokens`` caps the reply (default: the engine-wide ``--max-new-tokens``);
+* ``max_tokens`` caps the reply (default: the engine-wide ``--max-new-tokens``), under either
+  its legacy name or OpenAI's ``max_completion_tokens`` (which the OpenAI SDKs and AIPerf/AgentX send);
+  ``ignore_eos`` (``false`` by default) keeps generating past the EOS token, so a reply runs to
+  ``max_tokens`` or the context instead of ending early (a benchmark's fixed-length run); the EOS
+  tokens it runs through are dropped from the reply's text, as vLLM's detokenizer drops them;
   ``temperature`` / ``top_p`` sample from the per-step logits (default: the
   server's ``--temperature``, unset = greedy argmax). ``thinking`` and ``reasoning_effort`` are DeepSeek extensions
   that switch that session to the thinking template. ``thinking`` is ``true`` / ``false`` or
@@ -325,7 +329,17 @@ def _describe_request(completion_id: str, client: str, user_key: str, body: dict
     """
     options = {
         key: body[key]
-        for key in ("model", "stream", "max_tokens", "temperature", "top_p", "thinking", "reasoning_effort")
+        for key in (
+            "model",
+            "stream",
+            "max_tokens",
+            "max_completion_tokens",
+            "ignore_eos",
+            "temperature",
+            "top_p",
+            "thinking",
+            "reasoning_effort",
+        )
         if body.get(key) is not None
     }
     messages = [m for m in body.get("messages") or [] if isinstance(m, dict)]
@@ -612,13 +626,25 @@ class _Streamer:
     A DSML tool-call block is held back the same way and never streamed as content: it
     is markup addressed to the client's tool runner, not prose for the reader. What it
     describes is parsed into OpenAI ``tool_calls`` and left on :attr:`tool_calls`.
+
+    ``omit_ids`` (a turn's EOS, when it generates past it) are dropped before decoding, as
+    vLLM's detokenizer drops special tokens: an EOS the turn was told to ignore is not part
+    of the reply, and a client echoing the reply back should not see it in ``content``.
     """
 
-    def __init__(self, tokenizer, on_chunk, chat_format: ChatFormat, thinking: bool = False):
+    def __init__(
+        self,
+        tokenizer,
+        on_chunk,
+        chat_format: ChatFormat,
+        thinking: bool = False,
+        omit_ids: frozenset[int] = frozenset(),
+    ):
         self.tokenizer = tokenizer
         self.on_chunk = on_chunk
         self.chat_format = chat_format
         self.thinking = thinking
+        self.omit_ids = omit_ids
         self.text = ""  # raw decoded reply, tags included, no escapes
         self.reasoning = ""
         self.content = ""
@@ -627,6 +653,8 @@ class _Streamer:
         self._sent_c = 0
 
     def push(self, token_ids) -> None:
+        if self.omit_ids:
+            token_ids = [token_id for token_id in token_ids if token_id not in self.omit_ids]
         full = self.tokenizer.decode(token_ids, skip_special_tokens=False).rstrip("\ufffd")
         self.text = full
         held = self._held_back(full)
@@ -1323,6 +1351,8 @@ class _Turn:
         self.body = body
         self.sampler = sampler
         self.max_tokens = max_tokens
+        # Keep decoding past EOS, so the reply runs to ``max_tokens`` (a fixed-length benchmark run).
+        self.ignore_eos = bool(body.get("ignore_eos", False))
         # The turn this request adds. After normalisation it is always a user message,
         # though it may carry tool results as content blocks rather than plain text.
         self.message = body["messages"][-1]
@@ -1853,6 +1883,8 @@ class _Scheduler:
             lambda r, c: turn.events.put(("delta", r, c)),
             self.engine.chat_format,
             thinking=user.thinking_mode == "thinking",
+            # A turn that generates past EOS keeps decoding: the EOS tokens it runs through are not its text.
+            omit_ids=frozenset({self.engine.eos_id}) if turn.ignore_eos else frozenset(),
         )
         self._active.append(turn)
         if turn.resumed_from:
@@ -2365,7 +2397,7 @@ class _Scheduler:
     def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
         """The steps this turn dispatches now, as ``(token_id, pos, last_prompt_token)``.
 
-        Touches no device state, but finishes a turn that is done (EOS, its ``max_tokens``,
+        Touches no device state, but finishes a turn that is done (EOS unless ``ignore_eos``, its ``max_tokens``,
         the context, or stopped).
         """
         engine = self.engine
@@ -2391,7 +2423,7 @@ class _Scheduler:
             return [(int(turn.ids[turn.fed + i]), user.pos + i, turn.fed + i + 1 == len(turn.ids)) for i in range(n)]
         if turn.pending:
             return []
-        if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
+        if turn.cancelled.is_set() or (turn.next_id == engine.eos_id and not turn.ignore_eos):
             self._finish(turn)
             return []
         if len(turn.generated) >= turn.max_tokens or user.pos >= engine.max_seq - 1:
@@ -2913,7 +2945,11 @@ class GenerationServer:
         messages = self.normalized_messages(body)
         body = {**body, "messages": messages}
 
-        max_tokens = body.get("max_tokens")
+        # ``max_completion_tokens`` is OpenAI's current name for the same cap, and what the
+        # OpenAI Python client and AIPerf/AgentX send (``--use-legacy-max-tokens`` is what sends
+        # ``max_tokens``). Reading only the legacy name dropped every such cap silently, so the
+        # reply ran to EOS -- or, with ``ignore_eos``, to the whole context.
+        max_tokens = body.get("max_tokens", body.get("max_completion_tokens"))
         if max_tokens is None:
             max_tokens = self.engine.max_new_tokens
         else:
@@ -2923,6 +2959,10 @@ class GenerationServer:
                 raise RequestError(400, "max_tokens must be a positive integer")
             if max_tokens < 1:
                 raise RequestError(400, "max_tokens must be a positive integer")
+
+        ignore_eos = body.get("ignore_eos", False)
+        if not isinstance(ignore_eos, bool):
+            raise RequestError(400, f"ignore_eos must be a boolean, but got {ignore_eos!r}")
 
         # A request may override the server-wide default, unless the device is sampling (see below).
         request_temperature, request_top_p = body.get("temperature"), body.get("top_p")
