@@ -260,3 +260,48 @@ def test_zero_blocks_zeroes_only_the_listed_blocks(device, block):
                 assert not host[b].any(), f"{name} block {b} was not zeroed"
             else:
                 assert torch.equal(host[b], torch.ones_like(host[b])), f"{name} block {b} changed"
+
+
+@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
+def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout):
+    """run_chain_copies with the counts on the device (a chained step's state_chain_copies_per_layer): a row whose
+    count selects its copy gets the source's state and the pending verify's conv rows of that column at dst; a row
+    whose count does not keeps dst as it was (the copy lands in the null block 0)."""
+    from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+    g, block, layout = geo_block_layout
+    st, dn, k, v = _state(device, g, block, 40, layout)
+    st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
+    st._slot_layers, st.moves_counts, st.chain_copies = {0: dn}, None, []
+    B = 8
+    st.book = sbs.SpecBlockBook(st.layout, 1, B, T, "align", block)
+    w = torch.zeros(B, T, dtype=torch.int64)
+    w[2], w[5] = torch.tensor([20, 21, 22, 23]), torch.tensor([30, 31, 32, 33])
+    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2, 5])
+    torch.manual_seed(5)
+    recs = {b: torch.randn(1, g.Nv, 128, 128) for b in (21, 32, 9, 12)}
+    carries = {b: torch.randn(1, 3, g.C).bfloat16() for b in (9, 12)}
+    with sbs._PageTables(st) as pts:
+        for b, r in recs.items():
+            st._write_rec(dn, b, ttnn.from_torch(r, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), pts)
+        for b, c in carries.items():
+            rm = ttnn.from_torch(c, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            st._write_carry(dn, b, rm, pts)
+    window = torch.randn(B, 3 + T, g.C).bfloat16()
+    w_dev = ttnn.from_torch(window, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dn.verify_win_cur = lambda: w_dev
+    # row 2: counts 2..4 copy window column 1 (block 21) into 9; row 5: counts 3..4 copy column 2 (block 32) into 12
+    cp = torch.zeros(B, T, 2, dtype=torch.int64)
+    cp[2, 1:] = torch.tensor([21, 9])
+    cp[5, 2:] = torch.tensor([32, 12])
+    st.capture_chain_copies([cp], [2, 5])
+    assert st.chain_copies == [(2, 0, 21, 9, 1, (2, 3, 4)), (5, 0, 32, 12, 2, (3, 4))]
+    res = torch.zeros(3, 32, dtype=torch.int32)
+    res[RES_COUNTS, 2], res[RES_COUNTS, 5] = 3, 2  # row 2 selects its copy, row 5 does not
+    st.run_chain_copies(result=ttnn.from_torch(res, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+    rec_at = lambda b: ttnn.to_torch(st._read_rec(dn, b)).reshape(1, g.Nv, 128, 128).float()
+    conv_at = lambda b: ttnn.to_torch(st._read_carry(dn, b)).reshape(1, 3, g.C)
+    assert torch.equal(rec_at(9), recs[21]), "row 2: selected copy, state"
+    assert torch.equal(conv_at(9), window[2:3, 2:5]), "row 2: selected copy, conv rows after token 1"
+    assert torch.equal(rec_at(12), recs[12]) and torch.equal(conv_at(12), carries[12]), "row 5: dst changed"
+    assert torch.equal(rec_at(32), recs[32]) and torch.equal(rec_at(21), recs[21]), "a source changed"

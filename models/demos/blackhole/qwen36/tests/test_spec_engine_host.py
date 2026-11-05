@@ -527,6 +527,7 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             _last_hidden=[],
             _phys=[0],
             _dv_guard=None,  # QWEN36_DRAFT_VOCAB_FALLBACK off (MTPSpecEngine class default)
+            _paged_state=lambda: None,  # QWEN36_MAMBA_SPEC off
         )
 
     def clean(e):

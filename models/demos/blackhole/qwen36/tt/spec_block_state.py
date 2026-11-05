@@ -438,6 +438,19 @@ class SpecBlockBook:
         out = [int(b[u, c]) for b in self.step_blocks]
         return out if all(x > 0 for x in out) else None
 
+    def chain_copy_column(self, u, g, src):
+        """The window column of engine row u's latest verify (group g) whose state block ``src`` holds, or None when src is
+        not a window block of that verify (its block then holds its whole state, conv history included). A row whose
+        chained state moves are still unresolved (moves) looks src up in every count's window and needs one column."""
+        mv = self.moves.get(int(u))
+        if mv is None:
+            ent = self.window_map.get(int(src))
+            return ent[1] if ent is not None and ent[0] == int(u) and ent[2] == int(g) else None
+        cols = {t for w in mv[1][g].tolist() for t, b in enumerate(w) if b == int(src)}
+        if len(cols) > 1:
+            raise RuntimeError(f"row {u} group {g}: block {src} sits at window columns {sorted(cols)} by count")
+        return cols.pop() if cols else None
+
     def take_pending(self):
         """[(row, column, group, block)] conv writes the staged verify left due; clears them."""
         pending, self.pending = self.pending, []
@@ -635,7 +648,8 @@ class SpecGdnBlockState:
             )
         self._up = {}  # host copy of the last upload of pages_dev / windows_dev
         self._tables_moved = False  # the last upload held a row's chained state moves
-        self.moves_counts = None  # () -> engine-row accepted counts of the chained verify, None until the host has them
+        self.moves_counts = None  # (wait=False) -> engine-row accepted counts the staged moves follow, None until read
+        self.chain_copies = []  # capture_chain_copies: (row, group, src, dst, window column or None, counts)
 
     cache_mode = property(lambda self: self.book.cache_mode)
     mamba_block_size = property(lambda self: self.book.mamba_block_size)
@@ -699,15 +713,135 @@ class SpecGdnBlockState:
     def set_start(self, cols, start_pos=None):
         self._upload_idx(self.book.set_start(cols, start_pos))
 
-    def resolve_moves(self):
+    def resolve_moves(self, wait=False):
         """Adopt the window of each chained row's actual count once the host has the chained verify's counts (the
-        runner read it); until then the rows keep the optimistic window map."""
+        runner read it, or ``wait``: read it now); until then the rows keep the optimistic window map."""
         if not self.book.moves or self.moves_counts is None:
             return
-        counts = self.moves_counts()
+        counts = self.moves_counts(wait)
         if counts is not None:
             self.book.resolve_moves(counts)
             self.moves_counts = None
+
+    def capture_chain_copies(self, copies, rows):
+        """A chained step's boundary copies (state_chain_copies_per_layer), before set_step maps this step's windows:
+        ``copies`` [G] int64 [B, T, 2] in engine rows, entry [u, c - 1] = (src, dst) when the pending verify accepts c
+        tokens of row u; ``rows`` = the chained rows. Records each distinct pair with the counts that select it and the
+        pending verify's window column whose conv rows src stands for (src's block holds only its recurrent state)."""
+        try:
+            self.resolve_moves()
+            found = self._chain_copy_entries(copies, rows)
+        except RuntimeError:  # a source the older chained verify's count decides: read that count, then look again
+            self.resolve_moves(wait=True)
+            found = self._chain_copy_entries(copies, rows)
+        self.chain_copies = found
+
+    def _chain_copy_entries(self, copies, rows):
+        out = []
+        for g, cp in enumerate(copies):
+            for u in rows:
+                by_pair = {}
+                for c in range(1, self.T + 1):
+                    src, dst = int(cp[u, c - 1, 0]), int(cp[u, c - 1, 1])
+                    if src == dst:
+                        continue
+                    if src <= 0 or dst <= 0:
+                        raise ValueError(f"row {u} group {g}: chained copy {src} -> {dst} names the null block 0")
+                    by_pair.setdefault((src, dst), []).append(c)
+                for (src, dst), cs in by_pair.items():
+                    out.append((int(u), g, src, dst, self.book.chain_copy_column(u, g, src), tuple(cs)))
+        return out
+
+    def run_chain_copies(self, counts=None, result=None):
+        """Run the copies capture_chain_copies recorded, before the step reads or writes any state, and forget them.
+        ``counts`` (engine row -> the pending verify's accepted count, known on the host): those copies run. ``result``
+        (the pending fused step's int32 ROW_MAJOR result buffer, row RES_COUNTS = counts by engine row): the counts stay
+        on the device, so every copy writes into dst where its row's count selects it and into the null block 0 where
+        not (padding rows write their states there too)."""
+        todo, self.chain_copies = self.chain_copies, []
+        if counts is not None:
+            todo = [e for e in todo if int(counts.get(e[0], 0)) in e[5]]
+        if not todo:
+            return
+        for e in todo:
+            self.book.forget_block(e[3])
+        with self._timed("chained block copies", len(todo)), _PageTables(self) as pts:
+            if result is None:
+                from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
+
+                for u, g, src, dst, t, _ in todo:
+                    if self.layout.phase(src) == self.layout.phase(dst):
+                        copy_kv_blocks(self.model, [(src, dst)])
+                    else:
+                        self._relayout(src, dst, pts)
+                    if t is not None:
+                        self.materialize(u, t, g, dst, pts)
+            else:
+                self._chain_copies_on_device(todo, result, pts)
+
+    def _chain_copies_on_device(self, todo, result, pts):
+        import ttnn
+        from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+        f32, mc, lay = ttnn.float32, ttnn.DRAM_MEMORY_CONFIG, self.layout
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        W = int(result.shape[1])
+        row = ttnn.slice(result, [RES_COUNTS, 0], [RES_COUNTS + 1, W], memory_config=mc)
+        cnt = ttnn.typecast(ttnn.to_layout(row, ttnn.TILE_LAYOUT), f32)  # [1, W]: integers, exact in fp32
+        ttnn.deallocate(row)
+        owned = [cnt]
+
+        def selected(m, dst0, null0, n):
+            """int32 ROW_MAJOR [1, n] page table: pages dst0 .. dst0 + n - 1 where m is 1, null0 .. where m is 0."""
+            host = lambda x: ttnn.from_torch(x, dtype=f32, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=rep)
+            base = host((float(null0) + torch.arange(n, dtype=torch.float32)).reshape(1, n))
+            step = host(torch.full((1, n), float(dst0 - null0)))
+            sel = ttnn.add(ttnn.multiply(step, m), base)
+            out = ttnn.to_layout(ttnn.typecast(sel, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT)
+            owned.extend((base, step, sel, out))
+            return out
+
+        heads = lambda b: lay.head_pages(torch.tensor([b]))[0]
+        for u, g, src, dst, t, cs in todo:
+            cu = ttnn.slice(cnt, [0, u], [1, u + 1])  # [1, 1]
+            m = None
+            for c in cs:
+                e = ttnn.typecast(ttnn.to_layout(ttnn.eq(cu, float(c)), ttnn.TILE_LAYOUT), f32)
+                m = e if m is None else ttnn.add(m, e)
+            owned.extend((cu, m))
+            ps, pd, p0 = heads(src), heads(dst), heads(0)
+            tabs = {}  # pool -> its page table: a block names the same pages in every slot's views
+            for dn in self._slot_layers.values():  # every slot's views: the bytes of src belong to group g in each slot
+                for k, (view, h0, h1, off) in enumerate(self._pools(dn)):
+                    if h1 <= h0:
+                        continue
+                    n = 2 * (h1 - h0)
+                    s0 = (int(ps[h0]) - off) // HALF_PAGES
+                    if k not in tabs:
+                        tabs[k] = selected(m, (int(pd[h0]) - off) // HALF_PAGES, (int(p0[h0]) - off) // HALF_PAGES, n)
+                    tab = tabs[k]
+                    part = ttnn.slice(view, (s0, 0, 0, 0), (s0 + n, 1, dn.Dk // 2, dn.Dv), memory_config=mc)
+                    x = ttnn.reshape(part, (1, 1, n * dn.Dk // 2, dn.Dv))
+                    ttnn.experimental.paged_fill_cache(view, x, tab, batch_idx=0)
+                    ttnn.deallocate(part)
+            cd, c0 = lay.conv_page(dst), lay.conv_page(0)
+            if (cd < lay.conv_pages_total) != (c0 < lay.conv_pages_total):
+                raise RuntimeError(f"block {dst} and the null block keep their conv history in different views")
+            total = lay.conv_pages_total
+            q = lambda page: page if page < total else page - total
+            ctab = selected(m, q(cd), q(c0), lay.conv_pages)
+            if t is None:  # src's block holds its conv history: copy it
+                for dn in self._slot_layers.values():
+                    vs, qs = dn._spec_paged.conv_at(lay.conv_page(src), total)
+                    vd, _ = dn._spec_paged.conv_at(cd, total)
+                    part = ttnn.slice(vs, (qs, 0, 0, 0), (qs + lay.conv_pages, 1, 32, 32), memory_config=mc)
+                    x = ttnn.reshape(part, (1, 1, lay.conv_pages * 32, 32))
+                    ttnn.experimental.paged_fill_cache(vd, x, ctab, batch_idx=0)
+                    ttnn.deallocate(part)
+            else:
+                self.materialize(u, t, g, dst, pts, table=ctab)
+        for x in owned:
+            ttnn.deallocate(x)
 
     def ctrl_rows(self, mi, parity, words, hold=(), start_col=None, pages=None):
         return self.book.ctrl_rows(mi, parity, words, hold, start_col, pages)
@@ -918,9 +1052,10 @@ class SpecGdnBlockState:
                 ttnn.experimental.paged_fill_cache(v, self._zeros, pt, batch_idx=0)
             ttnn.deallocate(pt)
 
-    def materialize(self, u, t, g, dst, pts):
+    def materialize(self, u, t, g, dst, pts, table=None):
         """Write the conv history after token t of engine row u's latest verify (rows t + 1 .. t + kc - 1 of the window
-        the next verify reads, verify_win_cur) into block dst of every GDN layer of group g."""
+        the next verify reads, verify_win_cur) into block dst of every GDN layer of group g (``table``: a device page
+        table to write through instead of dst's conv pages, in dst's view)."""
         import ttnn
 
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -934,7 +1069,7 @@ class SpecGdnBlockState:
             ttnn.deallocate(row)
             carry = ttnn.slice(rm, (0, t + 1, 0), (1, t + kc, C), memory_config=mc)
             ttnn.deallocate(rm)
-            self._write_carry(dn, dst, carry, pts)
+            self._write_carry(dn, dst, carry, pts, table)
             ttnn.deallocate(carry)
 
     # ---------------------------------------------------------------- page I/O (eager)
@@ -1003,7 +1138,7 @@ class SpecGdnBlockState:
             ttnn.deallocate(p)
         return out
 
-    def _write_carry(self, dn, b, carry_rm, pts):
+    def _write_carry(self, dn, b, carry_rm, pts, table=None):
         """carry_rm [1, kc - 1, C] bf16 ROW_MAJOR -> block b's conv history: its row-major values, 32 per tile row,
         zero padded to whole tiles."""
         import ttnn
@@ -1017,7 +1152,7 @@ class SpecGdnBlockState:
         if z is not x:
             ttnn.deallocate(z)
         view, q0 = dn._spec_paged.conv_at(self.layout.conv_page(b), self.layout.conv_pages_total)
-        ttnn.experimental.paged_fill_cache(view, w, pts(q0, pages), batch_idx=0)
+        ttnn.experimental.paged_fill_cache(view, w, pts(q0, pages) if table is None else table, batch_idx=0)
         ttnn.deallocate(w)
 
     def _read_carry(self, dn, b):

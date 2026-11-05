@@ -874,7 +874,10 @@ def test_zeroing_runs_at_once_and_skips_copied_blocks_never(monkeypatch):
 
 
 class _FT:
-    """A fake device tensor: a label, or per-user rows (the conv window)."""
+    """A fake device tensor: a label, or per-user rows (the conv window). Its head count never matches a pool's, so a
+    head slice is always taken."""
+
+    shape = (1, -1, 1, 1)
 
     def __init__(self, label=None, users=None, rows=None):
         self.label, self.users, self.rows = label, users, rows
@@ -920,6 +923,7 @@ def _fake_ttnn(monkeypatch):
     monkeypatch.setattr(ttnn, "copy", lambda src, dst: setattr(dst, "label", src.label))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: t)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
     monkeypatch.setattr(ttnn.experimental, "paged_fill_cache", fill)
 
 
@@ -1092,7 +1096,7 @@ def test_chain_boundary_conv_write_targets_the_count_that_starts_there():
     assert book.take_pending() == [(1, 0, 0, int(wins[0][1, 1, 0])), (1, 0, 1, int(wins[1][1, 1, 0]))]
 
 
-def test_chain_moves_keywords_are_grouped_and_copies_refused(monkeypatch):
+def test_chain_moves_keywords_are_grouped_with_their_copies(monkeypatch):
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
 
     specs = _per_layer_specs()
@@ -1117,8 +1121,128 @@ def test_chain_moves_keywords_are_grouped_and_copies_refused(monkeypatch):
     assert [int(w[0, 0]) for w in out] == [10, 11, 12] and counts.tolist() == [-1, -1, 1, 1]
     assert [int(s[1, 3]) for s in moves[0]] == [20, 21, 22] and [int(s[3, 0]) for s in moves[0]] == [0, 0, 0]
     assert [tuple(w.shape) for w in moves[1]] == [(4, T, T)] * 3 and int(moves[1][2][0, 1, 2]) == 32
-    with pytest.raises(NotImplementedError):  # allow-pytest.raises: host test without the device conftest
-        Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(copy_src=7), 4)
+    assert moves[2] is None  # every pair (0, 0): nothing to copy
+    _, _, moves = Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(copy_src=7), 4)
+    assert [tuple(c.shape) for c in moves[2]] == [(4, T, 2)] * 3
+    assert int(moves[2][1][1, 2, 0]) == 7 and int(moves[2][1][3, 0, 0]) == 0  # padding rows: (0, 0)
+
+
+def _torch_ops_over_fake(monkeypatch):
+    """The fake ttnn of _fake_ttnn plus plain torch semantics for real tensors (the device-selected copy's count math)."""
+    import ttnn
+
+    fake_slice, fake_same = ttnn.slice, ttnn.reshape
+    dt = {ttnn.float32: torch.float32, ttnn.int32: torch.int32}
+
+    def sl(t, start, end, memory_config=None):
+        if isinstance(t, torch.Tensor):
+            return t[tuple(slice(a, b) for a, b in zip(start, end))]
+        return fake_slice(t, start, end, memory_config)
+
+    keep = lambda f: lambda t, *a, **k: t if isinstance(t, torch.Tensor) else f(t, *a, **k)
+    monkeypatch.setattr(ttnn, "slice", sl)
+    monkeypatch.setattr(ttnn, "to_layout", keep(fake_same))
+    monkeypatch.setattr(ttnn, "typecast", lambda t, d, **k: t.to(dt[d]))
+    monkeypatch.setattr(ttnn, "eq", lambda t, c, **k: (t == c).to(torch.float32))
+    monkeypatch.setattr(ttnn, "add", lambda a, b, **k: a + b)
+    monkeypatch.setattr(ttnn, "multiply", lambda a, b, **k: a * b)
+
+
+def _chain_copy_state(monkeypatch):
+    """One GDN layer (group 0) on fake views; row 2's latest verify wrote window blocks 20 .. 23, block 21 holds the
+    state after token 1 ("rec:21") and the conv window holds rows x0 .. x6."""
+    _fake_ttnn(monkeypatch)
+    _torch_ops_over_fake(monkeypatch)
+    lay = _layout(4, 2048, 8, "two_pool")
+    views = sbs._LayerViews(
+        rec1=_View(sbs.HALF_PAGES), rec2=_View(sbs.HALF_PAGES), conv=_View(1), conv_k=_View(1), group=0, two_pool=True
+    )
+    rows = [f"x{r}" for r in range(3 + T)]
+    dn = SimpleNamespace(
+        Nv=lay.nv,
+        Dk=128,
+        Dv=128,
+        K=4,
+        qkv_dim_tp=(2 * 16 * 128 + 48 * 128) // 4,
+        _spec_paged=views,
+        verify_win_cur=lambda: _FT(users={2: rows}),
+    )
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.model, st.mesh, st.T, st.G, st.layout = None, None, T, 1, lay
+    st.layers, st.layer_groups, st._slot_layers = [(0, dn, 0)], {0: 0}, {0: dn}
+    st.book = sbs.SpecBlockBook(lay, 1, B, T, "align", 2048)
+    st.moves_counts, st.chain_copies = None, []
+    w = torch.zeros(B, T, dtype=torch.int64)
+    w[2] = torch.tensor([20, 21, 22, 23])
+    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2])
+    with sbs._PageTables(st) as pts:
+        for b in (21, 40):
+            st._write_rec(dn, b, _FT(f"rec:{b}"), pts)
+    rec = lambda b: {
+        (views.rec1 if p < lay.pool1_pages else views.rec2).pages.get(int(p) % lay.pool1_pages)
+        for p in lay.head_pages(torch.tensor([b]))[0].tolist()
+    }
+    conv = lambda b: views.conv_at(lay.conv_page(b), lay.conv_pages_total)[0].pages.get(
+        views.conv_at(lay.conv_page(b), lay.conv_pages_total)[1]
+    )
+    # counts 2 .. 4 of row 2 accept the token whose state ends a block: copy window column 1 (block 21) into block 40
+    cp = torch.zeros(B, T, 2, dtype=torch.int64)
+    cp[2, 1:] = torch.tensor([21, 40])
+    return st, rec, conv, cp
+
+
+@pytest.mark.parametrize("count", [1, 2, 4])
+@pytest.mark.parametrize("on_device", [False, True])
+def test_chained_copy_runs_for_the_counts_that_select_it(monkeypatch, count, on_device):
+    """state_chain_copies_per_layer on a chained step: the copy of the pending verify's window column runs only when the
+    row's accepted count selects it, from the host count (fallback) or the device count (result buffer row RES_COUNTS;
+    an unselected copy writes into the null block 0 instead), and carries that column's conv rows."""
+    from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
+    from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+    st, rec, conv, cp = _chain_copy_state(monkeypatch)
+    monkeypatch.setattr(
+        gbs,
+        "copy_kv_blocks",
+        lambda model, pairs: [st._relayout(s, d, lambda f, n: torch.arange(f, f + n)) for s, d in pairs],
+    )
+    st.capture_chain_copies([cp], [2])
+    assert st.chain_copies == [(2, 0, 21, 40, 1, (2, 3, 4))]
+    if on_device:
+        res = torch.zeros(3, 32, dtype=torch.int32)
+        res[RES_COUNTS, 2] = count
+        st.run_chain_copies(result=res)
+    else:
+        st.run_chain_copies(counts={2: count})
+    assert st.chain_copies == []
+    if count >= 2:
+        assert rec(40) == {"rec:21"} and conv(40) == ("x2", "x3", "x4")  # conv rows after token 1
+    else:
+        assert rec(40) == {"rec:40"} and conv(40) is None
+        if on_device:
+            assert rec(0) == {"rec:21"} and conv(0) == ("x2", "x3", "x4")
+
+
+def test_a_chained_copy_source_the_older_count_decides_is_looked_up_after_reading_that_count():
+    """A row whose own chained moves are unresolved: when its copy source sits at different window columns by the older
+    pending count, capture_chain_copies reads that count (moves_counts(wait=True)) and uses the adopted window."""
+    lay, book, blocks, starts, wins = _moves_case(G=1)
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.book, st.T, st.chain_copies = book, T, []
+    wins[0][1, 0] = torch.tensor([60, 61, 62, 63])
+    wins[0][1, 3] = torch.tensor([61, 70, 71, 72])  # block 61: column 1 at count 1, column 0 at count 4
+    book.set_moves(starts, wins, [1])
+    calls = []
+
+    def counts(wait=False):
+        calls.append(wait)
+        return torch.tensor([1, 4, 1, 1]) if wait else None
+
+    st.moves_counts = counts
+    cp = torch.zeros(B, T, 2, dtype=torch.int64)
+    cp[1, 3] = torch.tensor([61, 90])
+    st.capture_chain_copies([cp], [1])
+    assert calls == [False, True] and st.chain_copies == [(1, 0, 61, 90, 0, (4,))]
 
 
 def test_chain_audit_twin_reads_the_pages_of_its_own_staging():

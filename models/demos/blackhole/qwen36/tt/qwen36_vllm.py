@@ -1342,7 +1342,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ),
         # QWEN36_MAMBA_CHAIN_MOVES=1: a chained verify in mode align gets state_chain_start_blocks_per_layer and
         # state_chain_windows_per_layer (one entry per accepted count of the pending verify) and the chain body selects
-        # them on the device (state_chain_copies_per_layer must be all no-op pairs: retention 0)
+        # them on the device; state_chain_copies_per_layer runs as block copies whose count the device selects
         "supports_mamba_chained_state_moves": bool(
             spec_chain_enabled() and spec_fused_enabled() and mamba_chain_moves_enabled()
         ),
@@ -1476,8 +1476,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def _gdn_windows(self, kwargs, B):
         """The engine's gdn_windows for a decode step (runner slots), or None without MambaSpec groups: ([G] block
         windows [B, 1 + K], state_accepted_counts [B], moves). ``moves`` is None, or, on a chained step with
-        supports_mamba_chained_state_moves, ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K]) indexed by the
-        pending verify's accepted count - 1."""
+        supports_mamba_chained_state_moves, ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K], [G] block
+        copies [B, 1 + K, 2] or None when every entry is (0, 0)) indexed by the pending verify's accepted count - 1."""
         blocks = getattr(self.model[0], "_spec_blocks", None)
         copies = kwargs.pop("state_chain_copies_per_layer", None)
         starts = kwargs.pop("state_chain_start_blocks_per_layer", None)
@@ -1502,16 +1502,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if starts is not None or wins is not None or copies is not None:
             if starts is None or wins is None:
                 raise ValueError("chained state moves need state_chain_start_blocks_per_layer and _windows_per_layer")
-            for e in {id(e): e for e in copies or () if e is not None}.values():  # one tensor per KV cache group
-                if bool((torch.as_tensor(e)[..., 0] != torch.as_tensor(e)[..., 1]).any()):
-                    raise NotImplementedError(
-                        "state_chain_copies_per_layer holds a block copy (a boundary copy at a nonzero "
-                        "prefix_cache_retention_interval); QWEN36_MAMBA_CHAIN_MOVES runs only the start-block and window "
-                        "selection on the device"
-                    )
+            cps = None
+            if copies is not None:  # (0, 0) everywhere at prefix_cache_retention_interval 0
+                cps = [pad_rows(e) for e in blocks.group_windows(copies)]
+                if not any(bool((e[..., 0] != e[..., 1]).any()) for e in cps):
+                    cps = None
             moves = (
                 [pad_rows(s) for s in blocks.group_windows(starts)],
                 [pad_rows(w) for w in blocks.group_windows(wins)],
+                cps,
             )
         return out, c, moves
 
