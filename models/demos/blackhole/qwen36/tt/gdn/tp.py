@@ -127,13 +127,13 @@ def gdn_g_fp32_enabled():
 def _gdn_gate(tw, a, memory_config=None):
     """Prefill g-gate [.., Nv]: -exp(A_log) * softplus(a + dt_bias); fp32 (see gdn_g_fp32_enabled) or the old bf16."""
     mc = {} if memory_config is None else {"memory_config": memory_config}
-    if gdn_g_fp32_enabled() and "dt_bias_fp32" in tw and "neg_exp_A_fp32" in tw:
+    if gdn_g_fp32_enabled() and "dt_bias_g32" in tw and "neg_exp_A_g32" in tw:
         a32 = a if a.dtype == ttnn.float32 else ttnn.typecast(a, ttnn.float32, **mc)
-        x = ttnn.add(a32, tw["dt_bias_fp32"], **mc)
+        x = ttnn.add(a32, tw["dt_bias_g32"], **mc)
         if a32 is not a:
             ttnn.deallocate(a32)
         g = ttnn.multiply(
-            tw["neg_exp_A_fp32"],
+            tw["neg_exp_A_g32"],
             x,
             input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
             **mc,
@@ -508,10 +508,22 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-    if gdn_g_fp32_enabled() and "dt_bias_fp32" not in tw:
-        # fp32 prefill decay-gate constants (gdn_g_fp32_enabled); the fused decode builds the same two above.
-        tw["dt_bias_fp32"] = _shard_small_fp32(sd[P + "dt_bias"], mesh, c("dt_bias_fp32"))
-        tw["neg_exp_A_fp32"] = _shard_small_fp32(-torch.exp(sd[P + "A_log"].float()), mesh, c("neg_exp_A_fp32"))
+    if gdn_g_fp32_enabled():
+        # fp32 prefill decay-gate constants (gdn_g_fp32_enabled), sharded over the TP axis like tw["dt_bias"] (on a 2D
+        # mesh replicated over the rows; the fused decode's dt_bias_fp32 shards over every device, 1xN only).
+        for key, val in (
+            ("dt_bias_g32", sd[P + "dt_bias"].float()),
+            ("neg_exp_A_g32", -torch.exp(sd[P + "A_log"].float())),
+        ):
+            tw[key] = ttnn.as_tensor(
+                val.reshape(1, 1, -1),
+                dtype=ttnn.float32,
+                device=mesh,
+                mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=c(key),
+            )
     return tw
 
 
