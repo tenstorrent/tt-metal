@@ -2630,6 +2630,7 @@ class LMHeadSampling:
                         raise RuntimeError("Missing argmax mesh sender kernel group for BRISC fabric append")
                     sender_kernel_idx = sender_group.brisc_kernel_index
                     fabric_rt_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),
                         link_idx=sender_link_idx,
@@ -2645,6 +2646,7 @@ class LMHeadSampling:
                         raise RuntimeError("Missing argmax final core kernel group for persistent fabric append")
                     persistent_kernel_idx = persistent_group.brisc_kernel_index
                     persistent_fabric_rt_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=persistent_target_node,
                         link_idx=0,
@@ -2670,6 +2672,7 @@ class LMHeadSampling:
                         rfk_idx = fc_group.brisc_kernel_index
                         link = 0 if fc_i < num_cols // 2 else 1
                         rf_args = ttnn.setup_fabric_connection(
+                            mesh_device,
                             src_node,
                             reduce_dest_fabric_node_id,
                             link,
