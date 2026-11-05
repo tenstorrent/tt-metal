@@ -582,7 +582,7 @@ ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get
 std::string SerializeClusterDescriptor() {
     // Serialize the descriptor the cluster already holds. The cluster makes the
     // mock-vs-real (emule) decision once when it builds the descriptor at init
-    // (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this layer
+    // (see tt_cluster.cpp, gated on the mock cluster descriptor path), so this layer
     // must not re-create it: a fresh real-UMD create here would open the physical
     // card and bypass the emulator. Assumes the cluster is initialized (this API's
     // only caller, ttnn serialize_cluster_descriptor, runs in an active session).
