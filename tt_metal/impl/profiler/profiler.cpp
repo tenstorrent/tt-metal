@@ -9,6 +9,7 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "llrt/hal.hpp"
 #include "mesh_device.hpp"
 #include "impl/threading/thread_pool.hpp"
