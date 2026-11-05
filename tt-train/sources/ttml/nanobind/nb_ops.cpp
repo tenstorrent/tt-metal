@@ -463,7 +463,7 @@ void py_module(nb::module_& m) {
             nb::arg("query"),
             nb::arg("key"),
             nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
+            nb::arg("mask").none());
     }
 
     {
