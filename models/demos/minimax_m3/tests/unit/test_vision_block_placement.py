@@ -31,7 +31,8 @@ and M3VLVisionModel.forward_device runs at the checkpoint's widths on stand-ins 
   GELU and SDPA no memory_config. Each matmul gets linear_program_config's config for its operands. With the L1
   placements out_proj reads its input from DRAM, fc2 from DRAM or from fc1's shards, and the tower's output is in DRAM.
 - The check before each forward: L1 memory views with another bank count, a smaller bank or a tensor lower in the bank
-  make the forward use DRAM_PLACEMENT, with the reason logged once.
+  make the forward use DRAM_PLACEMENT, with the reason logged once, and so does TT_METAL_ALLOCATOR_MODE_HYBRID set,
+  as the views do not show the HYBRID allocator's per-core tensors.
 
 The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
@@ -257,6 +258,12 @@ def _sdpa_cb_bytes(config, q_shape, cores):
     padded = seq_len % config.q_chunk_size or seq_len % config.k_chunk_size
     mask = 2 * q * k * BFP4_TILE_BYTES if padded else 0
     return TILE_BYTES * bf16_tiles + FP32_TILE_BYTES * (q * k + 2 * q) + mask
+
+
+@pytest.fixture(autouse=True)
+def _lockstep_allocator(monkeypatch):
+    """The tests take the lockstep allocator, as l1_free_for_activations' proof does, whatever the shell exports."""
+    monkeypatch.delenv("TT_METAL_ALLOCATOR_MODE_HYBRID", raising=False)
 
 
 class _Device:
@@ -863,6 +870,26 @@ def test_vision_block_placement_calls(monkeypatch, patches):
                 assert repr(kwargs["program_config"]) == repr(want), case
         if activations == "dram":
             assert sum(event[0] == "alloc" for event in events) == 2, events
+
+
+def test_vision_l1_free_for_activations_hybrid_allocator(monkeypatch):
+    """With TT_METAL_ALLOCATOR_MODE_HYBRID set, per-core tensors can sit low in a core's L1 where the memory view does
+    not show them: l1_free_for_activations then fails on an empty 12x10 view, naming the variable, and the forward
+    gets DRAM_PLACEMENT at 2304 patches with "l1" and "l1_interleaved". Unset or 0, the same view passes."""
+    model = _model(_Recorder(monkeypatch), (12, 10))
+    _empty_l1(monkeypatch, (12, 10))
+    l1_placements = (("l1", L1_SHARDED_MLP_PLACEMENT), ("l1_interleaved", L1_INTERLEAVED_PLACEMENT))
+    for value, free in ((None, True), ("0", True), ("1", False)):
+        if value is None:
+            monkeypatch.delenv("TT_METAL_ALLOCATOR_MODE_HYBRID", raising=False)
+        else:
+            monkeypatch.setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", value)
+        result = l1_free_for_activations(model.device)
+        assert result[0] is free and ("TT_METAL_ALLOCATOR_MODE_HYBRID" in result[1]) is not free, (value, result)
+        for activations, l1_placement in l1_placements:
+            model.activations = activations
+            placement = model.placement(SimpleNamespace(padded_shape=(1, 1, 2304, 1184)))
+            assert placement is (l1_placement if free else DRAM_PLACEMENT), (value, activations)
 
 
 def test_vision_l1_free_for_activations(monkeypatch):

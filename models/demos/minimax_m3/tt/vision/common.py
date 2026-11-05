@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import math
+import os
 from typing import Callable, NamedTuple, Optional
 
 import torch
@@ -365,6 +366,10 @@ PROOF_L1_BANK_BYTES = P150_L1_BANK_BYTES - L1_SMALL_SIZE - PROOF_L1_BANK_SLACK_B
 # The most bytes at the top of each bank that other tensors may take when a forward starts: the proof keeps every
 # margin above it.
 PROOF_L1_FOREIGN_BYTES = 64 * 1024
+# The variable that has tt-metal open its devices with the HYBRID allocator when its value starts with 1, read once
+# per process, before the first device opens. Each core's L1 can then hold per-core tensors that ttnn.get_memory_view,
+# the lockstep allocator's view, does not show, and lockstep tensors go below them.
+HYBRID_ALLOCATOR_ENV = "TT_METAL_ALLOCATOR_MODE_HYBRID"
 
 
 def block_placement(block, rows: int, activations: str) -> BlockPlacement:
@@ -461,10 +466,13 @@ def _l1_block_placement(
 
 
 def l1_free_for_activations(mesh_device) -> tuple[bool, str]:
-    """Whether mesh_device's L1 is as block_placement's proof takes it, and why not: one L1 bank per core of the
-    compute grid, at least PROOF_L1_BANK_BYTES per bank, and no L1 tensor more than PROOF_L1_FOREIGN_BYTES below the
-    top of the bank. Tensors are allocated from the top of the bank down, and an op's circular buffers, which start at
-    its bottom, must end below the lowest tensor, so a small tensor low in the bank cuts every margin."""
+    """Whether mesh_device's L1 is as block_placement's proof takes it, and why not: the lockstep allocator (no
+    HYBRID_ALLOCATOR_ENV), one L1 bank per core of the compute grid, at least PROOF_L1_BANK_BYTES per bank, and no L1
+    tensor more than PROOF_L1_FOREIGN_BYTES below the top of the bank. Tensors are allocated from the top of the bank
+    down, and an op's circular buffers, which start at its bottom, must end below the lowest tensor, so a small tensor
+    low in the bank cuts every margin."""
+    if os.environ.get(HYBRID_ALLOCATOR_ENV, "").startswith("1"):
+        return False, f"{HYBRID_ALLOCATOR_ENV} is set, and the L1 memory view does not show per-core tensors"
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
     grid = mesh_device.compute_with_storage_grid_size()
     if view.num_banks != grid.x * grid.y:
