@@ -26,30 +26,31 @@ from test_topk_xl_unfused_macro import TOPK_XL_MACRO_KNOBS
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 
-def _e2e(K, **knobs):
+def _e2e(K, blaze_compat=False, **knobs):
     return _variant(
         K,
         num_chunks=4,
         num_rows=2,
         fused_e2e=True,
+        blaze_compat=blaze_compat,
         extra_templates=[TOPK_XL_MACRO_KNOBS(**knobs)],
     )
 
 
-def _columns(**knobs):
+def _columns(blaze_compat=False, **knobs):
     return _variant(
         1024,
         num_chunks=4,
         sort_mode=TopKXLSortMode.Columns,
+        blaze_compat=blaze_compat,
         extra_templates=[TOPK_XL_MACRO_KNOBS(**knobs)],
     )
 
 
-@parametrize(K=[1024, 2048])
-def test_topk_xl_fused_macro_equals_opt_out(K):
-    (K,) = K
-    good_cfg, rows = _e2e(K)
-    base_cfg, _ = _e2e(K, opt_out=True)
+@parametrize(K=[1024, 2048], blaze_compat=[False, True])
+def test_topk_xl_fused_macro_equals_opt_out(K, blaze_compat):
+    good_cfg, rows = _e2e(K, blaze_compat=blaze_compat)
+    base_cfg, _ = _e2e(K, blaze_compat=blaze_compat, opt_out=True)
     # Build both before running either: under --compile-producer, run() skips
     # as soon as the first variant is built.
     good_cfg.prepare()
@@ -62,9 +63,11 @@ def test_topk_xl_fused_macro_equals_opt_out(K):
     ), f"K={K}: the fused macro build's packed output differs from the opt-out build"
 
 
-def test_topk_xl_fused_macro_columns_equals_opt_out():
-    good_cfg, _ = _columns()
-    base_cfg, _ = _columns(opt_out=True)
+@parametrize(blaze_compat=[False, True])
+def test_topk_xl_fused_macro_columns_equals_opt_out(blaze_compat):
+    (blaze_compat,) = blaze_compat
+    good_cfg, _ = _columns(blaze_compat=blaze_compat)
+    base_cfg, _ = _columns(blaze_compat=blaze_compat, opt_out=True)
     good_cfg.prepare()
     base_cfg.prepare()
     good, base = good_cfg.run().result, base_cfg.run().result
@@ -73,11 +76,10 @@ def test_topk_xl_fused_macro_columns_equals_opt_out():
     ), "the fused macro build's column body differs from the opt-out build"
 
 
-@parametrize(K=[1024, 2048])
-def test_topk_xl_fused_macro_mutation(K):
-    (K,) = K
-    good_cfg, rows = _e2e(K)
-    bad_cfg, _ = _e2e(K, mutate_fused=True)
+@parametrize(K=[1024, 2048], blaze_compat=[False, True])
+def test_topk_xl_fused_macro_mutation(K, blaze_compat):
+    good_cfg, rows = _e2e(K, blaze_compat=blaze_compat)
+    bad_cfg, _ = _e2e(K, blaze_compat=blaze_compat, mutate_fused=True)
     good_cfg.prepare()
     bad_cfg.prepare()
     good, bad = good_cfg.run().result, bad_cfg.run().result
@@ -89,9 +91,11 @@ def test_topk_xl_fused_macro_mutation(K):
     )
 
 
-def test_topk_xl_fused_macro_columns_mutation():
-    good_cfg, _ = _columns()
-    bad_cfg, _ = _columns(mutate_fused=True)
+@parametrize(blaze_compat=[False, True])
+def test_topk_xl_fused_macro_columns_mutation(blaze_compat):
+    (blaze_compat,) = blaze_compat
+    good_cfg, _ = _columns(blaze_compat=blaze_compat)
+    bad_cfg, _ = _columns(blaze_compat=blaze_compat, mutate_fused=True)
     good_cfg.prepare()
     bad_cfg.prepare()
     good, bad = good_cfg.run().result, bad_cfg.run().result
