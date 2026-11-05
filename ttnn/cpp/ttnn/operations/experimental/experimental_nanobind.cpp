@@ -72,6 +72,7 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/small_m_matmul/small_m_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
@@ -223,6 +224,7 @@ void py_module(nb::module_& mod) {
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+    small_m_matmul::detail::bind_small_m_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);

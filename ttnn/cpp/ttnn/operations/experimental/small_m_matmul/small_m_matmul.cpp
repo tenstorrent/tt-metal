@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "small_m_matmul.hpp"
+
+#include "device/small_m_matmul_device_operation.hpp"
+
+using namespace tt::tt_metal;
+
+namespace ttnn::experimental {
+
+ttnn::Tensor small_m_matmul(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<const ttnn::experimental::prim::SmallMMatmulConfig>& config,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<ttnn::Tensor>& fused_ternary_input_a,
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b) {
+    auto outs = ttnn::prim::small_m_matmul(
+        input_tensor,
+        weight_tensor,
+        config,
+        bias_tensor,
+        std::move(fused_activation),
+        fused_ternary_scalar,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
+        1);  // chunks
+    TT_FATAL(outs.size() == 1, "small_m_matmul expected a single output, got {}", outs.size());
+    return outs[0];
+}
+
+std::vector<ttnn::Tensor> small_m_matmul_split(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    int32_t chunks,
+    int32_t dim,
+    const std::optional<const ttnn::experimental::prim::SmallMMatmulConfig>& config,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<ttnn::Tensor>& fused_ternary_input_a,
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b) {
+    TT_FATAL(chunks >= 1, "small_m_matmul_split requires chunks >= 1, got {}", chunks);
+    // `dim` is kept in the wrapper signature for minimal_matmul API compatibility, validated here, and NOT
+    // forwarded to the device op (only -1 is supported; the device op works on `chunks` alone).
+    TT_FATAL(dim == -1, "small_m_matmul_split only supports dim=-1, got {}", dim);
+    return ttnn::prim::small_m_matmul(
+        input_tensor,
+        weight_tensor,
+        config,
+        bias_tensor,
+        std::move(fused_activation),
+        fused_ternary_scalar,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
+        chunks);
+}
+
+}  // namespace ttnn::experimental
