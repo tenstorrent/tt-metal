@@ -749,14 +749,16 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
         (64, 160, 4096, 2048, 128, "all"),  # GLM per-chip shape (16 chunks/token)
         (64, 160, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments, masks in either segment
         (32, 250, 1024, 512, 128, "causal"),  # 2+ tokens/core, prefill-like valid counts
-        (64, 130, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core
+        (64, None, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core: S = cores + 10
     ],
 )
 def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, TOPK, kc, nv_id):
     """Split-K must match the whole-token split and the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
-    if S <= grid.x * grid.y:
-        pytest.skip(f"split-K needs S > cores ({grid.x * grid.y})")
+    cores = grid.x * grid.y
+    S = cores + 10 if S is None else S
+    if S <= cores:
+        pytest.skip(f"split-K needs S > cores ({cores})")
     monkeypatch.setenv("SPARSE_SDPA_SPLITK", split_k)  # split-K is the default; "0" = whole-token split
     nv_fn = {
         "all": lambda s: TOPK,
