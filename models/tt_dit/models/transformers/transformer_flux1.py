@@ -44,6 +44,7 @@ class Flux1SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
+        attention_exp_approx_mode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,6 +68,7 @@ class Flux1SingleTransformerBlock(Module):
             use_spatial_weights_for_prompt=True,
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
+            exp_approx_mode=attention_exp_approx_mode,
         )
 
         self.norm = DistributedLayerNorm(
@@ -169,8 +171,9 @@ class Flux1SingleTransformerBlock(Module):
         mlp_prompt = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_prompt, 0)), 0)
 
         # Fusing the activation function currently gives worse PCC
-        ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, fast_and_approximate_mode=False)
-        ttnn.gelu(mlp_prompt, output_tensor=mlp_prompt, fast_and_approximate_mode=False)
+        # Reference uses nn.GELU(approximate="tanh")
+        ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, variant=ttnn.GeluVariant.Tanh)
+        ttnn.gelu(mlp_prompt, output_tensor=mlp_prompt, variant=ttnn.GeluVariant.Tanh)
 
         attn_spatial, attn_prompt = self.attn.forward(
             spatial=norm_spatial,
@@ -303,6 +306,7 @@ class Flux1Transformer(Module):
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
                 context_pre_only=False,
+                ff_activation_fn="gelu_tanh",
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
@@ -400,7 +404,7 @@ class Flux1Transformer(Module):
                 skip_time_embed_activation_fn=True,
             )
 
-        prompt = ttnn.clone(prompt, dtype=spatial.dtype)
+        prompt = ttnn.typecast(prompt, spatial.dtype)
 
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             spatial, prompt = block.forward(

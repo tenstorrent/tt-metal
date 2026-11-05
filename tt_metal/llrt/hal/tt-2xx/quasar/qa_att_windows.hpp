@@ -22,6 +22,7 @@
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
+#include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_uncapped_att_config.h"
 
 namespace tt::tt_metal::quasar_att {
 
@@ -34,11 +35,15 @@ struct MapInfo {
 inline constexpr MapInfo MAPS[] = {
     {"grendel_qsr1", "NOC_ATT_CONFIG_GRENDEL_QSR1", grendel_qsr1_att_config::MAP},
     {"quasar_aether_2x3", "NOC_ATT_CONFIG_QUASAR_AETHER_2X3", quasar_aether_2x3_att_config::MAP},
+    {"quasar_aether_2x3_uncapped",
+     "NOC_ATT_CONFIG_QUASAR_AETHER_2X3_UNCAPPED",
+     quasar_aether_2x3_uncapped_att_config::MAP},
     {"horizon_2x3", "NOC_ATT_CONFIG_HORIZON_2X3", horizon_2x3_att_config::MAP},
 };
 
 /// Names accepted by TT_METAL_NOC_ATT, for diagnostics (keep in step with MAPS).
-inline constexpr std::string_view KNOWN_MAP_NAMES = "grendel_qsr1, quasar_aether_2x3 or horizon_2x3";
+inline constexpr std::string_view KNOWN_MAP_NAMES =
+    "grendel_qsr1, quasar_aether_2x3, quasar_aether_2x3_uncapped or horizon_2x3";
 
 /// @brief The registry row for @p name, or nullptr for an unknown map.
 constexpr const MapInfo* find_map(std::string_view name) {
@@ -56,6 +61,8 @@ constexpr const MapInfo* find_map(std::string_view name) {
 ///
 /// - quasar_aether_2x3: 64 MiB, the DRAM a 2x3 emulator channel backs
 ///   (qa_emulator_models.hpp), which the descriptor is already clamped to.
+/// - quasar_aether_2x3_uncapped: 1 GiB, the DRAM the soc descriptor declares
+///   (TT_METAL_SIMULATOR_DRAM_UNCAPPED=1).
 /// - horizon_2x3: 64 MiB.
 /// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view.
 constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
@@ -148,6 +155,9 @@ static_assert(
 static_assert(
     dram_window_local_address_limit(*find_map("quasar_aether_2x3")) == (std::uint64_t{64} << 20),
     "quasar_aether_2x3 DRAM window must carry 64 MiB of local address, the size of the emulator's DRAM tile");
+static_assert(
+    dram_window_local_address_limit(*find_map("quasar_aether_2x3_uncapped")) == (std::uint64_t{1} << 30),
+    "quasar_aether_2x3_uncapped DRAM window must carry the 1 GiB of local address the soc descriptor declares");
 static_assert(
     dram_window_local_address_limit(*find_map("horizon_2x3")) == (std::uint64_t{64} << 20),
     "horizon_2x3 DRAM window must carry 64 MiB of local address, the size of the emulator's DRAM tile");

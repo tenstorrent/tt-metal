@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -23,16 +24,6 @@ bool has_wrap_around(tt::tt_fabric::Topology topology) {
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt_fabric::Topology topology) {
     return has_wrap_around(topology) ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                                      : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-}
-
-uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        if (devices[i] == device) {
-            return i;
-        }
-    }
-    TT_THROW("Device not found in device_index");
-    return std::numeric_limits<uint32_t>::max();
 }
 }  // namespace detail
 
@@ -129,7 +120,11 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     }
 
     if (!num_links.has_value()) {
-        log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        // This runs on every op invocation, so warn once per process to keep serving logs readable.
+        static std::once_flag warned;
+        std::call_once(warned, [] {
+            log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        });
         return 1;
     }
     log_debug(tt::LogOp, "num_links: {}", *num_links);

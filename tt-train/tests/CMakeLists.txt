@@ -59,6 +59,8 @@ set(SOURCES
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
     ops/distributed/mesh_workload_cache_hit_test.cpp
+    ops/distributed/gumbel_sample_mesh_test.cpp
+    ops/distributed/moe_ep_mesh_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -71,11 +73,13 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
+    ops/qkv_causal_conv1d_silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/swiglu_packed_op_test.cpp
     ops/moe_ffn_swiglu_op_test.cpp
     ops/moe_group_op_test.cpp
     ops/moe_ungroup_op_test.cpp
@@ -202,10 +206,12 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_kv_assemble_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
+        benchmark/qkv_causal_conv1d_silu_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
