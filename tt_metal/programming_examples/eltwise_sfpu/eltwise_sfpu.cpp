@@ -8,7 +8,9 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -32,78 +34,116 @@ int main() {
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-        // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
-        // same kernel at a given time. Metalium allows you to run different kernels on different cores
-        // simultaneously.
+        // A MeshWorkload is a collection of programs that will be executed on the mesh.
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-        constexpr CoreCoord core = {0, 0};
+        constexpr experimental::NodeCoord core = {0, 0};
 
         constexpr uint32_t n_tiles = 64;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-        // Allocate DRAM buffers for the input and output data.
-        distributed::DeviceLocalBufferConfig dram_config{
-            .page_size = tile_size_bytes, .buffer_type = tt_metal::BufferType::DRAM};
-        distributed::ReplicatedBufferConfig buffer_config{
-            .size = tile_size_bytes * n_tiles};  // Replicated across the mesh (unit mesh ⇒ single device)
+        // Allocate DRAM tensors for the input and output data. Each row of a row-major tensor is one page, so a row
+        // of one tile's worth of elements gives a page size of one tile.
+        TensorSpec dram_tensor_spec(
+            Shape({n_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-        // Allocate an input and output buffer on DRAM. We will perform a unary operation on the input buffer and write
+        // Allocate an input and output tensor on DRAM. We will perform a unary operation on the input tensor and write
         // the result.
-        std::shared_ptr<distributed::MeshBuffer> src0_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-        std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-        // Each handle refers to the per-device allocation; on a 1x1 mesh it's a single device buffer.
+        MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        // Each tensor is replicated across the mesh; on a 1x1 mesh it's a single device buffer.
 
-        // Allocate 2 circular buffers for input and output.
-        constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+        // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+        const experimental::KernelSpecName unary_reader_kernel{"unary_reader"};
+        const experimental::KernelSpecName unary_writer_kernel{"unary_writer"};
+        const experimental::KernelSpecName eltwise_sfpu_kernel{"eltwise_sfpu"};
+        const experimental::DFBSpecName src0_dfb{"src0"};
+        const experimental::DFBSpecName output_dfb{"output"};
+        const experimental::TensorParamName src0_tensor_param{"src0"};
+        const experimental::TensorParamName dst_tensor_param{"dst"};
+
+        // Describe 2 dataflow buffers for input and output.
         constexpr uint32_t num_input_tiles = 2;
-        CircularBufferConfig cb_src0_config =
-            CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, tile_size_bytes);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        experimental::DataflowBufferSpec src0_dfb_spec{
+            .unique_id = src0_dfb,
+            .entry_size = tile_size_bytes,
+            .num_entries = num_input_tiles,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
+        experimental::DataflowBufferSpec output_dfb_spec{
+            .unique_id = output_dfb,
+            .entry_size = tile_size_bytes,
+            .num_entries = num_input_tiles,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
 
-        constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_input_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, tile_size_bytes);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        // Describe the 2 data movement kernels and the compute kernel.
+        experimental::KernelSpec unary_reader_kernel_spec{
+            .unique_id = unary_reader_kernel,
+            .source = OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
+            .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0")},
+            .tensor_bindings = {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+                },
+        };
 
-        // Create the 2 data movement kernels and the compute kernel.
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-        KernelHandle unary_reader_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = reader_compile_time_args});
+        experimental::KernelSpec unary_writer_kernel_spec{
+            .unique_id = unary_writer_kernel,
+            .source = OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
+            .dfb_bindings = {experimental::ConsumerOf(output_dfb, "out0")},
+            .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out0"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+                },
+        };
 
-        std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-        KernelHandle unary_writer_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = writer_compile_time_args});
-        KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
-            core,
-            ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .math_approx_mode = false,
-            });
+        experimental::KernelSpec eltwise_sfpu_kernel_spec{
+            .unique_id = eltwise_sfpu_kernel,
+            .source = OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings = {experimental::ConsumerOf(src0_dfb, "in0"), experimental::ProducerOf(output_dfb, "out0")},
+            .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+            .hw_config =
+                experimental::ComputeHardwareConfig{
+                    .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .sfpu_precision_mode = Precision::Precise,
+                },
+        };
+
+        // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
+        // same kernel at a given time. Metalium allows you to run different kernels on different cores
+        // simultaneously.
+        // A program spec describes the program: its kernels, the dataflow buffers between them, the tensors they
+        // operate on, and the cores the kernels run on (the work units).
+        experimental::ProgramSpec program_spec{
+            .name = "eltwise_sfpu",
+            .kernels = {unary_reader_kernel_spec, unary_writer_kernel_spec, eltwise_sfpu_kernel_spec},
+            .dataflow_buffers = {src0_dfb_spec, output_dfb_spec},
+            .tensor_parameters =
+                {{.unique_id = src0_tensor_param, .spec = dram_tensor_spec},
+                 {.unique_id = dst_tensor_param, .spec = dram_tensor_spec}},
+            .work_units =
+                {{.name = "eltwise_sfpu",
+                  .kernels = {unary_reader_kernel, unary_writer_kernel, eltwise_sfpu_kernel},
+                  .target_nodes = core}},
+        };
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
         // Initialize the input data with random values and use as the input to the kernel.
         std::mt19937 rng(std::random_device{}());
@@ -113,23 +153,26 @@ int main() {
             v = bfloat16(dist(rng));
         }
 
-        // Write the data on host to the input buffer on the device.
-        // setting blocking to false allows us to overlap the data movement and following host operations (
+        // Write the data on host to the input tensor on the device.
+        // The write does not block, which allows us to overlap the data movement and following host operations (
         // setting kerenel args) in this case
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+        HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+        cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
 
-        // Set up the runtime arguments for the kernels.
-        SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
-        SetRuntimeArgs(
-            program,
-            unary_reader_kernel_id,
-            core,
-            {
-                static_cast<uint32_t>(src0_dram_buffer->address()),
-                n_tiles,
-            });
-
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {static_cast<uint32_t>(dst_dram_buffer->address()), n_tiles});
+        // Set up the runtime arguments for the kernels, and the tensors bound to the tensor parameters.
+        experimental::ProgramRunArgs run_args{
+            .kernel_run_args =
+                {{.kernel = eltwise_sfpu_kernel,
+                  .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+                 {.kernel = unary_reader_kernel,
+                  .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+                 {.kernel = unary_writer_kernel,
+                  .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})}},
+            .tensor_args =
+                {{src0_tensor_param, experimental::TensorArgument{src0_dram_tensor}},
+                 {dst_tensor_param, experimental::TensorArgument{dst_dram_tensor}}},
+        };
+        experimental::SetProgramRunArgs(program, run_args);
 
         // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading results.
         workload.add_program(device_range, std::move(program));
@@ -137,8 +180,8 @@ int main() {
         distributed::Finish(cq);
 
         // Read the result (from shard at mesh coordinate {0,0} on a unit mesh) and compare to our expected result.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+        std::vector<bfloat16> result_vec =
+            cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
         // Compute the same thing on CPU for comparison
 
