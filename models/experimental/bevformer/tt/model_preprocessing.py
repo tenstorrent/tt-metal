@@ -111,22 +111,14 @@ def create_spatial_cross_attention_parameters(sca, device, dtype=WEIGHT_DTYPE):
 
 def create_temporal_self_attention_parameters(tsa, device, dtype=WEIGHT_DTYPE):
     """``reference.temporal_self_attention.TemporalSelfAttention`` as TTTemporalSelfAttention
-    takes it. The offset and attention Linears emit channels head-major,
-    (head, queue, level, point[, xy]); they are reordered queue-major, so each stacked map's
-    channels are one contiguous half of the row."""
-    heads, queue = tsa.num_heads, tsa.num_bev_queue
-    per_head = tsa.num_levels * tsa.num_points
-
-    def queue_major(linear, width):
-        order = torch.arange(heads * queue * per_head * width).view(heads, queue, per_head * width)
-        order = order.permute(1, 0, 2).reshape(-1)
-        return linear_params(linear.weight[order], linear.bias[order], device, dtype)
-
+    takes it, which samples the BEV maps as levels of one fused op: the offset and attention
+    Linears' head-major channels, (head, map, level, point[, xy]), are the op's as they are, and
+    ``output_proj_mean`` carries the mean over the maps, which the op sums."""
     return SimpleNamespace(
         value_proj=linear_params(tsa.value_proj.weight, tsa.value_proj.bias, device, dtype),
-        sampling_offsets=queue_major(tsa.sampling_offsets, 2),
-        attention_weights=queue_major(tsa.attention_weights, 1),
-        output_proj=linear_params(tsa.output_proj.weight, tsa.output_proj.bias, device, dtype),
+        sampling_offsets=linear_params(tsa.sampling_offsets.weight, tsa.sampling_offsets.bias, device, dtype),
+        attention_weights=linear_params(tsa.attention_weights.weight, tsa.attention_weights.bias, device, dtype),
+        output_proj_mean=linear_params(tsa.output_proj.weight / tsa.num_bev_queue, tsa.output_proj.bias, device, dtype),
     )
 
 

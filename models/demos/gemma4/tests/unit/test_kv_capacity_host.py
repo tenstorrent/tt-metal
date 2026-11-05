@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.attention.prefill import (
     _bounded_ring_tail_blocks,
     _owner_lane_device_index,
     _paged_tail_block_range,
+    ring_hygiene_rows,
 )
 from models.demos.gemma4.tt.capacity import (
     BFP8_BYTES,
@@ -33,6 +34,7 @@ from models.demos.gemma4.tt.capacity import (
 )
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Generator
+from models.demos.gemma4.tt.warmup_isls import PREFILL_PAD_BUCKETS_ENV
 
 try:
     import vllm  # noqa: F401
@@ -513,12 +515,12 @@ def test_the_pool_is_allocated_from_the_ring_not_the_window(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    m = gv.Gemma4DFlashForCausalLM.__new__(gv.Gemma4DFlashForCausalLM)
+    m = gv.Gemma4DFlashContractForCausalLM.__new__(gv.Gemma4DFlashContractForCausalLM)
     m._bounded_sliding_kv_cache = True
     m.model_args = [SimpleNamespace(max_batch_size=32)]
     m.model = [SimpleNamespace(mesh_config=None, lane_slots=0)]  # no lane fold: the pool is per max batch
     monkeypatch.setattr(
-        gv.Gemma4DFlashForCausalLM,
+        gv.Gemma4DFlashContractForCausalLM,
         "_text_config",
         lambda self: SimpleNamespace(sliding_window=WINDOW_bounded_ring_spec_headroom),
     )
@@ -545,6 +547,16 @@ def test_wrapped_window_walks_the_ring_in_position_order():
     blocks, first_row, take = _bounded_ring_tail_blocks(ROW, 1100, 1024, 1024, 64)
     assert take == 1024 and first_row == 12  # 76 - 64
     assert blocks == [100 + b for b in range(1, 16)] + [100, 101]
+    # The same wrap bounds what a fresh fill zeroes (``_zero_fill_ring``): a query at p < W - 1 reads the slots of
+    # positions below 0 at the ring's end, so an exact ring is zeroed whole and a ring with speculative headroom
+    # only in its headroom half -- a window's worth of zeros either way, never the ring's (the MTP rail's 2048
+    # ring paid two windows per sliding layer per prefill: 31B QB2 random c1 TTFT +17 ms, 2026-10-30).
+    assert ring_hygiene_rows(1024, 1024) == (1024, 0)
+    assert ring_hygiene_rows(2048, 1024) == (1024, 1024)
+    assert ring_hygiene_rows(4096, 1024) == (1024, 3072)
+    assert ring_hygiene_rows(2048, None) == (2048, 0) and ring_hygiene_rows(2048, 0) == (2048, 0)
+    assert ring_hygiene_rows(512, 1024) == (512, 0), "a window the ring does not exceed keeps the whole ring"
+    assert ring_hygiene_rows(0, 1024) == (0, 0) and ring_hygiene_rows(None, 1024) == (0, 0)
 
 
 def test_short_window_and_block_zero():
@@ -713,3 +725,40 @@ def test_unbounded_last_chunk_is_noop():
     )
     assert start == 100352
     assert last_idx == 440
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS x the bounded ring: the finer bucket's page table never drops below the window
+def _padded_prefill_generator(calls, *, window=None):
+    """A bare mixin with a 64-token-block layer-0 pool and, with ``window``, a bounded sliding layer; its eager
+    single-user prefill records the token width and page-table columns it is handed."""
+    generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
+    layers = [SimpleNamespace(self_attn=None)]
+    if window:
+        config = SimpleNamespace(cache_position_modulo=window)
+        layers.append(SimpleNamespace(self_attn=SimpleNamespace(config=config)))
+    generator.model = [
+        SimpleNamespace(
+            mesh_config=None, layers=layers, hidden_size_per_layer_input=0, bounded_sliding_kv_cache=bool(window)
+        )
+    ]
+    generator.model_args = [SimpleNamespace(max_prefill_chunk_size=4096)]
+    generator._prefill_forward_single_user_text_eager = (
+        lambda tokens, page_table=None, **kw: calls.append((tuple(tokens.shape), tuple(page_table.shape))) or "logits"
+    )
+    return generator
+
+
+@pytest.mark.parametrize("window, cols", [(None, 4), (1024, 16)])
+def test_the_finer_bucket_trims_its_page_table_but_never_below_the_bounded_window(monkeypatch, window, cols):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    calls = []
+    generator = _padded_prefill_generator(calls, window=window)
+    kv_cache = [[SimpleNamespace(shape=(64, 8, 64, 256))], None]  # layer 0's K pool: 64-token blocks
+    tokens = torch.zeros(1, 1024, dtype=torch.long)  # the shared loop's 1024-token call for a 143-token prompt
+    tokens[0, :143] = 1
+    page_table = torch.arange(1, 33, dtype=torch.int32).reshape(1, 32)
+    generator.prefill_forward_single_user_text(
+        tokens, page_table, kv_cache=kv_cache, last_token_idx=142, model_id=0, user_id=0
+    )
+    assert calls == [((1, 256), (1, cols))], "4 blocks of 64 for the 256 bucket; the ring's 16 under bounded"
+    assert generator._g4_slot_tail_gen[0] == (1, 256), "the next chunk is expected at the bucket, not at 1024"

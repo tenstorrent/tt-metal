@@ -63,3 +63,20 @@ Before → after figures were recorded at each commit, so the chain ends at 151.
 
 Data parallel over a mesh ([`4abfa9b0395`](#data-parallel-scaling)) is left out of this table because it changes chip count, not single-chip time.
 Note that dataparallel will get almost a linear scale till the bottleneck becomes the datamovement to the actual chip
+
+## Token packing (context 512, not the paper shape)
+
+Token packing (`pack_tokens=None`) is left out of the ranked table, because the paper shape does
+not pack: 133 tokens pad to 160, which saves only 10%. At context 512 / horizon 64, 37-token series
+pad to 64. Packing six of them into 224 rows removes 40% of the padded rows. Single chip, b1024,
+end to end from host tensors:
+
+| Preset | Before → after (ms) | Saved | Hardware limit addressed |
+|---|---|---|---|
+| performance L1 | 83.7 → 59.1 | 29% | Tile padding of short sequences (matmul M, SDPA) |
+| default L1 | 119.2 → 82.9 | 30% | same |
+
+Code: `TtChronos._pack_plan`, `_packed_layout` and the packed branches of `prepare_inputs`,
+`forward_device` and `postprocess_output` in [tt/model.py](tt/model.py), plus the
+`tail_end` slice in [tt/encoder.py](tt/encoder.py). See the README section "Token packing for
+short sequences" for b64/b256 and 4 chips.

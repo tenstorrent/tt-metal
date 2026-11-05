@@ -27,8 +27,8 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(metadata_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
 
-    TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
-    TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
+    TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
+    TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
 
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
@@ -58,12 +58,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto experts = mapping_shape[2];
 
     TT_FATAL(
-        experts % mesh_rows * mesh_cols == 0,
-        "Experts {} must be evenly divisible by devices",
-        experts,
-        mesh_rows * mesh_cols);
-
-    TT_FATAL(
         (input_shape.rank() == 4) && (metadata_shape.rank() == 4) && (mapping_shape.rank() == 4),
         "Input, metadata, and mapping tensors must all be rank 4");
 
@@ -78,15 +72,17 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     if (operation_attributes.locally_reduced) {
         TT_FATAL(
             input_shape[0] == 1,
-            "Expecting input dim 0 equal to num devices: {}, got: {}",
-            num_devices,
+            "Expecting input dim 0 equal to 1 for a locally reduced input, got: {}",
             input_shape[0]);
     } else {
         TT_FATAL(
             input_shape[0] == experts / num_devices,
-            "Expected input shape dim 0: {} to be equal to expert mapping dim 2: {}",
+            "Expected input shape dim 0: {} to be equal to the experts per device: {} (expert mapping dim 2: {} / "
+            "devices: {})",
             input_shape[0],
-            mapping_shape[2]);
+            experts / num_devices,
+            experts,
+            num_devices);
     }
 
     TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
@@ -99,9 +95,9 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_shard_dim);
     uint32_t output_shard_dim = operation_attributes.output_shard_dim;
     if (output_shard_dim == 1) {
-        TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group", batch, axis_group);
+        TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group {}", batch, axis_group);
     } else if (output_shard_dim == 2) {
-        TT_FATAL(seq % axis_group == 0, "Sequence length {} must be divisible by axis group", seq, axis_group);
+        TT_FATAL(seq % axis_group == 0, "Sequence length {} must be divisible by axis group {}", seq, axis_group);
     }
 
     TT_FATAL(

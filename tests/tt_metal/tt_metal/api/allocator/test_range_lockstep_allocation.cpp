@@ -16,6 +16,7 @@
 #include <vector>
 #include <gtest/gtest.h>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>

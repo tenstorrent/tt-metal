@@ -17,9 +17,15 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
+    PerfRunType,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import (
+    ALL_PERF_RUN_TYPES,
+    create_test_or_perf_config,
+)
 from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
@@ -29,28 +35,41 @@ from helpers.sfpu_domains import (
     for_op,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
-    DISABLE_SRC_ZERO_FLAG,
+    ITERATIONS,
+    LOOP_FACTOR,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PERF_RUN_TYPE,
     SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
 _SCALAR_VALUE = 2.0
 
-#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
-#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
+# Default approx mode. The clobber test overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
+# Fixed. The kernel reads this constexpr.
+_SFPU_ITERATIONS = 8
+# [64, 64] only. [128, 64] shares this ULP key and raised the Wormhole Float32 ceiling.
+_INPUT_DIMENSIONS = [[64, 64]]
 
 
-# Helper check function
 def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
@@ -76,6 +95,22 @@ def _ternary_default_specs(mathop, input_format):
     return spec_ab, spec_ab, spec_c
 
 
+def _sfpu_ternary_compile_params(
+    mathop, approx_mode, tile_count, loop_factor, faces_to_generate
+):
+    return [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        ITERATIONS(_SFPU_ITERATIONS),
+        TILE_COUNT(tile_count),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+
+
 def _run_sfpu_ternary(
     formats,
     dest_acc,
@@ -86,61 +121,110 @@ def _run_sfpu_ternary(
     spec_C=None,
     approx_mode=_APPROX_MODE,
     clobber_lregs=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
-    torch.manual_seed(0)
+    """Drive sources/sfpu_ternary_test.cpp for one functional check or one perf row."""
+    if run_types is None:
+        run_types = ALL_PERF_RUN_TYPES if is_perf else []
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
 
-    default_A, default_B, default_C = _ternary_default_specs(
-        mathop, formats.input_format
-    )
-    spec_a = spec_A if spec_A is not None else default_A
-    spec_b = spec_B if spec_B is not None else default_B
-    spec_c = spec_C if spec_C is not None else default_C
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_a,
-        spec_B=spec_b,
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
-    src_C, tile_cnt_C, _, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_c,
-        spec_B=spec_c,
-    )
+    if is_perf:
+        # Literal list: the perf schema gate reads templates= and runtimes= lists.
+        templates = [
+            SFPU_TERNARY_OP(mathop),
+            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(_SFPU_ITERATIONS),
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            DEST_SYNC(),
+        ]
+        if clobber_lregs:
+            templates.append(SFPU_CLOBBER_LREGS())
+        runtimes = []
+        # C must exist so L1_TO_L1 builds the third Operand; values are unused.
+        perf_c = torch.zeros(input_dimensions)
+        stimuli = StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+            buffer_C=perf_c.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_count,
+        )
+    else:
+        # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
+        torch.manual_seed(0)
 
-    generate_golden = get_golden_generator(TernarySFPUGolden)
-    golden = generate_golden(
-        mathop,
-        src_A,
-        src_B,
-        src_C,
-        _SCALAR_VALUE_BITS,
-        formats.output_format,
-    )
+        default_A, default_B, default_C = _ternary_default_specs(
+            mathop, formats.input_format
+        )
+        spec_a = spec_A if spec_A is not None else default_A
+        spec_b = spec_B if spec_B is not None else default_B
+        spec_c = spec_C if spec_C is not None else default_C
 
-    templates = [
-        SFPU_TERNARY_OP(mathop),
-        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-        APPROX_MODE(approx_mode),
-        DISABLE_SRC_ZERO_FLAG(True),
-        DEST_SYNC(),
-    ]
-    if clobber_lregs:
-        templates.append(SFPU_CLOBBER_LREGS())
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_a,
+            spec_B=spec_b,
+        )
 
-    configuration = TestConfig(
-        "sources/sfpu_ternary_test.cpp",
-        formats,
-        templates=templates,
-        runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
-        variant_stimuli=StimuliConfig(
+        src_C, tile_cnt_C, _, _ = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_c,
+            spec_B=spec_c,
+        )
+
+        generate_golden = get_golden_generator(TernarySFPUGolden)
+        golden = generate_golden(
+            mathop,
+            src_A,
+            src_B,
+            src_C,
+            _SCALAR_VALUE_BITS,
+            formats.output_format,
+        )
+
+        templates = _sfpu_ternary_compile_params(
+            mathop, approx_mode, tile_count, 1, faces_to_generate
+        ) + [
+            DEST_SYNC(),
+        ]
+        if clobber_lregs:
+            templates.append(SFPU_CLOBBER_LREGS())
+        # Not named runtimes: that assignment would add block columns to the perf schema.
+        functional_runtime_params = [
+            NUM_BLOCKS(tile_cnt_A),
+            NUM_TILES_IN_BLOCK(1),
+        ]
+        runtimes = functional_runtime_params
+        stimuli = StimuliConfig(
             src_A.flatten(),
             formats.input_format,
             src_B.flatten(),
@@ -152,11 +236,28 @@ def _run_sfpu_ternary(
             buffer_C=src_C.flatten(),
             stimuli_C_format=formats.input_format,
             tile_count_C=tile_cnt_C,
-        ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
+        )
+
+    # A 32-bit input unpacks straight to Dest.
+    unpack_to_dest = formats.input_format.is_32_bit()
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": "sources/sfpu_ternary_test.cpp",
+            "formats": formats,
+            "templates": templates,
+            "runtimes": runtimes,
+            "variant_stimuli": stimuli,
+            "unpack_to_dest": unpack_to_dest,
+            "dest_acc": dest_acc,
+            "compile_time_formats": True,
+        },
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     res_from_L1 = res_from_L1[: len(golden)]
@@ -169,10 +270,7 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The op's declared accuracy contract for this exact variant, the same gate the
-    # binary driver applies: the whole contract, step budget included, since the ternary
-    # rows were measured over this driver's own variants. The mode the kernel compiled
-    # is passed: left unset, a row keyed `approx: "No"` would not match.
+    # Pass approx_mode so a contract row keyed approx "No" still matches.
     assert_against_contract(
         mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
     )
@@ -194,8 +292,9 @@ def _run_sfpu_ternary(
         MathOperation.SfpuLerp,
         MathOperation.SfpuSnakeBeta,
     ],
+    input_dimensions=_INPUT_DIMENSIONS,
 )
-def test_sfpu_ternary(formats, dest_acc, mathop):
+def test_sfpu_ternary(formats, dest_acc, mathop, input_dimensions):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Bfp8_b
@@ -203,51 +302,41 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
     ):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
-    _run_sfpu_ternary(formats, dest_acc, mathop)
+    _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=input_dimensions)
 
 
-# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
-# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
-# (tenstorrent/tt-llk#1701 items 2 and 5).
+# Newton init must program vConstFloatPrgm0 itself (tt-llk#1701 items 2 and 5).
 _TERNARY_RECIP_NEWTON_OPS = [
     MathOperation.SfpuAddcdiv,
     MathOperation.SfpuSnakeBeta,
 ]
 
 
-# Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 items 2 and
-# 5, verified on Blackhole silicon only; Wormhole's sfpu_reciprocal_init programs its
-# constants in both modes
+# Wormhole programs the reciprocal constants in both modes, so this is Blackhole-only.
 @blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=_TERNARY_RECIP_NEWTON_OPS,
+    input_dimensions=_INPUT_DIMENSIONS,
 )
-def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
-    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
-    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
-    """
+def test_sfpu_ternary_approx_after_lreg_clobber(
+    formats, dest_acc, mathop, input_dimensions
+):
+    """Clobber SFPU registers before APPROX_MODE=Yes, or 1/c is about 47.6x too large."""
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_ternary(
         formats,
         dest_acc,
         mathop,
+        input_dimensions=input_dimensions,
         approx_mode=ApproximationMode.Yes,
         clobber_lregs=True,
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Deliberate edge values on the third operand
-#
-# The random sweep holds c away from zero for the ops that divide by it, so the pole is
-# unreachable by construction; these variants drive it, via each op's registered edge metadata.
-# Only C gets edge values: A and B keep their random domains, since the divisor is the
-# interesting operand and pinning all three would test one point rather than a spread.
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Operand C only. A and B stay in their random domains.
 _TERNARY_EDGE_OPS = [
     MathOperation.SfpuAddcdiv,
     MathOperation.SfpuAddcmul,
@@ -255,16 +344,12 @@ _TERNARY_EDGE_OPS = [
     MathOperation.SfpuSnakeBeta,
 ]
 
-# Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
-# unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
-# form, which the binary suite covers as a class of its own.
+# Divides by c, so the numerator stays off zero and the edge is the pole rather than 0/0.
 _TERNARY_DIVIDES_BY_C = frozenset(
     {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
 )
 
-# |x| >= 0.5 on both a and b, keeping both numerators off zero -- addcdiv's is value * b,
-# snake_beta's sin(b*a)^2. Two specs differing only in seed: one spec shared by both operands
-# would make every variant run a == b, hiding a kernel that reads the wrong operand.
+# Different seeds so a == b cannot hide a kernel that reads the wrong operand.
 _TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
 _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
 
@@ -274,8 +359,9 @@ _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], s
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=_TERNARY_EDGE_OPS,
+    input_dimensions=_INPUT_DIMENSIONS,
 )
-def test_sfpu_ternary_edges(formats, dest_acc, mathop):
+def test_sfpu_ternary_edges(formats, dest_acc, mathop, input_dimensions):
     """Drive each ternary op's operand-C pole or knee, where it has one."""
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
@@ -287,22 +373,32 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
         dest_acc=dest_acc,
     )
     if spec_C is None:
-        # addcmul: c is a multiplicand, so there is no pole or knee for a probe to reach.
         pytest.skip(
             reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
             "pipeline"
         )
 
-    # Keep the numerator off zero so the variant asserts the pole, not 0/0.
     nonzero = mathop in _TERNARY_DIVIDES_BY_C
     _run_sfpu_ternary(
         formats,
         dest_acc,
         mathop,
+        input_dimensions=input_dimensions,
         spec_A=_TERNARY_NONZERO_A if nonzero else None,
         spec_B=_TERNARY_NONZERO_B if nonzero else None,
         spec_C=spec_C,
     )
+
+
+def _skip_where_config(formats, dest_acc):
+    """where's supported (format, dest_acc) pairs. Shared by the functional tests and perf."""
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
 
 @parametrize(
@@ -317,26 +413,17 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
+    input_dimensions=_INPUT_DIMENSIONS,
 )
 def test_ttnn_where(
     formats,
     dest_acc,
     mathop,
     test_case,
+    input_dimensions,
 ):
+    _skip_where_config(formats, dest_acc)
 
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
-
-    # 64x64 = 2x2 tiles: exercises the multi-tile block loop in sfpu_ternary_test.cpp.
-    input_dimensions = [64, 64]
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -356,7 +443,6 @@ def test_ttnn_where(
         spec_B=sfpu_false_spec,
     )
 
-    # Modify the condition tensor based on test case
     if test_case == "all_ones":
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
@@ -368,12 +454,12 @@ def test_ttnn_where(
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
-            DISABLE_SRC_ZERO_FLAG(True),
+        templates=_sfpu_ternary_compile_params(
+            mathop, _APPROX_MODE, tile_cnt_A, 1, MAX_NUM_FACES
+        )
+        + [
             DEST_SYNC(),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
@@ -421,7 +507,6 @@ def test_ttnn_where(
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
-# MCW test: the main test's format sweep, input format == output format.
 @parametrize(
     formats=input_output_formats(
         [
@@ -433,31 +518,20 @@ def test_ttnn_where(
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
+    input_dimensions=_INPUT_DIMENSIONS,
 )
 def test_ttnn_where_mcw(
     formats,
     dest_acc,
     mathop,
+    input_dimensions,
 ):
-    # Multi-tile tensor dimensions (2x2 tiles of 32x32).
-    height = 64
-    width = 64
+    height, width = input_dimensions
+    _skip_where_config(formats, dest_acc)
 
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
-
-    # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2
     C = pattern.view(height, width).to(format_dict[formats.input_format])
 
-    # Set specific values for true and false tensors
     T = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 2
     F = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 11
 
@@ -468,12 +542,12 @@ def test_ttnn_where_mcw(
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
-            DISABLE_SRC_ZERO_FLAG(True),
+        templates=_sfpu_ternary_compile_params(
+            mathop, _APPROX_MODE, tile_count, 1, MAX_NUM_FACES
+        )
+        + [
             DEST_SYNC(),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(

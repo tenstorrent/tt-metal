@@ -333,6 +333,7 @@ void add_fabric_mux_v2_to_program(
 }
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -342,6 +343,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc) {
     std::vector<uint32_t> forwarder_runtime_args;
     append_fabric_connection_rt_args(
+        mesh_device,
         src_fabric_node_id,
         dst_fabric_node_id,
         link_idx,
@@ -404,6 +406,7 @@ void add_fabric_mux_v2_to_program(
 }
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -413,6 +416,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc) {
     std::vector<uint32_t> forwarder_runtime_args;
     append_fabric_connection_rt_args(
+        mesh_device,
         src_fabric_node_id,
         dst_fabric_node_id,
         link_idx,

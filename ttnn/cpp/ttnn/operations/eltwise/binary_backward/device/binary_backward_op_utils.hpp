@@ -25,6 +25,8 @@ struct BinaryBackwardKernelSpec {
     // Fused multiply+reduce compute kernel for broadcast cases. Empty here: broadcast rows
     // use the composite reduce_to_shape path in binary_backward.cpp; follow-up wires this.
     std::string_view broadcast_reduce_kernel_path;
+    // 1 = reader streams only grad (c_0); 3 = also input (c_1) + other (c_2). Mismatch deadlocks reader.
+    uint8_t num_input_tensors = 3;
 };
 
 const BinaryBackwardKernelSpec& kernel_spec(BinaryBackwardOpType op_type);

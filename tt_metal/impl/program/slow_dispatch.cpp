@@ -32,7 +32,6 @@
 #include "program_impl.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tracy/Tracy.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/program.hpp>

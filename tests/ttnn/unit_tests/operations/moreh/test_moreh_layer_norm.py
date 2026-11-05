@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose, skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_layer_norm import (
     make_input_tensors,
     run_moreh_layer_norm,

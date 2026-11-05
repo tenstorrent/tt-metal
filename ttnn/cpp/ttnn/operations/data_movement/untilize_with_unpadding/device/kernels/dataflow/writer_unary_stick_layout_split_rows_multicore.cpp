@@ -21,9 +21,11 @@ void kernel_main() {
     const auto n_block_reps = get_arg(args::n_block_reps);
 
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool ONE_BYTE_DTYPE = get_arg(args::one_byte_dtype) == 1;
     constexpr auto unpadded_X_size = get_arg(args::unpadded_X_size);
 
-    const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
+    // 32-datum tile row: 4/2/1 bytes per datum -> shift 7/6/5.
+    const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : (ONE_BYTE_DTYPE ? 5 : 6));
 
     // The destination's per-shard page size — the shard width for BLOCK/WIDTH-sharded output (a
     // logical row spans multiple shards), the aligned page size for HEIGHT-sharded output (one row

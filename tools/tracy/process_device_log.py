@@ -257,7 +257,7 @@ def get_ops(timeseries):
                     if is_master_fw_boundary(risc, timerID, "ZONE_START"):
                         if len(opCores[core]) == 2:
                             corruption = False
-                            for core, coreOp in opCores.items():
+                            for otherCore, coreOp in opCores.items():
                                 if coreOp and len(coreOp) != 2:
                                     corruption = True
                             if corruption:
@@ -274,10 +274,10 @@ def get_ops(timeseries):
                     elif is_master_fw_boundary(risc, timerID, "ZONE_END"):
                         assert (
                             len(opCores[core]) == 1
-                        ), "Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
+                        ), f"Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
                         opCores[core] = (opCores[core][0], timerID)
                         opIsDone = True
-                        for core, coreOp in opCores.items():
+                        for otherCore, coreOp in opCores.items():
                             if not coreOp or len(coreOp) != 2:
                                 opIsDone = False
                                 break

@@ -15,6 +15,7 @@ import torch
 
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.lane_prefill import (
+    TRACE_SEQ_LENS,
     check_lane_decode_frame,
     fit_table_width,
     lane_decode_frame_shapes,
@@ -22,8 +23,10 @@ from models.demos.gemma4.tt.lane_prefill import (
     lane_prefill_trace_buckets,
     lane_prefill_trace_choice,
     lane_trace_rounds_for_call,
+    lane_trace_seq_lens,
     parse_lane_prefill_trace_buckets,
 )
+from models.demos.gemma4.tt.warmup_isls import PREFILL_PAD_BUCKETS_ENV
 from models.tt_transformers.tt.common import get_padded_prefill_len
 
 try:
@@ -91,8 +94,8 @@ if _HAS_VLLM:
     CLASSES = [
         gv.Gemma4ForCausalLM,
         gv.Gemma4VisionForConditionalGeneration,
-        gv.Gemma4MTPForCausalLM,
-        gv.Gemma4DFlashForCausalLM,
+        gv.Gemma4MTPContractForCausalLM,
+        gv.Gemma4DFlashContractForCausalLM,
     ]
 
 
@@ -424,6 +427,11 @@ def test_router_with_one_prompt_per_lane_keeps_full_rounds_and_the_serial_remain
     inst, _model, calls = _bridge(monkeypatch, prompts=1)
     kwargs, tables = _step([0, 32, 64], [50] * 3)
     assert inst._try_lane_parallel_prefill(kwargs, tables) is None, "B < lanes falls through"
+    # the decline names the frame the single-prompt path needed (the served log's only word on a serial prefill)
+    (reason,) = inst._g4_router_reasons_logged
+    assert "B=3 < lanes=" in reason and "no 1x128 frame is captured" in reason and "captured frames []" in reason
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is None
+    assert len(inst._g4_router_reasons_logged) == 1, "a repeated reason is not logged at INFO again"
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -766,13 +774,14 @@ def _replay_instance(monkeypatch, *, install=None):
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.tt_transformers.tt import common as tt_common
 
-    calls = {"installs": [], "copies": 0, "executed": [], "logits": 0}
+    calls = {"installs": [], "copies": 0, "executed": [], "logits": 0, "released": []}
     model = SimpleNamespace(
         mesh_device="mesh",
         mesh_config=SimpleNamespace(lane_sharded=True, lanes=LANES_lane_prefill_trace_host),
         lane_slots=LANE_SLOTS_lane_prefill_trace_host,
         _persistent_pt_by_batch={LANES_lane_prefill_trace_host: _buffers("a")},
     )
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, tid: calls["released"].append((mesh, tid)))
 
     def _update(tables, force=False):
         calls["installs"].append([tuple(t.shape) for t in tables])
@@ -847,7 +856,9 @@ def test_replay_drops_a_frame_whose_table_buffers_moved_between_calls(monkeypatc
     assert _replay_call(inst, model) is None
     assert calls["executed"] == [] and calls["copies"] == 0 and len(calls["installs"]) == 1
     assert (1, 128) not in inst._g4_lane_prefill_traces and not hasattr(model, "_active_page_tables_per_layer")
+    assert calls["released"] == [("mesh", 7)], "the dropped frame's trace goes back to the trace region"
     assert _replay_call(inst, model) is None, "a dropped frame never replays"
+    assert calls["released"] == [("mesh", 7)], "released once: a frame no longer in the registry has no trace"
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -859,12 +870,13 @@ def test_replay_drops_a_frame_reallocated_under_its_own_install(monkeypatch):
     inst, model, calls = _replay_instance(monkeypatch, install=_grow)
     assert _replay_call(inst, model) is None
     assert calls["executed"] == [] and (1, 128) not in inst._g4_lane_prefill_traces
+    assert calls["released"] == [("mesh", 7)]
 
     # an address change alone (same objects, moved buffers) is caught by the fingerprint too
     inst, model, calls = _replay_instance(monkeypatch)
     for b in model._persistent_pt_by_batch[LANES_lane_prefill_trace_host]:
         b.buffer_address = lambda: 0xBEEF
-    assert _replay_call(inst, model) is None and calls["executed"] == []
+    assert _replay_call(inst, model) is None and calls["executed"] == [] and calls["released"] == [("mesh", 7)]
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -1111,3 +1123,109 @@ def test_guard_interval_zero_keeps_the_hard_limit(monkeypatch):
     monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_MIN_INTERVAL_S", "0")
     g = _guard(monkeypatch, recaptures=8, last_recapture_age_s=1e6)
     assert g._g4_trace_guard_should_recapture("k") is False
+
+
+# ===== the speculative records on the lane engine: the lane frame of a record call (tt/lane_prefill.py, host-only)
+from models.demos.gemma4.tt.lane_prefill import (  # noqa: E402
+    lane_frame_rows,
+    lane_of_row,
+    lane_record_table,
+    lane_row_groups,
+    lane_rows_per_lane,
+)
+
+REC_LANES, REC_SLOTS = 4, 8  # a 4-lane engine of 8 slots: slot s sits on lane s // 8
+
+
+def test_record_rows_group_by_lane_in_call_order_and_count_the_busiest_lane():
+    rows = [0, 3, 16, 17, 18, 31]  # lanes 0, 0, 2, 2, 2, 3
+    assert [lane_of_row(r, REC_SLOTS) for r in rows] == [0, 0, 2, 2, 2, 3]
+    assert lane_row_groups(rows, REC_LANES, REC_SLOTS) == [[0, 1], [], [2, 3, 4], [5]]
+    assert lane_rows_per_lane(rows, REC_LANES, REC_SLOTS) == 3
+    assert lane_rows_per_lane([], REC_LANES, REC_SLOTS) == 0
+    # one column: every row is lane 0 and the count is the batch
+    assert lane_row_groups([5, 2, 9], 1, 0) == [[0, 1, 2]] and lane_rows_per_lane([5, 2, 9], 1, 0) == 3
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ([16, 0], "lane-major"),  # lane 2 before lane 0
+        ([0, 0], "duplicate row 0"),
+        ([32], "outside the 4 x 8 lane slot space"),
+        ([-1], "outside the 4 x 8 lane slot space"),
+    ],
+)
+def test_record_rows_out_of_lane_order_or_space_are_refused(expect_error, rows, message):
+    with expect_error(ValueError, message):
+        lane_row_groups(rows, REC_LANES, REC_SLOTS)
+
+
+def test_the_lane_frame_mirrors_each_lanes_first_row_and_idles_empty_lanes():
+    groups = lane_row_groups([0, 3, 16, 17, 18, 31], REC_LANES, REC_SLOTS)
+    anchors = [100, 101, 102, 103, 104, 105]
+    frame = lane_frame_rows(anchors, groups, 5, idle=0)
+    assert frame == [100, 101, 100, 100, 100] + [0] * 5 + [102, 103, 104, 102, 102] + [105] * 5
+    with expect_error_value("lane 2 has 3 rows for a 2-row record"):
+        lane_frame_rows(anchors, groups, 2, idle=0)
+
+
+def expect_error_value(message):
+    return pytest.raises(ValueError, match=message)  # allow-pytest.raises (a module-level helper, no fixture)
+
+
+def test_the_record_table_is_the_lane_frame_of_the_global_rows():
+    full = torch.arange(REC_LANES * REC_SLOTS * 3, dtype=torch.int32).reshape(REC_LANES * REC_SLOTS, 3) + 1
+    rows = [0, 3, 16, 17, 18, 31]
+    table = lane_record_table(full, 5, rows, REC_LANES, REC_SLOTS)
+    assert tuple(table.shape) == (REC_LANES * 5, 3) and table.dtype == torch.int32
+    # lane 0's rows at 0..1, lane 2's at 10..12, lane 3's at 15; every other frame row is block 0
+    assert table[0].tolist() == full[0].tolist() and table[1].tolist() == full[3].tolist()
+    assert table[10:13].tolist() == full[[16, 17, 18]].tolist() and table[15].tolist() == full[31].tolist()
+    live = {0, 1, 10, 11, 12, 15}
+    assert all(not table[r].any() for r in range(REC_LANES * 5) if r not in live)
+    # one column: the plain record's [b_v, blocks] table in call order
+    one = lane_record_table(full, 3, [9, 2], 1, 0)
+    assert one.tolist() == [full[9].tolist(), full[2].tolist(), [0, 0, 0]]
+    with expect_error_value("lane 2 has 3 rows for a 2-row record"):
+        lane_record_table(full, 2, rows, REC_LANES, REC_SLOTS)
+    with expect_error_value("row 31 is outside the 20-row page table"):
+        lane_record_table(full[:20], 5, [0, 31], REC_LANES, REC_SLOTS)
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS on the lane engine: the router pads to Gemma 4's bucket and the frames admit it
+def test_the_pad_knob_admits_its_buckets_as_frame_lengths(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    assert lane_trace_seq_lens() == TRACE_SEQ_LENS
+    kept, dropped = parse_lane_prefill_trace_buckets(
+        "1x256,4x256,1x128", max_chunk=4096, lane_slots=32, bounded_sliding=False
+    )
+    assert kept == {(1, 128)} and dropped == ["1x256", "4x256"], "no router pads to 256 without the knob"
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    assert lane_trace_seq_lens() == (128, 256, 512, 1024, 2048, 4096)
+    kept, dropped = parse_lane_prefill_trace_buckets(
+        "1x256,4x256,1x128", max_chunk=4096, lane_slots=32, bounded_sliding=False
+    )
+    assert kept == {(1, 128), (1, 256), (4, 256)} and dropped == []
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_router_pads_to_the_knobs_bucket_and_replays_its_frame(monkeypatch):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    inst, calls = _bridge_lane_prefill_trace_host(monkeypatch, prompts=1, captured={(1, 128), (1, 256)})
+    kwargs, tables = _step_lane_prefill_trace_host([33], [200], seq=200)  # 200 tokens: 256 under the knob, else 1024
+    out = inst._try_lane_parallel_prefill(kwargs, tables)
+    assert out is not None and calls["serial"] == [] and calls["eager"] == []
+    bucket, toks, _pts, _per_layer, plens = calls["replays"][-1]
+    assert bucket == (1, 256) and toks == (LANES_lane_prefill_trace_host, 1, 256)
+    assert plens == [200] * LANES_lane_prefill_trace_host
+    # a full round of 300-token prompts with no frame at 512: the eager walk at the knob's bucket
+    kwargs, tables = _step_lane_prefill_trace_host([0, 32, 64, 96], [300] * 4, seq=300)
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is not None
+    assert calls["eager"][-1][0] == (LANES_lane_prefill_trace_host, 512)
+    # without the knob the same prompt pads to the shared 1024 bucket, which has no frame: the serial path
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    inst, calls = _bridge_lane_prefill_trace_host(monkeypatch, prompts=1, captured={(1, 128), (1, 256)})
+    kwargs, tables = _step_lane_prefill_trace_host([33], [200], seq=200)
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is None
+    assert calls["replays"] == [] and calls["eager"] == []

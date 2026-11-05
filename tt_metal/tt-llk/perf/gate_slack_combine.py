@@ -67,6 +67,27 @@ def threshold_for(ctx, module):
         return None
 
 
+def _pct_short(value):
+    return f"{value * 100:g}%"
+
+
+def _rule(ctx):
+    """The threshold line of an arch's section; empty when no threshold was given."""
+    base = threshold_for(ctx, "")
+    if base is None:
+        return []
+    rule = f"slower by more than {_pct_short(base)}"
+    if ctx.get("min_cycles"):
+        rule += f" and by more than {_escape(ctx['min_cycles'])} cycles"
+    pairs = (ctx.get("module_thresholds") or "").split(",")
+    names = sorted({p.partition("=")[0].strip() for p in pairs} - {""})
+    if names:
+        rule += ", except " + ", ".join(
+            f"{_escape(m)} {_pct_short(threshold_for(ctx, m))}" for m in names
+        )
+    return [f"_Threshold: a point regresses when it is {rule}._"]
+
+
 def _elsewhere(row, others):
     """How the same point moved on the other arches, as one line."""
     bits = []
@@ -81,7 +102,9 @@ def _elsewhere(row, others):
             bits.append(f"{arch}: {what}")
             continue
         limit = threshold_for(ctx, row.get(MODULE_KEY) or "")
-        under = f", under its {limit:.0%} threshold" if limit is not None else ""
+        under = (
+            f", under its {_pct_short(limit)} threshold" if limit is not None else ""
+        )
         bits.append(f"{arch}: {what}{under}")
     return "same point on " + "; ".join(bits) if bits else ""
 
@@ -91,14 +114,16 @@ def _section(part, others):
     arch = (ctx.get("arch") or "?").capitalize()
     head = f"*{_escape(arch)}* · {_escape(ctx.get('run_types') or '?')}"
     note = [f":hourglass: {_escape(ctx['note'])}"] if ctx.get("note") else []
+    rule = _rule(ctx)
     status = part["status"]
     if status == "clean":
-        return [f"{head}: :white_check_mark: no point regressed.", *note]
+        return [f"{head}: :white_check_mark: no point regressed.", *rule, *note]
     if status == "skipped":
         reason = _escape(ctx.get("reason") or "The gate compared nothing.")
         return [f"{head}: :warning: *SKIPPED.* {reason}", *note]
     return [
         f"{head}: :rotating_light: regression",
+        *rule,
         *note,
         *regression_body(part["rows"], ctx, lambda row: _elsewhere(row, others)),
     ]

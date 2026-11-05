@@ -100,7 +100,6 @@ def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry
     if unique_id is None:
         return None, "remote"
     segments = {}
-    # Window 0: every version window aliases the same bytes.
     for segment in range(kda_segments_per_layer(geometry, kind)):
         loc = table.lookup(layer, kda_position(geometry, kind, segment), slot, config_id)
         uid = resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)

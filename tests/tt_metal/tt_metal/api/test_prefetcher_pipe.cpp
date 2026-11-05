@@ -39,6 +39,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -65,7 +66,11 @@ protected:
     // A space sized for exactly one pipe, and that pipe carved from it. The space must outlive
     // the pipe (the pipe does not own it), so it is parked on the fixture until TearDown.
     experimental::PrefetcherPipe make_pipe(
-        distributed::MeshDevice* device, CoreCoord sender, const CoreRangeSet& receivers, uint32_t ring_size);
+        distributed::MeshDevice* device,
+        CoreCoord sender,
+        const CoreRangeSet& receivers,
+        uint32_t ring_size,
+        uint32_t num_credit_lanes = 1);
 
     bool is_fast_dispatch() const { return MetalContext::instance().rtoptions().get_fast_dispatch(); }
 
@@ -310,6 +315,43 @@ Program& persistent_run_on_mesh_device(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_out, false);
     distributed::Finish(mesh_device->mesh_command_queue());
     return workload_out.get_programs().at(device_range);
+}
+
+// Enqueue a blank kernel with a CB on `cores` and hand back its workload. While the workload is
+// alive its Program keeps that program-local L1 placed, as an op held in the program cache does.
+distributed::MeshWorkload run_program_with_cb(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& cores) {
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        blank_kernel_path,
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateCircularBuffer(
+        program, cores, CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048));
+    distributed::MeshWorkload workload;
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
+    return workload;
+}
+
+bool ranges_overlap(uint64_t a_begin, uint64_t a_end, uint64_t b_begin, uint64_t b_end) {
+    return a_begin < b_end && b_begin < a_end;
+}
+
+// Allocate an L1 buffer while `space` is alive and expect the allocator to have placed it clear of
+// the space's ring and config page.
+void expect_l1_buffer_placed_clear_of(distributed::MeshDevice& mesh_device, const m2::PrefetcherPipeSpace& space) {
+    constexpr uint32_t buffer_size = 2048;
+    auto buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        distributed::DeviceLocalBufferConfig{.page_size = buffer_size, .buffer_type = BufferType::L1},
+        &mesh_device);
+    const uint64_t buffer_begin = buffer->address();
+    const uint64_t buffer_end = buffer_begin + buffer_size;
+    EXPECT_FALSE(
+        ranges_overlap(buffer_begin, buffer_end, space.buffer_address(), space.buffer_address() + space.ring_size()));
+    EXPECT_FALSE(ranges_overlap(
+        buffer_begin, buffer_end, space.config_address(), space.config_address() + space.config_page_size()));
 }
 
 // Overlap producer/consumer across two programs (cross-program shape). Prefer a single Program
@@ -673,12 +715,12 @@ uint32_t run_prefetcher_pipe_relay(
         TT_FATAL(
             (params.total_entries / params.num_producers) % params.batch_size == 0,
             "Multi-producer: per-hart entries must be divisible by batch_size");
-        TT_FATAL(
-            pipe.impl().credit_lane_capacity() >= params.num_producers,
-            "Multi-producer: PrefetcherPipe credit_lane_capacity {} < num_producers {}",
-            pipe.impl().credit_lane_capacity(),
-            params.num_producers);
     }
+    TT_FATAL(
+        pipe.num_credit_lanes() == params.num_producers,
+        "Relay test: num_producers {} needs a pipe carved with that many credit lanes, but it has {}",
+        params.num_producers,
+        pipe.num_credit_lanes());
     if (params.num_sender_threads > 1) {
         TT_FATAL(is_quasar_arch(), "Multi-DM PrefetcherPipe requires Quasar");
     }
@@ -786,8 +828,7 @@ uint32_t run_prefetcher_pipe_relay(
         distributed::MeshWorkload workload;
         persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
     } else {
-        // Cross-program shape: bind the consumer first so its receiver kernel arms the pipe's
-        // lanes before the sender's slot payload is built at enqueue.
+        // Cross-program shape: the consumer and the sender bind the pipe from separate Programs.
         m2::ProgramSpec consumer_spec{
             .name = "pipe_relay_consumer",
             .kernels = {consumer.receiver, consumer.compute},
@@ -890,9 +931,13 @@ uint32_t slot_relay_word(const Program& program, const CoreCoord& core) {
 }  // namespace
 
 m2::PrefetcherPipe PrefetcherPipeFixture::make_pipe(
-    distributed::MeshDevice* device, CoreCoord sender, const CoreRangeSet& receivers, uint32_t ring_size) {
+    distributed::MeshDevice* device,
+    CoreCoord sender,
+    const CoreRangeSet& receivers,
+    uint32_t ring_size,
+    uint32_t num_credit_lanes) {
     spaces_.push_back(m2::CreatePrefetcherPipeSpace(*device, one_pipe_space_config(sender, receivers, ring_size)));
-    return spaces_.back().create_pipe(sender, receivers);
+    return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
 }
 
 // ============================================================================
@@ -924,6 +969,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_CarveRejects) {
     EXPECT_THROW(space.create_pipe(sender, CoreRangeSet(CoreRange({0, 0}, {1, 0}))), std::exception);
     EXPECT_THROW(space.create_pipe(sender, CoreRangeSet{}), std::exception);
     EXPECT_THROW(space.create_pipe(sender, domain), std::exception);
+    // Credit lanes outside [1, the lanes the space's pages reserve].
+    EXPECT_THROW(space.create_pipe(sender, CoreRangeSet(CoreRange({1, 0})), 0), std::exception);
+    EXPECT_THROW(
+        space.create_pipe(sender, CoreRangeSet(CoreRange({1, 0})), PREFETCHER_PIPE_MAX_CREDIT_LANES + 1),
+        std::exception);
     EXPECT_EQ(space.unclaimed_cores().num_cores(), 3u);
 
     {
@@ -975,6 +1025,13 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_ConfigRejects) {
         std::exception);
     // Worker and DRAM sender capacity may coexist; exact DRAM senders are selected later.
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.num_dram_senders = 1; })));
+    // DRAM senders take their worker L1 from the allocator, never from the persistent arena.
+    EXPECT_THROW(
+        m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) {
+            c.num_dram_senders = 1;
+            c.l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+        })),
+        std::exception);
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, config));
 }
 
@@ -1085,6 +1142,109 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
     EXPECT_NE(replacement.identity(), first_pipe_identity);
 }
 
+TEST_F(PrefetcherPipeFixture, DefaultL1SourceFollowsSenderType) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto config = one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    EXPECT_EQ(
+        m2::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(), m2::PrefetcherPipeL1Source::PersistentArena);
+    config.num_dram_senders = 1;
+    EXPECT_EQ(m2::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(), m2::PrefetcherPipeL1Source::Allocator);
+}
+
+TEST_F(PrefetcherPipeFixture, AllocatorSpaceTakesItsL1FromTheAllocator) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto config = one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+
+    uint32_t first_ring_address = 0;
+    uint32_t first_config_address = 0;
+    {
+        auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+        first_ring_address = space.buffer_address();
+        first_config_address = space.config_address();
+        EXPECT_EQ(space.config_address() % PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN, 0u);
+        EXPECT_TRUE(mesh_device->allocator_impl()->persistent_l1().occupied_ranges().empty());
+
+        // The allocator places a later L1 buffer around the space.
+        expect_l1_buffer_placed_clear_of(*mesh_device, space);
+    }
+
+    // Destroying the space handed its L1 back, so an identical space lands where it was.
+    auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+    EXPECT_EQ(space.buffer_address(), first_ring_address);
+    EXPECT_EQ(space.config_address(), first_config_address);
+}
+
+TEST_F(PrefetcherPipeFixture, AllocatorSpaceCanBeCreatedAfterProgramLocalL1) {
+    if (const auto reason = insufficient_worker_grid_reason(3); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Places its CB through the legacy host API";
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t num_entries = 4;
+    const CoreCoord sender(0, 0);
+    const CoreRangeSet receivers(CoreRange({1, 0}, {2, 0}));
+    const distributed::MeshWorkload cached_workload = run_program_with_cb(mesh_device, receivers);
+
+    // The live program's CB seals the persistent arena on the receivers.
+    auto config = one_pipe_space_config(sender, receivers, entry_size * num_entries);
+    config.l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, config), std::exception);
+
+    config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+    auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+    auto pipe = space.create_pipe(sender, receivers);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, /*write_primitive=*/0), 2u);
+}
+
+TEST_F(PrefetcherPipeFixture, SpacesCreatedTogetherShareL1) {
+    if (const auto reason = insufficient_worker_grid_reason(4); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t num_entries = 4;
+    std::vector<m2::PrefetcherPipeSpaceConfig> configs = {
+        one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * num_entries),
+        one_pipe_space_config(CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})), entry_size * num_entries),
+    };
+    for (auto& config : configs) {
+        config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+    }
+
+    // Spaces that share L1 addresses need disjoint cores and one source.
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpaces(*mesh_device, std::vector{configs[0], configs[0]}), std::exception);
+    auto mixed = configs;
+    mixed[1].l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpaces(*mesh_device, mixed), std::exception);
+
+    std::vector<m2::PrefetcherPipeSpace> spaces = m2::CreatePrefetcherPipeSpaces(*mesh_device, configs);
+    ASSERT_EQ(spaces.size(), 2u);
+    EXPECT_EQ(spaces[0].buffer_address(), spaces[1].buffer_address());
+    EXPECT_EQ(spaces[0].config_address(), spaces[1].config_address());
+    {
+        auto pipe0 = spaces[0].create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
+        auto pipe1 = spaces[1].create_pipe(CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})));
+        EXPECT_EQ(
+            run_persistent_1toN_cross_program(mesh_device, pipe0, entry_size, num_entries, /*write_primitive=*/0), 1u);
+        EXPECT_EQ(
+            run_persistent_1toN_cross_program(mesh_device, pipe1, entry_size, num_entries, /*write_primitive=*/0), 1u);
+    }
+
+    // The L1 stays allocated until the last space of the batch is gone.
+    spaces.erase(spaces.begin());
+    expect_l1_buffer_placed_clear_of(*mesh_device, spaces.front());
+}
+
 // ============================================================================
 // ProgramSpec / ProgramRunArgs: slot reservation and binding
 // ============================================================================
@@ -1171,8 +1331,8 @@ TEST_F(PrefetcherPipeFixture, ProgramSpec_AssignsDistinctSlotsPerAccessor) {
     args.advanced_options.prefetcher_pipe_args = {
         {name0, m2::PrefetcherPipeArgument{pipe0}}, {name1, m2::PrefetcherPipeArgument{pipe1}}};
     m2::SetProgramRunArgs(program, args);
-    EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe, &pipe0.impl());
-    EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe, &pipe1.impl());
+    EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe_identity, pipe0.identity());
+    EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe_identity, pipe1.identity());
 
     program.impl().compile(mesh_device.get());
     program.impl().finalize_offsets(mesh_device.get());
@@ -1204,8 +1364,8 @@ TEST_F(PrefetcherPipeFixture, ProgramRunArgs_SameObjectMultiplePrograms) {
     const auto& per_core_b = program_b.impl().get_per_core_prefetcher_pipes().at(CoreCoord(0, 0));
     EXPECT_EQ(per_core_a[0].config_page_addr, config_addr);
     EXPECT_EQ(per_core_b[0].config_page_addr, config_addr);
-    EXPECT_EQ(per_core_a[0].pipe, &pipe.impl());
-    EXPECT_EQ(per_core_b[0].pipe, &pipe.impl());
+    EXPECT_EQ(per_core_a[0].pipe_identity, pipe.identity());
+    EXPECT_EQ(per_core_b[0].pipe_identity, pipe.identity());
     EXPECT_EQ(pipe.buffer_address(), fifo_start);
 }
 
@@ -1502,7 +1662,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDMSender_AllFlows_2P1C) {
 }
 
 // 2 sender DMs is partition-R (needs R>=2). This test is lane credits on 1S×1R: the receiver
-// kernel runs P=2 threads (arming two credit lanes when its Program binds), while a single
+// kernel runs P=2 threads (the pipe is carved with two credit lanes), while a single
 // sender DM stripes pages_sent across lanes. (Sharing one receiver across sender DMs is deferred.)
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P2R_1S1R) {
     if (!is_quasar_arch()) {
@@ -1521,12 +1681,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P2R_1S1R) {
     for (const uint32_t write_primitive : {0u, 1u, 2u, 3u, 4u, 5u}) {
         SCOPED_TRACE("write_primitive=" + std::to_string(write_primitive));
         log_info(tt::LogTest, "MultiDM_2P2R_1S1R: start write_primitive={}", write_primitive);
-        auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, entry_size * num_entries);
+        auto pipe =
+            make_pipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, entry_size * num_entries, num_credit_lanes);
 
         // Matching P on both ends, but still use two programs + async SD: a shared Program
         // has hung on RTL sim; async overlap is the proven path for lane-credit MultiDM.
         Program receiver_program = make_receiver_program(device, pipe, entry_size, num_entries, num_credit_lanes);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), num_credit_lanes);
         const SenderKernelParams sender_params{
             .entry_size = entry_size, .num_entries = num_entries, .write_primitive = write_primitive};
         Program sender_program = make_sender_program(device, pipe, sender_params);
@@ -1764,21 +1924,20 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                 /*is_metal2_kernel=*/true,
                 handles);
             bool saw_binding = false;
-            kernel->process_dataflow_buffer_binding_handles(
-                [&](const std::string& name,
-                    uint16_t logical_id,
-                    bool is_relay,
-                    uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>& llk_metadata,
-                    uint8_t /*pap*/,
-                    uint8_t /*cap*/) {
-                    EXPECT_EQ(name, "relay_dfb");
-                    EXPECT_EQ(logical_id, expected_slot);
-                    EXPECT_TRUE(is_relay);
-                    EXPECT_EQ(prefetcher_pipe_id, 0u);
-                    EXPECT_FALSE(llk_metadata.has_value());
-                    saw_binding = true;
-                });
+            kernel->process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                                uint16_t logical_id,
+                                                                bool is_relay,
+                                                                uint8_t prefetcher_pipe_id,
+                                                                const std::optional<LLKMetadata>& llk_metadata,
+                                                                uint8_t /*pap*/,
+                                                                uint8_t /*cap*/) {
+                EXPECT_EQ(name, "relay_dfb");
+                EXPECT_EQ(logical_id, expected_slot);
+                EXPECT_TRUE(is_relay);
+                EXPECT_EQ(prefetcher_pipe_id, 0u);
+                EXPECT_FALSE(llk_metadata.has_value());
+                saw_binding = true;
+            });
             EXPECT_TRUE(saw_binding);
         }
     }
@@ -1825,9 +1984,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 }
 
-// Host-only: the receiver kernel's num_threads (with or without a relay) arms the pipe's lane
-// count, which dispatch packs into each program's kernel-config slot; over-capacity and
-// reprogram-to-different-P are rejected.
+// Host-only: the lanes a pipe is carved with reach every bound program's kernel-config slot, on
+// sender and receiver cores alike, whichever program binds first; a receiver kernel whose
+// num_threads differs from them, or more lanes than the page reserves, is rejected.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "Lane-credit capacity > 1 is Quasar-only";
@@ -1839,23 +1998,22 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(1, 0);
     const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange(receiver_core));
-    const auto new_pipe = [&] { return make_pipe(mesh_device.get(), sender_core, receiver_cores, /*ring_size=*/1024); };
+    const auto new_pipe = [&](uint32_t num_credit_lanes = 1) {
+        return make_pipe(mesh_device.get(), sender_core, receiver_cores, /*ring_size=*/1024, num_credit_lanes);
+    };
 
     {
-        // Arm lanes with a 2-thread receiver kernel, no relay.
-        auto pipe = new_pipe();
+        // A 2-thread receiver kernel, no relay. The sender Program binds first and still packs P = 2.
+        auto pipe = new_pipe(2);
         EXPECT_EQ(pipe.impl().credit_lane_capacity(), PREFETCHER_PIPE_MAX_CREDIT_LANES);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
-
+        EXPECT_EQ(pipe.num_credit_lanes(), 2u);
+        Program sender_program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
         Program receiver_program =
             m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.num_threads = 2}));
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);  // reserved, not yet bound
         m2::SetProgramRunArgs(receiver_program, pipe_run_args(pipe));
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
         // P is not in the persistent page; it travels in the program's kernel-config slot, packed
         // above relay_dfb_id, on sender and receiver cores alike. word[9] keeps the peer counter
         // offset, which for a worker sender is the same slot offset on the peer's page.
-        Program sender_program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
         const auto& sender_page = pipe.impl().config_page(sender_core);
         const auto& receiver_page = pipe.impl().config_page(receiver_core);
         EXPECT_EQ(
@@ -1878,13 +2036,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
     }
 
     {
-        // Lanes armed through a relay: the relay's num_producers is the receiver kernel's thread
-        // count. The receiver slot carries the relay's device slot; the sender's does not.
-        auto pipe = new_pipe();
+        // Through a relay: the relay's num_producers is the receiver kernel's thread count. The
+        // receiver slot carries the relay's device slot; the sender's does not.
+        auto pipe = new_pipe(2);
         Program receiver_program = m2::MakeProgramFromSpec(
             *mesh_device, receiver_program_spec(pipe, {.num_threads = 2, .with_relay = true, .num_consumers = 2}));
         m2::SetProgramRunArgs(receiver_program, pipe_run_args(pipe, {compute_result_args(receiver_cores, 0u)}));
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
         const uint32_t recv_word = slot_relay_word(receiver_program, receiver_core);
         EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(recv_word), 2u);
         EXPECT_EQ(
@@ -1897,45 +2054,38 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
     }
 
     {
-        // Lanes are armed once per pipe lifetime: a second Program whose receiver runs a
-        // different thread count is rejected at bind and leaves the pipe as it was.
-        auto pipe = new_pipe();
-        Program armed = make_receiver_program(*mesh_device, pipe, 256, 4, /*num_threads=*/2);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
-        Program three = m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.num_threads = 4}));
-        EXPECT_THROW(m2::SetProgramRunArgs(three, pipe_run_args(pipe)), std::exception);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
+        // Every receiver Program consumes with the pipe's lanes: one whose receiver runs a
+        // different thread count is rejected at bind.
+        auto pipe = new_pipe(2);
+        EXPECT_NO_THROW(make_receiver_program(*mesh_device, pipe, 256, 4, /*num_threads=*/2));
+        Program four = m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.num_threads = 4}));
+        EXPECT_THROW(m2::SetProgramRunArgs(four, pipe_run_args(pipe)), std::exception);
         Program one = m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.num_threads = 1}));
         EXPECT_THROW(m2::SetProgramRunArgs(one, pipe_run_args(pipe)), std::exception);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
     }
 
     {
-        // More lanes than the page reserves is rejected when the Program is built.
+        // More lanes than the page reserves is rejected at carve, and when the Program is built.
+        EXPECT_THROW(new_pipe(PREFETCHER_PIPE_MAX_CREDIT_LANES + 1), std::exception);
         auto pipe = new_pipe();
         EXPECT_THROW(
             m2::MakeProgramFromSpec(
                 *mesh_device, receiver_program_spec(pipe, {.num_threads = PREFETCHER_PIPE_MAX_CREDIT_LANES + 1})),
             std::exception);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
     }
 
     {
-        // Lane mode needs an exact entry ring with an entry count divisible by P; a rejected
-        // Program must not leave the persistent pipe armed.
-        auto pipe = new_pipe();
+        // Lane mode needs an exact entry ring with an entry count divisible by P.
+        auto pipe = new_pipe(2);
         // 1024 % 384 != 0: trailing gap would never be credited with striped lanes.
         EXPECT_THROW(
             m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.entry_size = 384, .num_threads = 2})),
             std::exception);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
         // 4 entries is not a multiple of 3 lanes.
         EXPECT_THROW(
             m2::MakeProgramFromSpec(*mesh_device, receiver_program_spec(pipe, {.entry_size = 256, .num_threads = 3})),
             std::exception);
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
         EXPECT_NO_THROW(make_receiver_program(*mesh_device, pipe, 256, 4, /*num_threads=*/2));
-        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
     }
 
     {
@@ -2122,7 +2272,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -2151,7 +2306,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 8;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -2181,7 +2341,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -2210,7 +2375,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 8;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -2239,7 +2409,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers4_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 8;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/4);
     EXPECT_EQ(pipe.impl().credit_lane_capacity(), PREFETCHER_PIPE_MAX_CREDIT_LANES);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
@@ -2256,7 +2431,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers4_Consumer
                 .num_sender_threads = 2,
             }),
         1u);
-    EXPECT_EQ(pipe.impl().num_credit_lanes(), 4u);
 }
 
 // Lane credits: P=4 pipe consumers batch owned strides (batch_size=2).
@@ -2270,7 +2444,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers4_Consumer
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 8;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/4);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -2331,7 +2510,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Consumers2_
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -3009,7 +3193,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
         return args;
     };
 
-    // Receiver Program first: binding its receivers arms the pipes' lanes before any sender runs.
     RelayConsumerSpecs consumer = make_relay_consumer(
         {name_a, name_b},
         RelayConsumerParams{
@@ -3033,8 +3216,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
         const auto& per_core = receiver_program.impl().get_per_core_prefetcher_pipes();
         ASSERT_EQ(per_core.at(receiver_a).size(), 1u);
         ASSERT_EQ(per_core.at(receiver_b).size(), 1u);
-        EXPECT_EQ(per_core.at(receiver_a)[0].pipe, &pipe_a.impl());
-        EXPECT_EQ(per_core.at(receiver_b)[0].pipe, &pipe_b.impl());
+        EXPECT_EQ(per_core.at(receiver_a)[0].pipe_identity, pipe_a.identity());
+        EXPECT_EQ(per_core.at(receiver_b)[0].pipe_identity, pipe_b.identity());
     }
 
     const SenderKernelParams sender_params{

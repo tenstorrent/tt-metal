@@ -367,6 +367,16 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # The drafter's KV-shared layers size the shared cache by their own KV head
+    # count and read the target's caches with it, so the counts must agree.
+    assistant_kv_heads = int(assistant_args.text_args.num_key_value_heads)
+    target_kv_heads = int(target_model.hf_config.num_key_value_heads)
+    if assistant_kv_heads != target_kv_heads:
+        raise ValueError(
+            f"Assistant num_key_value_heads ({assistant_kv_heads}) != target num_key_value_heads "
+            f"({target_kv_heads}). The assistant cross-attends the target's KV caches, so it must be the "
+            "assistant of this target (see assistant_repo_for in generator_vllm)."
+        )
     # Bounded target KV is supported now: the drafter's attention configs take
     # the same cache_position_modulo as the target's sliding layers (see the
     # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its

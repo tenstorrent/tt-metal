@@ -1614,6 +1614,7 @@ class PostSDPA:
                         sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
                     )
                     brisc_fabric_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=sdpa["fabric_node_id"],
                         dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
                         link_idx=fwd_idx,
@@ -1626,6 +1627,7 @@ class PostSDPA:
                         sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
                     )
                     ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=sdpa["fabric_node_id"],
                         dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
                         link_idx=fwd_idx,

@@ -43,7 +43,7 @@
 
 ## Overview ##
 
-This repository contains header-only low-level kernels (LLK) for Tenstorrent AI chips, including Wormhole, and Blackhole.
+This repository contains header-only low-level kernels (LLK) for Tenstorrent AI chips, including Wormhole, Blackhole, and Quasar.
 
 These kernels serve as foundational compute primitives, acting as building blocks for higher-level software stacks that implement machine learning (ML) operations.
 
@@ -51,13 +51,13 @@ Additionally, the repository includes a test environment designed to validate LL
 
 ## Install ##
 
-1. **Clone the repository**
+1. **Work from a tt-metal checkout**
 
-    Clone this repository to your local computer.
+    Clone [`tt-metal`](https://github.com/tenstorrent/tt-metal); the LLK source is in `tt_metal/tt-llk`.
 
 2. **Set up the test environment**
 
-    Follow the instructions in the [testing README](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md) to set up the test environment. This will also automatically configure pre-commit hooks for code quality checks.
+    Follow the instructions in the [testing README](tests/README.md) to set up the test environment. This will also automatically configure pre-commit hooks for code quality checks.
 
 ## Software dependencies ##
 

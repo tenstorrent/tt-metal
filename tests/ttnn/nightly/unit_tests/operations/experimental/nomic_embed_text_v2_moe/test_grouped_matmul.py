@@ -16,7 +16,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
     BLOCK_ROWS,
     region_starts,

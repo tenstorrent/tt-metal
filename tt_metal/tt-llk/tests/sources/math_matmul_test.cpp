@@ -430,17 +430,10 @@ constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-// MATMUL_PACK_FORM 1 and 2: the block pack llk_pack_block runs (matmul_pack_production.h); 4 runs small tiles back to back with one close.
-inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] std::uint32_t face_r_dim, [[maybe_unused]] bool fast = false)
+// MATMUL_PACK_FORM 1 and 2: the block pack llk_pack_block runs (matmul_pack_production.h).
+inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] bool fast = false)
 {
-    if constexpr (matmul_pack_form_v == 4)
-    {
-        _llk_pack_block_dense_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, face_r_dim, num_faces);
-    }
-    else
-    {
-        matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
-    }
+    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
 }
 #endif
 
@@ -478,9 +471,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, !matmul_true_main_key>();
-#if defined(ARCH_BLACKHOLE)
-        if constexpr (matmul_pack_form_v == 4) { _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces); }
-#endif
         // the W base of the block pack is programmed by its second call, as in llk_pack_block
         //
         //
@@ -535,8 +525,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             L1_ADDRESS(buffer_Res[block * result_block_stride]),
                             NUM_TILES_IN_BLOCK,
                             (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4,
-                            num_faces,
-                            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM MATMUL_FAST_PACK_ARG);
+                            num_faces MATMUL_FAST_PACK_ARG);
                     }
                     else
 #endif

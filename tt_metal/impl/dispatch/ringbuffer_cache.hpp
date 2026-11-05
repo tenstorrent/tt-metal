@@ -7,11 +7,9 @@
 #pragma once
 
 #include <cstdint>
-#include <array>
 #include <vector>
 #include <optional>
 #include <climits>
-#include <memory>
 namespace tt::tt_metal {
 
 /*! @brief Ringbuffer cache manager

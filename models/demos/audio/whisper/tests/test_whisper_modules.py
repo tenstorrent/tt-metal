@@ -865,3 +865,42 @@ def test_traced_decoder_executor(
         logger.info("Trace released successfully")
 
     logger.info(f"All {num_decode_iterations} iterations passed PCC checks!")
+
+
+@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+def test_encoder_conv_frontend_bias(mesh_device, ttnn_model, model_name):
+    """The conv stem applies conv1/conv2 biases. HF initialises them to zero, so test_encoder cannot see them."""
+    torch.manual_seed(0)
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
+    config = whisper_config_for_tests(model_name)
+    model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
+    with torch.no_grad():
+        model.conv1.bias.uniform_(-0.5, 0.5)
+        model.conv2.bias.uniform_(-0.5, 0.5)
+    batch_size = mesh_device.get_num_devices()
+    features = torch_random((batch_size, config.num_mel_bins, 3000), -0.1, 0.1, dtype=torch.float32)
+    with torch.no_grad():
+        gelu = torch.nn.functional.gelu
+        expected = gelu(model.conv2(gelu(model.conv1(features)))).permute(0, 2, 1)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        convert_to_ttnn=ttnn_model.convert_to_ttnn,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        prefix="encoder",
+        device=mesh_device,
+    )
+    input_embeds = ttnn_model.preprocess_encoder_inputs(
+        config=config,
+        input_features=features.unsqueeze(1),
+        parameters=parameters,
+        device=mesh_device,
+        weights_mesh_mapper=weights_mesh_mapper,
+        input_mesh_mapper=input_mesh_mapper,
+    )
+    output = ttnn.to_torch(input_embeds, mesh_composer=output_mesh_composer)
+    output = output.reshape(batch_size, -1, config.d_model)[:, : expected.shape[1]]
+    _, pcc_message = assert_with_pcc(expected, output, 0.999)
+    logger.info(f"Conv frontend PCC: {pcc_message}")

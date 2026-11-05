@@ -68,11 +68,20 @@ def test_prefill_forces_after_decode_and_first_write_only():
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="prefill")  # first write: forced
     Gemma4Generator._install_per_layer_page_tables(
         m, tables, writer="prefill"
-    )  # chunk 2 of the same prompt: not forced
+    )  # chunk 2 of the same prompt: the very tables the device holds, not even compared
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="decode")  # decode never forces
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="prefill")  # after decode: forced again
-    assert m._calls == [True, False, False, True], m._calls
+    assert m._calls == [True, False, True], m._calls
     assert m._g4_page_table_writer_by_rows == {1: "prefill"}
+    # new host objects with equal content are compared by the update (its own unchanged shortcut), a table
+    # modified in place is uploaded again, and the restore after a sequential prefill (the same list) is free
+    same = [t.clone() for t in tables]
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    same[0][0, 0] = 7
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    assert m._calls == [True, False, True, False, False], m._calls
+    assert m._g4_page_tables_installed_by_rows[1][1] is not same and m._g4_page_tables_installed_by_rows[1][1] == same
 
 
 def test_row_counts_are_tracked_independently():
@@ -83,9 +92,10 @@ def test_row_counts_are_tracked_independently():
     Gemma4Generator._install_per_layer_page_tables(m, many, writer="decode")
     Gemma4Generator._install_per_layer_page_tables(
         m, one, writer="prefill"
-    )  # the 1-row buffers were last written by prefill
-    assert m._calls == [True, False, False], m._calls
+    )  # the 1-row buffers were last written by prefill and hold these very tables: skipped
+    assert m._calls == [True, False], m._calls
     assert m._g4_page_table_writer_by_rows == {1: "prefill", 32: "decode"}
+    assert m._g4_page_tables_installed_by_rows == {1: (Gemma4Generator._page_tables_identity(one), one), 32: None}
 
 
 def test_models_without_persistent_tables_are_left_alone():
@@ -835,6 +845,38 @@ def test_slab_rows_follow_the_l1_headroom():
     for k, n, dt in ((5376, 10752, ttnn.bfloat8_b), (5376, 10752, ttnn.bfloat16), (3840, 7680, ttnn.bfloat16)):
         rows = prefill_slab_rows(k, n, dt, **bh)
         assert rows % 320 == 0 and 320 <= rows <= 2560
+
+
+def test_slab_rows_with_fp32_dest_acc():
+    """The prefill linears' fp32 Dest config (compute_config.prefill_linear_compute_kernel_config) adds an fp32
+    partials block per core: the slab shrinks so the CBs still fit, and an fp32 2016-row 31B gate_up (TP=4) is no
+    longer one per_core_M 7 matmul (2.6 MB of CBs; PR #60786 review)."""
+    import ttnn
+    from models.demos.gemma4.tt.dram_sharded import (
+        fp32_dest_acc,
+        prefill_cb_bytes,
+        prefill_row_chunks,
+        prefill_slab_rows,
+    )
+
+    # 31B gate_up TP=4 (bfp8) at 2016 rows: per_core_M 7, per_core_N 48, k-block 4
+    assert prefill_cb_bytes(7, 48, 4, 1088) == 112000 + 1220608
+    assert prefill_cb_bytes(7, 48, 4, 1088, fp32_acc=True) == 112000 + 2596864 > 1572864
+    h64 = dict(grid=(8, 10), l1_bytes=1572864, headroom=64 * 1024, max_cols=8)
+    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, **h64) == 2560
+    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **h64) == 960
+    assert prefill_slab_rows(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h64) == 960  # 12B gate_up TP=4
+    assert prefill_slab_rows(5376, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == 2240  # 31B down TP=4
+    # headroom 0 drops the margin, not the L1 limit, when the fp32 block is there
+    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **dict(h64, headroom=0)) == 960
+    assert prefill_row_chunks(2016, slab=960, remainder=960) == [(0, 960), (960, 1920), (1920, 2016)]
+    # the dense per-chip DRAM-sharded weights (12B / 31B, TP 2 / 4 / 8): the fp32 slab is never above the bf16 one
+    for k, n in ((3840, 7680), (3840, 3840), (3840, 15360), (5376, 10752), (5376, 5376), (5376, 21504), (2688, 5376)):
+        for dt in (ttnn.bfloat8_b, ttnn.bfloat16):
+            rows = prefill_slab_rows(k, n, dt, fp32_acc=True, **h64)
+            assert rows % 320 == 0 and 320 <= rows <= prefill_slab_rows(k, n, dt, **h64)
+    assert fp32_dest_acc(None) is False
+    assert fp32_dest_acc(ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)) is True
 
 
 # ===== merged from tests/unit/test_prefill_sdpa_config_host.py: Host-only checks of the prefill SDPA program config (tt/attention/operations.py): every grid derives from the

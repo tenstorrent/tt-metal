@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/memory_tracking/memory_stats_shm.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -14,12 +13,7 @@
 #include <cstring>
 #include <chrono>
 #include <fstream>
-#include <sstream>
-#include <stdexcept>
 #include <vector>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
 
 namespace tt::tt_metal {
 

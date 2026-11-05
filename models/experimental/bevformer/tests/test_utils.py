@@ -582,6 +582,10 @@ def compute_error_statistics(torch_tensor: torch.Tensor, ttnn_tensor, tensor_nam
     if torch.isnan(torch.tensor(pcc)):
         pcc = 0.0  # Handle case where one tensor is constant
 
+    # numpy: torch.quantile refuses more than 2**24 elements.
+    abs_p95, abs_p99 = np.quantile(abs_error.detach().numpy(), [0.95, 0.99])
+    rel_p95, rel_p99 = np.quantile(rel_error.detach().numpy(), [0.95, 0.99])
+
     # Compute statistics
     stats = {
         # Basic tensor info
@@ -612,10 +616,10 @@ def compute_error_statistics(torch_tensor: torch.Tensor, ttnn_tensor, tensor_nam
         "ttnn_mean": ttnn_flat.mean().item(),
         "ttnn_std": ttnn_flat.std().item(),
         # Percentile-based error analysis
-        "abs_error_p95": torch.quantile(abs_error, 0.95).item(),
-        "abs_error_p99": torch.quantile(abs_error, 0.99).item(),
-        "rel_error_p95": torch.quantile(rel_error, 0.95).item(),
-        "rel_error_p99": torch.quantile(rel_error, 0.99).item(),
+        "abs_error_p95": float(abs_p95),
+        "abs_error_p99": float(abs_p99),
+        "rel_error_p95": float(rel_p95),
+        "rel_error_p99": float(rel_p99),
     }
 
     # Add sparsity analysis

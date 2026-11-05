@@ -453,6 +453,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         }
         if (!reader_dst_nodes.empty()) {
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *mesh_device,
                 sender_fabric_node_id,
                 reader_dst_nodes,
                 {link},
@@ -500,6 +501,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         }
         if (!writer_dst_nodes.empty()) {
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *mesh_device,
                 sender_fabric_node_id,
                 writer_dst_nodes,
                 {link},

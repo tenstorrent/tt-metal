@@ -31,11 +31,10 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    KDA_VERSIONS,
     kda_chunk_n_tokens,
-    kda_max_sequence_length,
     kda_position,
     kda_segment_bytes,
+    kda_window,
     populate_kv_chunk_address_table_kda,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
@@ -240,10 +239,11 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     for name, kind in (("01", "kda_recurrent"), ("02", "kda_convolution")):
         cfg = disagg.KvChunkAddressTableConfig()
         cfg.num_layers = max(layer_rows) + 1
-        cfg.max_sequence_length = kda_max_sequence_length(geometry)
+        cfg.max_sequence_length = kda_window(geometry)
         cfg.num_slots = num_slots
         cfg.chunk_n_tokens = kda_chunk_n_tokens(geometry, kind)
         cfg.chunk_size_bytes = kda_segment_bytes(geometry, kind)
+        cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         configs[name] = cfg
     table = disagg.KvChunkAddressTable(configs)
     for name, kind, slab in (("01", "kda_recurrent", slabs.recurrent), ("02", "kda_convolution", slabs.convolution)):
@@ -295,23 +295,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     assert loc.noc_addr == ((shard % banks) << 32) | (
         slabs.recurrent.buffer_address() + (shard // banks) * geometry.recurrent_segment_bytes
     )
-    # 6. The window decode asks for (v = (real_len - 1) % 8, here the last one) aliases window 0: same
-    #    location on the real table object, same bytes through its own read path.
-    for name, kind in (("01", "kda_recurrent"), ("02", "kda_convolution")):
-        cfg_id = table.config_id_of(name)
-        head = table.lookup(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id)
-        alias = table.lookup(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)
-        assert (alias.noc_addr, alias.size_bytes, alias.device_group_index) == (
-            head.noc_addr,
-            head.size_bytes,
-            head.device_group_index,
-        ), f"{kind}: window {KDA_VERSIONS - 1} does not alias window 0"
-        assert bytes(
-            table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)
-        ) == bytes(table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id))
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
 
-    # 7. Zeroing a slot zeroes every layer of that slot and nothing else.
+    # 6. Zeroing a slot zeroes every layer of that slot and nothing else.
     others = {(slot, layer): imported(slot, layer) for slot in range(1, num_slots) for layer in layer_ids}
     slabs.zero_slot(0)
     for layer in layer_ids:

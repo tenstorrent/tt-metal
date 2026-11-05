@@ -41,8 +41,8 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Number of runtime-argument words emitted for the given connection count in the
-// currently opened fabric context.
-size_t fabric_connection_rt_args_size(size_t num_connections);
+// fabric context of `mesh_device`.
+size_t fabric_connection_rt_args_size(const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t num_connections);
 
 // Compute fabric connection RT args without any PD mutation.
 // Pure computation — resolves routing + assembles RT args; the semaphore values are copied
@@ -62,6 +62,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 // (e.g., blaze eager-compile model). Allocates semaphores and computes RT args only.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_rt_args_no_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,

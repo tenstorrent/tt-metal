@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>

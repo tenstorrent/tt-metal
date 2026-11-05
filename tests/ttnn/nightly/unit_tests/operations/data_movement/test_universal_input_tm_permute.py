@@ -1035,3 +1035,51 @@ def test_permute_specless_sharded_output_grid_shrinks_block_col_major(device):
     ref = x.permute(0, 1, 3, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+# UINT8 regression: int-FPU reconstruct in permute_rm / permute_tiled returned zeros in 16-bit Dest.
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        ((32, 32), (1, 0)),
+        ((1, 1, 64, 128), (0, 1, 3, 2)),
+        ((2, 3, 96, 64), (0, 1, 3, 2)),
+        # Hit the tiled permute factories directly (bypass the transpose_wh/hc decomps).
+        ((2, 3, 64, 64), (1, 0, 2, 3)),  # MultiCoreTileInvariant
+        ((2, 3, 64, 64), (0, 3, 1, 2)),  # MultiCoreTileRowInvariant
+        pytest.param(
+            (2, 3, 64, 64),
+            (0, 2, 3, 1),
+            marks=pytest.mark.xfail(
+                strict=False,
+                reason="MultiCoreTiledGeneric uses pack_untilize_dest; BH 8-bit truncation tracked in #61827",
+            ),
+        ),
+    ],
+)
+def test_permute_dtype_uint8(device, shape, dims, input_layout):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x.permute(dims))
+
+
+# INT8 shares the 8-bit int-FPU reconstruct path with UINT8; covers the 4D BH workaround
+# (dims[-1] != rank-1). WH Int8 RM permute has pre-existing gaps (#63926), so BH-only.
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        ((1, 1, 64, 128), (0, 1, 3, 2)),
+        ((2, 3, 96, 64), (0, 1, 3, 2)),
+    ],
+)
+def test_permute_dtype_int8_rm(device, shape, dims):
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("Int8 RM permute WH gaps tracked in #63926; test covers BH pack_untilize workaround.")
+    torch.manual_seed(0)
+    x = torch.randint(-128, 128, shape, dtype=torch.int8)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.int8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x.permute(dims))

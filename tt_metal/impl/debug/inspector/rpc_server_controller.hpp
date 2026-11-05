@@ -5,9 +5,7 @@
 #pragma once
 
 #include <atomic>
-#include <capnp/ez-rpc.h>
 #include <condition_variable>
-#include <memory>
 #include <thread>
 #include <string>
 #include "impl/debug/inspector/rpc_server_generated.hpp"

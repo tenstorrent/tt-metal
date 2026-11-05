@@ -57,7 +57,7 @@ void kernel_main() {
     loc_scratch_cb.reserve_back(TILE_MAX_ROWS * LOC_STICKS_PER_ROW);
 
     MaterializedLocations loc_src{
-        .acc = TensorAccessor(loc_args, loc_addr, loc_stick_nbytes),
+        .acc = TensorAccessor(loc_args, loc_addr, loc_page_nbytes),
         .arena_l1 = loc_scratch_cb.get_write_ptr(),
     };
 

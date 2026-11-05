@@ -157,6 +157,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
 Tensor prepare_conv3d_weights(
     const ttnn::Tensor& weights, uint32_t groups, uint32_t C_in_block, uint32_t alignment, MeshDevice* device) {
+    TT_FATAL(alignment > 0, "alignment must be greater than 0");
     ttnn::Tensor prepare_weights = weights;
 
     if (groups > 1) {

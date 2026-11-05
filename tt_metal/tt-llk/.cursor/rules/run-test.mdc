@@ -68,10 +68,18 @@ If `--arch` is not provided, infer in this order:
 
    MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
 
-   1. Verify the venv exists at `tests/.venv/bin/activate`.
-      If it does NOT exist, run from the tt-llk worktree root:
-          cd tests && CHIP_ARCH={arch} ./setup_testing_env.sh
-      The CHIP_ARCH env var is REQUIRED — setup builds arch-specific bits.
+   1. Check and bootstrap the env under a lock on `tests/`, every run,
+      from the tt-llk worktree root, with a blocking shell call and a
+      ~30 minute timeout:
+          cd tests && flock . bash -c '
+            if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+            elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi
+            test -x .venv/bin/pytest && test -f sfpi/sfpi.version'
+      The block is a no-op when both files exist. A missing `pytest` runs
+      the full setup (`sudo apt-get`, `tests/.venv` rebuilt); a missing
+      `sfpi.version` alone runs only the SFPI fetch, which leaves
+      `tests/.venv` untouched. If the block exits non-zero, report
+      ENV_ERROR with the setup output and stop.
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \
@@ -104,5 +112,4 @@ Reuse the same `llk-test-runner` agent for repeated test runs after a failure (u
 
 - **Never** call `pytest` directly. Always go through the script.
 - **Never** skip the venv check — the script exits 3 with a clear message, but the rule should detect-and-bootstrap rather than fail.
-- **Never** run setup with the wrong `CHIP_ARCH` — wrong-arch venvs silently produce broken builds.
 - **Never** run multiple simulator invocations in parallel from the same agent. The script's `flock` protects against concurrent agents, but a single agent should still serialise its own runs.

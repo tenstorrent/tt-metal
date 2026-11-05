@@ -350,6 +350,7 @@ class DecodeBoundary:
             fabric_args.append(1 if hops > 0 else 0)
             if hops > 0:
                 fabric_args += ttnn.setup_fabric_connection(
+                    mesh_device=self.mesh_device,
                     src_fabric_node_id=src,
                     dst_fabric_node_id=self.mesh_device.get_fabric_node_id(self._neighbor(coord, step)),
                     link_idx=link,

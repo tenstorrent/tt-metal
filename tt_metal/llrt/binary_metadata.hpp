@@ -8,8 +8,6 @@
 #include <set>
 #include <string_view>
 
-#include "hostdev/buf_rw_common.h"
-
 namespace ll_api {
 
 class ElfFile;

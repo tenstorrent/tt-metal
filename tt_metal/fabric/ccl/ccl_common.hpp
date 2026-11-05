@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <vector>
-
 #include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/kernel_types.hpp>

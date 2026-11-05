@@ -9,7 +9,6 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"

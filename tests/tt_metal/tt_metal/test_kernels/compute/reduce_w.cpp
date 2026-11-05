@@ -19,12 +19,10 @@ void kernel_main() {
     DataflowBuffer dfb_in_scaler(dfb::in_scaler);
     DataflowBuffer dfb_out(dfb::out);
     compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
-#ifndef ARCH_QUASAR
     constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
     if constexpr (swap_operands) {
         reconfig_data_format(dfb::in_scaler, dfb::in_data);
     }
-#endif
     reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, dfb::out);
 
     dfb_in_scaler.wait_front(onetile);
@@ -39,11 +37,7 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
-#ifdef ARCH_QUASAR
-                UNPACK((llk_unpack_AB_reduce(dfb::in_data, dfb::in_scaler, 0, 0)));
-#else
                 UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0)));
-#endif
                 // REDUCE_OP and REDUCE_DIM are expected to come from add_define
                 reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)

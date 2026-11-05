@@ -16,7 +16,6 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include "tt_cluster.hpp"

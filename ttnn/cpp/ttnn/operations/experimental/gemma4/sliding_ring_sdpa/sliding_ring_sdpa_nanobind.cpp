@@ -112,10 +112,18 @@ void bind_sliding_ring_sdpa(nb::module_& mod) {
             use_column_major_ccl (bool): Allocate CCL workers column-major. Defaults to False.
             kv_cache_batch_idx (int, optional): Host cache slot. Defaults to None.
             kv_actual_isl (int, optional): Host prior valid KV length. Defaults to None.
-            slot_id (ttnn.Tensor, optional): Cache slot read on-device (trace replay). Defaults to None.
-            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid KV length read on-device. Defaults to None.
+            slot_id (ttnn.Tensor, optional): Cache slot read on-device (trace replay), a UINT32 ROW_MAJOR
+                DRAM tensor with one element per request (1 to 8; see Lanes). Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid KV length read on-device, same contract
+                and element count as slot_id. Defaults to None.
             kv_cache_num_layers (int, optional): Layers packed per cache slot. None uses 1.
             kv_cache_layer_idx (int, optional): Layer within the cache slot. None uses 0.
+
+        Lanes: slot_id / kv_actual_isl_tensor with B > 1 elements (up to 8) make one call serve B requests.
+        Q holds their CP-local rows stacked request-major, [1 x nh x B*N/num_devices x d], and the output
+        stacks the same way. Request b reads cache slot slot_id[b] with prior length kv_actual_isl[b]. The
+        persistent K/V halo buffers take batch B. Lanes need the metadata path and k_splits 1 without
+        segmented accumulation.
 
         Returns:
             ttnn.Tensor: The attention output for Q's shape.

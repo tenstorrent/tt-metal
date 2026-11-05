@@ -5,7 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include <boost/algorithm/string.hpp>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>

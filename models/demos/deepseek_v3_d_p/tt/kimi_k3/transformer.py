@@ -29,7 +29,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
@@ -79,8 +78,8 @@ class TtKimiK3Transformer(LightweightModule):
         stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
         if stale:
             logger.warning(
-                f"Kimi-K3 cache at {cache_path}: layers {stale} lack {KIMI_K3_PROJECTION_DTYPE.name} KDA projections; "
-                f"rebuild them from the checkpoint (test_transformer_depth does this, rebuilding only the projections)"
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format KDA weights; rebuild them from "
+                f"the checkpoint (test_transformer_depth does this, rebuilding only the KDA weights)"
             )
         return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 

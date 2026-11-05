@@ -16,7 +16,7 @@ namespace ttnn::operations::moreh::moreh_bmm {
 void bind_moreh_bmm_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_bmm">(
         mod,
-        "Moreh BMM Operation",
+        "Deprecated in favor of ttnn.matmul. Will be removed after 2026-11-26.",
         &ttnn::moreh_bmm,
         nb::arg("input"),
         nb::arg("mat2"),

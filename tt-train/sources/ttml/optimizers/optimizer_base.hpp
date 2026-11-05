@@ -40,8 +40,8 @@ template <typename Config>
     return defaults;
 }
 
-// TT_FATAL unless every trainable parameter is stored in bf16. For optimizers whose update only exists for bf16
-// parameters: fp32 parameters are supported by AdamW, and by the others once the precision config lands (#56513).
+// TT_FATAL unless every trainable parameter is stored in bf16, for optimizers whose update exists only for bf16
+// parameters. Of the optimizers, only fused AdamW updates fp32 parameters.
 void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name);
 
 class OptimizerBase {

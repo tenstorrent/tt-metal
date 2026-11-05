@@ -186,8 +186,8 @@ Table 2 contains all math operations currently implemented for Tensix:
 | `llk_math_eltwise_unary_datacopy.h` | Transfers a tile from Source A/B to Destination register using FPU. |
 | `llk_math_eltwise_unary_sfpu.h` | Executes unary operations on a tile data in the Destination register using SFPU. |
 | `llk_math_eltwise_binary.h` | Performs element-wise operations (add/sub/mul) on Source A and B tiles using FPU, storing results in Destination register. |
-| `llk_math_eltwise_reduce.h` | Computes global maximum or average from Source A using scalar values from Source B via FPU. |
-| `llk_math_eltwise_matmul.h` | Performs matrix multiplication between Source A and Source B tiles using FPU. |
+| `llk_math_reduce.h` | Computes global maximum or average from Source A using scalar values from Source B via FPU. |
+| `llk_math_matmul.h` | Performs matrix multiplication between Source A and Source B tiles using FPU. |
 ---
 
 ### LLK Pack Operations (Table 3)

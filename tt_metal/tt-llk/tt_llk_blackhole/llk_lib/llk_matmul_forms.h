@@ -1713,11 +1713,10 @@ constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const Data
     return false;
 }
 
-// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles (dense_pages only: the perf sweep, where the
-// output address does not change the pack timing). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
+// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages and small tiles). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
 // harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
 constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
-                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, [[maybe_unused]] const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
     const bool small = r0 < 32 || c1 < 32;
@@ -1778,10 +1777,6 @@ constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool ha
                       ((in_a == DataFormat::Float32 || (in_b == DataFormat::Float32 && out == DataFormat::Bfp4_b)) && out != DataFormat::Float32 && rt * ct >= 3)))
     {
         return 0;
-    }
-    if (dense_pages && small && c1 == 32 && !block_float_out)
-    {
-        return (half_sync && rt * ct >= 8) ? 2 : 4;
     }
     return (small || block_float_out) ? 2 : 1;
 }

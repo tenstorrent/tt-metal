@@ -24,8 +24,7 @@ struct LlamaAllGatherMatmulAsyncDeviceOperation {
     using tensor_args_t = LlamaAllGatherMatmulAsyncInputs;
     using spec_return_value_t = LlamaAllGatherMatmulAsyncResultSpec;
     using tensor_return_value_t = LlamaAllGatherMatmulAsyncResult;
-    using program_factory_t = std::variant<LlamaAllGatherMatmulAsyncProgramFactory>;
-    using shared_variables_t = LlamaAllGatherMatmulAsyncProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<LlamaAllGatherMatmulAsyncMeshWorkloadFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

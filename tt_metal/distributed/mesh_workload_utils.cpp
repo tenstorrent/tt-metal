@@ -19,7 +19,6 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
-#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 

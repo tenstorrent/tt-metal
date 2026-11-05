@@ -55,23 +55,11 @@ tensor_return_value_t SwigluPackedBwDeviceOperation::create_output_tensors(
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.packed.device());
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t SwigluPackedBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& packed = tensor_args.packed;
-    const auto& out_memcfg = tensor_args.preallocated_dL_dpacked.has_value()
-                                 ? tensor_args.preallocated_dL_dpacked->memory_config()
-                                 : packed.memory_config();
-    return tt::tt_metal::operation::hash_operation<SwigluPackedBwDeviceOperation>(
-        args,
-        packed.dtype(),
-        packed.logical_shape(),
-        packed.padded_shape(),
-        packed.memory_config(),
-        tensor_args.dL_dh.dtype(),
-        tensor_args.dL_dh.logical_shape(),
-        tensor_args.dL_dh.padded_shape(),
-        tensor_args.dL_dh.memory_config(),
-        out_memcfg);
+    return tt::tt_metal::operation::hash_operation<SwigluPackedBwDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::swiglu_packed_bw::device

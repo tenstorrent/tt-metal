@@ -37,6 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
+#include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>

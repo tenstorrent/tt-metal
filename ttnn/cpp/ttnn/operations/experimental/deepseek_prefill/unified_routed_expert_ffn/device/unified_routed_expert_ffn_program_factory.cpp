@@ -47,12 +47,12 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block — one x read
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
-// Writer-only scratch for the device-side `start` (expert_region_offsets)
-// page: the writer adds start[global_id]/TILE tile-rows to every output row.
-constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
-// Reader's own `start` scratch (x is the shared dispatched buffer, so the
-// reader offsets its x reads by start[global_id] too). Separate from the
-// writer's so the two RISCs don't share one L1 page.
+// c_14 is unused: the writer once had its own `start` scratch there.
+// The `start` (expert_region_offsets) scratch, shared by reader and writer: the
+// reader offsets its x reads by start[global_id] and the writer adds
+// start[global_id]/TILE tile-rows to every output row. The reader's counts
+// broadcast fills it once on every core, before the counts push the writer
+// waits on; neither RISC writes it afterwards.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // Row-major bf16 staging for x when x_is_row_major: the reader fills it with
 // row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
@@ -68,6 +68,10 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+// bf8_b x staging for tilize-once (x_is_row_major only): per gate/up K-block, the M-row's
+// owner core (adaptive_chunk::x_owner_col) tilizes its cb_x_rm block into here, and its reader
+// multicasts it into every row core's CB_IN0_X. Allocated only in row-major mode.
+constexpr uint32_t CB_X_TILIZED = tt::CBIndex::c_20;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -413,10 +417,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
@@ -706,23 +710,23 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
-    // both on the compute threads sharing DST -> serial), so a second slot buys no
-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
-    // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
-    // while N's posted mcast still drains — single-buffering reuses the slot
-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
-    // unchanged.
+    // Row-major x is tilized once per M-row and multicast as bf8_b, so the reader fills
+    // cb_in0_x in both layouts and both double-buffer it: block kb+1 lands while kb's
+    // matmul runs.
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2u, in0_x_tile_size);
+    // Row-major bf16 x staging and its bf8_b tilize output (x_is_row_major only;
+    // skipped when x is TILE so the bf8_b path's L1 is unchanged).
+    // Single slot each: only the K-block's owner uses them, and a core owns at most one
+    // block per owner-rotation period, so one block is in flight per core. cb_x_rm is no
+    // longer a multicast source; cb_x_tilized is, and its reader frees it only after the
+    // multicast has been acked.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles,
             tt::tile_size(tt::DataFormat::Float16_b));
+        make_cb(CB_X_TILIZED, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -782,9 +786,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * 2u, in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tilized", gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -836,18 +841,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // may itself be up to MAX_GLOBAL_EXPERTS entries.
     make_cb(CB_IDX_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, idx_scratch_bytes);
 
-    // CB_START_SCRATCH holds the device-side `start` (expert_region_offsets)
-    // page for the writer in direct-write mode. Same sizing rationale as the
-    // counts scratch: expert_region_offsets is validated to have the same
-    // length as counts, so size it to the real per-call requirement (lands the
-    // tensor's page and holds every region-offset entry) rather than the old
-    // fixed MAX_GLOBAL_EXPERTS floor.
+    // CB_START_SCRATCH_READER holds the device-side `start` (expert_region_offsets)
+    // page for reader and writer. Same sizing rationale as the counts scratch:
+    // expert_region_offsets is validated to have the same length as counts, so
+    // size it to the real per-call requirement (lands the tensor's page and holds
+    // every region-offset entry) rather than the old fixed MAX_GLOBAL_EXPERTS floor.
     const uint32_t start_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(start_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    make_cb(CB_START_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
-    // Reader's `start` scratch. Same sizing; separate CB so
-    // reader (NCRISC) and writer (BRISC) never share one scratch page.
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
@@ -964,6 +965,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     reader_kernel_desc.core_ranges = core_range_set;
     reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
     reader_kernel_desc.defines = std::move(reader_defines);
+    reader_kernel_desc.named_compile_time_args = {{"cb_x_tilized", CB_X_TILIZED}};
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
@@ -991,8 +993,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         M_tiles_full,  // 13
         // dst_M_tiles: tile-row count of the shared destination buffer, which
         // bounds the writer's destination rows.
-        dst_M_tiles,       // 14
-        CB_START_SCRATCH,  // 15
+        dst_M_tiles,              // 14
+        CB_START_SCRATCH_READER,  // 15: shared with the reader (counts broadcast)
         // UP_SPLIT up-weight read: CB + dims let the writer replicate the gate
         // read on NoC 1, and writer_split_up gates it (1 = UP_SPLIT).
         CB_IN1_UP,                            // 16
@@ -1094,6 +1096,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
         {"cb_x_rm", CB_X_RM},
+        // bf8_b tilize-once staging (x_is_row_major only); tilize output on owner cores.
+        {"cb_x_tilized", CB_X_TILIZED},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},
@@ -1351,6 +1355,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         std::vector<uint32_t> compute_args = {
             (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+            gx,                                                        // 2 tilize-once: own column
+            GRID_X,                                                    // 3 tilize-once: M-row width
+            gy,                                                        // 4 tilize-once: own row
         };
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.append(compute_args);

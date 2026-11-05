@@ -303,6 +303,28 @@ void BakeComputeSemaphoreMax(
     }
 }
 
+// Place a kernel's RTA or CRTA arrays in section 1 of their dispatch buffer: after the scalars, which
+// take the first `num_scalars` words, in declaration order.
+std::vector<ArrayArgLayout> PlaceArrayArgs(const Group<ArrayArgDecl>& decls, size_t num_scalars) {
+    std::vector<ArrayArgLayout> placed;
+    placed.reserve(decls.size());
+    auto word_offset = static_cast<uint32_t>(num_scalars);
+    for (const ArrayArgDecl& decl : decls) {
+        placed.push_back(ArrayArgLayout{.name = decl.name, .word_offset = word_offset, .size = decl.size});
+        word_offset += decl.size;
+    }
+    return placed;
+}
+
+// Size of section 1 (the named args) of a dispatch buffer, in words: the scalars, then the arrays.
+size_t NamedSectionWords(size_t num_scalars, const std::vector<ArrayArgLayout>& arrays) {
+    size_t words = num_scalars;
+    for (const ArrayArgLayout& array : arrays) {
+        words += array.size;
+    }
+    return words;
+}
+
 LoweredKernel LowerKernel(
     const KernelSpec& kernel_spec,
     const ProgramSpec& spec,
@@ -319,19 +341,40 @@ LoweredKernel LowerKernel(
     const tt::tt_metal::DataflowBufferBindingHandleMap& dfb_handles = resource_bindings.dfbs;
     const tt::tt_metal::SemaphoreBindingHandleMap& semaphore_handles = resource_bindings.semaphores;
 
+    // Named args. The scalar names are passed to the Kernel ctor: they are used at JIT time to emit
+    // kernel_args_generated.h and factor into the kernel cache key. (The user CRTA list passes through
+    // unchanged; the TensorBinding address section is tracked separately, via tensor_binding_handles.)
+    //
+    // Arrays are placed before the tensor bindings are resolved: RTA/CRTA arrays follow the scalars in
+    // the named section of their dispatch buffer, and the binding sections start where it ends. CTA
+    // array values are baked into the generated header.
+    const auto& user_schema = kernel_spec.runtime_arg_schema;
+    const auto& named_rtas = user_schema.runtime_arg_names;
+    const auto& user_named_crtas = user_schema.common_runtime_arg_names;
+    KernelArrayArgs array_args{
+        .runtime = PlaceArrayArgs(user_schema.runtime_array_args, named_rtas.size()),
+        .common_runtime = PlaceArrayArgs(user_schema.common_runtime_array_args, user_named_crtas.size()),
+    };
+    for (const auto& [name, value] : kernel_spec.compile_time_array_args) {
+        std::vector<uint32_t>& values = array_args.compile_time[name];
+        values.reserve(value.size());
+        for (size_t i = 0; i < value.size(); ++i) {
+            values.push_back(value[i].to_uint32());
+        }
+    }
+
     // Resolve TensorBindings for this kernel:
     //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
     //    (after the user CTA-vararg prefix)
     //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section),
-    //    or in each node's RTA buffer for a per-node binding (after the user-named RTAs)
-    const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+    //    or in each node's RTA buffer for a per-node binding (after the user-named RTAs, scalar and array)
     const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
     const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
     TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
         kernel_spec,
         resources.tensor_parameters,
-        /*base_named_crta_count=*/user_named_crtas.size(),
-        /*base_named_rta_count=*/kernel_spec.runtime_arg_schema.runtime_arg_names.size(),
+        /*base_named_crta_words=*/NamedSectionWords(user_named_crtas.size(), array_args.common_runtime),
+        /*base_named_rta_words=*/NamedSectionWords(named_rtas.size(), array_args.runtime),
         /*base_cta_offset=*/vararg_cta_count);
 
     // Create TensorBindingHandles for this kernel
@@ -347,12 +390,6 @@ LoweredKernel LowerKernel(
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
-
-    // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
-    // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
-    // address section is tracked separately (via tensor_binding_handles), so we pass the user
-    // CRTA list through unchanged.
-    const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -467,7 +504,10 @@ LoweredKernel LowerKernel(
     // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
     kernel->set_compile_time_vararg_count(vararg_cta_count);
 
-    // Build the RTA+CRTA schema (named lists + vararg counts) for the ProgramImpl.
+    // Array args (also part of the kernel cache key and of kernel_args_generated.h).
+    kernel->set_array_args(std::move(array_args));
+
+    // Build the RTA+CRTA schema (named lists, array slots + vararg counts) for the ProgramImpl.
     // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
     // the user-provided values at dispatch time.
     //
@@ -480,7 +520,6 @@ LoweredKernel LowerKernel(
     // An explicit override of 0 erases the scalar-default entry so run-params treats
     // that node as having no varargs (rather than requiring an "empty" value list).
     // Overlapping override entries (two entries covering the same node) are an error.
-    const auto& user_schema = kernel_spec.runtime_arg_schema;
     detail::ProgramImpl::KernelRTASchema runtime_schema;
     runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
 
@@ -497,6 +536,16 @@ LoweredKernel LowerKernel(
     }
     for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
         runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
+    }
+    // Array name -> slots, copied from the placement the kernel was given above.
+    using ArraySlots = detail::ProgramImpl::KernelRTASchema::ArraySlots;
+    for (const ArrayArgLayout& array : kernel->get_array_args().runtime) {
+        runtime_schema.runtime_array_arg_slots.emplace(
+            array.name, ArraySlots{.first_slot = array.word_offset, .size = array.size});
+    }
+    for (const ArrayArgLayout& array : kernel->get_array_args().common_runtime) {
+        runtime_schema.common_runtime_array_arg_slots.emplace(
+            array.name, ArraySlots{.first_slot = array.word_offset, .size = array.size});
     }
 
     // Varargs schema now lives on KernelAdvancedOptions.

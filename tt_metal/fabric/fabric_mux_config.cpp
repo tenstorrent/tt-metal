@@ -7,7 +7,6 @@
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/context/metal_context.hpp"

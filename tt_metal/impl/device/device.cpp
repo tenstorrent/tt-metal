@@ -53,7 +53,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"

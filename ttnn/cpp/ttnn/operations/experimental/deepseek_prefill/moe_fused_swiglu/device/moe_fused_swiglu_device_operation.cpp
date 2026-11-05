@@ -5,6 +5,7 @@
 
 #include <initializer_list>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -256,13 +257,31 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
             "moe_fused_swiglu: expert biases require RoutedExpertActivation::SituGlu or "
             "RoutedExpertActivation::SwiGluOai; the SiLU path has no bias branch");
         // The CB layout reuses the bf16 tile for all three bias CBs rather than threading a bias
-        // format through it, so the tensors have to actually be bf16.
-        for (const auto& bias : {std::cref(gate_biases), std::cref(up_biases), std::cref(down_biases)}) {
-            for (const auto& tensor : bias.get()) {
+        // format through it, so the tensors have to actually be bf16. The reader fetches bias tile
+        // `col` of tile-row 0 by page id, so each bias must also be one TILE row of exactly its
+        // projection's N in DRAM; any other layout or shape reads the wrong pages silently.
+        for (const auto& [list_name, list, expected_n] :
+             std::initializer_list<std::tuple<const char*, const std::vector<Tensor>&, uint32_t>>{
+                 {"gate_bias", gate_biases, static_cast<uint32_t>(gate_shape[-1])},
+                 {"up_bias", up_biases, static_cast<uint32_t>(up_shape[-1])},
+                 {"down_bias", down_biases, static_cast<uint32_t>(down_shape[-1])}}) {
+            for (uint32_t e = 0; e < list.size(); ++e) {
+                const Tensor& bias = list[e];
+                const std::string name = fmt::format("{}[{}]", list_name, e);
+                validate_device_tensor(bias, name.c_str());
                 TT_FATAL(
-                    tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+                    bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
                     "moe_fused_swiglu: expert biases must be BFLOAT16, got {}",
-                    tensor.dtype());
+                    bias.dtype());
+                TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "moe_fused_swiglu: {} must be TILE layout", name);
+                TT_FATAL(is_dram_interleaved(bias), "moe_fused_swiglu: {} must be DRAM interleaved", name);
+                const auto& shape = bias.logical_shape();
+                TT_FATAL(
+                    static_cast<uint32_t>(shape[-1]) == expected_n && shape.volume() == expected_n,
+                    "moe_fused_swiglu: {} logical shape {} must be a single row of its projection N ({})",
+                    name,
+                    shape,
+                    expected_n);
             }
         }
     }

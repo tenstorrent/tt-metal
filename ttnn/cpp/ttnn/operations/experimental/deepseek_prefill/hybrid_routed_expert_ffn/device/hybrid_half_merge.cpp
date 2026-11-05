@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 
@@ -217,6 +218,9 @@ KernelDescriptor merge_kernel(
     bool is_coordinator_kernel,
     uint32_t barrier_semaphore_id,
     uint32_t shared_semaphore_count,
+    const WeightTablePlan& weight_table,
+    uint32_t weight_table_cb,
+    uint32_t weight_table_bytes,
     MergeReport::Bases& bases_out) {
     TT_FATAL(
         fused.core_ranges == unified.core_ranges,
@@ -305,12 +309,15 @@ KernelDescriptor merge_kernel(
         "a half grew common runtime args; the merge does not rebase them yet");
 
     reconcile_config(fused, unified, merged);
-    // Both halves of a dataflow kernel sit in one binary and the kernel config ring, not instruction
-    // count, is what this op runs out of. These two wait on the NoC rather than issue back to back, so
-    // trading speed for size costs them little. The compute halves keep their default O3: the fused
-    // matmul is the one place where a lower level has measured 1.8x slower.
+    // The data-movement kernels at O2, the level each half has alone, not the Os that would save ring:
+    // both halves issue their DRAM weight reads back to back, and Os cost the fused half 2-6 us per
+    // expert and the unified half up to 1.4x at 512 tokens. The compute kernel keeps its default O3,
+    // trimmed where it can afford it in hybrid_compute.cpp.
+    //
+    // The JIT cache does not key on the opt level, so a change here needs those kernels' cache
+    // entries cleared before it shows on the device.
     if (!std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(merged.config)) {
-        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
     if (run_fused_pass) {
         merged.defines.emplace_back("HYB_RUN_FUSED_PASS", "1");
@@ -341,6 +348,27 @@ KernelDescriptor merge_kernel(
             args.push_back(barrier.total_arrivals);
             args.push_back(barrier_semaphore_id);
             args.push_back(shared_semaphore_count);
+        }
+    }
+    // Both data-movement kernels read the weight table's L1 page; see kernels/hybrid_weight_table.hpp.
+    if (weight_table.buffer != nullptr && runs_barrier) {
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE", "1");
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE_CB", std::to_string(weight_table_cb));
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE_BYTES", std::to_string(weight_table_bytes));
+        // Only the reader loads it, so only the reader takes the address. Bound like any other
+        // buffer argument, so a cache hit re-patches it.
+        if (is_coordinator_kernel) {
+            std::optional<uint32_t> index;
+            for (auto& [core, args] : merged.runtime_args) {
+                TT_FATAL(
+                    !index.has_value() || *index == args.size(),
+                    "the weight table's runtime arg must sit at one index on every core");
+                index = static_cast<uint32_t>(args.size());
+                args.push_back(static_cast<uint32_t>(weight_table.buffer->address()));
+                merged.buffer_bindings.push_back(tt::tt_metal::BufferBinding{core, *index, weight_table.buffer});
+            }
+            TT_FATAL(index.has_value(), "the reader runs on no core, so nothing can load the weight table");
+            merged.defines.emplace_back("HYB_WEIGHT_TABLE_RT", std::to_string(*index));
         }
     }
     return merged;
@@ -392,6 +420,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     bool run_fused_pass,
     tt::tt_metal::Buffer* l1_arena,
     const PassBarrierPlan& barrier,
+    const WeightTablePlan& weight_table,
     MergeReport& report) {
     TT_FATAL(
         !run_fused_pass || l1_arena != nullptr,
@@ -401,6 +430,49 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     report.barrier_semaphore_id = merge_semaphores(fused, unified, merged);
     report.semaphore_count = static_cast<uint32_t>(merged.semaphores.size());
     report.arena_bytes_per_core = overlay_circular_buffers(fused, unified, run_fused_pass, l1_arena, merged);
+
+    // The weight table's page goes PAST both halves' buffers, not over them: it is loaded once,
+    // before the first pass, and read by both. Its index is the next one up, so the program's CB
+    // config -- which spans every index up to the highest -- grows by one entry and no more.
+    uint32_t weight_table_cb = 0;
+    uint32_t weight_table_bytes = 0;
+    if (weight_table.buffer != nullptr) {
+        TT_FATAL(run_fused_pass && !merged.cbs.empty(), "only a merged program reads the weight table");
+        uint32_t highest = 0;
+        for (const auto& cb : merged.cbs) {
+            for (const auto& format : cb.format_descriptors) {
+                highest = std::max<uint32_t>(highest, format.buffer_index);
+            }
+        }
+        weight_table_cb = highest + 1;
+        TT_FATAL(
+            weight_table_cb < tt::tt_metal::hal::get_num_dataflow_buffers(),
+            "no circular-buffer index is left for the weight table");
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        weight_table_bytes =
+            (3 * weight_table.experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) /
+            dram_alignment * dram_alignment;
+        const uint32_t offset = report.arena_bytes_per_core;
+        TT_FATAL(
+            offset + weight_table_bytes <= l1_arena->aligned_size_per_bank(),
+            "the weight table's {} bytes do not fit past both halves' {} bytes of the {}-byte L1 arena",
+            weight_table_bytes,
+            offset,
+            l1_arena->aligned_size_per_bank());
+        tt::tt_metal::CBDescriptor table_cb{
+            .total_size = weight_table_bytes,
+            .core_ranges = merged.cbs.front().core_ranges,
+            .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(weight_table_cb),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = weight_table_bytes,
+            }},
+        };
+        table_cb.buffer = l1_arena;
+        table_cb.address_offset = offset;
+        merged.cbs.push_back(std::move(table_cb));
+        report.arena_bytes_per_core = offset + weight_table_bytes;
+    }
 
     const auto fused_by_role = index_by_role(fused, "fused");
     const auto unified_by_role = index_by_role(unified, "unified");
@@ -442,6 +514,9 @@ tt::tt_metal::ProgramDescriptor merge_halves(
                 KernelDescriptor::ConfigDescriptor(tt::tt_metal::ReaderConfigDescriptor{}).index(),
             report.barrier_semaphore_id,
             /*shared_semaphore_count=*/report.barrier_semaphore_id,
+            weight_table,
+            weight_table_cb,
+            weight_table_bytes,
             *bases_it->second));
     }
     mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);

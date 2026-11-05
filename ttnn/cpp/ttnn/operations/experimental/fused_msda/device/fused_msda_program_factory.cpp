@@ -712,6 +712,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         geom_rm_cb,
         ref_tile_cb,
         const_cb,
+        static_cast<uint32_t>(s.locations_heads_packed),
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);

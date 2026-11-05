@@ -5,6 +5,8 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "matmul_wo_ring_common.h"
 
 void kernel_main() {
@@ -53,15 +55,9 @@ void kernel_main() {
     constexpr uint8_t collector_core_coords[num_collectors][2] = COLLECTOR_CORE_COORDS;
 
     // Get dst address
-    // Since we write to 7 different collector cores, get all their addresses in an array
+    // The partials land in the 7 collector cores' c_3, at the address c_3 has on this core: c_3 is one CB
+    // across both core sets, so its L1 address is the same on every core.
     const uint32_t local_collector_base_addr = cb_s2c_in2.get_write_ptr();
-    uint64_t collector_dst_base_addr[num_collectors];
-    for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
-        collector_dst_base_addr[collector_idx] = get_noc_addr(
-            collector_core_coords[collector_idx][0],
-            collector_core_coords[collector_idx][1],
-            local_collector_base_addr);
-    }
 
     constexpr uint32_t collector_dst_stride = num_cores * out_tile_size;
     const uint32_t collector_offset = dram_bank_id * out_tile_size;
@@ -80,30 +76,35 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Reduction transactions
     //-------------------------------------------------------------------------
-    uint32_t semaphore_addr = get_semaphore(reduce_semaphore_id);
-    uint64_t partial_semaphore_noc_addr[num_collectors];
-    for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
-        partial_semaphore_noc_addr[collector_idx] = get_noc_addr(
-            collector_core_coords[collector_idx][0], collector_core_coords[collector_idx][1], semaphore_addr);
-    }
-
-    // Use semaphore_inc<posted=true> with 1 transaction ID and flush barrier for trids
-    constexpr uint32_t semaphore_trid = 0x4;
-
-    noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
+    // NoC 1 (this writer kernel's noc_index). Each partial tile is a posted write, followed by a posted increment
+    // of that collector's semaphore on the same NoC and VC.
+    const Noc noc;
+    UnicastEndpoint collector;
+    // The increment below needs the semaphore's raw L1 address, which a Device 2.0 Semaphore does not expose
+    const uint32_t reduce_semaphore_addr = get_semaphore(reduce_semaphore_id);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
         cb_c2w_out.wait_front(num_n_tiles_per_iter);
-        uint32_t local_collector_src_addr = cb_c2w_out.get_read_ptr();
+        uint32_t src_offset = 0;
 
         for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
-            noc_async_write_one_packet_set_state</*posted=*/true>(
-                collector_dst_base_addr[collector_idx], out_tile_size, /*noc=*/1, vchannel);
-            noc_async_write_one_packet_with_state</*posted=*/true>(local_collector_src_addr, local_collector_dst_addr);
+            const uint32_t collector_x = collector_core_coords[collector_idx][0];
+            const uint32_t collector_y = collector_core_coords[collector_idx][1];
+            noc.set_async_write_state<NocOptions::POSTED | NocOptions::CUSTOM_VC, out_tile_size>(
+                collector,
+                out_tile_size,
+                {.noc_x = collector_x, .noc_y = collector_y, .addr = local_collector_base_addr},
+                {.vc = vchannel});
+            noc.async_write_with_state<NocOptions::POSTED, out_tile_size>(
+                cb_c2w_out, collector, out_tile_size, {.offset_bytes = src_offset}, {.addr = local_collector_dst_addr});
+            // Stays on Device 1.0: Device 2.0 has no posted remote increment yet (Semaphore::up is non-posted only)
             noc_semaphore_inc</*posted=*/true>(
-                partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+                collector.get_noc_unicast_addr(collector_x, collector_y, reduce_semaphore_addr, noc.get_noc_id()),
+                /*incr=*/1,
+                noc.get_noc_id(),
+                /*vc=*/vchannel);
 
-            local_collector_src_addr += out_tile_size;
+            src_offset += out_tile_size;
         }
 
         cb_c2w_out.pop_front(num_n_tiles_per_iter);
@@ -111,7 +112,7 @@ void kernel_main() {
         local_collector_dst_addr += collector_dst_stride;
     }
 
-    // Ensure write and semaphore have left the core before continuing
-    noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
-    noc_async_write_set_trid(0, /*noc=*/1);
+    // Ensure the partial writes have left the core before the kernel exits. The posted increments are not tracked;
+    // each collector waits for its own count.
+    noc.async_writes_flushed<NocOptions::POSTED>();
 }

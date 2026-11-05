@@ -9,6 +9,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
+#include "hostdev/buf_rw_common.h"
 #include "tt_elffile.hpp"
 
 namespace ll_api {

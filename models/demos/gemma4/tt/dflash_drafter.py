@@ -35,6 +35,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import plan_packed_sdpa, sdpa_tile_bytes
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -156,6 +157,50 @@ def _rope_tables(head_dim, theta, max_pos):
     freqs = torch.outer(t, inv_freq)  # [max_pos, head_dim/2]
     emb = torch.cat([freqs, freqs], dim=-1)
     return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
+
+
+def packed_verify_slot_sources(installed, flat, slots):
+    """Per KV group slot, the 1-D int64 host page row the packed verify reads: the installed per-layer table of
+    the slot's first layer (row 0 of a 2-D table) when one is installed, else the flat table. Under vLLM
+    hybrid KV-cache groups the layers of one type sit in several groups with disjoint block ids
+    (spec_decode.serving_kv_group_slots), so a table per layer TYPE would hand most layers another group's
+    blocks."""
+    flat = (flat[0] if flat.dim() > 1 else flat).to(torch.int64)
+    n_slots = (max(slots) + 1) if slots else 0
+    out = []
+    for slot in range(n_slots):
+        src = None
+        if installed:
+            idx = slots.index(slot)
+            lpt = installed[idx] if idx < len(installed) else None
+            if lpt is not None and hasattr(lpt, "dim"):
+                src = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
+        out.append(flat if src is None else src)
+    return out
+
+
+def packed_verify_k_cache(kv_layers, layer, i):
+    """The K cache handle whose geometry sizes layer ``i``'s packed-verify tables: the served per-layer
+    ``[k, v]`` list the decoder verifies through (vLLM owns the caches, so the attention module's own
+    ``kv_cache`` is None there), else the module's own cache, else None."""
+    if isinstance(kv_layers, (list, tuple)) and i < len(kv_layers):
+        entry = kv_layers[i]
+        if isinstance(entry, (list, tuple)) and entry and entry[0] is not None:
+            return entry[0]
+    own = getattr(getattr(layer, "self_attn", None), "kv_cache", None)
+    if isinstance(own, (list, tuple)) and own and own[0] is not None:
+        return own[0]
+    return None
+
+
+def packed_verify_slot_row(src, width):
+    """``src`` zero-padded (never clamped) to ``width`` columns as a [1, width] int32 row: columns past the live
+    top sit where the mask is NEG and contribute nothing, while clamping would let a width record created by a
+    short request truncate a longer one's table."""
+    src = src.to(torch.int64)
+    if int(src.shape[0]) < width:
+        src = torch.cat([src, torch.zeros(width - int(src.shape[0]), dtype=src.dtype)])
+    return src[:width].to(torch.int32).reshape(1, width)
 
 
 class DFlashDrafter:
@@ -463,11 +508,33 @@ class DFlashDrafter:
         scale = 1.0 / math.sqrt(self.head_dim)
         use_sdpa = self._use_sdpa
         if use_sdpa:
+            # The drafter packs local_heads x K1 query rows into the head dim of one decode SDPA (non-paged, bf16
+            # context caches); its chunk and cores per head come from the same CB model as the target's packed
+            # verify (the 31B drafter at TP4, 16 local heads x 16 rows = PNHt 8 on head_dim 128 with 2 local KV
+            # heads, overflowed the per-core L1 at the op defaults and again at 8 cores per head: 715 tiles that
+            # fit the 1.5 MB alone, not above the unreserved base the CBs start at).
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            plan = plan_packed_sdpa(
+                self.local_heads,
+                self.local_kv,
+                K1,
+                self.head_dim,
+                1,
+                grid.x * grid.y,
+                arch=getattr(self.mesh_device, "arch", lambda: None)(),
+                kv_tile_bytes=sdpa_tile_bytes(getattr(ctx_k[0], "dtype", None) if ctx_k else None),
+            )
+            if not plan.fits and not getattr(self, "_sdpa_overflow_logged", False):
+                self._sdpa_overflow_logged = True
+                logger.warning(
+                    f"dFlash drafter: no SDPA config on the ladder fits the per-core L1 on the {grid.x}x{grid.y} "
+                    f"grid: {plan.describe()}"
+                )
             # keys padded to a k_chunk multiple; pad columns arrive NEG from the
             # mask builder. Masks are H-repeated once per iteration (h-major
             # rows, the packed-verify contract).
             S_k = ctx_rows + K1
-            padn = (-S_k) % 64
+            padn = (-S_k) % plan.k_chunk
             if padn and self._sdpa_zpad is None:  # compile-pass one-time alloc
                 self._sdpa_zpad = ttnn.from_torch(
                     torch.zeros(1, self.local_kv, padn, self.head_dim, dtype=torch.bfloat16),
@@ -479,11 +546,11 @@ class DFlashDrafter:
             mf_r = ttnn.repeat(mask_full_tt, ttnn.Shape([1, 1, self.local_heads, 1]))
             ms_r = ttnn.repeat(mask_slide_tt, ttnn.Shape([1, 1, self.local_heads, 1]))
             sdpa_pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=64,
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=plan.q_chunk,
+                k_chunk_size=plan.k_chunk,
                 exp_approx_mode=False,
-                max_cores_per_head_batch=16,
+                max_cores_per_head_batch=plan.max_cores_per_head_batch,
             )
         for li, lyr in enumerate(self.layers):
             resid = x
@@ -944,7 +1011,7 @@ class DFlashFusedDecoder:
         self.pv_widx_all = None
         self.pv_mask_slide = None
         self.pv_tables = None
-        self._pv_cache_by_type = None
+        self._pv_cache_by_slot = None
         # Persistent OUTPUT slots (lazy first-use clone on the compile pass,
         # then ttnn.copy per body run). The body's fresh draft_ids/vidx are
         # created MID-GRAPH; ops after them (the whole packed verify) can
@@ -1178,6 +1245,44 @@ class DFlashFusedDecoder:
 
     # ---------------------------------------------------------------- graph
 
+    def _commit_ctx_caches(self, kv_new):
+        """Gather-merge the committed rows into every layer's roped ctx K/V cache.
+
+        ``kv_new`` is ``project_ctx_kv``'s per-layer ``[(k, v)]`` of
+        ``[1, local_kv, P_v, hd]``. Per cache, one gather per local KV head
+        through the shared ``merge_idx`` row map (the head's ``[cache | new]``
+        rows form one 2-D table), then the heads are stacked back on dim 1 and
+        written over the whole cache. One local head (TP8) keeps the
+        single-gather graph; TP4 (two local heads) and the replicated drafter
+        stack their heads before the assign. Trace-safe: every op is the same
+        tiled concat / view reshape / embedding / assign the one-head graph
+        already replays, plus a dim-1 concat of tile-aligned ``[1, 1, cap, hd]``
+        blocks."""
+        d = self.drafter
+        hd = d.head_dim
+        for li, (k_new, v_new) in enumerate(kv_new):
+            for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
+                heads = []
+                scratch = []
+                for h_i in range(d.local_kv):
+                    src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
+                    src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
+                    m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
+                    heads.append(ttnn.reshape(m, (1, 1, self.cap, hd)))
+                    scratch.extend((m, src2d, src))
+                merged = heads[0] if d.local_kv == 1 else ttnn.concat(heads, dim=1)
+                ttnn.assign(merged, cache)
+                to_free = heads + scratch
+                if merged is not heads[0]:
+                    to_free.append(merged)
+                for t in to_free:
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+            k_new.deallocate(True)
+            v_new.deallocate(True)
+
     def _body(self):
         d = self.drafter
         K = self.K
@@ -1194,25 +1299,7 @@ class DFlashFusedDecoder:
             kv_new = d.project_ctx_kv(self.fc_prev, cos_c, sin_c)
             cos_c.deallocate(True)
             sin_c.deallocate(True)
-            hd = d.head_dim
-            for li, (k_new, v_new) in enumerate(kv_new):
-                for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
-                    for h_i in range(d.local_kv):
-                        src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
-                        src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
-                        m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
-                        m4 = ttnn.reshape(m, (1, 1, self.cap, hd))
-                        dst = cache if d.local_kv == 1 else None
-                        if dst is None:
-                            raise NotImplementedError("ctx cache merge assumes local_kv == 1 per device")
-                        ttnn.assign(m4, dst)
-                        for t in (m4, m, src2d, src):
-                            try:
-                                t.deallocate(True)
-                            except Exception:
-                                pass
-                k_new.deallocate(True)
-                v_new.deallocate(True)
+            self._commit_ctx_caches(kv_new)
         else:
             src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
             src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
@@ -1493,6 +1580,32 @@ class DFlashFusedDecoder:
         # only the full-attention layers at the grown flat table and leaves the
         # sliding-layer RING buffers alone (bounded target).
         self._pv_rep = rep
+        # One packed-verify page table per vLLM KV-cache group slot (not per
+        # layer type): under hybrid groups the layers of one type are spread
+        # over several groups with disjoint block ids.
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+        from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+        layer_types = list(t.hf_config.layer_types[: len(t.layers)])
+        self._pv_slots, self._pv_n_slots = serving_kv_group_slots(layer_types)
+        self._pv_slot_type = {}
+        for i, slot in enumerate(self._pv_slots):
+            self._pv_slot_type.setdefault(slot, layer_types[i])
+        # Per-type EFFECTIVE block size: the token count one page-table column
+        # spans for a layer of that type (what its paged writes and paged SDPA
+        # use); under vLLM hybrid groups the sliding and full pools differ.
+        tp = int(self.drafter.tp)
+        self._pv_bs_t = {}
+        for lt, i in rep.items():
+            layer = t.layers[i]
+            cfg = layer.self_attn.config
+            nkv_local = 1 if layer.self_attn.weights.kv_replicated else cfg.num_key_value_heads // tp
+            k_cache = packed_verify_k_cache(self.kv_layers, layer, i)
+            # No cache handle (demo paths that pass caches per forward): the
+            # physical 64-token block the packed tables always assumed.
+            self._pv_bs_t[lt] = (
+                int(effective_block_size(k_cache, cfg.head_dim, nkv_local)) if k_cache is not None else 64
+            )
 
     def _pv_width_install(self, pv_sk):
         """Allocate (or reuse) the WIDTH-DEPENDENT packed-verify buffers for
@@ -1515,44 +1628,30 @@ class DFlashFusedDecoder:
             self._pv_width_activate(rec)
             return rec
         self.pv_sk = pv_sk
-        rows_t = {}
         installed = getattr(t, "_active_page_tables_per_layer", None)
-        flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
-        for lt in self.pv_ring:
-            rows_t[lt] = flat
-        if installed:
-            for lt, i in self._pv_rep.items():
-                lpt = installed[i]
-                if lpt is not None and hasattr(lpt, "dim"):
-                    rows_t[lt] = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
-        bs = 64
+        sources = packed_verify_slot_sources(installed, self.page_table_torch, self._pv_slots)
         self.pv_tables = []
-        cache_by_type = {}
-        for i in range(len(t.layers)):
-            lt = t.hf_config.layer_types[i]
-            if lt not in cache_by_type:
-                ring = self.pv_ring.get(lt)
-                width = (ring // bs) if ring else max(1, pv_sk // bs)
-                row = rows_t[lt]
-                # Width-MATCHED to the mask, NOT clamped to this request's table
-                # row: the packed SDPA attends the table width, so the table and
-                # the mask must agree (root cause #4 on the MTP side). A row
-                # shorter than the width is zero-padded, exactly as
-                # refresh_page_tables pads it on every later request -- those
-                # columns sit past the live top, where the mask is NEG, so they
-                # contribute nothing. Clamping instead would have made a width
-                # record created by a SHORT request truncate a longer one's
-                # table, silently reading the null block past the clamp.
-                if int(row.shape[0]) < width:
-                    row = torch.cat([row, torch.zeros(width - int(row.shape[0]), dtype=row.dtype)])
-                cache_by_type[lt] = ttnn.from_torch(
-                    row[:width].to(torch.int32).reshape(1, width),
+        cache_by_slot = []
+        for slot in range(self._pv_n_slots):
+            lt = self._pv_slot_type[slot]
+            ring = self.pv_ring.get(lt)
+            bs = self._pv_bs_t[lt]
+            # Width-MATCHED to the mask with the type's own block size, NOT
+            # clamped to this request's table row: the packed SDPA attends the
+            # table width times the block size, so the table and the mask must
+            # agree (root cause #4 on the MTP side). A row shorter than the
+            # width is zero-padded (packed_verify_slot_row).
+            width = (ring // bs) if ring else max(1, pv_sk // bs)
+            cache_by_slot.append(
+                ttnn.from_torch(
+                    packed_verify_slot_row(sources[slot], width),
                     device=self.mesh_device,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=self._mapper,
                 )
-            self.pv_tables.append(cache_by_type[lt])
+            )
+        self.pv_tables = [cache_by_slot[slot] for slot in self._pv_slots]
         z = torch.zeros
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
         mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
@@ -1596,7 +1695,7 @@ class DFlashFusedDecoder:
             "pv_sk": pv_sk,
             "pv_iota": pv_iota,
             "pv_tables": self.pv_tables,
-            "cache_by_type": cache_by_type,
+            "cache_by_slot": cache_by_slot,
             "pv_ssl": pv_ssl,
             "pv_mask_slide": pv_mask_slide,
             "trace": None,
@@ -1610,7 +1709,7 @@ class DFlashFusedDecoder:
         self.pv_sk = rec["pv_sk"]
         self.pv_iota = rec["pv_iota"]
         self.pv_tables = rec["pv_tables"]
-        self._pv_cache_by_type = rec["cache_by_type"]
+        self._pv_cache_by_slot = rec["cache_by_slot"]
         self.pv_ssl = rec["pv_ssl"]
         self.pv_mask_slide = rec["pv_mask_slide"]
         self.trace = rec["trace"]
@@ -1791,6 +1890,72 @@ class DFlashFusedDecoder:
         self._replay_on_first = True
         return cost
 
+    def measure_positions(self, top_position=None):
+        """The positions each captured width is timed at, ``[(width, first, last)]``: ``first`` is the position
+        the width starts serving (``width_for``), ``last`` the highest it serves, capped at ``top_position``."""
+        widths = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
+        positions, prev = [], None
+        for w in widths:
+            first = 0 if prev is None else prev - self.P_v - VERIFY_WIDTH_MARGIN + 1
+            if self.width_for(first) != w:
+                raise ValueError(f"position {first} selects width {self.width_for(first)} of {widths}, not {w}")
+            last = w - self.P_v - VERIFY_WIDTH_MARGIN
+            if top_position is not None:
+                last = min(last, int(top_position))
+            positions.append((w, first, max(first, last)))
+            prev = w
+        return positions
+
+    def measure_widths(self, top_position, repeats=2, anchor_id=1):
+        """Time one replay per captured width at the ends of its position range: ``{width: (first, ms, last, ms)}``.
+
+        The adaptive policy's cost table (``spec_policy``), a cost line in
+        the position per width. Each timing is what a contract step pays on
+        the device for that width at that position: the per-iteration input
+        upload, the fused replay (the draft block and the packed verify) and
+        the ids readback, at ``anchor_id`` through the scratch table (block
+        0, which the prepare and capture passes already wrote). The minimum
+        of ``repeats`` timings is kept. Runs after ``capture_widths`` and
+        before any request, and leaves the decoder as the capture left it:
+        the next request replays rather than reads ``_out``.
+        """
+        import time as _time
+
+        if int(repeats) < 1:
+            raise ValueError(f"measure_widths needs repeats >= 1, got {repeats}")
+        positions = self.measure_positions(top_position)
+        if not positions:
+            raise RuntimeError("measure_widths needs captured widths (capture_widths first)")
+        t_all = _time.perf_counter()
+        costs = {}
+        timings = 0
+        for width, first, last in positions:
+            self._pv_width_activate(self._pv_widths[width])
+            line = []
+            for pos in (first, last) if last > first else (first,):
+                best = None
+                for _ in range(int(repeats)):
+                    t0 = _time.perf_counter()
+                    self._upload_iter_inputs(anchor_id, pos)
+                    ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
+                    out_ids_t, _fc_out = self._out
+                    self._read_ids(out_ids_t)
+                    ttnn.synchronize_device(self.mesh_device)
+                    dt = (_time.perf_counter() - t0) * 1e3
+                    best = dt if best is None else min(best, dt)
+                timings += 1
+                line.append((pos, best))
+            if len(line) == 1:
+                line.append(line[0])
+            costs[width] = (line[0][0], line[0][1], line[1][0], line[1][1])
+        self._replay_on_first = True
+        logger.info(
+            f"dFlash measured {len(costs)} verify widths ({timings} timings, min of {int(repeats)} replays each) "
+            f"in {_time.perf_counter() - t_all:.1f}s (ms at position): "
+            + ", ".join(f"{w}={v[1]:.1f}@{v[0]}..{v[3]:.1f}@{v[2]}" for w, v in costs.items())
+        )
+        return costs
+
     def width_for(self, start):
         """Narrowest CAPTURED width that covers a verify block at ``start``.
 
@@ -1913,29 +2078,20 @@ class DFlashFusedDecoder:
         h = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(h, self.v_pt)
         h.deallocate(True)
-        if getattr(self, "_pv_cache_by_type", None):
-            # BOUNDED-aware refresh: full-attention layers grow with the sequence,
-            # so re-point them at the current flat table; sliding layers live in a
-            # STATIC ring pool, so re-point them at the installed per-layer ring
+        if getattr(self, "_pv_cache_by_slot", None):
+            # Refresh every KV group slot's table from the installed per-layer
+            # tables (the slot's first layer): full-attention groups grow with
+            # the sequence, sliding groups are their own tables under hybrid
+            # groups, and a bounded sliding RING is the installed per-layer ring
             # (never the flat global table -- doing so was the acceptance-collapse
-            # bug at >=131072). Unbounded targets have installed=None and every
-            # type is treated as full -> flat, i.e. the prior behaviour.
+            # bug at >=131072). With nothing installed every slot reads the flat
+            # table, i.e. the prior single-pool behaviour.
             installed = getattr(self.target, "_active_page_tables_per_layer", None)
-            seen = set()
-            for lt, buf in self._pv_cache_by_type.items():
-                if buf is None or id(buf) in seen:
+            sources = packed_verify_slot_sources(installed, flat, self._pv_slots)
+            for slot, buf in enumerate(self._pv_cache_by_slot):
+                if buf is None:
                     continue
-                seen.add(id(buf))
-                ring = self.pv_ring.get(lt)
-                if ring is not None and installed is not None and self._pv_rep.get(lt) is not None:
-                    lpt = installed[self._pv_rep[lt]]
-                    src = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
-                else:
-                    src = flat
-                pw = int(buf.shape[-1])
-                p2 = pw - int(src.numel())
-                r = src if p2 <= 0 else torch.cat([src, torch.zeros(p2, dtype=src.dtype)])
-                row = r[:pw].to(torch.int32).reshape(1, pw)
+                row = packed_verify_slot_row(sources[slot], int(buf.shape[-1]))
                 h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
                 ttnn.copy_host_to_device_tensor(h, buf)
                 h.deallocate(True)

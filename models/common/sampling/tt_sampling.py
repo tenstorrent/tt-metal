@@ -711,6 +711,14 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _raw_log_prob_logits(self, logits):
+        calculator = self.log_probs_calculator
+        if logits is None or not calculator.enable_log_probs or calculator._use_topk_logprobs:
+            return None
+        if logits.dtype != ttnn.bfloat16:
+            logits = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        return self._mask_invalid_vocab_logits(logits)
+
     def _mask_invalid_vocab_logits(self, logits):
         if self.tt_invalid_vocab_tail_mask is not None:
             return self._mask_invalid_vocab_tail_logits(logits)
@@ -1061,6 +1069,7 @@ class TTSampling(LightweightModule):
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
         apply_grammar: bool = False,
+        log_prob_logits: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """
         Perform on-device sampling on logits tensor.
@@ -1074,6 +1083,8 @@ class TTSampling(LightweightModule):
             tt_out_tok: Optional output tensor to write results to
             apply_grammar: Apply the packed mask previously staged with
                 ``update_grammar_bitmask`` before token selection.
+            log_prob_logits: Logits the single-token logprob is reported from
+                instead of ``x`` (the logits before sampling penalties).
 
         Returns:
             Sampled token indices and optional logprob output.
@@ -1094,6 +1105,7 @@ class TTSampling(LightweightModule):
             logger.info("Forcing argmax sampling")
             # Logprobs consume the vocabulary shards before argmax's gather/slice,
             # masked below. Keep token selection identical when reporting toggles.
+            raw_log_prob_logits = self._raw_log_prob_logits(log_prob_logits)
             logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
@@ -1108,11 +1120,13 @@ class TTSampling(LightweightModule):
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
                 logits_for_log_probs = x
-            elif self.log_probs_calculator.enable_log_probs:
+            elif self.log_probs_calculator.enable_log_probs and raw_log_prob_logits is None:
                 # The valid-vocab slice only trims the gathered tensor; the shards the
                 # calculator normalizes over would otherwise keep the padded tail in sum(exp).
                 logits_for_log_probs = self._mask_invalid_vocab_logits(x)
-            owns_log_prob_logits = logits_for_log_probs is not x
+            if raw_log_prob_logits is not None:
+                logits_for_log_probs = raw_log_prob_logits
+            owns_log_prob_logits = logits_for_log_probs is not x and logits_for_log_probs is not log_prob_logits
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -1205,7 +1219,8 @@ class TTSampling(LightweightModule):
         # The calculator derives per-shard width from its logits, which must match the
         # padded_vocab_size // num_shards offsets in tt_indices_device_offsets, so keep the
         # masked logits from before any power-of-2 pad below.
-        logits_for_log_probs = x_bf16
+        raw_log_prob_logits = self._raw_log_prob_logits(log_prob_logits)
+        logits_for_log_probs = x_bf16 if raw_log_prob_logits is None else raw_log_prob_logits
 
         # The single-device split below exists only because the stock top-k factories cap
         # out near 64K columns. When ttnn.topk would take the Blackhole topk_large_indices

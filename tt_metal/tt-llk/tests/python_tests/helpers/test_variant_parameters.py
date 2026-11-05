@@ -2189,8 +2189,7 @@ class PACK_RMW_DEST(TemplateParameter):
 
 class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
-    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles.
-    """
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
 
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
@@ -2224,7 +2223,7 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
-    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run"""
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 4 closed block with the W offset."""
 
     tiny_pack_mode: int = 0
 
@@ -2603,10 +2602,15 @@ class TOP32_RM(TemplateParameter):
                       be pre-sorted into descending runs of 32.
     ``via_wrappers``  route every SFPU call through the Metal wrapper layer
                       (``experimental/llk_sfpu/llk_math_deepseek_top32_rm.h``) instead of
-                      calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
-                      thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
-                      so this is the same computation through one more layer, and the only thing
-                      in the tree that calls those 7 entry points at all.
+                      calling the ``ckernel::sfpu::`` primitives directly. The SFPU wrappers
+                      are thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_``
+                      call -- so on the SFPU side this is the same computation through one more
+                      layer, and the only thing in the tree that calls those 7 entry points at
+                      all. In the plain mode the unpack goes through
+                      ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
+                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
+                      from their primitives-path namesakes) and the per-chunk L1 offset, so
+                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
     row_elements: int = 64

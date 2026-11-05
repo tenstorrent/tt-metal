@@ -11,7 +11,6 @@
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"

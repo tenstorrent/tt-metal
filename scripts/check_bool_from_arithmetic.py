@@ -41,8 +41,10 @@ NAME = re.compile(r"([A-Za-z_]\w*)\s*")
 RAW_START = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\n]{0,16})\(')
 # A `'` right after a number literal is a digit separator, not a character literal.
 NUMBER_BEFORE = re.compile(r"(?<![\w.])\d[\w.']*$")
+# In `num`, `[eEpP][+-]` is tried before `[\w.']` so an exponent sign stays inside the literal, as in a
+# C++ pp-number (`1e-3` is one token, not `1e` `-` `3`).
 TOKEN = re.compile(
-    r"\s*(?:(?P<num>\.?\d(?:[\w.']|[eEpP][+-])*)|(?P<id>[A-Za-z_]\w*)|(?P<op>::|->\*?|\.\*|<=>|<<=|>>=|\+\+|--|&&|\|\||"
+    r"\s*(?:(?P<num>\.?\d(?:[eEpP][+-]|[\w.'])*)|(?P<id>[A-Za-z_]\w*)|(?P<op>::|->\*?|\.\*|<=>|<<=|>>=|\+\+|--|&&|\|\||"
     r"[=!<>+\-*/%&|^]=|<<|>>|[-+*/%&|^~!<>=?:,.;()\[\]{}#]))"
 )
 # Binary operators below the multiplicative ones: if one is at the top level, the top-level operator

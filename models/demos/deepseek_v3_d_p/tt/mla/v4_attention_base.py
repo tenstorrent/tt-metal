@@ -111,7 +111,8 @@ class TtV4AttentionBase(LightweightModule):
         self.wo_b = self.ops.to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
-        # Everything below comes from alloc_state, which every caller has to run before forward.
+        # Everything below comes from build_tables, which every caller has to run (directly or through
+        # alloc_state) before forward.
         self._carry_index = {}
         self._slab_rope = None
         self._slab_index = None

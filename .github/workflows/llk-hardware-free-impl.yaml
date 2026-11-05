@@ -1,6 +1,6 @@
 name: "LLK hardware-free impl"
 
-# One leg from tests/pipeline_reorg/llk_hardware_free_tests.yaml. cpu_xlarge has
+# One leg from tests/pipeline_reorg/llk_hardware_free_tests.yaml. cpu_medium has
 # no card, so this workflow does not mount /dev/tenstorrent.
 
 on:
@@ -61,7 +61,7 @@ jobs:
         uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
-          enabled-skus: cpu_xlarge
+          enabled-skus: cpu_medium
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name }}
 

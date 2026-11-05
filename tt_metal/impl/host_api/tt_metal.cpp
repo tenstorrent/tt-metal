@@ -5,7 +5,6 @@
 #include <allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
-#include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
@@ -21,17 +20,13 @@
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
-#include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <type_traits>
 #include <variant>
@@ -74,7 +69,6 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE

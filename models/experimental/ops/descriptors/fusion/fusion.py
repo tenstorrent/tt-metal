@@ -19,7 +19,7 @@ kernel labels, and an output-source map — **no IO tensors or L1 buffers**. On 
 :class:`FusedOp` is constructed from the cached descriptor and the caller's
 current branch ops' tensors. This avoids pinning device buffers in the cache.
 
-The cache key includes **mesh identity** (:meth:`MeshDevice.id` when available,
+The cache key includes explicit output specs and **mesh identity** (:meth:`MeshDevice.id` when available,
 else Python ``id`` of the device object) from ``build(device=...)`` or inferred
 from branch tensors, so entries never cross different open meshes — required
 because the device program cache behind ``fusion_dispatch_op`` is tied to a
@@ -43,7 +43,8 @@ visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
 **Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` dispatch
 via :func:`_container_run`.  Persistent containers cache a ``_cached_entry``
 pointer to the shared ``_CacheEntry``; on call 2+ the C++
-``FusionDispatchState`` allocates ephemeral outputs, patches, and dispatches
+``FusionDispatchState`` uses explicit live output bindings, allocates unbound
+outputs, patches, and dispatches
 in a single call — zero L1 pinning between forward passes. Inline containers
 (new each call) use the same dispatch state after a build-cache lookup;
 persistent containers bypass that lookup after their first call.
@@ -59,7 +60,10 @@ import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import (
     OpDescriptor,
+    LazyOutputList,
     _DeferredOutput,
+    _BoundOutputSpec,
+    _fold_bound_output_specs,
     _clear_all_program_key_caches,
     is_op_descriptor,
 )
@@ -147,6 +151,8 @@ class _CacheEntry:
     # Cached output TensorSpecs (output_sources order) and shared_output_map
     # for the allocating fusion_dispatch_op overload.  Computed eagerly at build time.
     output_specs: Optional[List] = None
+    # TensorSpec equality omits these tile flags; freeze them once per entry.
+    output_tile_flags: Tuple[Tuple[bool, bool], ...] = ()
     shared_output_map: List = field(default_factory=list)
     # C++ FusionDispatchState — created eagerly at build time when output_specs
     # and device are available.  Used by both persistent and inline dispatch paths.
@@ -322,6 +328,9 @@ def _cache_build_result(
     elif fused_op.output_tensors:
         output_specs = [t.spec for t in fused_op.output_tensors if t is not None]
 
+    output_tile_flags = tuple(
+        (spec.tile.transpose_within_face, spec.tile.transpose_of_faces) for spec in output_specs or ()
+    )
     dispatch_state = None
     if output_specs is not None and device is not None:
         dispatch_state = ttnn._ttnn.operations.experimental.FusionDispatchState(
@@ -344,6 +353,7 @@ def _cache_build_result(
         address_slots=address_slots,
         result_reorder=result_reorder,
         output_specs=output_specs,
+        output_tile_flags=output_tile_flags,
         shared_output_map=shared_output_map,
         dispatch_state=dispatch_state,
     )
@@ -539,6 +549,68 @@ def _gather_inputs(ops) -> List:
     return inputs
 
 
+def _has_output_bindings(ops):
+    """Inspect assignment flags and eager lists without reading tensor specs."""
+    lazy_type = LazyOutputList
+    for op in ops:
+        outputs = op.output_tensors
+        if outputs.__class__ is lazy_type or isinstance(outputs, lazy_type):
+            if outputs._any_explicit:
+                return True
+        else:
+            for tensor in outputs:
+                if isinstance(tensor, ttnn.Tensor):
+                    return True
+    return False
+
+
+def _gather_output_bindings(ops, entry):
+    """Read explicit bindings only; factory allocations remain ephemeral."""
+    sources = entry.output_sources or ()
+    if not sources:
+        return []
+    lazy_type = LazyOutputList
+    if len(sources) == 1:
+        outputs = ops[sources[0][0]].output_tensors
+        if outputs.__class__ is lazy_type and not outputs._any_explicit:
+            return []
+    elif not _has_output_bindings(ops):
+        return []
+    tensor_type = ttnn.Tensor
+    bindings = []
+    for index, (op_index, tensor_index) in enumerate(sources):
+        outputs = ops[op_index].output_tensors
+        if outputs.__class__ is lazy_type or isinstance(outputs, lazy_type):
+            if not outputs._any_explicit:
+                continue
+            slots = outputs._slots
+            explicit = outputs._explicit_bindings
+            if tensor_index >= len(slots) or tensor_index >= len(explicit) or not explicit[tensor_index]:
+                continue
+            tensor = slots[tensor_index]
+        else:
+            # Plain-list eager outputs are supplied by the caller.
+            tensor = outputs[tensor_index] if tensor_index < len(outputs) else None
+        if isinstance(tensor, tensor_type):
+            if not bindings:
+                bindings = [None] * len(sources)
+            bindings[index] = tensor
+    return bindings
+
+
+def _bound_output_specs(bindings, sources):
+    """Build a variant key only for explicitly bound returned outputs."""
+    specs = []
+    for (op_index, slot), tensor in zip(sources, bindings):
+        if tensor is not None:
+            if tensor.storage_type() == ttnn.StorageType.DEVICE and tensor.buffer_unique_id() is None:
+                continue
+            spec = tensor.spec
+            tile = spec.tile
+            specs.append((op_index, slot, _BoundOutputSpec(spec, tile.transpose_within_face, tile.transpose_of_faces)))
+    return tuple(specs)
+
+
 def _build_run_cache_key(container, ops, device):
     """Build fusion cache key from precomputed container values."""
     branch_keys = tuple(op.program_cache_key for op in ops)
@@ -548,14 +620,60 @@ def _build_run_cache_key(container, ops, device):
         dev_id = _fusion_mesh_runtime_id(ops[0].input_tensors[0].device())
     else:
         dev_id = 0
-    return (container._topo_fp, branch_keys, dev_id)
+    base = (container._topo_fp, branch_keys, dev_id, ())
+    if not _has_output_bindings(ops):
+        return base
+    # Predict deferred specialization without materializing or changing the op.
+    # Built descriptors already carry the folded key; never fold them twice.
+    branch_keys = tuple(
+        _fold_bound_output_specs(op.program_cache_key, op._snapshot_output_bindings(op.output_tensors))
+        if op.is_deferred
+        else op.program_cache_key
+        for op in ops
+    )
+    base = (container._topo_fp, branch_keys, dev_id, ())
+    entry = _build_cache_get(base)
+    if entry is None:
+        # The first compiled structure owns the base entry.
+        return base
+    lazy_type = LazyOutputList
+    tensor_type = ttnn.Tensor
+    for index, (op_index, slot) in enumerate(entry.output_sources or ()):
+        outputs = ops[op_index].output_tensors
+        if isinstance(outputs, lazy_type):
+            if (
+                not outputs._any_explicit
+                or slot >= len(outputs._slots)
+                or slot >= len(outputs._explicit_bindings)
+                or not outputs._explicit_bindings[slot]
+            ):
+                continue
+            tensor = outputs._slots[slot]
+        else:
+            tensor = outputs[slot] if slot < len(outputs) else None
+        if not isinstance(tensor, tensor_type):
+            continue
+        if tensor.storage_type() == ttnn.StorageType.DEVICE and tensor.buffer_unique_id() is None:
+            continue
+        spec = tensor.spec
+        tile = spec.tile
+        within_face, of_faces = entry.output_tile_flags[index]
+        if (
+            spec != entry.output_specs[index]
+            or tile.transpose_within_face != within_face
+            or tile.transpose_of_faces != of_faces
+        ):
+            bindings = _gather_output_bindings(ops, entry)
+            return (*base[:3], _bound_output_specs(bindings, entry.output_sources))
+    return base
 
 
 def _cleanup_persistent_ops(ops) -> None:
     """Clear updated activation slots after persistent dispatch.
 
     Sets activation inputs to ``None`` (zero L1 pinning between calls)
-    and clears ``_updated_indices`` / ``output_tensors``.  The next
+    and clears ``_updated_indices`` and factory outputs, retaining explicit
+    output bindings. The next
     ``run()`` requires ``update()`` on every descriptor whose activations
     were cleared; ``_gather_inputs`` enforces this with a ``RuntimeError``.
     """
@@ -565,8 +683,14 @@ def _cleanup_persistent_ops(ops) -> None:
             for idx in updated:
                 op.input_tensors[idx] = None
             updated.clear()
-            if op.output_tensors:
-                op.output_tensors = []
+            outputs = op.output_tensors
+            if isinstance(outputs, LazyOutputList):
+                if outputs._any_explicit:
+                    for index in range(len(outputs._slots)):
+                        if index >= len(outputs._explicit_bindings) or not outputs._explicit_bindings[index]:
+                            outputs._slots[index] = None
+                elif outputs:
+                    outputs._slots[:] = [None] * len(outputs)
 
 
 def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
@@ -575,8 +699,8 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     Three dispatch paths:
 
     **Persistent hot path** (call 2+ on the same container): ``_cached_entry``
-    points to the shared ``_CacheEntry`` whose ``dispatch_state`` allocates
-    ephemeral outputs, patches, and dispatches in C++.  Skips cache-key
+    points to the shared ``_CacheEntry`` whose ``dispatch_state`` uses explicit live output bindings, allocates
+    unbound outputs, patches, and dispatches in C++.  Skips cache-key
     computation entirely.  Guarded by ``_cached_entry_gen == _BUILD_CACHE_GEN``
     so that ``clear_build_cache()`` invalidates stale entries without
     needing to track live containers.  After dispatch, updated activation
@@ -600,7 +724,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         and getattr(container, "_cached_entry_gen", -1) == _BUILD_CACHE_GEN
     ):
         inputs = _gather_inputs(container._cached_ops)
-        outputs = entry.dispatch_state.dispatch(inputs)
+        outputs = entry.dispatch_state.dispatch(inputs, _gather_output_bindings(container._cached_ops, entry))
         _cleanup_persistent_ops(container._cached_ops)
         return _filter_results(outputs, container._default_results, results)
 
@@ -612,7 +736,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     if entry is not None:
         if entry.dispatch_state is not None:
             inputs = _gather_inputs(ops)
-            outputs = entry.dispatch_state.dispatch(inputs)
+            outputs = entry.dispatch_state.dispatch(inputs, _gather_output_bindings(ops, entry))
             _cleanup_persistent_ops(ops)
             container._cached_entry = entry
             container._cached_entry_gen = _BUILD_CACHE_GEN
@@ -638,7 +762,8 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
         fused.launch()
-        entry = _build_cache_get(cache_key)
+        # A factory may have specialized its key when it consumed a binding.
+        entry = _build_cache_get(_build_run_cache_key(container, ops, device))
 
     if results is None:
         results = container._default_results
@@ -764,7 +889,8 @@ class FusedOp:
             all_outputs = []
             for idx, (pi, ti) in enumerate(self._rebind_output_sources):
                 new_out = ops[pi].output_tensors[ti]
-                # None = deferred output alloc; keep existing (cached) output.
+                # Only None preserves the existing merged output here.
+                # This direct build/launch path does not allocate missing outputs.
                 all_outputs.append(new_out if new_out is not None else out_list[idx])
         else:
             if len(ops) != 1:
@@ -939,6 +1065,16 @@ class Sequential:
                 result._apply_kernel_dir(kernel_dir)
             return result
 
+        for op in ops:
+            op._validate_cold_outputs()
+        # Factory materialization may include caller output specs in its key.
+        cache_key = _build_run_cache_key(self, ops, cache_device)
+        entry = _build_cache_get(cache_key)
+        if entry is not None:
+            result = _fused_op_from_cache_entry(entry, ops)
+            if kernel_dir is not None:
+                result._apply_kernel_dir(kernel_dir)
+            return result
         r = self._build_internal(device)
         rebind_src = _make_rebind_output_sources(ops, r.output_source_map)
         fused = FusedOp(
@@ -984,13 +1120,13 @@ class Sequential:
 
         2. **Warm path** (``_BUILD_CACHE`` hit, first call on this container
            instance): gathers inputs from branch descriptors and dispatches
-           via the cached ``FusionDispatchState``, which allocates output
-           tensors and a command-lifetime semaphore bank. Sets
+           via the cached ``FusionDispatchState``, which uses explicit live
+           output bindings and allocates unbound outputs and a semaphore bank. Sets
            ``_cached_entry`` on the container for subsequent hot-path calls.
 
         3. **Persistent hot path** (call 2+ on the same container): bypasses
            cache-key computation entirely.  ``_cached_entry.dispatch_state``
-           allocates ephemeral output tensors, patches the cached descriptor,
+           uses explicit live bindings, allocates unbound outputs, patches the descriptor,
            and dispatches — all in a single C++ call.  Updated activation
            slots are cleared after dispatch (zero L1 pinning between calls).
 
@@ -1111,6 +1247,16 @@ class Parallel:
                 result._apply_kernel_dir(kernel_dir)
             return result
 
+        for op in ops:
+            op._validate_cold_outputs()
+        # Factory materialization may include caller output specs in its key.
+        cache_key = _build_run_cache_key(self, ops, cache_device)
+        entry = _build_cache_get(cache_key)
+        if entry is not None:
+            result = _fused_op_from_cache_entry(entry, ops)
+            if kernel_dir is not None:
+                result._apply_kernel_dir(kernel_dir)
+            return result
         r = self._build_internal(device)
         rebind_src = _make_rebind_output_sources(ops, r.output_source_map)
         fused = FusedOp(

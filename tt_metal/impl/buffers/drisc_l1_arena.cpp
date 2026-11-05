@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 

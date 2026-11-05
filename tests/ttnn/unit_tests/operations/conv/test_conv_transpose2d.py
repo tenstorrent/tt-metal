@@ -574,3 +574,59 @@ def test_conv_transpose2d_with_groups(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         auto_shard=True,
     )
+
+
+_CONV_T_ZERO_PARAM_CASES = [
+    ({"in_channels": 0}, "in_channels"),
+    ({"batch_size": 0}, "batch_size"),
+    ({"kernel_size": (3, 0)}, "kernel_size"),
+    ({"stride": (0, 2)}, "stride"),
+    ({"groups": 0}, "groups"),
+]
+_CONV_T_ZERO_PARAM_IDS = ["in_channels", "batch_size", "kernel_size", "stride", "groups"]
+
+
+def _conv_transpose2d_zero_param_kwargs(device, override):
+    kwargs = dict(
+        in_channels=32,
+        out_channels=32,
+        batch_size=1,
+        input_height=8,
+        input_width=8,
+        kernel_size=(3, 3),
+        stride=(2, 2),
+        padding=(1, 1),
+        dilation=(1, 1),
+        groups=1,
+        device=device,
+    )
+    kwargs.update(override)
+    return kwargs
+
+
+@pytest.mark.parametrize("override, field", _CONV_T_ZERO_PARAM_CASES, ids=_CONV_T_ZERO_PARAM_IDS)
+def test_conv_transpose2d_rejects_zero_params(device, override, field, expect_error):
+    tt_input = ttnn.from_torch(torch.randn(1, 1, 64, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
+    tt_weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, f"{field}.*must be greater than 0"):
+        ttnn.conv_transpose2d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            output_padding=(0, 0),
+            **_conv_transpose2d_zero_param_kwargs(device, override),
+        )
+
+
+@pytest.mark.parametrize("override, field", _CONV_T_ZERO_PARAM_CASES, ids=_CONV_T_ZERO_PARAM_IDS)
+def test_prepare_conv_transpose2d_weights_rejects_zero_params(device, override, field, expect_error):
+    tt_weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, f"{field}.*must be greater than 0"):
+        ttnn.prepare_conv_transpose2d_weights(
+            weight_tensor=tt_weight,
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="IOHW",
+            has_bias=False,
+            input_dtype=ttnn.bfloat16,
+            **_conv_transpose2d_zero_param_kwargs(device, override),
+        )

@@ -371,6 +371,7 @@ def run_test_FalconCausalLM_end_to_end(
         assert does_pass
 
 
+@pytest.mark.falcon40b_config
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -437,10 +438,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     mesh_device,
 ):
     model_config_str = f"{data_type}-{memcfg}"
-    if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and memcfg != "SHARDED":
-        pytest.skip("Decode is only supported for SHARDED memory config!")
 
     out_pcc = 0.99
     k_cache_pcc = 0.99

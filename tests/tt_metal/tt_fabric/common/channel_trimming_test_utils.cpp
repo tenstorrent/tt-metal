@@ -43,8 +43,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     // The connection destination is the first-hop neighbor (which equals dst for 1-hop)
     FabricNodeId connection_dst = dst_fabric_node_id;
     if (num_hops > 1) {
-        auto first_hop_neighbors =
-            control_plane.get_intra_chip_neighbors(src_fabric_node_id, *forwarding_dir_opt);
+        auto first_hop_neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, *forwarding_dir_opt);
         if (first_hop_neighbors.empty()) {
             return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
         }
@@ -64,7 +63,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     const auto& sender_device = BaseFabricFixture::devices_map_.at(src_physical);
     const auto& receiver_device = BaseFabricFixture::devices_map_.at(dst_physical);
-    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core =
+        receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh || topology == Topology::Torus;
@@ -112,6 +112,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     // Use connection API to append EDM connection args (to first-hop neighbor)
     append_fabric_connection_rt_args(
+        *sender_device,
         src_fabric_node_id,
         connection_dst,
         link_idx,
@@ -165,8 +166,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
     EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
-    return UnicastTrafficResult{
-        src_physical, dst_physical, src_fabric_node_id, dst_fabric_node_id, edm_port, false};
+    return UnicastTrafficResult{src_physical, dst_physical, src_fabric_node_id, dst_fabric_node_id, edm_port, false};
 }
 
 MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
@@ -190,9 +190,8 @@ MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
         FabricNodeId target(MeshId{0}, 0);
         bool found_target = false;
         for (int i = num_chips - 1; i >= 0; i--) {
-            bool visited = std::any_of(path.begin(), path.end(), [&](const FabricNodeId& n) {
-                return n.chip_id == static_cast<uint32_t>(i);
-            });
+            bool visited = std::any_of(
+                path.begin(), path.end(), [&](const FabricNodeId& n) { return n.chip_id == static_cast<uint32_t>(i); });
             if (!visited) {
                 target = FabricNodeId(MeshId{0}, static_cast<uint32_t>(i));
                 found_target = true;

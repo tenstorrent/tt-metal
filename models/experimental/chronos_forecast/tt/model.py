@@ -13,6 +13,11 @@ v1: all-valid masks only (variable masks raise); embeddings/encoder on device, r
 The device-resident path orders tokens [context, future, REG] (RoPE positions follow each
 token, and unmasked attention is order-free), so the forecast rows start on a tile when the
 context patch count is a multiple of 32, and embeds all of them in one call.
+
+Token packing (unique groups, batch > 4, opt-in via ``pack_tokens``): k series share one Sp-row
+time sequence, tails of all k slots first, then their contexts, then pad rows; a block-diagonal
+time mask keeps the series apart and RoPE positions restart per series, so attention is
+unchanged while tile padding per series drops (ctx512/h64: 64 -> 38.4 rows).
 """
 
 from __future__ import annotations
@@ -34,6 +39,18 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
 from models.experimental.chronos_forecast.tt.program_configs import L1_CHUNK_GRID, TtChronosPrecision
 from models.experimental.chronos_forecast.tt.residual_block import TtResidualBlock, TtResidualBlockWeights
 from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
+
+TILE = 32
+PACK_MIN_BATCH = 5  # b <= 4 is latency bound; packing only adds mask traffic there
+# Below this many series per chip, pack only inside the unpacked tile padding (Sp <= padded S).
+# A longer Sp leaves few SDPA work units of (Sp/32)^2 tiles each: bfp8_b b16 (4 x Sp160) ran
+# 16% and 40-series ctx100/160/256 11-15% slower than unpacked; ctx17 at Sp = 32 ran 23% faster.
+PACK_FULL_MIN_SERIES = 64
+PACK_MAX_SEQ = 256  # one SDPA chunk per packed sequence (program_configs._MAX_SDPA_CHUNK)
+PACK_MIN_SAVING = 0.25  # paper shape ctx2048 (S=133) saves 10% and stays unpacked
+# L1 LoFi 2D matmuls block per-core M tiles by their largest divisor <= 8; a prime above 8 leaves
+# out_block_h = 1 (b256 at k=6: 301 M tiles -> 31 per core, 5.4% slower than unpacked).
+PACK_MAX_OUT_BLOCK_H = 8
 
 
 @dataclass(frozen=True)
@@ -71,6 +88,10 @@ class TtChronosPreparedInputs:
     # count; ``output_rows`` maps each input series to its packed row.
     group_block: int | None = None
     output_rows: torch.Tensor | None = None
+    # Token packing: ``pack`` series per time sequence (1 = unpacked). Packed outputs hold
+    # ``pack * tail_len`` rows per sequence, slot-major; ``output_rows`` indexes slots.
+    pack: int = 1
+    tail_len: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +108,8 @@ class TtChronosDeviceInputs:
     num_output_patches: int
     unique_groups: bool
     group_block: int | None = None
+    pack: int = 1
+    tail_len: int | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +161,7 @@ class TtChronos:
         precision: TtChronosPrecision | None = None,
         *,
         l1_chunk_tokens: int | None = None,
+        pack_tokens: bool | None = False,
     ):
         """``l1_chunk_tokens`` (e.g. ``precision.l1_chunk_tokens()``) runs the encoder
         L1-resident on chunks of ``l1_chunk_tokens // padded_T`` series (rounded down
@@ -145,13 +169,17 @@ class TtChronos:
         keeps activations in DRAM.
 
         On a mesh device the model runs data parallel: weights are copied to every
-        chip and the device-resident path splits the batch along dim 0."""
+        chip and the device-resident path splits the batch along dim 0.
+
+        ``pack_tokens`` (False = never, the default; None = auto) packs unique-group series into
+        shared time sequences in ``prepare_inputs`` when that saves >= 25% of the padded rows."""
         self.device = device
         self.num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         self.weights = weights
         self.config = config
         self.precision = precision or TtChronosPrecision()
         self.l1_chunk_tokens = l1_chunk_tokens
+        self.pack_tokens = pack_tokens
         if l1_chunk_tokens is not None:
             grid = device.compute_with_storage_grid_size()
             if (grid.x, grid.y) != L1_CHUNK_GRID:
@@ -166,12 +194,23 @@ class TtChronos:
 
     @classmethod
     def from_torch_model(
-        cls, device, model, precision: TtChronosPrecision | None = None, *, l1_chunk_tokens: int | None = None
+        cls,
+        device,
+        model,
+        precision: TtChronosPrecision | None = None,
+        *,
+        l1_chunk_tokens: int | None = None,
+        pack_tokens: bool | None = False,
     ) -> "TtChronos":
         """Build from a reference ``Chronos2Model`` (weights + geometry)."""
         weights = TtChronosWeights.from_torch_model(model)
         return cls(
-            device, weights, tt_chronos_config_from_torch_model(model), precision, l1_chunk_tokens=l1_chunk_tokens
+            device,
+            weights,
+            tt_chronos_config_from_torch_model(model),
+            precision,
+            l1_chunk_tokens=l1_chunk_tokens,
+            pack_tokens=pack_tokens,
         )
 
     def _l1_series_chunk(self, padded_seq_len: int) -> int | None:
@@ -229,6 +268,73 @@ class TtChronos:
         per_chip = mask.reshape(self.num_devices, 1, blocks // self.num_devices, g, g)
         return per_chip.expand(-1, seq_len, -1, -1, -1).reshape(-1, 1, g, g)
 
+    def _pack_plan(self, batch_size: int, seq_len: int) -> tuple[int, int, int] | None:
+        """(k, Sp, packed sequences) for a unique-group call, or None to stay unpacked.
+
+        Cost = padded rows x (1 + Sp/5000): the second term charges SDPA its quadratic share. Below
+        ``PACK_FULL_MIN_SERIES`` series per chip Sp may not exceed the unpacked padded length,
+        and plans whose L1 chunks block badly (``_pack_blocks_well``) are skipped.
+        """
+        if self.pack_tokens is False or batch_size < PACK_MIN_BATCH:
+            return None
+        chips = self.num_devices
+        padded = -(-seq_len // TILE) * TILE
+        unpacked = -(-batch_size // chips) * chips * padded
+        max_seq = PACK_MAX_SEQ if batch_size // chips >= PACK_FULL_MIN_SERIES else padded
+        grid_y = None if self.l1_chunk_tokens is None else self.device.compute_with_storage_grid_size().y
+        best = None
+        for k in range(2, batch_size + 1):
+            sp = -(-k * seq_len // TILE) * TILE
+            if sp > max_seq:
+                break
+            seqs = -(-(-(-batch_size // k)) // chips) * chips
+            rows = seqs * sp
+            if rows > (1 - PACK_MIN_SAVING) * unpacked:
+                continue
+            if grid_y is not None and not self._pack_blocks_well(seqs // chips, sp, grid_y):
+                continue
+            cost = rows * (1 + sp / 5000)
+            if best is None or cost < best[0]:
+                best = (cost, k, sp, seqs)
+        return None if best is None else best[1:]
+
+    def _pack_blocks_well(self, seqs_per_chip: int, sp: int, grid_y: int) -> bool:
+        """False when an L1 chunk's per-core M tiles (``fused_batch_matmul_config``) is a prime > 8."""
+        chunk = self._l1_series_chunk(sp)
+        sizes = {min(chunk, seqs_per_chip)}
+        if seqs_per_chip > chunk and seqs_per_chip % chunk:
+            sizes.add(seqs_per_chip % chunk)
+        for size in sizes:
+            per_core_m = -(-(size * sp // TILE) // grid_y)
+            if per_core_m > PACK_MAX_OUT_BLOCK_H and all(per_core_m % h for h in range(2, PACK_MAX_OUT_BLOCK_H + 1)):
+                return False
+        return True
+
+    @staticmethod
+    def _packed_layout(k: int, num_context: int, tail_len: int, num_reg: int, sp: int):
+        """Layout v2: per packed row, the source (slot, token index) and its RoPE position.
+
+        Rows [0, k*H) are the tails (future, then REG) of slots 0..k-1, rows [k*H, k*S) their
+        contexts, rows [k*S, Sp) padding (segment k, so no mask row is all -inf).
+        """
+        seq_len = num_context + tail_len
+        num_future = tail_len - num_reg
+        # Unpacked token order is [context, future, REG]; tails are its last ``tail_len`` rows.
+        unpacked_pos = torch.cat(
+            [
+                torch.arange(num_context),
+                torch.arange(num_context + num_reg, num_context + num_reg + num_future),
+                torch.arange(num_context, num_context + num_reg),
+            ]
+        )
+        slot = torch.cat([torch.arange(k).repeat_interleave(tail_len), torch.arange(k).repeat_interleave(num_context)])
+        token = torch.cat([torch.arange(num_context, seq_len).repeat(k), torch.arange(num_context).repeat(k)])
+        segment = torch.full((sp,), k, dtype=torch.long)
+        segment[: k * seq_len] = slot
+        position = torch.zeros(sp, dtype=torch.long)
+        position[: k * seq_len] = unpacked_pos[token]
+        return slot, token, segment, position
+
     def prepare_inputs(
         self,
         context: torch.Tensor,
@@ -275,7 +381,7 @@ class TtChronos:
         seq_len = full_mask.shape[-1]
         time_mask = torch.zeros(1, 1, seq_len, seq_len)
 
-        group_mask, group_block, output_rows = None, None, None
+        group_mask, group_block, output_rows, plan = None, None, None, None
         if not unique_groups:
             # All-valid masks make group attention block-diagonal over group-sorted series.
             preferred_block = 128
@@ -296,7 +402,9 @@ class TtChronos:
             group_mask = (
                 packing.mask[:1] if packing.is_uniform() else self._time_major_group_mask(packing.mask, seq_len)
             )
-        elif batch_size % self.num_devices:
+        else:
+            plan = self._pack_plan(batch_size, seq_len)
+        if plan is None and unique_groups and batch_size % self.num_devices:
             # Pad with copies of series 0 so every chip gets the same number of series.
             pad = self.num_devices - batch_size % self.num_devices
             rows = torch.cat([torch.arange(batch_size), torch.zeros(pad, dtype=torch.long)])
@@ -310,6 +418,34 @@ class TtChronos:
         tokens[:, num_context_patches : seq_len - num_reg, : patched_future.shape[-1]] = patched_future
         if num_reg:
             tokens[:, -1, self._input_embed.in_features] = 1.0
+        inv_freq = self.weights.encoder.blocks[0].time.inv_freq
+        if plan is not None:
+            k, sp, seqs = plan
+            tail_len = seq_len - num_context_patches
+            slot, token, segment, position = self._packed_layout(k, num_context_patches, tail_len, num_reg, sp)
+            # Fill every slot (dummy slots copy series 0), so all packed sequences are alike.
+            series = torch.cat([torch.arange(batch_size), torch.zeros(seqs * k - batch_size, dtype=torch.long)])
+            series = series.reshape(seqs, k)
+            packed = torch.zeros(seqs, sp, tokens.shape[-1], dtype=torch.bfloat16)
+            packed[:, : k * seq_len] = tokens[series[:, slot], token]
+            same = segment.unsqueeze(0) == segment.unsqueeze(1)
+            time_mask = torch.where(same, 0.0, torch.finfo(torch.bfloat16).min).reshape(1, 1, sp, sp)
+            cos, sin = build_rope_cache(position.unsqueeze(0), inv_freq)
+            return TtChronosPreparedInputs(
+                patched_tokens=packed,
+                cos=cos,
+                sin=sin,
+                time_mask=time_mask,
+                group_mask=None,
+                loc_scale=loc_scale,
+                num_context_patches=num_context_patches,
+                num_output_patches=num_output_patches,
+                unique_groups=True,
+                # Packed sequence s, slot j -> flattened output row s*k + j.
+                output_rows=torch.arange(batch_size),
+                pack=k,
+                tail_len=tail_len,
+            )
         # Reference positions of the [context, future, REG] token order; every series uses the
         # same ones, so one (1,T,Dh) cache broadcasts over the batch.
         position_ids = torch.cat(
@@ -319,7 +455,6 @@ class TtChronos:
                 torch.arange(num_context_patches, num_context_patches + num_reg),
             ]
         ).unsqueeze(0)
-        inv_freq = self.weights.encoder.blocks[0].time.inv_freq
         cos, sin = build_rope_cache(position_ids, inv_freq)
         return TtChronosPreparedInputs(
             patched_tokens=tokens,
@@ -381,6 +516,8 @@ class TtChronos:
             num_output_patches=prepared.num_output_patches,
             unique_groups=prepared.unique_groups,
             group_block=prepared.group_block,
+            pack=prepared.pack,
+            tail_len=prepared.tail_len,
         )
 
     def forward_device(self, inputs: TtChronosDeviceInputs):
@@ -392,6 +529,7 @@ class TtChronos:
         import ttnn
 
         tokens = ttnn.to_layout(inputs.patched_tokens, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Chunks count time sequences, i.e. packed sequences of Sp rows when packed.
         l1_series_chunk = self._l1_series_chunk(tokens.padded_shape[-2])
         if l1_series_chunk is not None and inputs.group_block is not None:
             # Chunks hold whole group blocks; a block larger than one chunk runs from DRAM.
@@ -407,6 +545,11 @@ class TtChronos:
                 x, deallocate_input=True, memory_config=mem, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
+        if inputs.pack > 1:
+            # Layout v2: all k tails sit in rows [0, k*H), so the head runs on k*H rows, not Sp.
+            tail_start, tail_end = 0, inputs.pack * inputs.tail_len
+        else:
+            tail_start, tail_end = inputs.num_context_patches, None
         out = self._encoder.forward_device(
             tokens,
             inputs.cos,
@@ -417,7 +560,8 @@ class TtChronos:
             group_block=inputs.group_block,
             l1_series_chunk=l1_series_chunk,
             embed=embed,
-            tail_start=inputs.num_context_patches,
+            tail_start=tail_start,
+            tail_end=tail_end,
             head=head,
         )
         ttnn.deallocate(tokens)
@@ -430,10 +574,13 @@ class TtChronos:
         *,
         num_output_patches: int,
         output_rows: torch.Tensor | None = None,
+        pack: int = 1,
     ) -> torch.Tensor:
         """Download and unscale the device output into `(B, Q, horizon)`.
 
         Pass ``prepared.output_rows`` so grouped (packed) or padded batches come back in input order.
+        Packed outputs (``pack`` = ``prepared.pack`` > 1) hold k slot tails per sequence and are
+        split into one row per slot first.
         """
         import ttnn
 
@@ -443,6 +590,9 @@ class TtChronos:
         out = ttnn.to_torch(output_device, mesh_composer=composer).float()
         if out.dim() == 4 and out.shape[0] == 1:
             out = out.squeeze(0)
+        if pack > 1:
+            seqs, rows, width = out.shape
+            out = out.reshape(seqs * pack, rows // pack, width)
         if output_rows is not None:
             out = out[output_rows]
         out = out[:, :num_output_patches, :]

@@ -113,8 +113,7 @@ def _summarize_chunk_recurrence_ops(
         perf_model.FpuOps(
             matrix_flops=instances * (8 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
             multiply_ops=instances * 2 * key_dim * value_dim,
-            add_ops=instances * (2 * CHUNK_SIZE * value_dim + 2 * key_dim * value_dim)
-            + batch_heads * key_dim * value_dim,
+            add_ops=instances * 2 * CHUNK_SIZE * value_dim,
         ),
         perf_model.SfpuOps(),
     )
@@ -150,7 +149,7 @@ def test_summarize_chunk_recurrence_work_golden() -> None:
     )
     fpu, sfpu = _summarize_chunk_recurrence_ops(inputs, (torch.empty((2, 1, 2, 4)),))
 
-    assert fpu == perf_model.FpuOps(matrix_flops=9216, multiply_ops=8, add_ops=140)
+    assert fpu == perf_model.FpuOps(matrix_flops=9216, multiply_ops=8, add_ops=128)
     assert sfpu == perf_model.SfpuOps()
 
 
@@ -402,15 +401,28 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
     )
 
 
+@pytest.mark.parametrize(
+    ("packer_l1_acc", "fp32_dest_acc_en", "message"),
+    [
+        pytest.param(True, True, "packer_l1_acc=true is unsupported", id="packer-l1-acc"),
+        pytest.param(False, False, "fp32_dest_acc_en=false is unsupported", id="bf16-dst"),
+    ],
+)
 def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
-    zero_actual_start, device: ttnn.Device, expect_error: Callable
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    packer_l1_acc: bool,
+    fp32_dest_acc_en: bool,
+    message: str,
 ) -> None:
     _, inputs = _regression_protocol(device, seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
     )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         run_summary(inputs, compute_kernel_config=unsupported_config, actual_start=zero_actual_start)
 
 

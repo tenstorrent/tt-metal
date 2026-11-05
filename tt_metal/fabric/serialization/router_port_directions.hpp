@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 namespace tt::tt_fabric {
 

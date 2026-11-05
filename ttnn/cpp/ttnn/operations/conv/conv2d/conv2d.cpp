@@ -900,8 +900,9 @@ Conv2dResultWithOptions conv2d(
     using namespace operations::conv::conv2d;
     using operations::conv::Conv2dExecutionPath;
     using operations::conv::determine_conv2d_execution_path;
-    // Kernel-stride folding takes `% stride` before the output size is computed.
-    operations::conv::validate_stride(stride);
+    // Kernel-stride folding takes `% stride` before the output size is computed, and the L1 estimate divides
+    // by the kernel size, channels and batch.
+    operations::conv::validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
     // Determine execution path based on configuration and input properties
     Conv2dExecutionPath path = determine_conv2d_execution_path(input_tensor, slice_config_);
 

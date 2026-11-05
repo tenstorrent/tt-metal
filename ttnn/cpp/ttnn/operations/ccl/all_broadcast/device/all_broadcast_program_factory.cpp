@@ -318,7 +318,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // appends additional fabric connection args (and, on 2D meshes, more
         // header words) onto writer_rt_args.
         append_routing_plane_connection_manager_rt_args(
-            sender_fabric_node_id, dst_nodes, {link}, desc, worker_sender_writer_kernel_id, core, writer_rt_args);
+            *mesh_device,
+            sender_fabric_node_id,
+            dst_nodes,
+            {link},
+            desc,
+            worker_sender_writer_kernel_id,
+            core,
+            writer_rt_args);
 
         // Promote the writer RT args to the kernel descriptor.  Index 0 is the
         // output buffer's base address — push it as Buffer* so the framework

@@ -35,6 +35,7 @@ from models.demos.gemma4.demo.text_demo import (
 )
 from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric, skip_if_config_only_checkpoint
 from models.demos.gemma4.tt.generator import Gemma4Generator, plan_packed_prefill_groups
+from models.demos.gemma4.tt.warmup_isls import PREFILL_PAD_BUCKETS_ENV
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
 
 B = int(os.environ.get("PACKED_PREFILL_USERS", "32"))
@@ -480,3 +481,14 @@ def test_physical_slots_keep_the_call_within_max_batch(slots):
 def test_nothing_to_pack():
     assert plan_packed_prefill_groups([128], [0], max_prefill_chunk_size=4096, max_batch_size=32) == []
     assert plan_packed_prefill_groups([128, 256], [0, 0], max_prefill_chunk_size=4096, max_batch_size=32) == []
+
+
+@pytest.mark.usefixtures("_blackhole_user_cap")
+def test_the_pad_knob_packs_the_finer_buckets(monkeypatch):
+    lens = [200, 250, 600, 700]
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    groups = plan_packed_prefill_groups(lens, [0] * 4, max_prefill_chunk_size=4096, max_batch_size=32)
+    assert groups == [(1024, [0, 1, 2, 3])], "the shared policy: one 1024 bucket"
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    groups = plan_packed_prefill_groups(lens, [0] * 4, max_prefill_chunk_size=4096, max_batch_size=32)
+    assert groups == [(256, [0, 1]), (1024, [2, 3])], "GEMMA4_PREFILL_PAD_BUCKETS: the packed call at 256"

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <vector>
 
-#include <host_api.hpp>
 #include <tt-metalium/device_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_env_impl.hpp"

@@ -6,7 +6,6 @@
 #include "fabric_tensix_builder_impl.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <hal.hpp>
 #include <tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 

@@ -7,7 +7,12 @@
 #include <cstdint>
 #include <array>
 #include <bit>
+// Compiled by both host and device: pick the matching buffer_types header for each side.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "api/buffer_types.hpp"
+#else
 #include <tt-metalium/buffer_types.hpp>
+#endif
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------

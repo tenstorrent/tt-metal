@@ -14,6 +14,7 @@ See tt_metal/impl/buffers/prefetcher_matmul_design.md for the delivery contract.
 """
 
 import contextlib
+import gc
 
 import pytest
 import torch
@@ -207,6 +208,15 @@ def test_worker_pipes_matmul(device, recv_per_reader, num_layers, enable_perform
 
 
 @skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_worker_pipes_matmul_recarved_pipes(device):
+    """Pipes re-carved in place of dropped ones, at their addresses with their geometry, reuse every program
+    cached for them: the cache hits rebind dram_prefetcher and the matmuls to the replacements."""
+    _check_matmuls(
+        device, _Layout(device, recv_per_reader=1), num_layers=1, enable_performance_mode=False, recarve=True
+    )
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 def test_worker_pipes_readers_follow_pipe_order(device):
     """Reader i drives the i-th pipe given, wherever its sender sits.
 
@@ -217,16 +227,18 @@ def test_worker_pipes_readers_follow_pipe_order(device):
     _check_matmuls(device, layout, num_layers=1, enable_performance_mode=False)
 
 
-def _check_matmuls(device, layout, num_layers, enable_performance_mode):
+def _check_matmuls(device, layout, num_layers, enable_performance_mode, recarve=False):
     """Runs dram_prefetcher over the layout's pipes into mcast_in0 matmuls and checks every output.
 
     Two weights of different block sizes per layer; run twice, and the second run must reuse every
     cached program. The second run's weights and address tensor are new allocations of the same specs,
     allocated while the first run's are still alive and holding different values, so a cache hit that kept
-    the first run's address tensor bound would read the first run's weights and fail the check.
+    the first run's address tensor bound would read the first run's weights and fail the check. With
+    `recarve`, the first run's pipes are dropped and re-carved from their space before the second run, so
+    its cache hits must rebind the programs to the replacements as well.
     """
     entry_sizes = [layout.entry_size(dtype, per_core_n) for dtype, per_core_n in _TWO_TENSORS]
-    _space, pipes = _make_pipes(device, layout, _ring_size(entry_sizes))
+    space, pipes = _make_pipes(device, layout, _ring_size(entry_sizes))
     runs = [_make_weights(device, layout, _TWO_TENSORS, num_layers, seed=run) for run in range(2)]
 
     M = ttnn.TILE_SIZE
@@ -248,6 +260,12 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
     cache_entries = []
     with _prefetcher_sub_devices(device, layout) as worker_sub_device_id:
         for run, (pt_weights, tt_weights, tt_addrs) in enumerate(runs):
+            if recarve and run > 0:
+                addresses = [(pipe.buffer_address(), pipe.config_address()) for pipe in pipes]
+                del pipes
+                gc.collect()
+                pipes = space.create_pipes(layout.sender_receiver_mapping())
+                assert [(pipe.buffer_address(), pipe.config_address()) for pipe in pipes] == addresses
             ttnn.dram_prefetcher(
                 tt_weights[:num_tensors] + [tt_addrs],
                 num_layers,

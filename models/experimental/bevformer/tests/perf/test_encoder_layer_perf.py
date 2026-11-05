@@ -28,7 +28,7 @@ from tracy import signpost
 
 import ttnn
 from models.experimental.bevformer.model_config import FEEDFORWARD_CHANNELS
-from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset, sample_ego_shifts
 from models.experimental.bevformer.reference.encoder import BEVFormerLayer
 from models.experimental.bevformer.reference.point_sampling_3d_2d import (
     bev_reference_points as reference_bev_points,
@@ -36,8 +36,10 @@ from models.experimental.bevformer.reference.point_sampling_3d_2d import (
     point_sampling_3d_to_2d,
 )
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_layer_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerLayer
+from models.experimental.bevformer.tt.tt_temporal_self_attention import shifted_reference_points
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import build_rebatch_plan
 
 DEVICE_PERF_ITERS = 1
@@ -63,6 +65,8 @@ def _head_sha():
     ],
 )
 @pytest.mark.parametrize("batch_size", [1])
+# The first frame has no previous BEV; every later one, the steady state, has one and an ego shift.
+@pytest.mark.parametrize("frame", ["first", "previous_bev"])
 @pytest.mark.parametrize("expected_pcc", [0.997])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_bevformer_layer_perf(
@@ -70,9 +74,11 @@ def test_bevformer_layer_perf(
     config_name,
     bev_size,
     batch_size,
+    frame,
     expected_pcc,
     reset_seeds,
     ensure_gc,
+    monkeypatch,
 ):
     logger.info(f"device-perf run of commit {_head_sha()}")
 
@@ -117,7 +123,7 @@ def test_bevformer_layer_perf(
         reference_points_3d[:, :, 0, :2].unsqueeze(2),
         device=device,
         dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     layer_kwargs = dict(
@@ -131,18 +137,25 @@ def test_bevformer_layer_perf(
 
     ref_model = BEVFormerLayer(**layer_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
-    # Without a previous BEV, upstream's encoder hands the self-attention each sample's grid twice.
+    # Upstream's encoder hands the self-attention each sample's grid twice, the previous BEV's
+    # shifted by the ego motion, and stacks the previous BEV with the encoder's input queries.
     ref_2d = reference_bev_points(bev_h, bev_w, batch_size)
+    prev_bev = shift = None
+    shifted_ref_2d = ref_2d
+    if frame == "previous_bev":
+        prev_bev = torch.stack([torch.randn_like(bev_query), bev_query], 1).flatten(0, 1)
+        shift = sample_ego_shifts(batch_size)
+        shifted_ref_2d = ref_2d + shift[:, None, None, :]
     ref_output = ref_model(
         bev_query,
         value=camera_features,
         bev_pos=bev_pos,
-        ref_2d=torch.stack([ref_2d, ref_2d], 1).flatten(0, 1),
+        ref_2d=torch.stack([shifted_ref_2d, ref_2d], 1).flatten(0, 1),
         bev_shape=bev_shape,
         spatial_shapes=spatial_shapes,
         reference_points_cam=ref_points_cam,
         bev_mask=ref_bev_mask,
-        prev_bev=None,
+        prev_bev=prev_bev,
     )
 
     tt_model = TTBEVFormerLayer(
@@ -163,25 +176,47 @@ def test_bevformer_layer_perf(
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     rebatch_plan = build_rebatch_plan(tt_points_cam, tt_bev_mask, device)
 
+    tt_prev_bev = None
+    layer_reference_points = bev_reference_points
+    if frame == "previous_bev":
+        tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # Built once per frame, as the encoder does.
+        layer_reference_points = shifted_reference_points(
+            bev_reference_points,
+            ttnn.from_torch(
+                shift.view(batch_size, 1, 1, 2), device=device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            ),
+        )
+
     def op_fn():
         return tt_model(
             bev_query=tt_bev_query,
             value=tt_value,
             bev_pos=tt_bev_pos,
-            prev_bev=None,
+            prev_bev=tt_prev_bev,
             reference_points_cam=tt_points_cam,
             bev_mask=tt_bev_mask,
-            bev_reference_points=bev_reference_points,
+            bev_reference_points=layer_reference_points,
             rebatch_plan=rebatch_plan,
         )
 
+    # The layer's speed rests on both fused ops keeping their value in L1; a DRAM fallback only
+    # logs a warning, once per shape and process, so catch it here with the record cleared.
+    monkeypatch.setattr(tt_ms_deformable_attention, "_warned_dram_fallbacks", set())
+    fallbacks = []
+    sink = logger.add(
+        lambda message: fallbacks.append(message),
+        filter=lambda record: record["message"].startswith(tt_ms_deformable_attention.DRAM_FALLBACK_PREFIX),
+    )
     # Doubles as the warmup: this call compiles the kernels and fills the program
     # cache, so the signposted iterations already run at steady state.
     tt_output = op_fn()
+    logger.remove(sink)
     tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
     passed, message = check_with_pcc(ref_output, tt_output_torch, expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
+    assert not fallbacks, f"fused_msda fell back to DRAM: {fallbacks}"
     ttnn.deallocate(tt_output)
 
     ttnn.synchronize_device(device)

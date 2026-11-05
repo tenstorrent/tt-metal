@@ -31,6 +31,8 @@ Constraints (first cut):
     a circular-buffer modulo (the assistant attention config doesn't carry one).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -150,19 +152,22 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True):
+        def _linear(key, mapper, transpose=True, weight_dtype=None):
             w = state_dict.get(key)
             if w is None:
                 return None
             wt = w.transpose(-2, -1) if transpose else w
             wt = wt.unsqueeze(0).unsqueeze(0)
+            cache_key = key.replace(".", "_")
+            if weight_dtype is not None and weight_dtype != dtype:
+                cache_key += f"_{str(weight_dtype).split('.')[-1]}"  # its own cache entry: never the other dtype's
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=weight_dtype or dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_")),
+                cache_file_name=get_cache_file_name(tensor_cache_path, cache_key),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -171,7 +176,11 @@ class Gemma4AssistantModel:
         # lm_head tied to the assistant's own embed_tokens when a separate
         # lm_head.weight isn't stored.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
+        # The drafter's lm_head is the largest read of a draft step (the vocab projection, 500 MB per chip on the
+        # 12B at TP4): GEMMA4_ASSISTANT_LM_HEAD_BFP8=1 keeps it in bfloat8_b (half the bytes; the drafts are
+        # proposals the verify checks, so only the acceptance can move, which the parity test measures).
+        lm_head_bfp8 = os.environ.get("GEMMA4_ASSISTANT_LM_HEAD_BFP8", "0") == "1"
+        self.lm_head = _linear(lm_key, col_mapper, weight_dtype=ttnn.bfloat8_b if lm_head_bfp8 else None)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
 
@@ -191,7 +200,51 @@ class Gemma4AssistantModel:
             emb = ttnn.unsqueeze_to_4D(emb)
         return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
 
-    def step(self, token_tt, target_hidden, shared_kv, page_tables, pos_uint32, pos_int32, return_logits=True):
+    def prepare_rope(self, pos_uint32):
+        """The RoPE rows of ``pos_uint32`` ([1, 32] uint32, one position per row) per layer type, gathered once
+        for every ``step`` run at these positions: ``{layer_type: (cos, sin, scratch)}``.
+
+        ``cos`` / ``sin`` are the ``[1, 1, 32, head_dim]`` TILE gathers the attention makes per layer otherwise
+        (``decode_forward`` under ``rope_presliced``, the target model's own per-type hoist) and ``scratch`` the
+        type's batch>1 RoPE workspace (``rope_prepared``: the transposed and head-repeated forms, built by the
+        type's first layer and reused by the rest). Same values, fewer programs: a serving record drafts K tokens
+        at one position per row, so one gather per type serves its K x 4 layer calls instead of two per layer per
+        step. Freed by ``release_rope``.
+        """
+        prepared = {}
+        for lt in self.layer_types:
+            if lt in prepared:
+                continue
+            cos_2d, sin_2d = self.rope_caches_2d[lt]
+            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(pos_uint32, cos_2d, layout=ttnn.TILE_LAYOUT))
+            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(pos_uint32, sin_2d, layout=ttnn.TILE_LAYOUT))
+            prepared[lt] = (cos_pos, sin_pos, {})
+        return prepared
+
+    @staticmethod
+    def release_rope(prepared):
+        """Free what ``prepare_rope`` gathered and what the steps built in its scratch (the target's order)."""
+        for cos_pos, sin_pos, _scratch in prepared.values():
+            cos_pos.deallocate(True)
+            sin_pos.deallocate(True)
+        for _cos, _sin, scratch in prepared.values():
+            for pair in scratch.values():
+                for t in pair:
+                    t.deallocate(True)
+            scratch.clear()
+
+    def step(
+        self,
+        token_tt,
+        target_hidden,
+        shared_kv,
+        page_tables,
+        pos_uint32,
+        pos_int32,
+        return_logits=True,
+        gather_logits=True,
+        rope_prepared=None,
+    ):
         """One drafter step.
 
         Args:
@@ -204,9 +257,15 @@ class Gemma4AssistantModel:
                 for both types in the simple unbounded case).
             pos_uint32: [1,32] uint32 fixed position for RoPE lookup.
             pos_int32: [1] int32 fixed position for SDPA cur_pos.
+            gather_logits: when False (TP > 1), return the chip's vocab slice ``[1, 1, rows, vocab / tp]``
+                instead of the all-gathered logits (the serving records' sharded argmax).
             return_logits: when False, skip the lm_head + its TP all-gather and
                 return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
                 cost in timing harnesses).
+            rope_prepared: the RoPE rows of ``pos_uint32`` gathered once per
+                layer type by ``prepare_rope`` (the serving records run K steps
+                at one position per row); None gathers them per layer, as the
+                attention does on its own.
 
         Returns:
             (logits [1,1,1,vocab], next_hidden [1,1,1,backbone]).
@@ -221,9 +280,13 @@ class Gemma4AssistantModel:
         for i, layer in enumerate(self.layers):
             lt = self.layer_types[i]
             pt = page_tables[lt] if isinstance(page_tables, dict) else page_tables
+            if rope_prepared is None:
+                rope_kwargs = {"rope_mats": self.rope_caches_2d[lt]}
+            else:
+                cos_pos, sin_pos, scratch = rope_prepared[lt]
+                rope_kwargs = {"rope_mats": (cos_pos, sin_pos), "rope_presliced": True, "rope_prepared": scratch}
             h = layer(
                 h,
-                rope_mats=self.rope_caches_2d[lt],
                 position_idx=pos_uint32,
                 page_table=pt,
                 kv_cache=shared_kv[lt],
@@ -231,6 +294,7 @@ class Gemma4AssistantModel:
                 token_index=None,
                 is_kv_shared=True,
                 position_idx_cache=pos_int32,
+                **rope_kwargs,
             )
 
         normed = self.norm.forward(h)
@@ -239,7 +303,7 @@ class Gemma4AssistantModel:
         logits = None
         if return_logits:
             logits = ttnn.linear(normed, self.lm_head)
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
+            if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         next_hidden = ttnn.linear(normed, self.post_projection)

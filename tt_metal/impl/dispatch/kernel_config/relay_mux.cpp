@@ -5,7 +5,6 @@
 #include "relay_mux.hpp"
 #include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
-#include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"

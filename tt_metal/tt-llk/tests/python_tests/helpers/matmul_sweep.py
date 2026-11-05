@@ -668,12 +668,10 @@ def _matmul_pack_form_value(
     in0_tile_r_dim: int = 32,
     in1_tile_c_dim: int = 32,
     throttle: int = 0,
-    dense_pages: bool = False,
     l1_acc: bool = False,
 ) -> int:
     """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
-    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles
-    (only with dense_pages: the perf sweep, where the output address does not change the pack timing; the functional tests keep a 32x32 page per tile, which a dense run cannot write).
+    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (padded pages, block-float outputs and small tiles).
     """
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
     # the packer's L1 accumulate of a Float32 output reads and writes 64 byte rows: at half sync the block run reads slower than the per-tile pack
@@ -810,14 +808,6 @@ def _matmul_pack_form_value(
         )
     ):
         return 0
-    if (
-        dense_pages
-        and small
-        and in1_tile_c_dim == 32
-        and not formats.output_format.is_block_float()
-    ):
-        # eight small tiles at half sync hide the pack behind the math: the closed form stays
-        return 2 if dest_sync == DestSync.Half and rt_dim * ct_dim >= 8 else 4
     return 2 if small or formats.output_format.is_block_float() else 1
 
 
@@ -1045,7 +1035,7 @@ def matmul_pack_form(
     dense_pages: bool = False,
     l1_acc: bool = False,
 ) -> int:
-    """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block, 4 the dense run)."""
+    """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block)."""
     value = _matmul_pack_form_value(
         formats,
         dest_sync,
@@ -1056,7 +1046,6 @@ def matmul_pack_form(
         in0_tile_r_dim,
         in1_tile_c_dim,
         throttle,
-        dense_pages,
         l1_acc,
     )
     value = _matmul_pack_form_ext(

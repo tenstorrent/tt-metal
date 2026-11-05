@@ -5,9 +5,7 @@
 #pragma once
 
 #include <device.hpp>
-#include <host_api.hpp>
 #include <fstream>
-#include <string>
 
 namespace tt::tt_metal {
 class IDevice;

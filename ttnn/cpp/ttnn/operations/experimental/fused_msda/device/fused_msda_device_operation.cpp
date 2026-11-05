@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
@@ -185,39 +186,67 @@ MSDAShapes derive_shapes(
 
     const auto& ls = loc.logical_shape();
     TT_FATAL(
-        ls.rank() == 6 || ls.rank() == 4,
-        "fused_msda: {} rank must be 6 (B, Q, H, L, P, 2) or 4 (B, Q, H, L*P*2), got shape {}",
+        ls.rank() == 6 || ls.rank() == 4 || ls.rank() == 3,
+        "fused_msda: {} rank must be 6 (B, Q, H, L, P, 2), 4 (B, Q, H, L*P*2) or 3 (B, Q, H*L*P*2), got shape {}",
         loc_name,
         ls);
-    TT_FATAL(
-        static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
-            static_cast<uint32_t>(ls[2]) == s.num_heads,
-        "fused_msda: {} leading dims {} do not match (B, Q, H) = ({}, {}, {})",
-        loc_name,
-        ls,
-        s.batch,
-        s.num_queries,
-        s.num_heads);
-    if (ls.rank() == 6) {
-        s.locations_packed = false;
-        TT_FATAL(
-            static_cast<uint32_t>(ls[3]) == s.num_levels && static_cast<uint32_t>(ls[4]) == s.num_points,
-            "fused_msda: {} (L, P) = ({}, {}) does not match attention_weights (L, P) = ({}, {})",
-            loc_name,
-            ls[3],
-            ls[4],
-            s.num_levels,
-            s.num_points);
-        TT_FATAL(ls[5] == 2, "fused_msda: {} last dim must be 2 (x, y), got {}", loc_name, ls[5]);
-    } else {
+    if (ls.rank() == 3) {
+        // The heads of one (b, q) share a row-major page; the reader reads head h's L*P*2 values at
+        // byte offset h * L*P*2 * elem_size inside it, so that offset has to be a legal NoC source
+        // address.
         s.locations_packed = true;
-        const uint32_t expected = s.num_levels * s.num_points * 2;
+        s.locations_heads_packed = true;
+        const uint32_t per_head = s.num_levels * s.num_points * 2;
         TT_FATAL(
-            static_cast<uint32_t>(ls[3]) == expected,
-            "fused_msda: packed {} last dim ({}) must equal L*P*2 = {}",
+            static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
+                static_cast<uint32_t>(ls[2]) == s.num_heads * per_head,
+            "fused_msda: heads-packed {} shape {} does not match (B, Q, H*L*P*2) = ({}, {}, {})",
             loc_name,
-            ls[3],
-            expected);
+            ls,
+            s.batch,
+            s.num_queries,
+            s.num_heads * per_head);
+        const uint32_t alignment = loc.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                       ? tt::tt_metal::hal::get_dram_alignment()
+                                       : tt::tt_metal::hal::get_l1_alignment();
+        TT_FATAL(
+            (per_head * loc.element_size()) % alignment == 0,
+            "fused_msda: heads-packed {} needs each head's L*P*2 values ({} B) to be a multiple of the buffer's "
+            "alignment ({} B); pass (B, Q, H, L*P*2) instead",
+            loc_name,
+            per_head * loc.element_size(),
+            alignment);
+    } else {
+        TT_FATAL(
+            static_cast<uint32_t>(ls[0]) == s.batch && static_cast<uint32_t>(ls[1]) == s.num_queries &&
+                static_cast<uint32_t>(ls[2]) == s.num_heads,
+            "fused_msda: {} leading dims {} do not match (B, Q, H) = ({}, {}, {})",
+            loc_name,
+            ls,
+            s.batch,
+            s.num_queries,
+            s.num_heads);
+        if (ls.rank() == 6) {
+            s.locations_packed = false;
+            TT_FATAL(
+                static_cast<uint32_t>(ls[3]) == s.num_levels && static_cast<uint32_t>(ls[4]) == s.num_points,
+                "fused_msda: {} (L, P) = ({}, {}) does not match attention_weights (L, P) = ({}, {})",
+                loc_name,
+                ls[3],
+                ls[4],
+                s.num_levels,
+                s.num_points);
+            TT_FATAL(ls[5] == 2, "fused_msda: {} last dim must be 2 (x, y), got {}", loc_name, ls[5]);
+        } else {
+            s.locations_packed = true;
+            const uint32_t expected = s.num_levels * s.num_points * 2;
+            TT_FATAL(
+                static_cast<uint32_t>(ls[3]) == expected,
+                "fused_msda: packed {} last dim ({}) must equal L*P*2 = {}",
+                loc_name,
+                ls[3],
+                expected);
+        }
     }
 
     // ---- reference_points (V2 only) ----

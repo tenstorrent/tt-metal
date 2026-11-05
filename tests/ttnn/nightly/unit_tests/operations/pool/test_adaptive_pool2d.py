@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 import pytest
 from tests.sweep_framework.sweep_utils.adaptive_pool2d_common import run_adaptive_pool2d
@@ -90,3 +91,15 @@ def test_adaptive_pool2d_short_sweep(
         dtype=dtype,
         pool_type=pool_type,
     )
+
+
+@pytest.mark.parametrize("pool_type", ["max", "avg"])
+@pytest.mark.parametrize("output_size", [[0, 4], [4, 0]], ids=["zero_h", "zero_w"])
+def test_adaptive_pool2d_rejects_zero_output_size(device, expect_error, pool_type, output_size):
+    in_n, in_c, in_h, in_w = 1, 32, 8, 8
+    x = ttnn.from_torch(
+        torch.randn(1, 1, in_n * in_h * in_w, in_c).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    op = ttnn.adaptive_max_pool2d if pool_type == "max" else ttnn.adaptive_avg_pool2d
+    with expect_error(RuntimeError, "Adaptive pool output_size must be non-zero"):
+        op(input_tensor=x, batch_size=in_n, input_h=in_h, input_w=in_w, channels=in_c, output_size=output_size)

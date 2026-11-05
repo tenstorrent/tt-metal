@@ -501,3 +501,16 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+def test_fold_transpose_rejects_empty_grid(device, expect_error):
+    x = torch.rand((1, 3, 32, 32), dtype=torch.bfloat16)
+    in_sharded_memory_config = ttnn.create_sharded_memory_config(
+        x.shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config)
+    with expect_error(RuntimeError, "core_grid must contain at least one core"):
+        ttnn.fold(tt_in, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 1], grid_size=ttnn.CoreRangeSet([]))

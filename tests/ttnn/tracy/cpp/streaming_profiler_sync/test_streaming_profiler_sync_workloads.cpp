@@ -561,7 +561,7 @@ distributed::MeshWorkload build_workload(
                 kRounds,
                 static_cast<uint32_t>(dst.chip_id),
                 static_cast<uint32_t>(dst.mesh_id.get())};
-            tt::tt_fabric::append_fabric_connection_rt_args(src, dst, self.link, program, self.core, args);
+            tt::tt_fabric::append_fabric_connection_rt_args(mesh_device, src, dst, self.link, program, self.core, args);
             SetRuntimeArgs(program, kernel, self.core, args);
         }
     }

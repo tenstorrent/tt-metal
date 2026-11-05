@@ -12,7 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt_metal.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "tt_metal_profiler.hpp"
 #include <fstream>
 

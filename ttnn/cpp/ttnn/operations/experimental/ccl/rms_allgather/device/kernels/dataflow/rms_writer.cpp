@@ -9,7 +9,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"

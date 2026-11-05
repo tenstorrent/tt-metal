@@ -34,7 +34,8 @@ struct MSDAShapes {
     uint32_t num_levels = 0;        // L
     uint32_t num_points = 0;        // P
     uint32_t num_refs = 0;          // R (V2 only; 0 for V1)
-    bool locations_packed = false;  // sampling_locations/offsets given as (B, Q, H, L*P*2)
+    bool locations_packed = false;  // sampling_locations/offsets given as (B, Q, H, L*P*2) or (B, Q, H*L*P*2)
+    bool locations_heads_packed = false;  // sampling_locations/offsets given as (B, Q, H*L*P*2)
     bool weights_packed = false;    // attention_weights given as (B, Q, H, L*P)
     bool value_packed = false;      // value given as (B, S, H*D); heads recovered from attention_weights
 };
