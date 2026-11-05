@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-inline vFloat target_domain_action_coordinate(vFloat x_raw) {
+__attribute__((always_inline)) inline vFloat target_domain_action_coordinate(vFloat x_raw) {
     // Float16_b exponent-zero inputs expand into ordinary FP32 values in DST.
     // The bound target declares DAZ before mathematical dispatch, so normalize
     // exactly that open interval here, once, before actions and finalization.

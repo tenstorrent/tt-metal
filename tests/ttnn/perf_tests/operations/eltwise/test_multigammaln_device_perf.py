@@ -15,6 +15,8 @@ kernel duration summed over the programs it launches, the median of REPEATS call
 generated program must be faster by more than MARGIN.
 """
 
+import os
+
 import pandas as pd
 import pytest
 import torch
@@ -27,6 +29,11 @@ MARGIN = 0.05
 # Inputs inside the range the generated kernel is fitted on.
 LOW, HIGH = 1.5009765625, 50.0
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_multigammaln_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 
 
 def _old_path(x, memory_config=None):
@@ -110,6 +117,7 @@ def _prove_reference(name, fused, reference, boards, device):
     logger.info(f"REFERENCE {name} {_board(device)} is TT-NN's own path: {len(own_operations)} device operations")
 
 
+@IN_PROFILER
 def test_multigammaln_profiled_calls(device):
     """The proofs, then the calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost

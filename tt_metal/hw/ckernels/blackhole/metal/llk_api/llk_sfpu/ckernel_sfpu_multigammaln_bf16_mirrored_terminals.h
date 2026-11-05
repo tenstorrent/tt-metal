@@ -7,7 +7,7 @@
 namespace ckernel::sfpu::ttpoly::multigammaln {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
-inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
+__attribute__((always_inline)) inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
     constexpr float min_normal = std::numeric_limits<float>::min();
     vFloat effective = x_raw;
     v_if(effective > -min_normal) { effective = 0.0f; }

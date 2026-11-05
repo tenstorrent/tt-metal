@@ -74,7 +74,7 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto& q_out = output;
 
     auto* device = q_in.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     const auto q_shape = q_in.logical_shape();
     const uint32_t B = q_shape[0];

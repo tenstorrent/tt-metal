@@ -6,7 +6,7 @@ static_assert(
     TT_SELECTED_STIRLING_AGGREGATE_COUNT == 2u || TT_SELECTED_STIRLING_AGGREGATE_COUNT == 4u,
     "aggregate Stirling schedule supports the declared fixed-parameter family");
 
-inline vFloat selected_stirling_log_ratio(vFloat x) {
+__attribute__((always_inline)) inline vFloat selected_stirling_log_ratio(vFloat x) {
     vFloat y = TT_SELECTED_STIRLING_LOG_RATIO[10];
     y = y * x + TT_SELECTED_STIRLING_LOG_RATIO[9];
     y = y * x + TT_SELECTED_STIRLING_LOG_RATIO[8];
@@ -21,7 +21,7 @@ inline vFloat selected_stirling_log_ratio(vFloat x) {
     return y;
 }
 
-inline vFloat selected_stirling_correction(vFloat x) {
+__attribute__((always_inline)) inline vFloat selected_stirling_correction(vFloat x) {
     vFloat y = TT_SELECTED_STIRLING_CORRECTION[12];
     y = y * x + TT_SELECTED_STIRLING_CORRECTION[11];
     y = y * x + TT_SELECTED_STIRLING_CORRECTION[10];
@@ -39,7 +39,7 @@ inline vFloat selected_stirling_correction(vFloat x) {
 }
 
 // Natural log of a positive normal argument from its mantissa in [0.75, 1.5).
-inline vFloat selected_stirling_positive_log(vFloat a) {
+__attribute__((always_inline)) inline vFloat selected_stirling_positive_log(vFloat a) {
     vInt exponent = exexp(a, ExponentMode::Biased);
     vFloat mantissa = setexp(a, 127);
     v_if(mantissa >= 1.5f) {
@@ -54,7 +54,7 @@ inline vFloat selected_stirling_positive_log(vFloat a) {
 }
 
 // The aggregate Stirling form at u >= the correction coordinate scale.
-inline vFloat selected_stirling_tail(vFloat u) {
+__attribute__((always_inline)) inline vFloat selected_stirling_tail(vFloat u) {
     constexpr float count = static_cast<float>(TT_SELECTED_STIRLING_AGGREGATE_COUNT);
     constexpr float log_offset = __builtin_bit_cast(float, TT_SELECTED_STIRLING_LOG_OFFSET_BITS);
     constexpr float constant = __builtin_bit_cast(float, TT_SELECTED_STIRLING_CONSTANT_BITS);
@@ -71,7 +71,7 @@ inline vFloat selected_stirling_tail(vFloat u) {
     return stirling_main + selected_stirling_correction(correction_coordinate);
 }
 
-inline vFloat selected_stirling_log_sine_ratio(vFloat w) {
+__attribute__((always_inline)) inline vFloat selected_stirling_log_sine_ratio(vFloat w) {
     constexpr int last = TT_SELECTED_STIRLING_LOG_SINE_RATIO.size() - 1;
     vFloat y = TT_SELECTED_STIRLING_LOG_SINE_RATIO[last];
 #pragma GCC unroll 16
@@ -90,7 +90,7 @@ inline vFloat selected_stirling_log_sine_ratio(vFloat w) {
 // so one logarithm covers both singular parts:
 //   F(x) = K + s log 2 - log(sin^2(pi r) / r^2) + log(|prod| 2^-s / r^2) - Stirling(u).
 // A pole is r == 0, or a magnitude at which every float is an integer.
-inline void apply_selected_core_aggregate_stirling(vFloat x, vFloat& y) {
+__attribute__((always_inline)) inline void apply_selected_core_aggregate_stirling(vFloat x, vFloat& y) {
     constexpr float core_lower = __builtin_bit_cast(float, TT_SELECTED_STIRLING_CORE_LOWER_BITS);
     constexpr float core_upper = __builtin_bit_cast(float, TT_SELECTED_STIRLING_CORE_UPPER_BITS);
     constexpr float overflow = __builtin_bit_cast(float, TT_SELECTED_STIRLING_OVERFLOW_BITS);
@@ -167,7 +167,7 @@ inline void apply_selected_core_aggregate_stirling(vFloat x, vFloat& y) {
     v_endif;
 }
 
-inline vFloat selected_aggregate_stirling_prepare(vFloat x_raw) {
+__attribute__((always_inline)) inline vFloat selected_aggregate_stirling_prepare(vFloat x_raw) {
     constexpr float core_lower = __builtin_bit_cast(float, TT_SELECTED_STIRLING_CORE_LOWER_BITS);
     constexpr float core_upper = __builtin_bit_cast(float, TT_SELECTED_STIRLING_CORE_UPPER_BITS);
     vFloat prepared = x_raw;

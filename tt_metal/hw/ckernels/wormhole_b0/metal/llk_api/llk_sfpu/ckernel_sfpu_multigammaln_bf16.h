@@ -94,12 +94,15 @@ constexpr std::array<uint32_t, 2> TT_SELECTED_STIRLING_REFLECTION_STOCK_WINDOW_B
 #include "ckernel_sfpu_multigammaln_bf16_aggregate_stirling_core.inc"
 #include "ckernel_sfpu_multigammaln_bf16_rational_interleaved_core.inc"
 template <uint32_t N, uint32_t D>
-inline void eval_rational_numer_denom(const float* n, const float* d, vFloat x, vFloat& a, vFloat& b) {
+__attribute__((always_inline)) inline void eval_rational_numer_denom(
+    const float* n, const float* d, vFloat x, vFloat& a, vFloat& b) {
     eval_rational_interleaved_numer_denom<N, D>(n, d, x, a, b);
 }
 #include "ckernel_sfpu_multigammaln_bf16_rational_segment_core.inc"
-inline vFloat prepare_raw_domain_input(vFloat x) { return selected_aggregate_stirling_prepare(x); }
-inline vFloat apply_output_postcompose(vFloat y, vFloat) { return y; }
+__attribute__((always_inline)) inline vFloat prepare_raw_domain_input(vFloat x) {
+    return selected_aggregate_stirling_prepare(x);
+}
+__attribute__((always_inline)) inline vFloat apply_output_postcompose(vFloat y, vFloat) { return y; }
 #include "ckernel_sfpu_multigammaln_bf16_domain_action_coordinate.inc"
 #include "ckernel_sfpu_multigammaln_bf16_domain_finalize.inc"
 // Upstream LLK runs several tiles in one DEST half, so the coefficients are
@@ -119,7 +122,7 @@ struct MultigammalnBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_multigammaln_bf16() {
+__attribute__((noinline)) inline void calculate_multigammaln_bf16() {
     ckernel::sfpu::bf16::multigammaln::
         calculate_core_bridge_rational<ckernel::sfpu::MultigammalnBf16Config, ITERATIONS>();
 }

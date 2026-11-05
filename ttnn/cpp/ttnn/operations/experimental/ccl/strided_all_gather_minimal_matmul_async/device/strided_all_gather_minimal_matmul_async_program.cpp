@@ -83,7 +83,6 @@ strided_all_gather_minimal_matmul_async_program(
     bool read_local_slice_from_input,
 
     /* All Gather Params */
-    IDevice* /*target_device*/,
     const MeshCoordinate& target_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -184,9 +183,6 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
     std::vector<Tensor>& output_tensor) {
-    auto* mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
-
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, attributes.strided_all_gather_async_struct.cluster_axis);
 
@@ -216,7 +212,6 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.read_local_slice_from_input,
 
         /* All Gather Params */
-        target_device,
         mesh_coordinate,
         forward_coord,
         backward_coord,

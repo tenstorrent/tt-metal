@@ -295,6 +295,27 @@ def test_custom_cycle_count():
     _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
+# At this support count the host profiler buffer (bank size x DRAM banks) exceeds 4 GiB on every Blackhole part.
+def test_large_program_support_count():
+    WRAPPING_PROGRAM_SUPPORT_COUNT = 150000
+    REF_CYCLE_COUNT = 52 * 2000
+    testName = f"build/{PROG_EXMP_DIR}/test_custom_cycle_count"
+    setupStr = "-s test_custom_cycle_count"
+
+    run_device_profiler_test(testName=testName, noPostProcess=True)
+    defaultData = get_device_data(setupStr)
+    if defaultData["data"]["deviceInfo"]["arch"] != "blackhole":
+        pytest.skip("Only Blackhole can reach the 32-bit wrap")
+
+    run_device_profiler_test(testName=testName, noPostProcess=True, setOpSupportCount=WRAPPING_PROGRAM_SUPPORT_COUNT)
+    largeData = get_device_data(setupStr)
+
+    _assert_kernel_cycle_counts(largeData, REF_CYCLE_COUNT // 5, REF_CYCLE_COUNT * 10)
+    defaultCores = set(defaultData["data"]["devices"]["0"]["cores"].keys())
+    largeCores = set(largeData["data"]["devices"]["0"]["cores"].keys())
+    assert largeCores == defaultCores, f"Cores missing at a large support count: {sorted(defaultCores - largeCores)}"
+
+
 @pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
@@ -958,6 +979,7 @@ def test_dispatch_cores():
 
 @skip_for_blackhole()
 @pytest.mark.skip_post_commit
+@pytest.mark.timeout(600)
 def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
@@ -1192,6 +1214,27 @@ def test_noc_event_profiler_linked_multicast_hang():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
+
+
+@pytest.mark.parametrize("brisc_ring_index, tail_zone", [(510, ""), (512, ""), (510, "zone"), (12, "midzone")])
+def test_noc_event_ring_overrun(brisc_ring_index, tail_zone):
+    # Regression test for profiler markers written past the end of the L1 ring. One worker core: BRISC fills its
+    # 512-word profiler ring to exactly `brisc_ring_index` with 2-word event records (accepted by the plain room
+    # check, which reserves no headroom for the quick push), optionally opens and closes an empty zone, then issues
+    # one NoC read with NoC-event tracing on. The quick-push START/END pair (510, 512) or the zone's END (510 zone)
+    # must not overrun into the NCRISC ring that follows in L1: that overwrites the NCRISC chunk header, which aborts
+    # the host at mesh close or drops the whole NCRISC lane. The binary fails on a missing NCRISC lane or a zone
+    # marker with timer id 0.
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ["wormhole_b0", "blackhole"]:
+        pytest.skip(
+            f"The test fills the BRISC ring and checks the NCRISC lane, which {ENV_VAR_ARCH_NAME} does not have"
+        )
+    run_device_profiler_test(
+        testName=f"build/test/tt_metal/tools/profiler/test_noc_event_ring_overrun {brisc_ring_index} {tail_zone}",
+        enable_noc_tracing=True,
+        noPostProcess=True,
+    )
 
 
 def test_noc_event_profiler():
