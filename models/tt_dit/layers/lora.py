@@ -278,12 +278,15 @@ class LoRAMixin:
         self._realize_active()
 
     def deallocate_weights(self) -> None:  # type: ignore[override]
+        self._forget_device_lora_state()
+        super().deallocate_weights()
+
+    def _forget_device_lora_state(self) -> None:
         # Weights about to be freed → any merged delta goes with them
         # and runtime A/B are tied to the layer being resident.
         self._delta_applied = False
         if self._runtime_A is not None or self._runtime_B is not None:
             self._free_runtime_ab()
-        super().deallocate_weights()
 
     def deallocate_lora(self) -> None:
         if self.active_idx is not None:
@@ -328,9 +331,13 @@ class LoRAMixin:
         ttnn.deallocate(delta)
 
         if saved_fused is not None:
-            # Only gelu is currently hoisted into fused_activation_fn.
-            if saved_fused[0] == ttnn.UnaryOpType.GELU:
-                out = ttnn.gelu(out)
+            # Only gelu variants are currently hoisted into fused_activation_fn, either as a bare
+            # UnaryOpType or a (UnaryOpType, param0) tuple; see _FUSED_GELU_VARIANTS in linear.py.
+            op, param = saved_fused if isinstance(saved_fused, tuple) else (saved_fused, False)
+            if op == ttnn.UnaryOpType.GELU:
+                out = ttnn.gelu(out, fast_and_approximate_mode=bool(param))
+            elif op == ttnn.UnaryOpType.GELU_TANH:
+                out = ttnn.gelu(out, variant=ttnn.GeluVariant.Tanh)
             else:
                 raise NotImplementedError(f"runtime LoRA cannot replay fused activation {saved_fused}")
         if saved_activation is not None:

@@ -179,6 +179,47 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+@pytest.mark.parametrize("w", [20, 24, 33, 40, 46, 70, 100])
+@pytest.mark.parametrize("pad_value", [float("inf"), float("-inf"), float("nan")], ids=["inf", "neg_inf", "nan"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_welford_nonfinite_tile_padding(device, w, pad_value, dtype):
+    # Tile padding can hold inf or NaN, e.g. after ttnn.log of zero padding. Welford must still ignore it.
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((64, w), dtype=dtype)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, pad_value)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    recip_tensor = create_recip_tensor(device, w, True)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=True)
+
+
+@pytest.mark.parametrize("w", [20, 24])
+def test_layer_norm_welford_fp32_single_tile_after_nan_op(device, w):
+    # With one tile per row no input lands in the mean's DEST tile, so it must not keep what an earlier op left there.
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((2, 1, 64, w), dtype=torch.float32)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    nan_tensor = ttnn.from_torch(
+        torch.full((2048, 1024), float("nan")), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn.deallocate(ttnn.add(nan_tensor, nan_tensor))
+    ttnn.deallocate(ttnn.exp(nan_tensor))
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=True)
+
+
 @pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
 def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
     """LayerNorm rejects tile shapes unsupported by its CB and LLK layout."""
@@ -513,6 +554,56 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
+
+
+# Rows too wide for L1 with gamma and beta select the large-tensor kernel, which streams each row in blocks and
+# switches the packer between several output buffers. Issue #62517: on Quasar this hung with fp32_dest_acc_en.
+@pytest.mark.parametrize("h", [4096])
+@pytest.mark.parametrize("w", [8192, 16384])
+def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
+    torch.manual_seed(0)
+    dtype = torch.bfloat16
+
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Packing into the wrong buffer left the output all zeros.
+    assert torch.isfinite(output_tensor).all()
+    assert output_tensor.count_nonzero() > 0
+
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        try:
+            assert_output_accuracy(torch_output_tensor, output_tensor)
+        except AssertionError:
+            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
+    else:
+        assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])

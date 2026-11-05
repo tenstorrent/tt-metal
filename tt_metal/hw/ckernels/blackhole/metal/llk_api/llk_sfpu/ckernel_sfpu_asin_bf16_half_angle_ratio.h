@@ -22,10 +22,10 @@ inline void calculate_half_angle_ratio() {
         sfpi::vFloat raw = sfpi::dst_reg[row];
         sfpi::vFloat result = ttpoly::asin::half_angle_evaluate<Config>(
             raw,
-            [](sfpi::vFloat x) {
+            [](sfpi::vFloat x) __attribute__((always_inline)) {
                 return ttpoly::asin::half_angle_root<Config::kSharedPool, Config::kRootIterations, Config::kMagic>(x);
             },
-            [](sfpi::vFloat x) {
+            [](sfpi::vFloat x) __attribute__((always_inline)) {
                 auto coefficient = [](unsigned k) { return Config::kCoefficients[k]; };
                 return ttpoly::asin::half_angle_ratio<3, Config::kSharedPool, decltype(coefficient), true>(
                     x, coefficient);
