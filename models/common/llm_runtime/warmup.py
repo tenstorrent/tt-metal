@@ -671,7 +671,8 @@ def _build_plan(
         sampling_paths.append("topk")
     prefill = []
     for sequence_length in prefill_sequence_lengths:
-        batches = warmup.prefill_batch_sizes if sequence_length == 128 else (1,)
+        # phi-3.5-mini S11: TT_PHI35_PREFILL_BATCH_ALL=1 covers batched prefill at every warmed length (vLLM batches arrivals)
+        batches = warmup.prefill_batch_sizes if (sequence_length == 128 or __import__('os').environ.get('TT_PHI35_PREFILL_BATCH_ALL') == '1') else (1,)
         for batch_size in batches:
             if batch_size <= lane_batch_size:
                 batch_sampling_paths = sampling_paths + (

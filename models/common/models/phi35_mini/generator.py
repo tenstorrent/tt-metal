@@ -358,6 +358,24 @@ class Phi35MiniGenerator:
         return execution
 
 
+
+def _s11_warmup_config(max_batch: int) -> WarmupConfig:
+    """phi-3.5-mini S11: prefill coverage for vLLM serving. TT_PHI35_PREFILL_LENS / TT_PHI35_PREFILL_BATCHES (comma lists)
+    declare the prefill shapes vLLM will send; unset keeps the defaults (model trace lengths, batches 1..32)."""
+    import os
+
+    lens = os.environ.get("TT_PHI35_PREFILL_LENS")
+    batches = os.environ.get("TT_PHI35_PREFILL_BATCHES")
+    kw = {}
+    if lens:
+        kw["prefill_seq_lens"] = tuple(int(x) for x in lens.split(","))
+    if batches:
+        kw["prefill_batch_sizes"] = tuple(b for b in (int(x) for x in batches.split(",")) if b <= max_batch)
+    from loguru import logger as _lg
+
+    _lg.info(f"S11 warmup override: lens={lens} batches={batches} -> {kw}")
+    return WarmupConfig(**kw)
+
 def build_phi35_mini_generator(config: Phi35MiniGeneratorConfig) -> Phi35MiniGenerator:
     """Construct lane-local models/executors and compose their shared target surface."""
 
@@ -395,7 +413,7 @@ def build_phi35_mini_generator(config: Phi35MiniGeneratorConfig) -> Phi35MiniGen
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
             executor_config = Phi35MiniExecutorConfig(
                 trace=TraceConfig(mode=config.trace_mode),
-                warmup=WarmupConfig(),
+                warmup=_s11_warmup_config(per_lane_max_batch_size),
                 paged_kv_cache=PagedKVCacheConfig(
                     block_size=_PROVISIONAL_BLOCK_SIZE,
                     max_num_blocks=max_num_blocks,
