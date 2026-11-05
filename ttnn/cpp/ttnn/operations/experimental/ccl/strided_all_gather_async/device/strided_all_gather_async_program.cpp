@@ -764,9 +764,16 @@ void strided_all_gather_async_minimal_default_helper(
                 }
                 reader_rt_args.append(reader_rt_args_tail);
                 reader_desc.emplace_runtime_args(core, reader_rt_args);
+                const auto& reader_core_rt_args = reader_desc.runtime_args.back().second;
                 TT_FATAL(
-                    reader_desc.runtime_args.back().second.at(layout::kReaderSemaphoreArg) ==
-                        out_ready_semaphore_address,
+                    reader_core_rt_args.at(layout::kReaderInputAddrArg) == input_buffer->address() &&
+                        reader_core_rt_args.at(layout::kReaderOutputAddrArg) == output_buffer->address(),
+                    "strided_all_gather_async reader: input/output address slots ({}, {}) no longer match the "
+                    "positions the cache-hit patch rewrites",
+                    layout::kReaderInputAddrArg,
+                    layout::kReaderOutputAddrArg);
+                TT_FATAL(
+                    reader_core_rt_args.at(layout::kReaderSemaphoreArg) == out_ready_semaphore_address,
                     "strided_all_gather_async reader: kReaderSemaphoreArg ({}) no longer points at the out-ready "
                     "semaphore address the cache-hit patch rewrites",
                     layout::kReaderSemaphoreArg);
@@ -873,12 +880,25 @@ void strided_all_gather_async_minimal_default_helper(
                 }
                 writer_rt_args.append(writer_rt_args_tail);
                 writer_desc.emplace_runtime_args(core, writer_rt_args);
+                const auto& writer_core_rt_args = writer_desc.runtime_args.back().second;
                 TT_FATAL(
-                    writer_desc.runtime_args.back().second.at(layout::kWriterSemaphoreArg) ==
-                        out_ready_semaphore_address,
+                    writer_core_rt_args.at(layout::kWriterOutputAddrArg) == output_buffer->address(),
+                    "strided_all_gather_async writer: kWriterOutputAddrArg ({}) no longer matches the output address "
+                    "slot the cache-hit patch rewrites",
+                    layout::kWriterOutputAddrArg);
+                TT_FATAL(
+                    writer_core_rt_args.at(layout::kWriterSemaphoreArg) == out_ready_semaphore_address,
                     "strided_all_gather_async writer: kWriterSemaphoreArg ({}) no longer points at the out-ready "
                     "semaphore address the cache-hit patch rewrites",
                     layout::kWriterSemaphoreArg);
+                if (writer_signals_mm) {
+                    const size_t writer_tail = writer_core_rt_args.size() - layout::kWriterAggregatorTailSize;
+                    TT_FATAL(
+                        writer_core_rt_args.at(writer_tail + layout::kWriterAggregatorTailSemaphoreOffset) ==
+                            agg_per_worker_sem_ids[dir][global_worker_id],
+                        "strided_all_gather_async writer: aggregator tail semaphore slot no longer points at the "
+                        "per-worker semaphore address the cache-hit patch rewrites");
+                }
 
                 TT_FATAL(
                     desc.kernels.size() == layout::writer_kernel_index(first_kernel_index, pair),
@@ -931,6 +951,11 @@ void strided_all_gather_async_minimal_default_helper(
             for (uint32_t w = 0; w < num_ag_workers; w++) {
                 agg_rt_args.push_back(agg_per_worker_sem_ids[dir][w]);
             }
+            TT_FATAL(
+                num_ag_workers == 0 ||
+                    agg_rt_args.at(layout::kAggregatorHeaderArgs + ring_size) == agg_per_worker_sem_ids[dir][0],
+                "strided_all_gather_async aggregator: per-worker semaphores no longer start where the cache-hit patch "
+                "writes");
             for (const auto& mm_core : fused_op_signaler.value().fused_op_receiver_cores_noc) {
                 agg_rt_args.push_back(static_cast<uint32_t>(mm_core.x));
                 agg_rt_args.push_back(static_cast<uint32_t>(mm_core.y));

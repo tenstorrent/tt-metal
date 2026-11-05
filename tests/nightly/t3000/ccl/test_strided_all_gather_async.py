@@ -323,7 +323,7 @@ def test_strided_all_gather_async(
 # fewer than the middle ones, so the per-device kernel count differs after the worker kernels.
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [

@@ -744,7 +744,6 @@ def test_strided_all_gather_minimal_matmul_async_swiglu(
 # Linear covers the end devices, which have one fabric mux fewer than the middle ones.
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
@@ -753,17 +752,18 @@ def test_strided_all_gather_minimal_matmul_async_swiglu(
     ids=["fulltest"],
 )
 @pytest.mark.parametrize(
-    "read_local_slice_from_input, use_bias, use_ternary, ternary_b_full, alias_ternary_first_iter, chunks, mm_signal_aggregator_mode",
+    "num_links, read_local_slice_from_input, use_bias, use_ternary, ternary_b_full, alias_ternary_first_iter, chunks, mm_signal_aggregator_mode",
     [
-        (True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
-        (False, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
-        (True, True, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
-        (True, False, True, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
-        (True, False, False, False, False, 2, ttnn.MMSignalAggregatorMode.Auto),
-        (True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Off),
-        (True, False, True, True, True, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (1, True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (2, True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (1, False, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (1, True, True, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (1, True, False, True, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (1, True, False, False, False, False, 2, ttnn.MMSignalAggregatorMode.Auto),
+        (1, True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Off),
+        (1, True, False, True, True, True, 1, ttnn.MMSignalAggregatorMode.Auto),
     ],
-    ids=["read_local", "no_read_local", "bias", "ternary", "chunks2", "aggregator_off", "ternary_alias_miss"],
+    ids=["read_local", "2link", "no_read_local", "bias", "ternary", "chunks2", "aggregator_off", "ternary_alias_miss"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag, mem_config_mm",

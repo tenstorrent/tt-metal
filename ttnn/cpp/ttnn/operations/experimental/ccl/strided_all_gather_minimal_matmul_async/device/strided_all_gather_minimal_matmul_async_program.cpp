@@ -109,6 +109,10 @@ tt::tt_metal::ProgramDescriptor StridedAllGatherMinimalMatmulAsyncProgramFactory
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
+    TT_FATAL(
+        desc.kernels.size() == strided_ag_mm_all_gather_first_kernel_index,
+        "strided_all_gather_minimal_matmul_async: all-gather kernels must start at index {}",
+        strided_ag_mm_all_gather_first_kernel_index);
     strided_all_gather_async_minimal_default_helper(
         desc,
         input_tensor,
