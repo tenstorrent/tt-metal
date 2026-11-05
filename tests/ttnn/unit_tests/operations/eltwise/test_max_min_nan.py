@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""NaN propagation through maximum, minimum, clamp and hardtanh (issue #51470).
+"""NaN propagation through maximum, minimum, clamp and hardtanh.
 
 All four are built on SFPSWAP, which orders by sign-magnitude: +NaN sorts above +inf and -NaN
 below -inf, so a bare swap returns the other operand for maximum(-NaN, x) and minimum(+NaN, x),

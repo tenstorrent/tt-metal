@@ -191,7 +191,7 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     The float32 kernel orders operands by their sign-magnitude bits with
     SFPSWAP and passes the selected operand's bits through unchanged.
 
-    1) NaN: both ops propagate NaN (issue #51470), in either operand position
+    1) NaN: both ops propagate NaN, in either operand position
        and for either NaN sign, as torch does. The NaN bits are not checked:
        the Blackhole SFPLOADMACRO path emits the canonical +NaN (0x7FC00000)
        through SFPMAD, while the Wormhole loop keeps the operand's NaN.

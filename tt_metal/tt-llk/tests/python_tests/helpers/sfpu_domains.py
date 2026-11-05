@@ -978,8 +978,8 @@ SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         MathOperation.I0,
         MathOperation.Hardshrink,
         # The comparison family answers on the SFPU's total order, not IEEE's unordered
-        # compare: +NaN ranks above every finite value. UnaryMin, Clamp and Hardtanh now
-        # propagate NaN; the relu family still lands a NaN on its bound.
+        # compare: +NaN ranks above every finite value. UnaryMin, Clamp and Hardtanh
+        # propagate NaN; the relu family lands a NaN on its bound.
         MathOperation.UnaryGt,
         MathOperation.UnaryGe,
         MathOperation.UnaryMin,

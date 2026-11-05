@@ -20,9 +20,8 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
-    // SFPSWAP orders by sign-magnitude, so +NaN sorts above +inf and -NaN below -inf, and its two outputs are a
-    // permutation of its inputs. max(-NaN, x) and min(+NaN, x) would return x; where the discarded value is NaN, it
-    // replaces the result instead.
+    // SFPSWAP sorts +NaN above +inf and -NaN below -inf, so max(-NaN, x) and min(+NaN, x) would return x.
+    // Where the discarded value is NaN, copy it into the result instead.
     constexpr int keep = IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0;
     constexpr int other = IS_MAX_OP ? p_sfpu::LREG0 : p_sfpu::LREG1;
     constexpr int inf = p_sfpu::LREG2;

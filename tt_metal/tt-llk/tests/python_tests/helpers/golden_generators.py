@@ -2339,12 +2339,8 @@ def ema_down_columns(x: torch.Tensor, chain_rows: int = None) -> torch.Tensor:
 
 @register_golden
 class UnarySFPUGolden:
-    # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
-    # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through,
-    # Fmod copies the dividend's sign onto the remainder, including a NaN, and the
-    # max/min/clamp kernels leave a NaN input in Dst untouched. For every
-    # other op the sign of a NaN result is unspecified and torch picks it inconsistently, so
-    # the golden canonicalises it and asserts the sign only where it means something.
+    # Ops whose NaN result keeps the input's sign because the kernel moves the sign bit rather than
+    # generating a NaN; every other op's NaN sign is unspecified, so the golden canonicalises it.
     _NAN_SIGN_TRANSPARENT_OPS = frozenset(
         {
             MathOperation.Neg,
@@ -4485,12 +4481,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
         return result
 
-    # The ops whose NaN result is a selected operand rather than a computed one: binary_max_min
-    # returns one of its inputs, so its NaN is the datum it was handed and the sign can be
-    # asserted (_max/_min model the +NaN of the Blackhole SFPLOADMACRO path). Everything else
-    # builds the result through the datapath, where an emitted NaN's sign is not the operand's.
-    # An exclusion list, so the composition ops (div, fmod, remainder, xlogy, pow, atan2) can't
-    # be silently dropped -- their NaN is as computed as add's.
+    # Ops whose NaN result is a selected operand, so its sign can be asserted (_max/_min model the
+    # Blackhole +NaN); every other binary op computes its NaN, whose sign is not the operand's.
     _NAN_SIGN_SELECTED_OPS = frozenset(
         {
             MathOperation.SfpuBinaryMax,

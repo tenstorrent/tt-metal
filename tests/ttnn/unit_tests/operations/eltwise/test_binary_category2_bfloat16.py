@@ -202,7 +202,7 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     """Cross product of ±0, ±1, ±inf, +NaN and -NaN for ttnn.minimum /
     ttnn.maximum.
 
-    Both propagate NaN (issue #51470): the kernel returns a NaN wherever either operand is
+    Both propagate NaN: the kernel returns a NaN wherever either operand is
     NaN, in both operand orders and for either NaN sign. The bfloat16 store packs a NaN as
     an infinity. On Blackhole the binary kernel emits the canonical +NaN, so -NaN (0xFFC0)
     comes back as +inf too; on Wormhole the kernel keeps the operand NaN, whose sign the inf

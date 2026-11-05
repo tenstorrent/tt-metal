@@ -21,9 +21,8 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     uint offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // SFPSWAP orders by sign-magnitude, so +NaN sorts above +inf and -NaN below -inf, and its two outputs are a
-    // permutation of its inputs. max(-NaN, x) and min(+NaN, x) would return x; where the discarded value is NaN, it
-    // replaces the result instead.
+    // SFPSWAP sorts +NaN above +inf and -NaN below -inf, so max(-NaN, x) and min(+NaN, x) would return x.
+    // Where the discarded value is NaN, copy it into the result instead.
     constexpr int keep = IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0;
     constexpr int other = IS_MAX_OP ? p_sfpu::LREG0 : p_sfpu::LREG1;
     constexpr int inf = p_sfpu::LREG2;
@@ -49,11 +48,8 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 4 cycles per input row.
     //
-    // SFPSWAP orders by sign-magnitude, so +NaN sorts above +inf and -NaN below -inf: max(-NaN, x) and
-    // min(+NaN, x) would return x. So after the swap, mask = -1 where the discarded value is that NaN and 0
-    // elsewhere, and the result is L16 = -1.0 * mask + keep on the MAD sub-unit. A zero mask adds -0, which is
-    // exact for every keep including -0; an all-ones mask is a NaN, so the result is the canonical NaN
-    // 0x7fc00000. SFPMAD reads a subnormal keep as zero and returns it as a zero of the same sign.
+    // After the swap, mask is all ones (a NaN) where the discarded value is NaN and 0 elsewhere, so
+    // L16 = -1.0 * mask + keep is the canonical NaN there and exactly keep everywhere else.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x. L12 holds the compare bound (see the init).
     //
@@ -68,13 +64,8 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     // 2 | ...  | (next row's swap)            | (next row's nop)     |       |         |
     // 3 | ...  |                              |                      |       | [c] L16 |
     //
-    // The swap leaves keep in [a] and the discarded value in b; it is two cycles, and the Simple and Round
-    // sub-units must be idle in the second, with an SFPNOP on the MAD sub-unit beside the first
-    // (SFPLOADMACRO.md, footnote ‡). a alternates between L0 and L1: it is read by the MAD one cycle after the
-    // next row loads the other one. b is reloaded every row, and the nop in the 4th slot is what keeps that
-    // reload (visible one cycle after the next row's [b]) after the MAD has read the mask. The store is two
-    // cycles after the MAD, which takes two cycles to produce L16. c only provides the store address; the
-    // value it loads is unused.
+    // The two-cycle swap needs idle Simple/Round sub-units and a MAD nop (SFPLOADMACRO.md, footnote ‡); a alternates
+    // L0/L1 and the 4th-slot nop keeps the next row's reload of b after the MAD has read the mask.
 
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
