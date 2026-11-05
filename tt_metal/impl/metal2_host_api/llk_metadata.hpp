@@ -17,13 +17,13 @@ namespace tt::tt_metal {
 struct LLKMetadata {
     DataFormat format;
     Tile tile;
-    // Zero until resolved for a target, or when the format has no supported Tile storage encoding.
+    // Zero when the format has no supported Tile storage encoding.
     uint32_t tile_size_bytes = 0;
 };
 
-// Returns metadata with its tile storage size resolved for the supplied target alignment.
+// Returns resource metadata with tile storage bytes computed for the supplied target alignment.
 // precondition: l1_alignment is a nonzero alignment in bytes.
-LLKMetadata resolve_llk_metadata_tile_size(LLKMetadata metadata, uint32_t l1_alignment);
+LLKMetadata make_llk_metadata(DataFormat format, const Tile& tile, uint32_t l1_alignment);
 
 // Returns the C++ initializer for the device-side binding_details::LLKMetadata
 // (internal/llk_metadata.h) that a generated binding token is constructed with, e.g.
