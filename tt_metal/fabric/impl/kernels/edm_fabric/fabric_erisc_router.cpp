@@ -239,6 +239,9 @@ template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
 
 static constexpr bool PERF_TELEMETRY_DISABLED = perf_telemetry_mode == PerfTelemetryRecorderType::NONE;
+static_assert(
+    PERF_TELEMETRY_DISABLED || perf_telemetry_buffer_addr != 0,
+    "Perf telemetry is on but PERF_TELEMETRY_BUFFER_ADDR is 0: clearing the buffer would zero L1 0x0");
 static constexpr bool PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH =
     perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH;
 using PerfTelemetryRecorder = std::conditional_t<
@@ -1900,8 +1903,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
     PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
-    auto local_perf_telemetry_buffer =
-        build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));
+    // With telemetry off the builder passes address 0, which must not be cleared.
+    L1PerfTelemetrySingleBuffer local_perf_telemetry_buffer(nullptr);
+    if constexpr (!PERF_TELEMETRY_DISABLED) {
+        local_perf_telemetry_buffer =
+            build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));
+    }
 
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();

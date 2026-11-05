@@ -140,8 +140,9 @@ FORCE_INLINE void clear_telemetry_buffer(BUFFER_TYPE& buffer) {
 template <>
 FORCE_INLINE void clear_telemetry_buffer<L1PerfTelemetrySingleBuffer>(L1PerfTelemetrySingleBuffer& buffer) {
     volatile tt_l1_ptr auto* buffer_ptr = buffer.get_ptr();
-    constexpr size_t num_words_to_clear = sizeof(LowResolutionBandwidthTelemetry) / sizeof(size_t);
-    static_assert(sizeof(LowResolutionBandwidthTelemetry) > sizeof(size_t), "L1PerfTelemetrySingleBuffer is too small");
+    constexpr size_t num_words_to_clear = sizeof(LowResolutionBandwidthTelemetry) / sizeof(uint32_t);
+    static_assert(
+        sizeof(LowResolutionBandwidthTelemetry) > sizeof(uint32_t), "L1PerfTelemetrySingleBuffer is too small");
     for (size_t i = 0; i < num_words_to_clear; i++) {
         buffer_ptr[i] = 0;
     }
