@@ -42,7 +42,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = input_page_size,
             }}},
-            .buffer = input_tensors[input_id].buffer(),
+            .tensor = &input_tensors[input_id].mesh_tensor(),
         });
     }
 
@@ -80,7 +80,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
         reader_runtime_args.reserve(num_input_tensors * 2);
         KernelDescriptor::RTArgList writer_runtime_args;
         writer_runtime_args.reserve(5 + num_input_tensors);
-        writer_runtime_args.push_back(output.buffer());
+        writer_runtime_args.push_back(output.mesh_tensor());
         writer_runtime_args.push_back(core_id);
         writer_runtime_args.push_back(curr_num_output_rows);
         writer_runtime_args.push_back(num_input_tensors * input_shard_spec.shape[0]);

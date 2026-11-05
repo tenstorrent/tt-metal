@@ -486,7 +486,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
             .data_format = df,
             .page_size = reduction_CB_single_tile_size,
         }}},
-        .buffer = buffer_tensor.buffer(),
+        .tensor = &buffer_tensor.mesh_tensor(),
     });
 
     /* out cb */
@@ -503,7 +503,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
             .data_format = output_df,
             .page_size = out_CB_single_tile_size,
         }}},
-        .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output
+        .tensor = &output_tensor.mesh_tensor(),  // TODO: Remove once new cb attached for output
     });
 
     // Create reduction dataflow kernel
@@ -713,7 +713,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         // pushed as Buffer* so the framework records a BufferBinding for the
         // cache-hit fast path.
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());                               // tensor_address0
+        reader_rt_args.push_back(input_tensor.mesh_tensor());                          // tensor_address0
         reader_rt_args.push_back(input_tensor_shard_num_pages);                        // num_tiles_per_core
         reader_rt_args.push_back(worker_num_tiles_to_read);                            // num_tiles_to_read
         reader_rt_args.push_back(input_first_core_tile_start_offset);                  // first_core_tile_start_offset
@@ -839,13 +839,13 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
             KernelDescriptor::RTArgList out;
             out.reserve(src.size());
             // Index 0: q buffer addr -- Buffer*
-            out.push_back(q_output_tensor.buffer());
+            out.push_back(q_output_tensor.mesh_tensor());
             // Index 1: k buffer addr -- Buffer*
-            out.push_back(k_output_tensor.buffer());
+            out.push_back(k_output_tensor.mesh_tensor());
             // Index 2: v buffer addr -- Buffer*
-            out.push_back(v_output_tensor.buffer());
+            out.push_back(v_output_tensor.mesh_tensor());
             // Index 3: batch_offset buffer addr -- Buffer*
-            out.push_back(batch_offset_tensor.buffer());
+            out.push_back(batch_offset_tensor.mesh_tensor());
             // Remaining indices stay as uint32_t.
             for (size_t i = 4; i < src.size(); ++i) {
                 out.push_back(src[i]);

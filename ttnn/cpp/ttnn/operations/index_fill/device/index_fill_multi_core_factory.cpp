@@ -272,8 +272,8 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         reader_desc.emplace_runtime_args(
             work.core,
             {
-                input.buffer(),        // input tensor address (binding)
-                index.buffer(),        // index tensor address (binding)
+                input.mesh_tensor(),   // input tensor address (binding)
+                index.mesh_tensor(),   // index tensor address (binding)
                 work.start_row,        // start row
                 work.end_row,          // end row
                 num_rows_in_dim,       // num rows in dim
@@ -286,13 +286,13 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         writer_desc.emplace_runtime_args(
             work.core,
             {
-                output.buffer(),    // output tensor address (binding)
-                work.start_row,     // start row
-                work.end_row,       // end row
-                num_rows_in_dim,    // num rows in dim
-                dim_size,           // dim size
-                fill_value,         // fill value
-                work.col_shard_id,  // input col shard (for last-dim bounds check)
+                output.mesh_tensor(),  // output tensor address (binding)
+                work.start_row,        // start row
+                work.end_row,          // end row
+                num_rows_in_dim,       // num rows in dim
+                dim_size,              // dim size
+                fill_value,            // fill value
+                work.col_shard_id,     // input col shard (for last-dim bounds check)
                 // --- output write params ---
                 out.col_shard_id,     // output col shard base index
                 out.row_page_stride,  // output page stride

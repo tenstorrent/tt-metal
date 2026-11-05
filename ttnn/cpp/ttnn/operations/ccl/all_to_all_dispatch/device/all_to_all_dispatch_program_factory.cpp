@@ -431,11 +431,11 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
 
         // Reader runtime args: positions 0..4 are Buffer*'s for BufferBinding fast-path.
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());
-        reader_rt_args.push_back(indices_tensor.buffer());
-        reader_rt_args.push_back(mapping_tensor.buffer());
-        reader_rt_args.push_back(output_tensor.buffer());
-        reader_rt_args.push_back(metadata_tensor.buffer());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
+        reader_rt_args.push_back(indices_tensor.mesh_tensor());
+        reader_rt_args.push_back(mapping_tensor.mesh_tensor());
+        reader_rt_args.push_back(output_tensor.mesh_tensor());
+        reader_rt_args.push_back(metadata_tensor.mesh_tensor());
         reader_rt_args.push_back((uint32_t)cross_device_semaphore.address());  // smuggled-rta-ok
         reader_rt_args.push_back(token_range_start);
         reader_rt_args.push_back(token_range_end);
@@ -481,11 +481,11 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
 
         KernelDescriptor::RTArgList writer_rt_args_builder;
         writer_rt_args_builder.reserve(writer_runtime_args.size());
-        writer_rt_args_builder.push_back(input_tensor.buffer());
-        writer_rt_args_builder.push_back(indices_tensor.buffer());
-        writer_rt_args_builder.push_back(mapping_tensor.buffer());
-        writer_rt_args_builder.push_back(output_tensor.buffer());
-        writer_rt_args_builder.push_back(metadata_tensor.buffer());
+        writer_rt_args_builder.push_back(input_tensor.mesh_tensor());
+        writer_rt_args_builder.push_back(indices_tensor.mesh_tensor());
+        writer_rt_args_builder.push_back(mapping_tensor.mesh_tensor());
+        writer_rt_args_builder.push_back(output_tensor.mesh_tensor());
+        writer_rt_args_builder.push_back(metadata_tensor.mesh_tensor());
         for (size_t i = 5; i < writer_runtime_args.size(); ++i) {
             writer_rt_args_builder.push_back(writer_runtime_args[i]);
         }

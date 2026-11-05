@@ -477,10 +477,10 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         }
         tt::tt_metal::KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(member.bank);
-        reader_args.push_back(tensor_args.expert_indices_tensor.buffer());
-        reader_args.push_back(tensor_args.expert_scores_tensor.buffer());
-        reader_args.push_back(tensor_args.expert_mapping_tensor.buffer());
-        reader_args.push_back(table_tensor.buffer());
+        reader_args.push_back(tensor_args.expert_indices_tensor.mesh_tensor());
+        reader_args.push_back(tensor_args.expert_scores_tensor.mesh_tensor());
+        reader_args.push_back(tensor_args.expert_mapping_tensor.mesh_tensor());
+        reader_args.push_back(table_tensor.mesh_tensor());
         reader_args.append(
             {layer_weights[0],
              layer_weights[1],
@@ -499,8 +499,8 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         desc.kernels[kRowsReaderKernelIdx].emplace_runtime_args(member.core, reader_args);
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(tensor_args.input_tensor.buffer());
-        writer_args.push_back(rows_tensor.buffer());
+        writer_args.push_back(tensor_args.input_tensor.mesh_tensor());
+        writer_args.push_back(rows_tensor.mesh_tensor());
         writer_args.append(
             {member.activated_columns,
              member.first_column,

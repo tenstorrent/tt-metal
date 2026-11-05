@@ -153,10 +153,10 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     // reader
     reader_desc.emplace_runtime_args(
-        single_core, {tmp_pow_sum.buffer(), static_cast<uint32_t>(num_tiles), std::bit_cast<uint32_t>(decimal)});
+        single_core, {tmp_pow_sum.mesh_tensor(), static_cast<uint32_t>(num_tiles), std::bit_cast<uint32_t>(decimal)});
 
     // writer
-    writer_desc.emplace_runtime_args(single_core, {total_norm.buffer()});
+    writer_desc.emplace_runtime_args(single_core, {total_norm.mesh_tensor()});
 
     // compute
     compute_desc.runtime_args.emplace_back(

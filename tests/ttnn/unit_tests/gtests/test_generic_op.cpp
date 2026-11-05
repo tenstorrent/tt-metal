@@ -252,13 +252,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {in_format_descriptor},
-        .buffer = device_input_tensor.buffer(),
+        .tensor = &device_input_tensor.mesh_tensor(),
     };
     CBDescriptor output_cb_descriptor = {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {out_format_descriptor},
-        .buffer = device_output_tensor.buffer(),
+        .tensor = &device_output_tensor.mesh_tensor(),
     };
 
     const KernelDescriptor::CompileTimeArgs reader_ct_args = {(std::uint32_t)in_cb_id};
@@ -1405,8 +1405,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         using AllGatherArgs = ttnn::ccl::AllGatherCommonArgs;
         tt::tt_metal::KernelDescriptor::RTArgList common_rt_args;
         common_rt_args.reserve(AllGatherArgs::count);
-        common_rt_args.push_back(input_tensor.buffer());
-        common_rt_args.push_back(output_tensor.buffer());
+        common_rt_args.push_back(input_tensor.mesh_tensor());
+        common_rt_args.push_back(output_tensor.mesh_tensor());
         common_rt_args.push_back(0u);  // barrier_sem (unused: use_barrier_sem = false)
         common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(0).address()));
         common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(1).address()));

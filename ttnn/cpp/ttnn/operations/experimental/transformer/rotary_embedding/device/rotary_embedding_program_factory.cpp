@@ -144,7 +144,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
+        .tensor = in_sharded ? &input.mesh_tensor() : nullptr,
     });
 
     // trans_mat CB at the slot the Wt>=2 path uses for "rotated input".
@@ -228,7 +228,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
+        .tensor = out_sharded ? &output.mesh_tensor() : nullptr,
     });
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
@@ -526,7 +526,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
+        .tensor = in_sharded ? &input.mesh_tensor() : nullptr,
     });
 
     constexpr uint8_t rotated_input_cb_index = tt::CBIndex::c_1;
@@ -620,7 +620,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
+        .tensor = out_sharded ? &output.mesh_tensor() : nullptr,
     });
 
     constexpr uint8_t untilized_cos_interm_cb_index = tt::CBIndex::c_27;

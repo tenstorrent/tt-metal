@@ -1174,7 +1174,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // Push output_tensor's buffer first as Buffer* so the framework records
             // a BufferBinding for the cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList writer_untilize_runtime_args;
-            writer_untilize_runtime_args.push_back(output_tensor.buffer());
+            writer_untilize_runtime_args.push_back(output_tensor.mesh_tensor());
 
             if (init_zeros) {
                 uint32_t row_idx = num_cores + untilizer_idx;
@@ -1234,11 +1234,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // Reader RT args.  Tensor buffer addresses are pushed as Buffer* so the
         // framework records BufferBindings for the O(1) cache-hit fast path.
         tt::tt_metal::KernelDescriptor::RTArgList reader_runtime_args;
-        reader_runtime_args.push_back(dispatched_buffer.buffer());
-        reader_runtime_args.push_back(dispatched_metadata.buffer());
-        reader_runtime_args.push_back(expert_token_counts.buffer());
-        reader_runtime_args.push_back(expert_region_offsets.buffer());
-        reader_runtime_args.push_back(output_tensor.buffer());
+        reader_runtime_args.push_back(dispatched_buffer.mesh_tensor());
+        reader_runtime_args.push_back(dispatched_metadata.mesh_tensor());
+        reader_runtime_args.push_back(expert_token_counts.mesh_tensor());
+        reader_runtime_args.push_back(expert_region_offsets.mesh_tensor());
+        reader_runtime_args.push_back(output_tensor.mesh_tensor());
         reader_runtime_args.push_back(output_init_complete_semaphore_id);
         reader_runtime_args.push_back(output_init_barrier_semaphore_id);
         reader_runtime_args.push_back(num_cores);
@@ -1379,11 +1379,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // uint32_t.
         tt::tt_metal::KernelDescriptor::RTArgList writer_runtime_args;
         writer_runtime_args.reserve(writer_runtime_args_raw.size());
-        writer_runtime_args.push_back(dispatched_buffer.buffer());
-        writer_runtime_args.push_back(dispatched_metadata.buffer());
-        writer_runtime_args.push_back(expert_token_counts.buffer());
-        writer_runtime_args.push_back(expert_region_offsets.buffer());
-        writer_runtime_args.push_back(output_tensor.buffer());
+        writer_runtime_args.push_back(dispatched_buffer.mesh_tensor());
+        writer_runtime_args.push_back(dispatched_metadata.mesh_tensor());
+        writer_runtime_args.push_back(expert_token_counts.mesh_tensor());
+        writer_runtime_args.push_back(expert_region_offsets.mesh_tensor());
+        writer_runtime_args.push_back(output_tensor.mesh_tensor());
         for (size_t i = 5; i < writer_runtime_args_raw.size(); ++i) {
             writer_runtime_args.push_back(writer_runtime_args_raw[i]);
         }
@@ -1423,10 +1423,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList untilizer_rt_args;
             untilizer_rt_args.push_back(counter_ready_semaphore_id);
-            untilizer_rt_args.push_back(dispatched_buffer.buffer());
+            untilizer_rt_args.push_back(dispatched_buffer.mesh_tensor());
             untilizer_rt_args.push_back(expert_start);
             untilizer_rt_args.push_back(expert_end);
-            untilizer_rt_args.push_back(dispatched_metadata.buffer());
+            untilizer_rt_args.push_back(dispatched_metadata.mesh_tensor());
             untilizer_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
             untilizer_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(

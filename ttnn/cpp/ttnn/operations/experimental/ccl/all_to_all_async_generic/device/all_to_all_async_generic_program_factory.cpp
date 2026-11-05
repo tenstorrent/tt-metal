@@ -1073,12 +1073,12 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
     {
         tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
-        reader_common_args.push_back(tensor_args.input_tensor.buffer());
+        reader_common_args.push_back(tensor_args.input_tensor.mesh_tensor());
         desc.kernels[sender_reader_kernel_id].emplace_common_runtime_args(reader_common_args);
     }
     for (const auto kernel_id : sender_writer_kernel_ids) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
-        writer_common_args.push_back(tensor_return_value.buffer());
+        writer_common_args.push_back(tensor_return_value.mesh_tensor());
         // clang-format off
         writer_common_args.push_back(static_cast<uint32_t>(init_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         writer_common_args.push_back(static_cast<uint32_t>(final_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)

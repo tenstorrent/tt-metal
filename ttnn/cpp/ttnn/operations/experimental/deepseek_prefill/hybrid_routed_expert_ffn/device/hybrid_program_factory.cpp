@@ -87,14 +87,14 @@ tt::tt_metal::KernelDescriptor::RTArgList routed_expert_common_args(
     if (!weights_from_table) {
         for (const auto* role : {&gate, &up, &down}) {
             for (const auto& tensor : *role) {
-                args.push_back(tensor.buffer());
+                args.push_back(tensor.mesh_tensor());
             }
         }
     }
     if (fuse_bias) {
         for (const auto* role : {&gate_biases, &up_biases, &down_biases}) {
             for (const auto& tensor : *role) {
-                args.push_back(tensor.buffer());
+                args.push_back(tensor.mesh_tensor());
             }
         }
     }

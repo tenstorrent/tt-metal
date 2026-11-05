@@ -732,8 +732,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     KernelDescriptor::RTArgList reader_common_args;
     reader_common_args.reserve(ReaderCrta::count);
     reader_common_args.push_back(slice_Ht);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
-    reader_common_args.push_back(input_tensor.buffer());
-    reader_common_args.push_back(intermediate_tensor.buffer());
+    reader_common_args.push_back(input_tensor.mesh_tensor());
+    reader_common_args.push_back(intermediate_tensor.mesh_tensor());
     reader_common_args.push_back(static_cast<uint32_t>(
         semaphore.at(0).address()));  // smuggled-rta-ok: caller semaphore is outside the program hash and
                                       // re-applied on cache hit
@@ -815,8 +815,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     KernelDescriptor::RTArgList writer_common_args;
     writer_common_args.reserve(WriterCrta::count);
     writer_common_args.push_back(slice_Ht);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
-    writer_common_args.push_back(intermediate_tensor.buffer());
-    writer_common_args.push_back(output_tensor.buffer());
+    writer_common_args.push_back(intermediate_tensor.mesh_tensor());
+    writer_common_args.push_back(output_tensor.mesh_tensor());
     writer_common_args.push_back(static_cast<uint32_t>(
         semaphore.at(0).address()));  // smuggled-rta-ok: caller semaphore is outside the program hash and
                                       // re-applied on cache hit

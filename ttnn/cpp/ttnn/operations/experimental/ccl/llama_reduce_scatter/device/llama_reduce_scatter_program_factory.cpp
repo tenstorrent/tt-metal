@@ -806,12 +806,12 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
         }
         const auto& indices = cb->buffer_indices();
         if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *tensor_args.input_tensor.buffer());
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), tensor_args.input_tensor.mesh_tensor());
         } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *tensor_return_value.buffer());
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), tensor_return_value.mesh_tensor());
         } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_4))) {
             tt::tt_metal::UpdateDynamicCircularBufferAddress(
-                program, cb->id(), *tensor_args.intermediate_packet_buffer.buffer());
+                program, cb->id(), tensor_args.intermediate_packet_buffer.mesh_tensor());
         } else {
             TT_FATAL(false, "llama_reduce_scatter: unexpected globally allocated circular buffer");
         }

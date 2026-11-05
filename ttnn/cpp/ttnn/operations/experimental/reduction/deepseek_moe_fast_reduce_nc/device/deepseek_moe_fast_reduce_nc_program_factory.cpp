@@ -269,7 +269,7 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
         uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
         uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
-        reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), start_tiles_read, start_tiles_to_read});
+        reader_desc.emplace_runtime_args(core, {input_tensor.mesh_tensor(), start_tiles_read, start_tiles_to_read});
 
         KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.push_back(start_tiles_read);
@@ -277,7 +277,7 @@ tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_de
         writer_rt_args.push_back(start_slice_row_offset);
         writer_rt_args.push_back(start_pages_read_in_row);
         for (const ttnn::Tensor& output_tensor : output_tensors) {
-            writer_rt_args.push_back(output_tensor.buffer());
+            writer_rt_args.push_back(output_tensor.mesh_tensor());
         }
         writer_desc.emplace_runtime_args(core, writer_rt_args);
     }

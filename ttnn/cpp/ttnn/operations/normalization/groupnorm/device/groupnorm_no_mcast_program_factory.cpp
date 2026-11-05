@@ -1517,8 +1517,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
             tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
             mcast_sender_args.reserve(22 + group.size() * 2);
-            mcast_sender_args.push_back(a.buffer());
-            mcast_sender_args.push_back(output.buffer());
+            mcast_sender_args.push_back(a.mesh_tensor());
+            mcast_sender_args.push_back(output.mesh_tensor());
             mcast_sender_args.push_back(in0_start_id);
             mcast_sender_args.push_back(out_tile_start_id);
             mcast_sender_args.push_back(Wt);
@@ -1615,19 +1615,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(output.buffer());
+        writer_mcast_sender_args.push_back(output.mesh_tensor());
         if (gamma.has_value()) {
-            writer_mcast_sender_args.push_back(gamma.value().buffer());
+            writer_mcast_sender_args.push_back(gamma.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (beta.has_value()) {
-            writer_mcast_sender_args.push_back(beta.value().buffer());
+            writer_mcast_sender_args.push_back(beta.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (input_mask.has_value()) {
-            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+            writer_mcast_sender_args.push_back(input_mask.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }

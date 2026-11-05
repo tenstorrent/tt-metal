@@ -145,8 +145,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::KernelHandle writer_id = 1;
     // Every core reads the same buffers, so they are bound once per kernel.
     desc.kernels[reader_id].emplace_common_runtime_args(
-        {in.rank_final.buffer(), in.prefix_final.buffer(), in.actual_start.buffer(), end_tensor.buffer()});
-    desc.kernels[writer_id].emplace_common_runtime_args({output.buffer()});
+        {in.rank_final.mesh_tensor(),
+         in.prefix_final.mesh_tensor(),
+         in.actual_start.mesh_tensor(),
+         end_tensor.mesh_tensor()});
+    desc.kernels[writer_id].emplace_common_runtime_args({output.mesh_tensor()});
 
     const auto drain_core = mesh->worker_core_from_logical_core(fabric_cores.front());
     for (uint32_t link = 0; link < fabric_cores.size(); ++link) {

@@ -1214,13 +1214,13 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         tilize_compute_runtime_args[0] = subtoken_size / tile_width_bytes;
 
         tt::tt_metal::KernelDescriptor::RTArgList tilize_data_rt;
-        tilize_data_rt.push_back(tilize_input_tensor.buffer());
-        tilize_data_rt.push_back(tilize_indices_tensor.buffer());
-        tilize_data_rt.push_back(tilize_input_scores_tensor.buffer());
-        tilize_data_rt.push_back(tilize_mapping_tensor.buffer());
-        tilize_data_rt.push_back(tilize_per_expert_total_tokens_output_tensor.buffer());
-        tilize_data_rt.push_back(tilize_expert_activation_output_tensor.buffer());
-        tilize_data_rt.push_back(tilize_e_t_output_tensor.buffer());
+        tilize_data_rt.push_back(tilize_input_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_indices_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_input_scores_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_mapping_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_per_expert_total_tokens_output_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_expert_activation_output_tensor.mesh_tensor());
+        tilize_data_rt.push_back(tilize_e_t_output_tensor.mesh_tensor());
         tilize_data_rt.append(std::vector<uint32_t>(tilize_runtime_args.begin() + 7, tilize_runtime_args.end()));
         desc.kernels[kTilizeReaderKernelIdx].emplace_runtime_args(tilize_cores[i], tilize_data_rt);
         desc.kernels[kTilizeWriterKernelIdx].emplace_runtime_args(tilize_cores[i], tilize_data_rt);
@@ -1581,14 +1581,14 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         tt::tt_metal::KernelDescriptor::RTArgList matmul_rt;
         matmul_rt.push_back(matmul_runtime_args[0]);
         matmul_rt.push_back(matmul_runtime_args[1]);
-        matmul_rt.push_back(matmul_w0_w1_tensor.buffer());
-        matmul_rt.push_back(matmul_w2_tensor.buffer());
-        matmul_rt.push_back(tilize_output_tensor.buffer());
+        matmul_rt.push_back(matmul_w0_w1_tensor.mesh_tensor());
+        matmul_rt.push_back(matmul_w2_tensor.mesh_tensor());
+        matmul_rt.push_back(tilize_output_tensor.mesh_tensor());
         matmul_rt.append(std::vector<uint32_t>(matmul_runtime_args.begin() + 5, matmul_runtime_args.end()));
         if (local_output) {
             // Final output and e_t addresses trail the bank table. Buffer* bindings are patched on a cache hit.
-            matmul_rt.push_back(tensor_return_value[5].buffer());
-            matmul_rt.push_back(tilize_e_t_output_tensor.buffer());
+            matmul_rt.push_back(tensor_return_value[5].mesh_tensor());
+            matmul_rt.push_back(tilize_e_t_output_tensor.mesh_tensor());
         }
         desc.kernels[kMatmulDm0KernelIdx].emplace_runtime_args(core, matmul_rt);
         desc.kernels[kMatmulDm1KernelIdx].emplace_runtime_args(core, matmul_rt);

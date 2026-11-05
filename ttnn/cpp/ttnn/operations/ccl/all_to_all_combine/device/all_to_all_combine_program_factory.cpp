@@ -283,9 +283,9 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         tokens_per_core_start = token_range_end;
 
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(mapping_tensor.buffer());
-        reader_rt_args.push_back(metadata_tensor.buffer());
-        reader_rt_args.push_back(input_tensor.buffer());
+        reader_rt_args.push_back(mapping_tensor.mesh_tensor());
+        reader_rt_args.push_back(metadata_tensor.mesh_tensor());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
         reader_rt_args.push_back(token_range_start);
         reader_rt_args.push_back(token_range_end);
         desc.kernels[ternary_reader_kernel_id].emplace_runtime_args(sender_core, reader_rt_args);
@@ -318,7 +318,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
 
         KernelDescriptor::RTArgList writer_rt_args_builder;
         writer_rt_args_builder.reserve(writer_runtime_args.size());
-        writer_rt_args_builder.push_back(output_tensor.buffer());
+        writer_rt_args_builder.push_back(output_tensor.mesh_tensor());
         for (size_t i = 1; i < writer_runtime_args.size(); ++i) {
             writer_rt_args_builder.push_back(writer_runtime_args[i]);
         }

@@ -327,8 +327,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     // reader [index_addr, n, tile_w, tile_h, core_id], writer [in_addr, out_addr, n, core_id].
     uint32_t id = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, geometry.Ht)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        reader_desc.emplace_runtime_args(core, {index_t.mesh_tensor(), n, tile_width, tile_height, id});
+        writer_desc.emplace_runtime_args(core, {in_t.mesh_tensor(), output_tensor.mesh_tensor(), n, id});
         id++;
     }
 
@@ -405,8 +405,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     // Kernel ABI: reader [index_addr, start, n, tile_w, tile_h], writer [in_addr, out_addr, start, n].
     uint32_t start = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, total_work)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), start, n, tile_width, tile_height});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
+        reader_desc.emplace_runtime_args(core, {index_t.mesh_tensor(), start, n, tile_width, tile_height});
+        writer_desc.emplace_runtime_args(core, {in_t.mesh_tensor(), output_tensor.mesh_tensor(), start, n});
         start += n;
     }
 
@@ -481,8 +481,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     // strided columns across all Ht rows -- see gather_reader_streaming.cpp).
     uint32_t id = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, geometry.Wt_index)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        reader_desc.emplace_runtime_args(core, {index_t.mesh_tensor(), n, tile_width, tile_height, id});
+        writer_desc.emplace_runtime_args(core, {in_t.mesh_tensor(), output_tensor.mesh_tensor(), n, id});
         id++;
     }
 

@@ -132,12 +132,12 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     });
     for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
         tt::tt_metal::KernelDescriptor::RTArgList place_args;
-        place_args.push_back(row_buffer.buffer());
-        place_args.push_back(e_t_out.buffer());
-        place_args.push_back(activation_out.buffer());
-        place_args.push_back(counts_out.buffer());
-        place_args.push_back(double_buffer.buffer());
-        place_args.push_back(table.buffer());
+        place_args.push_back(row_buffer.mesh_tensor());
+        place_args.push_back(e_t_out.mesh_tensor());
+        place_args.push_back(activation_out.mesh_tensor());
+        place_args.push_back(counts_out.mesh_tensor());
+        place_args.push_back(double_buffer.mesh_tensor());
+        place_args.push_back(table.mesh_tensor());
         place_args.append({core_index / width_shards, core_index % width_shards, core_index});
         place_args.append(virtual_coords.xs);
         place_args.append(virtual_coords.ys);
@@ -221,7 +221,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
             },
     });
     auto& combine_kernel = desc.kernels.back();
-    combine_kernel.emplace_common_runtime_args({output.buffer(), row_buffer.buffer(), table.buffer()});
+    combine_kernel.emplace_common_runtime_args({output.mesh_tensor(), row_buffer.mesh_tensor(), table.mesh_tensor()});
     for (uint32_t sender = 0; sender < senders; ++sender) {
         tt::tt_metal::KernelDescriptor::RTArgList combine_args;
         combine_args.push_back(sender);

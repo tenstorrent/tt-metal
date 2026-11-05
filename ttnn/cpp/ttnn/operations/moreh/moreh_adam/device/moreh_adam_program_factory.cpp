@@ -266,10 +266,10 @@ ProgramDescriptor MorehAdamOperation::MorehAdamProgramFactory::create_descriptor
         // re-derived here on every cache hit via override_runtime_arguments().
         KernelDescriptor::RTArgList reader_rt;
         reader_rt.reserve(14);
-        reader_rt.push_back(param_in.buffer());
-        reader_rt.push_back(grad.buffer());
-        reader_rt.push_back(exp_avg_in.buffer());
-        reader_rt.push_back(exp_avg_sq_in.buffer());
+        reader_rt.push_back(param_in.mesh_tensor());
+        reader_rt.push_back(grad.mesh_tensor());
+        reader_rt.push_back(exp_avg_in.mesh_tensor());
+        reader_rt.push_back(exp_avg_sq_in.mesh_tensor());
         reader_rt.push_back(max_exp_avg_sq_in_buffer);
         reader_rt.push_back(f2u_lr);
         reader_rt.push_back(f2u_beta1);
@@ -284,9 +284,9 @@ ProgramDescriptor MorehAdamOperation::MorehAdamProgramFactory::create_descriptor
 
         KernelDescriptor::RTArgList writer_rt;
         writer_rt.reserve(6);
-        writer_rt.push_back(param_out.buffer());
-        writer_rt.push_back(exp_avg_out.buffer());
-        writer_rt.push_back(exp_avg_sq_out.buffer());
+        writer_rt.push_back(param_out.mesh_tensor());
+        writer_rt.push_back(exp_avg_out.mesh_tensor());
+        writer_rt.push_back(exp_avg_sq_out.mesh_tensor());
         writer_rt.push_back(max_exp_avg_sq_out_buffer);
         writer_rt.push_back(num_tiles_per_core);
         writer_rt.push_back(tile_offset);

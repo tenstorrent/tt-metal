@@ -244,7 +244,7 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());                   // tensor_address0
+        reader_rt_args.push_back(input_tensor.mesh_tensor());              // tensor_address0
         reader_rt_args.push_back(input_tile_id_start * num_width_shards);  // tile_id_start
         reader_rt_args.push_back(input_tile_id_end * num_width_shards);    // tile_id_end
 

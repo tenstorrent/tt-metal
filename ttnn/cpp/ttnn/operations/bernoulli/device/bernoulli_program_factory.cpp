@@ -204,7 +204,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
         // Register input/output addresses as Buffer* bindings for the cache-miss build; both are
         // re-applied on every cache hit via override_runtime_arguments().
-        reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
+        reader_desc.emplace_runtime_args(core, {input.mesh_tensor(), tile_offset, units_per_core});
 
         // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
         // build, re-applied on every cache hit via override_runtime_arguments().
@@ -212,7 +212,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output.mesh_tensor(), tile_offset, units_per_core});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

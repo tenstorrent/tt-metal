@@ -551,15 +551,15 @@ ProgramDescriptor build_ring_program_descriptor(
     // Common buffer bindings retain descriptor ownership/alias resolution and are
     // re-applied on every dispatch. Scalars are uniform within each coordinate's kernel.
     KernelDescriptor::RTArgList reader_common;
-    reader_common.push_back(q.buffer());
-    reader_common.push_back(k.buffer());
-    reader_common.push_back(w.buffer());
-    reader_common.push_back(k_local.buffer());
+    reader_common.push_back(q.mesh_tensor());
+    reader_common.push_back(k.mesh_tensor());
+    reader_common.push_back(w.mesh_tensor());
+    reader_common.push_back(k_local.mesh_tensor());
     reader_common.push_back(k_batch_page_offset);
     reader_common.push_back(kv_len_tiles);
     reader_common.push_back(k_local_batch_page_offset);
     if (has_meta) {
-        reader_common.push_back(tensors.chunk_start_idx_tensor->buffer());
+        reader_common.push_back(tensors.chunk_start_idx_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -569,7 +569,7 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_common.push_back(geometry_ranks.device_index);
     reader_common.push_back(geometry_ranks.tp_index);
     if (has_slot_meta) {
-        reader_common.push_back(tensors.cache_batch_idx_tensor->buffer());
+        reader_common.push_back(tensors.cache_batch_idx_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -578,7 +578,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // ValidEnd: pushed unconditionally to hold the enum position, 0 when uncapped. Bound as a buffer so
     // the descriptor refreshes its address on every dispatch -- a stale one would clamp kv_len to garbage.
     if (has_valid_end) {
-        reader_common.push_back(tensors.valid_end_tensor->buffer());
+        reader_common.push_back(tensors.valid_end_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -587,7 +587,7 @@ ProgramDescriptor build_ring_program_descriptor(
     append_multicast_axes(reader_common, phys);
     reader_kernel.emplace_common_runtime_args(reader_common);
     KernelDescriptor::RTArgList writer_common;
-    writer_common.push_back(out.buffer());
+    writer_common.push_back(out.mesh_tensor());
     append_scalars(writer_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     writer_common.append(shard_order);
     writer_kernel.emplace_common_runtime_args(writer_common);

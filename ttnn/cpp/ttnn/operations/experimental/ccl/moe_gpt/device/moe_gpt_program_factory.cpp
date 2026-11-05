@@ -975,10 +975,10 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
             tt::tt_metal::KernelDescriptor::RTArgList tilize_runtime_args;
             tilize_runtime_args.reserve(18 + (2 * TILIZE_NUM_CORES) + 1);
-            tilize_runtime_args.push_back(sparse_buffer.buffer());          // 0 input
-            tilize_runtime_args.push_back(expert_indices.buffer());         // 1
-            tilize_runtime_args.push_back(expert_scores.buffer());          // 2
-            tilize_runtime_args.push_back(expert_mapping.buffer());         // 3
+            tilize_runtime_args.push_back(sparse_buffer.mesh_tensor());     // 0 input
+            tilize_runtime_args.push_back(expert_indices.mesh_tensor());    // 1
+            tilize_runtime_args.push_back(expert_scores.mesh_tensor());     // 2
+            tilize_runtime_args.push_back(expert_mapping.mesh_tensor());    // 3
             tilize_runtime_args.push_back(per_expert_total_tokens_buffer);  // 4 per_expert_total_tokens
             tilize_runtime_args.push_back(expert_activation_buffer);        // 5 expert_activation
             tilize_runtime_args.push_back(e_t_buffer);                      // 6 e_t

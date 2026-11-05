@@ -762,7 +762,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         push_buffer(args, ternary_a_buffer);
         push_buffer(args, ternary_b_buffer);
         for (const auto& output_tensor : output_tensors) {
-            args.push_back(output_tensor.buffer());
+            args.push_back(output_tensor.mesh_tensor());
         }
         return args;
     };

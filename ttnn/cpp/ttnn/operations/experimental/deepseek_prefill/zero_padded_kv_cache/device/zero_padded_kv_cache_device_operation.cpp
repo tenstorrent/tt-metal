@@ -377,7 +377,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         TensorAccessorArgs(cache.mesh_tensor()).append_to(writer.compile_time_args);
         writer.config = WriterConfigDescriptor{};
         writer.common_runtime_args = common_runtime_args;
-        writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+        writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.mesh_tensor()});
         desc.kernels.push_back(std::move(writer));
         return desc;
     }
@@ -427,7 +427,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     }
     reader.config = ReaderConfigDescriptor{};
     reader.common_runtime_args = common_runtime_args;
-    reader.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+    reader.emplace_runtime_args(CoreCoord{0, 0}, {cache.mesh_tensor()});
 
     // Compute: partial x mask -> out.
     KernelDescriptor compute;
@@ -460,7 +460,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     }
     writer.config = WriterConfigDescriptor{};
     writer.common_runtime_args = common_runtime_args;
-    writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+    writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.mesh_tensor()});
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));

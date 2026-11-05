@@ -307,7 +307,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
 
-        writer_kernel_desc.emplace_runtime_args(core, {output_tensor.buffer(), tile_row_start, tile_row_end});
+        writer_kernel_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), tile_row_start, tile_row_end});
     }
 
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));

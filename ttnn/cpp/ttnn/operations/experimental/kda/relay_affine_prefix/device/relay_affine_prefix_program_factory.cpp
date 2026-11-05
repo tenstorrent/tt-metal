@@ -78,7 +78,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // A K x K slot of the landing buffer on each head core, in place.
     const auto landing_slot_cb = [&](uint32_t index, uint32_t slot) {
         auto cb = kda_factory_detail::cb_descriptor(index, state_tiles, state_tile, tt::DataFormat::Float32, head_set);
-        cb.buffer = in.landing.buffer();
+        cb.tensor = &in.landing.mesh_tensor();
         cb.address_offset = slot * state_tiles * state_tile;
         return cb;
     };
@@ -158,8 +158,9 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     // Every core reads the same buffers, so they are bound once per kernel.
-    reader.emplace_common_runtime_args({in.packed.buffer(), in.initial_state.buffer(), in.actual_start.buffer()});
-    writer.emplace_common_runtime_args({entry.buffer(), final_state.buffer(), in.landing.buffer()});
+    reader.emplace_common_runtime_args(
+        {in.packed.mesh_tensor(), in.initial_state.mesh_tensor(), in.actual_start.mesh_tensor()});
+    writer.emplace_common_runtime_args({entry.mesh_tensor(), final_state.mesh_tensor(), in.landing.mesh_tensor()});
     for (uint32_t h = 0; h < batch_heads; ++h) {
         const auto& core = head_cores[h];
         const auto sender_core = mesh->worker_core_from_logical_core(sender_cores[h % attrs.num_links]);
@@ -182,7 +183,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto destination_node = mesh->get_fabric_node_id(successor);
     const auto connection_node = fabric_2d ? destination_node : mesh->get_fabric_node_id(first_hop);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, connection_node);
-    desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.buffer(), in.landing.buffer()});
+    desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.mesh_tensor(), in.landing.mesh_tensor()});
     TT_FATAL(
         links.size() >= attrs.num_links,
         "relay_affine_prefix uses {} links; the hop towards the successor has {}",

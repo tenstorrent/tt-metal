@@ -93,14 +93,14 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
         reader_rt_args.push_back(core_pages);
         reader_rt_args.push_back(start_id);
         reader_rt_args.push_back(page_size_bytes);
         desc.kernels[reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(output_tensor.buffer());
+        writer_rt_args.push_back(output_tensor.mesh_tensor());
         writer_rt_args.push_back(core_pages);
         writer_rt_args.push_back(start_id);
         writer_rt_args.push_back(page_size_bytes);

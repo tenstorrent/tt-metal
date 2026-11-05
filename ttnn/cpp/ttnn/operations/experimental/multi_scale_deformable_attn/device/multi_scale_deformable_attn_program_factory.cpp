@@ -212,14 +212,14 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
         KernelDescriptor::RTArgList reader_args;
         reader_args.reserve(4 + tiles_here * 3);
-        reader_args.push_back(value.buffer());
-        reader_args.push_back(grid.buffer());
-        reader_args.push_back(attn.buffer());
+        reader_args.push_back(value.mesh_tensor());
+        reader_args.push_back(grid.mesh_tensor());
+        reader_args.push_back(attn.mesh_tensor());
         reader_args.push_back(tiles_here);
 
         KernelDescriptor::RTArgList writer_args;
         writer_args.reserve(2 + tiles_here * 2);
-        writer_args.push_back(output.buffer());
+        writer_args.push_back(output.mesh_tensor());
         writer_args.push_back(tiles_here);
 
         for (uint32_t i = 0; i < tiles_here; ++i) {

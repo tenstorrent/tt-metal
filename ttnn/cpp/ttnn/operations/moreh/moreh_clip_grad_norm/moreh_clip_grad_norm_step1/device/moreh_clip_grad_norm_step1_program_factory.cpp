@@ -224,10 +224,10 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
         // reader
         reader_desc.emplace_runtime_args(
-            core, {input.buffer(), num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
+            core, {input.mesh_tensor(), num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
 
         // writer
-        writer_desc.emplace_runtime_args(core, {tmp_pow_sum.buffer(), tile_offset});
+        writer_desc.emplace_runtime_args(core, {tmp_pow_sum.mesh_tensor(), tile_offset});
 
         // compute
         compute_desc.runtime_args.emplace_back(

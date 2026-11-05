@@ -107,7 +107,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .data_format = grid_cb_data_format,
             .page_size = grid_stick_size,
         }}},
-        .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
+        .tensor = is_sharded ? &grid_tensor.mesh_tensor() : nullptr,
     });
 
     // Resolve compute kernel config early: under fp32_dest_acc_en + half-sync, DEST holds only 4
@@ -212,7 +212,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
-        .buffer = is_sharded ? output_tensor.buffer() : nullptr,
+        .tensor = is_sharded ? &output_tensor.mesh_tensor() : nullptr,
     });
 
     // Prepare stick size arguments with proper names
@@ -404,15 +404,15 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             reader0_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                    i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                    input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                    i * grid_nsticks_per_core    // rt_arg[1]: grid_stick_offset
                 });
             if (enable_split_reader) {
                 reader1_desc.emplace_runtime_args(
                     core,
                     {
-                        input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                        i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                        input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                        i * grid_nsticks_per_core    // rt_arg[1]: grid_stick_offset
                     });
             }
         }
@@ -430,19 +430,19 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             reader0_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
-                    grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
-                    grid_sticks,            // rt_arg[2]: grid_sticks
-                    grid_processed          // rt_arg[3]: grid_processed
+                    input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                    grid_tensor.mesh_tensor(),   // rt_arg[1]: grid_buffer_address
+                    grid_sticks,                 // rt_arg[2]: grid_sticks
+                    grid_processed               // rt_arg[3]: grid_processed
                 });
 
             // Runtime arguments for interleaved writer - expanded row by row
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
-                    output_sticks,           // rt_arg[1]: output_sticks
-                    output_processed         // rt_arg[2]: output_processed
+                    output_tensor.mesh_tensor(),  // rt_arg[0]: output_buffer_address
+                    output_sticks,                // rt_arg[1]: output_sticks
+                    output_processed              // rt_arg[2]: output_processed
                 });
 
             grid_processed += grid_sticks;

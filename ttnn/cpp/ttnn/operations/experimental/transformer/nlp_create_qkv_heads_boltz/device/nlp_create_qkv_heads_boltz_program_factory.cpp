@@ -512,7 +512,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<0>(output).buffer(),
+        .tensor = &std::get<0>(output).mesh_tensor(),
     });
 
     auto k_shard_spec = std::get<1>(output).shard_spec().value();
@@ -528,7 +528,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<1>(output).buffer(),
+        .tensor = &std::get<1>(output).mesh_tensor(),
     });
 
     auto v_shard_spec = std::get<2>(output).shard_spec().value();
@@ -544,7 +544,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<2>(output).buffer(),
+        .tensor = &std::get<2>(output).mesh_tensor(),
     });
 
     std::vector<uint32_t> reader_compile_time_args = {q_output_cb_index, k_output_cb_index};
@@ -621,9 +621,12 @@ void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     // rather than in runtime args.  Missing one is a silent stale-address bug.  Positional mapping
     // into desc.cbs (push order q, k, v), the same one resolve_bindings uses.
     const auto cbs = program.circular_buffers();
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(tensor_return_value).buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(tensor_return_value).buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(tensor_return_value).buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[0]->id(), std::get<0>(tensor_return_value).mesh_tensor());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[1]->id(), std::get<1>(tensor_return_value).mesh_tensor());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[2]->id(), std::get<2>(tensor_return_value).mesh_tensor());
 }
 
 // The input/output addresses are the leading reader/writer runtime args (emplaced as Buffer* by

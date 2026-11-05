@@ -164,7 +164,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         reader_rt_args_builder.reserve(reader_runtime_args.size());
         for (size_t i = 0; i < reader_runtime_args.size(); ++i) {
             if (i == 3) {
-                reader_rt_args_builder.push_back(intermediate_tensor.buffer());
+                reader_rt_args_builder.push_back(intermediate_tensor.mesh_tensor());
             } else {
                 reader_rt_args_builder.push_back(reader_runtime_args[i]);
             }
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         // Writer RT args.  Index 0 is the output buffer's base address —
         // push as Buffer* so the framework records a BufferBinding.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(output_tensor.buffer());
+        writer_rt_args.push_back(output_tensor.mesh_tensor());
         writer_rt_args.push_back(increment);
         writer_rt_args.push_back(page_idx_start);
         writer_rt_args.push_back(output_page_size_bytes);

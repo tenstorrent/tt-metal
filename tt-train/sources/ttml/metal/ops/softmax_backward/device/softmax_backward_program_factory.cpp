@@ -265,8 +265,8 @@ tt::tt_metal::ProgramDescriptor SoftmaxBackwardFactory::create_descriptor(
 
     // Buffer addresses travel in common runtime args (slots named at the top of the file); override_runtime_arguments()
     // rewrites them on every cache hit. start_row/num_rows follow from the hashed tensor specs and sub_core_grids.
-    reader.emplace_common_runtime_args({softmax_output.buffer(), upstream_grad.buffer()});
-    writer.emplace_common_runtime_args({tensor_return_value.buffer()});
+    reader.emplace_common_runtime_args({softmax_output.mesh_tensor(), upstream_grad.mesh_tensor()});
+    writer.emplace_common_runtime_args({tensor_return_value.mesh_tensor()});
     for (const CoreRowAssignment& a : core_row_assignments) {
         reader.emplace_runtime_args(a.core, {a.start_row, a.num_rows});
         writer.emplace_runtime_args(a.core, {a.start_row, a.num_rows});

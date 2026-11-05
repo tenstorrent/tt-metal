@@ -214,7 +214,7 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
 
     // The config buffer is passed as a Buffer* binding (not a raw address) so cache hits take the fast
     // path that patches its address and skips create_descriptor.
-    writer_kernel.emplace_runtime_args(core, {config.buffer()});
+    writer_kernel.emplace_runtime_args(core, {config.mesh_tensor()});
 
     desc.kernels.push_back(std::move(writer_kernel));
     return desc;

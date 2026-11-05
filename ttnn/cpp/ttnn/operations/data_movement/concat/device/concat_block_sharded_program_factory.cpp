@@ -221,7 +221,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = unit_size,
             }}},
-            .buffer = input_tensors[i].buffer(),
+            .tensor = &input_tensors[i].mesh_tensor(),
         });
     }
 
@@ -234,7 +234,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = unit_size,
         }}},
-        .buffer = output.buffer(),
+        .tensor = &output.mesh_tensor(),
     });
 
     // Pre-compute physical core map indexed by grid position [gy][gx]

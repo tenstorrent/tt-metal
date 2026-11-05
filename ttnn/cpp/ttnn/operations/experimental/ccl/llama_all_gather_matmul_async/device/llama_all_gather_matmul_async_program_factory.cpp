@@ -212,7 +212,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         tt::tt_metal::CircularBufferConfig(
             intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
             .set_page_size(inter_cb_index, intermediate_tensor_page_size)
-            .set_globally_allocated_address(*intermediate_tensor.buffer());
+            .set_globally_allocated_address(intermediate_tensor.mesh_tensor());
     desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(
         cb_inter_config, CoreRangeSet(intermediate_tensor_cores), nullptr, intermediate_tensor.buffer()));
 

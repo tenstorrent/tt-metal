@@ -141,10 +141,10 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
 
         // reader
-        reader_desc.emplace_runtime_args(core, {input.buffer(), clip_coef_clamped.buffer(), num_tiles});
+        reader_desc.emplace_runtime_args(core, {input.mesh_tensor(), clip_coef_clamped.mesh_tensor(), num_tiles});
 
         // writer
-        writer_desc.emplace_runtime_args(core, {input.buffer(), num_tiles});
+        writer_desc.emplace_runtime_args(core, {input.mesh_tensor(), num_tiles});
 
         // compute
         compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles});

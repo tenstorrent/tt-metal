@@ -607,20 +607,23 @@ uint32_t append_selective_reduce_combine_to_descriptor(
     // the fabric's packet headers (CCL path)
     constexpr auto packet_header_cb_id = tt::CBIndex::c_7;
 
-    auto push_cb =
-        [&](uint32_t cb_index, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format, Buffer* buffer) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = total_size,
-                .core_ranges = needed_worker_core_range_set,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb_index),
-                    .data_format = data_format,
-                    .page_size = page_size,
-                }}},
-                .buffer = buffer,
-            });
-        };
-    push_cb(data_cb_id, buffer_size_bytes, buffer_size_bytes, input_data_format, input_tensor.buffer());
+    auto push_cb = [&](uint32_t cb_index,
+                       uint32_t total_size,
+                       uint32_t page_size,
+                       tt::DataFormat data_format,
+                       const tt::tt_metal::MeshTensor* tensor) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = needed_worker_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+            .tensor = tensor,
+        });
+    };
+    push_cb(data_cb_id, buffer_size_bytes, buffer_size_bytes, input_data_format, &input_tensor.mesh_tensor());
     push_cb(
         dense_token_maps_cb_id,
         aligned_dense_token_maps_buffer_size_bytes,
@@ -697,9 +700,9 @@ uint32_t append_selective_reduce_combine_to_descriptor(
 
     auto make_reader_runtime_args = [&](uint32_t token_parallel_idx, uint32_t is_init_sync_core) {
         KernelDescriptor::RTArgList reader_rt;
-        reader_rt.push_back(dense_token_maps_tensor.buffer());
-        reader_rt.push_back(dense_token_counts_tensor.buffer());
-        reader_rt.push_back(token_activations_tensor.buffer());
+        reader_rt.push_back(dense_token_maps_tensor.mesh_tensor());
+        reader_rt.push_back(dense_token_counts_tensor.mesh_tensor());
+        reader_rt.push_back(token_activations_tensor.mesh_tensor());
         reader_rt.push_back(token_parallel_idx);
         reader_rt.push_back(is_init_sync_core);
         return reader_rt;
@@ -709,7 +712,7 @@ uint32_t append_selective_reduce_combine_to_descriptor(
                                         uint32_t dest_token_segment_offset_bytes,
                                         uint32_t is_init_sync_core) {
         KernelDescriptor::RTArgList writer_rt;
-        writer_rt.push_back(output_tensor.buffer());
+        writer_rt.push_back(output_tensor.mesh_tensor());
         writer_rt.push_back(source_token_segment_size_bytes);
         writer_rt.push_back(dest_token_segment_offset_bytes);
         writer_rt.push_back(

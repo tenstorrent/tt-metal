@@ -177,7 +177,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                 .data_format = input_cb_data_format,
                 .page_size = aligned_input_stick_nbytes,
             }}},
-            .buffer = input_tensor.buffer(),
+            .tensor = &input_tensor.mesh_tensor(),
         });
     }
 
@@ -192,7 +192,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
         }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
+        .tensor = any_sharded ? &output_tensor.mesh_tensor() : nullptr,
     });
 
     const bool fill_is_zero = (fill_value_bits == 0);
@@ -268,7 +268,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             reader_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),
+                    input_tensor.mesh_tensor(),
                     num_sticks,
                     start_stick_id,
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
@@ -281,7 +281,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    output_tensor.buffer(),
+                    output_tensor.mesh_tensor(),
                     num_sticks,
                     start_stick_id,
                 });
@@ -296,7 +296,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             reader_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),
+                    input_tensor.mesh_tensor(),
                     num_sticks,
                     sticks_processed,
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
@@ -309,7 +309,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    output_tensor.buffer(),
+                    output_tensor.mesh_tensor(),
                     num_sticks,
                     sticks_processed,
                 });

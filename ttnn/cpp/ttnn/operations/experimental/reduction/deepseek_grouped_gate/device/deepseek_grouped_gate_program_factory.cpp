@@ -328,10 +328,10 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         end_height_tile = start_height_tile + workload_per_core;
 
         reader_kernel_desc.emplace_runtime_args(
-            core, {scores.buffer(), bias.buffer(), start_height_tile, end_height_tile});
+            core, {scores.mesh_tensor(), bias.mesh_tensor(), start_height_tile, end_height_tile});
         compute_kernel_desc.emplace_runtime_args(core, {start_height_tile, end_height_tile});
         writer_kernel_desc.emplace_runtime_args(
-            core, {output_weights.buffer(), output_indices.buffer(), start_height_tile, end_height_tile});
+            core, {output_weights.mesh_tensor(), output_indices.mesh_tensor(), start_height_tile, end_height_tile});
     }
 
     desc.kernels.push_back(std::move(reader_kernel_desc));

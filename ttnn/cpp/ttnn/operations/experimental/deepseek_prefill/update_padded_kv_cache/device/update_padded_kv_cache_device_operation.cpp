@@ -907,10 +907,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         reader_kernel.emplace_common_runtime_args({input_row_offset_page_rows(args, cache)});
     }
     if (tensor_args.rope.has_value()) {
-        reader_kernel.emplace_common_runtime_args({tensor_args.rope->buffer()});
+        reader_kernel.emplace_common_runtime_args({tensor_args.rope->mesh_tensor()});
     }
     if (has_scaled) {
-        reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
+        reader_kernel.emplace_common_runtime_args({tensor_args.scales->mesh_tensor()});
     }
     writer_kernel.emplace_common_runtime_args({dst_buffer});
     // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).

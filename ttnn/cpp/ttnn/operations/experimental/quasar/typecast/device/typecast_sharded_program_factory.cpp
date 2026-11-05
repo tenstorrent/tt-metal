@@ -92,7 +92,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             .data_format = act_df,
             .page_size = in_cb_pagesize,
         }}},
-        .buffer = input.buffer(),
+        .tensor = &input.mesh_tensor(),
     });
 
     // output sharded CB
@@ -109,7 +109,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             .data_format = out_df,
             .page_size = out_cb_pagesize,
         }}},
-        .buffer = output.buffer(),
+        .tensor = &output.mesh_tensor(),
     });
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);

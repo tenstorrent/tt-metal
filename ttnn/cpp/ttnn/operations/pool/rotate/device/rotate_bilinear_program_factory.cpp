@@ -211,7 +211,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
+        .tensor = any_sharded ? &output_tensor.mesh_tensor() : nullptr,
     });
 
     const bool fill_is_zero = (fill_value_bits == 0);
@@ -364,7 +364,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         reader_desc.emplace_runtime_args(
             core,
             {
-                input_tensor.buffer(),
+                input_tensor.mesh_tensor(),
                 num_sticks,
                 start_stick_id,
                 static_cast<uint32_t>(cos_angle_q16),
@@ -378,7 +378,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             writer_desc->emplace_runtime_args(
                 core,
                 {
-                    output_tensor.buffer(),
+                    output_tensor.mesh_tensor(),
                     num_sticks,
                     start_stick_id,
                 });

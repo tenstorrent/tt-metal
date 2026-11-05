@@ -475,7 +475,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         // Set reader runtime args
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.reserve(9);
-        reader_rt_args.push_back(tensor_args.input_tensor.buffer());
+        reader_rt_args.push_back(tensor_args.input_tensor.mesh_tensor());
         reader_rt_args.push_back(in_row_tiles);
         reader_rt_args.push_back(in_col_tiles);
         reader_rt_args.push_back(input_row_device_stride);
@@ -537,8 +537,8 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         }
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;
         writer_rt_arg_list.reserve(writer_rt_args.size());
-        writer_rt_arg_list.push_back(tensor_args.persistent_intermediate_buffer.buffer());
-        writer_rt_arg_list.push_back(tensor_args.persistent_output_buffer.buffer());
+        writer_rt_arg_list.push_back(tensor_args.persistent_intermediate_buffer.mesh_tensor());
+        writer_rt_arg_list.push_back(tensor_args.persistent_output_buffer.mesh_tensor());
         for (size_t arg_idx = kSenderWriterSemaphoreAddr; arg_idx < writer_rt_args.size(); ++arg_idx) {
             writer_rt_arg_list.push_back(writer_rt_args[arg_idx]);
         }
@@ -563,8 +563,8 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         // Set receiver runtime args
         tt::tt_metal::KernelDescriptor::RTArgList receiver_reader_rt_args;
         receiver_reader_rt_args.reserve(15);
-        receiver_reader_rt_args.push_back(tensor_args.persistent_intermediate_buffer.buffer());
-        receiver_reader_rt_args.push_back(tensor_args.input_tensor.buffer());
+        receiver_reader_rt_args.push_back(tensor_args.persistent_intermediate_buffer.mesh_tensor());
+        receiver_reader_rt_args.push_back(tensor_args.input_tensor.mesh_tensor());
         // clang-format off
         receiver_reader_rt_args.push_back(
             static_cast<uint32_t>(semaphore.address()));  // smuggled-rta-ok: caller GlobalSemaphore excluded from compute_program_hash; re-applied by override_runtime_arguments
@@ -585,7 +585,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
 
         tt::tt_metal::KernelDescriptor::RTArgList receiver_writer_rt_args;
         receiver_writer_rt_args.reserve(13);
-        receiver_writer_rt_args.push_back(tensor_args.persistent_output_buffer.buffer());
+        receiver_writer_rt_args.push_back(tensor_args.persistent_output_buffer.mesh_tensor());
         receiver_writer_rt_args.push_back(in_row_tiles);
         receiver_writer_rt_args.push_back(in_col_tiles);
         receiver_writer_rt_args.push_back(receiver_input_row_device_stride);

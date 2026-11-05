@@ -700,8 +700,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     for (const size_t kernel_index : {reader_kernel_index, writer_kernel_index}) {
         tt::tt_metal::KernelDescriptor::RTArgList common_args;
         common_args.reserve(ttnn::ccl::AllGatherCommonArgs::count);
-        common_args.push_back(input_tensor.buffer());
-        common_args.push_back(output_tensor.buffer());
+        common_args.push_back(input_tensor.mesh_tensor());
+        common_args.push_back(output_tensor.mesh_tensor());
         for (const uint32_t semaphore_arg : semaphore_args) {
             common_args.push_back(semaphore_arg);  // smuggled-rta-ok: re-applied via
                                                    // apply_all_gather_async_minimal_default_semaphore_args()

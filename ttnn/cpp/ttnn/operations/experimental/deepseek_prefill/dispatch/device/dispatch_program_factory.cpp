@@ -1008,12 +1008,12 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args) {
         tt::tt_metal::KernelDescriptor::RTArgList args;
         args.reserve(raw_args.size());
-        args.push_back(input_tensor.buffer());
-        args.push_back(indices_tensor.buffer());
-        args.push_back(offsets_tensor.buffer());
-        args.push_back(output_tensor.buffer());
-        args.push_back(metadata_tensor.buffer());
-        args.push_back(dispatch_table_tensor.buffer());
+        args.push_back(input_tensor.mesh_tensor());
+        args.push_back(indices_tensor.mesh_tensor());
+        args.push_back(offsets_tensor.mesh_tensor());
+        args.push_back(output_tensor.mesh_tensor());
+        args.push_back(metadata_tensor.mesh_tensor());
+        args.push_back(dispatch_table_tensor.mesh_tensor());
         for (size_t i = 6; i < raw_args.size(); ++i) {
             args.push_back(raw_args[i]);
         }
@@ -1142,10 +1142,10 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         // Reader RT args
 
         tt::tt_metal::KernelDescriptor::RTArgList worker_reader_rt_args;
-        worker_reader_rt_args.push_back(input_tensor.buffer());
-        worker_reader_rt_args.push_back(indices_tensor.buffer());
-        worker_reader_rt_args.push_back(offsets_tensor.buffer());
-        worker_reader_rt_args.push_back(dispatch_table_tensor.buffer());
+        worker_reader_rt_args.push_back(input_tensor.mesh_tensor());
+        worker_reader_rt_args.push_back(indices_tensor.mesh_tensor());
+        worker_reader_rt_args.push_back(offsets_tensor.mesh_tensor());
+        worker_reader_rt_args.push_back(dispatch_table_tensor.mesh_tensor());
         worker_reader_rt_args.push_back(0u);                           // token_start_idx
         worker_reader_rt_args.push_back((uint32_t)tokens_per_device);  // token_end_idx
         // Baton-ring offset sync: owner (group[0]) holds the shared offsets[]; the next core
@@ -1165,11 +1165,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         }
         // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
         if (has_padding_config) {
-            worker_reader_rt_args.push_back(tensor_args.padding_config.value().buffer());
+            worker_reader_rt_args.push_back(tensor_args.padding_config.value().mesh_tensor());
         }
         // scales base address appended after padding_config (as Buffer* so it refreshes on cache hit).
         if (fp8_scaled_input) {
-            worker_reader_rt_args.push_back(tensor_args.scales_tensor.value().buffer());
+            worker_reader_rt_args.push_back(tensor_args.scales_tensor.value().mesh_tensor());
         }
         desc.kernels[reader_worker_kernel_ids[j]].emplace_runtime_args(all_worker_cores[j], worker_reader_rt_args);
 
@@ -1184,11 +1184,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         worker_writer_rt_args.push_back(cross_addr_semaphore_id);
         worker_writer_rt_args.push_back(data_avail_semaphore_ids[local_u_id]);
         worker_writer_rt_args.push_back(space_avail_semaphore_id);
-        worker_writer_rt_args.push_back(output_tensor.buffer());
-        worker_writer_rt_args.push_back(metadata_tensor.buffer());
+        worker_writer_rt_args.push_back(output_tensor.mesh_tensor());
+        worker_writer_rt_args.push_back(metadata_tensor.mesh_tensor());
         // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
         if (has_padding_config) {
-            worker_writer_rt_args.push_back(tensor_args.padding_config.value().buffer());
+            worker_writer_rt_args.push_back(tensor_args.padding_config.value().mesh_tensor());
         }
         desc.kernels[writer_worker_kernel_ids[j]].emplace_runtime_args(all_worker_cores[j], worker_writer_rt_args);
     }

@@ -903,7 +903,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                       .data_format = in_data_format,
                       .page_size = in0_cb_page_size,
                   }}},
-            .buffer = a.buffer(),
+            .tensor = &a.mesh_tensor(),
         };
         if (welford_fp32_alias) {
             in0_desc.format_descriptors.push_back(CBFormatDescriptor{
@@ -922,7 +922,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = in_data_format,
                 .page_size = in0_cb_page_size,
             }}},
-            .buffer = a.buffer(),
+            .tensor = &a.mesh_tensor(),
         };
         if (welford_fp32_alias) {
             in0_desc.format_descriptors.push_back(CBFormatDescriptor{
@@ -943,7 +943,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = out_data_format,
                 .page_size = out_cb_page_size,
             }}},
-            .buffer = output.buffer(),
+            .tensor = &output.mesh_tensor(),
         });
     }
 
@@ -1354,22 +1354,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         if (gamma.has_value()) {
-            writer_mcast_sender_args.push_back(gamma.value().buffer());
+            writer_mcast_sender_args.push_back(gamma.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (beta.has_value()) {
-            writer_mcast_sender_args.push_back(beta.value().buffer());
+            writer_mcast_sender_args.push_back(beta.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (input_mask.has_value()) {
-            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+            writer_mcast_sender_args.push_back(input_mask.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (negative_mask.has_value()) {
-            writer_mcast_sender_args.push_back(negative_mask.value().buffer());
+            writer_mcast_sender_args.push_back(negative_mask.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }

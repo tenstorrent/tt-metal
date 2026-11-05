@@ -206,7 +206,7 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output.mesh_tensor(), tile_offset, units_per_core});
     }
 
     desc.kernels.push_back(std::move(writer_desc));

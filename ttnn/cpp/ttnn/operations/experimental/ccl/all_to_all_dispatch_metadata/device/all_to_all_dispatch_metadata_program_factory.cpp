@@ -891,13 +891,13 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
                                                const std::vector<uint32_t>& scalar_args) {
             tt::tt_metal::KernelDescriptor::RTArgList rt_args;
             rt_args.reserve(scalar_args.size());
-            rt_args.push_back(input_tensor.buffer());
-            rt_args.push_back(indices_tensor.buffer());
-            rt_args.push_back(scores_tensor.buffer());
-            rt_args.push_back(mapping_tensor.buffer());
-            rt_args.push_back(output_tensor.buffer());
-            rt_args.push_back(metadata_tensor.buffer());
-            rt_args.push_back(scores_out_tensor.buffer());
+            rt_args.push_back(input_tensor.mesh_tensor());
+            rt_args.push_back(indices_tensor.mesh_tensor());
+            rt_args.push_back(scores_tensor.mesh_tensor());
+            rt_args.push_back(mapping_tensor.mesh_tensor());
+            rt_args.push_back(output_tensor.mesh_tensor());
+            rt_args.push_back(metadata_tensor.mesh_tensor());
+            rt_args.push_back(scores_out_tensor.mesh_tensor());
             for (size_t arg_idx = kCrossDeviceSemaphoreRuntimeArgSlot; arg_idx < scalar_args.size(); ++arg_idx) {
                 rt_args.push_back(scalar_args[arg_idx]);
             }

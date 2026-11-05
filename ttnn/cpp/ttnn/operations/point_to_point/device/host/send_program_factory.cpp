@@ -140,7 +140,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         // it as Buffer* so the framework records a BufferBinding and patches
         // it on cache hit (no override_runtime_arguments).
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
         reader_rt_args.push_back(increment);
         reader_rt_args.push_back(page_idx_start);
         reader_rt_args.push_back(input_page_size_bytes);
@@ -176,7 +176,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;
         writer_rt_args_builder.reserve(writer_runtime_args.size());
-        writer_rt_args_builder.push_back(output_tensors.at(0).buffer());  // tensor_address0 as Buffer*
+        writer_rt_args_builder.push_back(output_tensors.at(0).mesh_tensor());  // tensor_address0 as Buffer*
         for (size_t i = 1; i < writer_runtime_args.size(); ++i) {
             writer_rt_args_builder.push_back(writer_runtime_args[i]);
         }

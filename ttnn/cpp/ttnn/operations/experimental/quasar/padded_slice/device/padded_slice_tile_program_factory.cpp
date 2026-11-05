@@ -550,7 +550,7 @@ void PaddedSliceTileProgramFactory::override_runtime_arguments(
     auto& dst_tensor = output;
     TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
     UpdateDynamicCircularBufferAddress(
-        cached_program.program, std::get<1>(shared_vars.cb_output_tuple), *dst_tensor.buffer());
+        cached_program.program, std::get<1>(shared_vars.cb_output_tuple), dst_tensor.mesh_tensor());
     uint32_t output_row_size_bytes = dst_tensor.shard_spec()->shape[1] * dst_tensor.element_size();
     auto alignment = TILE_WIDTH * dst_tensor.element_size();
     auto is_non_aligned = output_row_size_bytes % alignment;

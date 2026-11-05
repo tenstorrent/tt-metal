@@ -182,7 +182,7 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
             core,
             KernelDescriptor::CoreRuntimeArgs{seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output.mesh_tensor(), tile_offset, units_per_core});
     }
 
     desc.kernels.push_back(std::move(writer_desc));

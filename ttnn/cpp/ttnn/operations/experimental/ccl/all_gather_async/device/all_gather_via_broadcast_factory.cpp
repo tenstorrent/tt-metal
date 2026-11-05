@@ -206,9 +206,9 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
         desc.kernels[reader_kernel_index].emplace_runtime_args(
             core,
             {
-                input_tensor.buffer(),  // tensor_address0
-                input_tile_id_start,    // tile_id_start
-                input_tile_id_end,      // tile_id_end
+                input_tensor.mesh_tensor(),  // tensor_address0
+                input_tile_id_start,         // tile_id_start
+                input_tile_id_end,           // tile_id_end
             });
 
         // Set writer runtime args

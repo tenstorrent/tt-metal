@@ -270,14 +270,14 @@ ProgramDescriptor ConcatTiledUnalignedProgramFactory::create_descriptor(
         reader_args.push_back(nbands);
         reader_args.push_back(band_start);
         for (const auto& t : input_tensors) {
-            reader_args.push_back(t.buffer());
+            reader_args.push_back(t.mesh_tensor());
         }
         reader_args.append(g.in_wt);
         reader_desc.emplace_runtime_args(core, reader_args);
 
         KernelDescriptor::RTArgList writer_args;
         writer_args.reserve(3 + 2 * num_tensors);
-        writer_args.push_back(output.buffer());
+        writer_args.push_back(output.mesh_tensor());
         writer_args.push_back(nbands);
         writer_args.push_back(band_start);
         writer_args.append(g.in_wt);

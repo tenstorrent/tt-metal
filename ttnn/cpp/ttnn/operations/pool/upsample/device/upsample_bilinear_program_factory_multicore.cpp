@@ -111,7 +111,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .data_format = input_cb_data_format,
             .page_size = in_cb_pagesize,
         }}},
-        .buffer = halo_in.buffer(),
+        .tensor = &halo_in.mesh_tensor(),
     });
 
     // first intermediate CB (4 pixels per page are needed for intermediate tensor)
@@ -182,7 +182,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .page_size = out_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
         }}},
-        .buffer = output.buffer(),
+        .tensor = &output.mesh_tensor(),
     });
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);

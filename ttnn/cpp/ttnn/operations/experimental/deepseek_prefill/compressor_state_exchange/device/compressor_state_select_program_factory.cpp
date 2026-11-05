@@ -67,9 +67,9 @@ ProgramDescriptor CompressorStateSelectProgramFactory::create_descriptor(
     };
     KernelDescriptor::RTArgList runtime_args;
     runtime_args.reserve(kNumRuntimeArgs);
-    runtime_args.push_back(args.gathered_state.buffer());
-    runtime_args.push_back(args.initial_state.buffer());
-    runtime_args.push_back(output.buffer());
+    runtime_args.push_back(args.gathered_state.mesh_tensor());
+    runtime_args.push_back(args.initial_state.mesh_tensor());
+    runtime_args.push_back(output.mesh_tensor());
     runtime_args.push_back(scalars.output_tiles);
     runtime_args.push_back(scalars.use_initial);
     runtime_args.push_back(scalars.source_offset);

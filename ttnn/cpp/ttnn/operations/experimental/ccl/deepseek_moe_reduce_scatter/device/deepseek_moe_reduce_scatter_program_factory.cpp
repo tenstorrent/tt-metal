@@ -376,9 +376,9 @@ ProgramDescriptor build_program_descriptor(
 
             KernelDescriptor::RTArgList writer_rt_args;
             for (uint32_t slice = 0; slice < kRingSize; ++slice) {
-                writer_rt_args.push_back(intermediate_slice_tensors.at(slice).buffer());
+                writer_rt_args.push_back(intermediate_slice_tensors.at(slice).mesh_tensor());
             }
-            writer_rt_args.push_back(output_tensor.buffer());
+            writer_rt_args.push_back(output_tensor.mesh_tensor());
             writer_rt_args.append(writer_fabric_args);
             desc.kernels[kWriterKernelIdx].emplace_runtime_args(core, writer_rt_args);
 
