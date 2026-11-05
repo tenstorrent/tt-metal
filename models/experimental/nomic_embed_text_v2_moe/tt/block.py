@@ -20,7 +20,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
 from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters, activation_memory_config
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
@@ -44,7 +43,6 @@ class TtNomicBertBlock(LightweightModule):
         state_dict,
         state_dict_prefix,
         moe: bool,
-        buffers: StackedBuffers | None = None,
         output_memory_config: ttnn.MemoryConfig | None = None,
     ):
         super().__init__()
@@ -55,7 +53,7 @@ class TtNomicBertBlock(LightweightModule):
         self.attn = TtNomicBertAttention(device, config, tt_config, state_dict, f"{state_dict_prefix}attn.")
         prefix = f"{state_dict_prefix}mlp."
         if moe:
-            self.mlp = TtNomicMoELayer(device, config, tt_config, state_dict, prefix, buffers=buffers)
+            self.mlp = TtNomicMoELayer(device, config, tt_config, state_dict, prefix)
         else:
             self.mlp = TtNomicBertMLP(device, config, tt_config, state_dict, prefix)
 
@@ -83,7 +81,7 @@ class TtNomicBertBlock(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.epsilon,
-            memory_config=activation_memory_config(x) if memory_config is None else memory_config,
+            memory_config=activation_memory_config(x.shape) if memory_config is None else memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
 

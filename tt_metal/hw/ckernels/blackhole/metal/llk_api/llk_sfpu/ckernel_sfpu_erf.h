@@ -52,12 +52,14 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #endif
 
-bool bf16_dest_erf();
-template <int ITERATIONS>
-void calculate_erf_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_erf_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated erf kernel as one call over the whole tile.
 inline constexpr bool erf_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_erf() {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
@@ -86,8 +88,6 @@ inline void calculate_erf() {
     }
 }
 
-void init_erf_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erf_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -98,5 +98,3 @@ void erf_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_erf_bf16.h"

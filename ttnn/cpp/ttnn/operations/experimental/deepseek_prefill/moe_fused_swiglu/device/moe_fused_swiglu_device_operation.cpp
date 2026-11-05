@@ -31,7 +31,7 @@ bool is_dram_nd_sharded(const Tensor& tensor) {
 
 void validate_device_tensor(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "moe_fused_swiglu: {} must be on device", name);
-    TT_FATAL(tensor.buffer() != nullptr, "moe_fused_swiglu: {} must have an allocated device buffer", name);
+    TT_FATAL(tensor.is_allocated(), "moe_fused_swiglu: {} must have an allocated device buffer", name);
 }
 
 void validate_aux_shape(const Tensor& tensor, const char* name) {

@@ -98,16 +98,6 @@ sfpi_inline void signed_abs_horner_pair(sfpi::vFloat& r0, sfpi::vFloat& r1, sfpi
     signed_abs_horner_pair<Config, Index, Negated, false>(r0, r1, a0, a1, sfpi::vFloat(0.0f));
 }
 
-// The NaN form returns the saturating result for every non-NaN. A NaN input
-// becomes the SFPU's +NaN: narrowing can turn a low-payload NaN into Inf, and
-// the trailing multiply-add regenerates +NaN from that. The payload is not torch's 0xffff.
-template <typename Config>
-inline void init_signed_abs_nan() {
-    // Horner runs on -P. BH SFPMAD returns +NaN for a NaN operand, which survives
-    // the max that bounds -P below; the min that bounds P would drop it.
-    sfpi::vConstFloatPrgm0 = signed_abs_negated(Config::kCoefficientBits[Config::kDegree]);
-}
-
 template <typename Config>
 sfpi_inline sfpi::vFloat signed_abs_nan_finish(sfpi::vFloat x, sfpi::vFloat negated) {
     sfpi::vFloat bound = -signed_abs_fp32_from_bits(Config::kClampMaxBits);

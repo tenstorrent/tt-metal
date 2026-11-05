@@ -39,14 +39,12 @@ inline void calculate_erf_bf16_body() {
 // Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
 // record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
-inline void calculate_erf_bf16() {
+__attribute__((noinline)) inline void calculate_erf_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0xbb39f45cu);
     calculate_erf_bf16_body<ITERATIONS>();
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
 }
-inline void init_erf_bf16() {
-    ckernel::sfpu::bf16::erf::init_signed_abs_nan<ckernel::sfpu::ErfBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
-}
+// The call sets the constants it holds and puts stock's back, so the init leaves them to stock's.
+inline void init_erf_bf16() {}
 
 }  // namespace ckernel::sfpu

@@ -75,13 +75,6 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
     return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
 }
 
-template <typename Config>
-inline void init_signed_abs() {
-    sfpi::vConstFloatPrgm0 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree]);
-    sfpi::vConstFloatPrgm1 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree - 1u]);
-    sfpi::vConstFloatPrgm2 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree - 2u]);
-}
-
 // SFPLOADIs a coefficient costs at each use: none for +0 and +-1, which constant
 // registers hold; one for a value exact in BF16 or in normal FP16; two otherwise.
 constexpr std::uint32_t signed_abs_load_slots(std::uint32_t bits) {

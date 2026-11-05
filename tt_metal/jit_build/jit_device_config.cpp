@@ -29,13 +29,12 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
-JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
+JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, MetalContext& ctx) {
     // Need both runtime state and hardware query
-    auto& ctx = MetalContext::instance(context_id);
     auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     const auto& hal = env.get_hal();
     const auto& cluster = env.get_cluster();
