@@ -4,7 +4,7 @@
 
 // Semaphores on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
 // Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock these tests check what the host computes and skip
-// before launch: Quasar Mock builds no kernel binaries, and UMD MockChip reads and writes are no-ops.
+// before launch: UMD MockChip reads and writes are no-ops.
 
 #include <gtest/gtest.h>
 
@@ -174,7 +174,7 @@ TEST(KeraunosEthSemaphore, CreateSemaphoreOnIdleAndActiveEth) {
         expect_in_kernel_config(core, semaphore_address(device, program, core, kCounterSem));
     }
     if (is_mock()) {
-        GTEST_SKIP() << "Mock: addresses checked. Quasar Mock builds no kernel binaries, so nothing launches.";
+        GTEST_SKIP() << "Mock: addresses checked. MockChip reads and writes are no-ops, so nothing launches.";
     }
 
     slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/false);
@@ -271,7 +271,7 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
     }
 
     if (is_mock()) {
-        GTEST_SKIP() << "Mock: addresses and arguments checked. Quasar Mock builds no kernel binaries, so nothing "
+        GTEST_SKIP() << "Mock: addresses and arguments checked. MockChip reads and writes are no-ops, so nothing "
                         "launches.";
     }
     slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/false);
