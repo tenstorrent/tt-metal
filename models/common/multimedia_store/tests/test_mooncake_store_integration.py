@@ -242,9 +242,9 @@ def test_batch_of_several_requests(cluster, expect_error):
     requests = [FetchRequest(k, 64 + 1000 * i, 4096) for i, (k, _) in enumerate(here + there)]
     lookups = cluster.master_lookups()
     got = cluster.store.fetch_batch(requests)
-    # Ours: one batched lookup for all five keys. Mooncake's get_into_ranges then looks the other host's keys up
-    # again: one batched lookup plus one per key.
-    assert cluster.master_lookups() - lookups == 1 + 1 + len(there)
+    # One batched lookup for all five keys, then one for the snapshot the other host's keys are read from; no lookup
+    # per key.
+    assert cluster.master_lookups() - lookups == 1 + 1
     for i, ((_, value), result) in enumerate(zip(here + there, got)):
         assert bytes(result) == value[64 + 1000 * i : 64 + 1000 * i + 4096].tobytes()
     lookups = cluster.master_lookups()

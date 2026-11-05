@@ -6,8 +6,8 @@
 ``MooncakeEmbeddingReader`` is an ``EmbeddingReader`` (reader.py):
 
 - ``fetch_batch(requests)`` reads one byte range from each of several values in one go: one batched lookup at the
-  master for the whole batch, plus one batched transfer for whatever lives on other hosts (inside which Mooncake
-  looks those keys up again). ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
+  master for the whole batch, plus, for whatever lives on other hosts, a second batched lookup and one batched
+  transfer. ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
   value's length.
 - A value in this host's segment comes back in place, read-only. A value in another host's segment is read into this
   reader's registered read buffer, which grows on demand, and comes back as a read-only view into it.
@@ -23,8 +23,6 @@ Media keys are bytes, stored under their lowercase hex, or with MEDIA_STORE_KEY_
 ``MediaEmbeddingStoreConfig`` (config.py), read from the ``PREFILL_MEDIA_STORE_*`` variables.
 """
 
-from __future__ import annotations
-
 import atexit
 import ctypes
 import threading
@@ -36,7 +34,7 @@ import numpy as np
 from loguru import logger
 from mooncake.store import MooncakeDistributedStore
 
-from models.common.multimedia_store.config import KEY_TRANSFORM_ENV, KEY_TRANSFORMS, MediaEmbeddingStoreConfig
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 # Mooncake ErrorCode the reader tells apart from other failures (mooncake-store/include/types.h).
@@ -44,19 +42,16 @@ OBJECT_NOT_FOUND = -704
 
 
 def _store_key(media_key: bytes, transform: str) -> str:
-    """The Mooncake key for a media key (config.KEY_TRANSFORM_ENV): its lowercase hex, or with
-    MEDIA_STORE_KEY_TRANSFORM=none, the media key itself. Mooncake's batched lookup (batch_get_replica_desc) returns its
-    results keyed by str, decoding each key as UTF-8, so an untransformed key must be valid UTF-8 and is passed as that
-    text, which is the same bytes. A raw digest is almost never valid UTF-8 and would make the lookup raise
-    UnicodeDecodeError, though Mooncake's other calls accept it (kvcache-ai/Mooncake#5263)."""
+    """The Mooncake key for media_key under transform, the config's key_transform. 'hex' gives the key's lowercase hex.
+    'none' gives the key itself, as text: Mooncake's batched lookup (batch_get_replica_desc) returns its results keyed
+    by str, decoding each key as UTF-8, so the key must be valid UTF-8, and that text is the same bytes. Raises
+    ValueError for a key that is not."""
     if transform == "hex":
         return media_key.hex()
     try:
         return media_key.decode("utf-8")
     except UnicodeDecodeError:
-        raise ValueError(
-            f"media key {media_key!r} is not valid UTF-8, which Mooncake needs (unset {KEY_TRANSFORM_ENV} for hex)"
-        ) from None
+        raise ValueError(f"media key {media_key!r} is not valid UTF-8, as an untransformed key must be") from None
 
 
 class MediaEmbeddingReaderStats:
@@ -120,18 +115,18 @@ class MooncakeEmbeddingReader:
     """EmbeddingReader (reader.py) over this host's Mooncake store.
 
     ``open(config)`` starts the client and mounts the segment; tests may pass an already set up client to the
-    constructor. Not tied to a model: values are opaque bytes."""
+    constructor. Not tied to a model: values are opaque bytes.
+
+    Not thread-safe: use a reader from one thread at a time. Reads share the read buffer, and close() must not run
+    while a read is in progress."""
 
     def __init__(self, client, segment: str, key_transform: str = "hex"):
         self._client = client
         self.segment = segment
         """This host's segment name, the preferred_segment writers use."""
         self.key_transform = key_transform
-        """How media keys become store keys (config.KEY_TRANSFORM_ENV)."""
-        if key_transform not in KEY_TRANSFORMS:
-            raise ValueError(f"unknown media key transform {key_transform!r}, want one of {KEY_TRANSFORMS}")
+        """How media keys become store keys (MediaEmbeddingStoreConfig.key_transform)."""
         self.stats = MediaEmbeddingReaderStats()
-        self._read_lock = threading.Lock()
         self._read_buffer = np.empty(0, dtype=np.uint8)  # registered on the first read from another host
         self._closed = False
 
@@ -165,6 +160,8 @@ class MooncakeEmbeddingReader:
         return reader
 
     def close(self) -> None:
+        """Leaves the store. Views of values in this host's segment are invalid afterwards: Mooncake unmounts the
+        segment they point into."""
         if self._closed:
             return
         self._closed = True
@@ -196,8 +193,8 @@ class MooncakeEmbeddingReader:
             return []
         t0 = time.perf_counter()
         requests = [FetchRequest(*r) for r in requests]
+        keys = [_store_key(r.media_key, self.key_transform) for r in requests]
         try:
-            keys = [_store_key(r.media_key, self.key_transform) for r in requests]
             located = self._locate(list(dict.fromkeys(keys)))
             results: list[Optional[memoryview]] = [None] * len(requests)
             remote = []  # (request index, store key, offset, length)
@@ -249,7 +246,7 @@ class MooncakeEmbeddingReader:
 
     def _grow_read_buffer(self, nbytes: int) -> None:
         """Make the read buffer at least nbytes, doubling it; it never shrinks, so a long run registers a new buffer
-        only a handful of times. Called with _read_lock held."""
+        only a handful of times."""
         if nbytes <= self._read_buffer.nbytes:
             return
         size = max(nbytes, 2 * self._read_buffer.nbytes)
@@ -267,7 +264,10 @@ class MooncakeEmbeddingReader:
 
     def _read_remote(self, remote: list[tuple[int, str, int, int]], results: list) -> None:
         """Reads the remote requests' ranges in one batched transfer into the read buffer and stores a view of each in
-        results. Mooncake rejects empty ranges, so those are not read and come back empty."""
+        results. Mooncake rejects empty ranges, so those are not read and come back empty.
+
+        The transfer reads from a snapshot of the keys' locations, one batched lookup at the master; a plain
+        get_into_ranges would look each key up again on top of that."""
         by_key: dict[str, list[tuple[int, int, int, int]]] = {}  # key -> [(request index, dst, offset, length)]
         dst = 0
         for i, key, offset, length in remote:
@@ -278,20 +278,22 @@ class MooncakeEmbeddingReader:
             dst += length
         if not by_key:
             return
-        with self._read_lock:
-            self._grow_read_buffer(dst)
-            keys = list(by_key)
-            got = self._client.get_into_ranges(
-                [self._read_buffer.ctypes.data],
-                [keys],
-                [[[d for _, d, _, _ in by_key[k]] for k in keys]],
-                [[[o for _, _, o, _ in by_key[k]] for k in keys]],
-                [[[n for _, _, _, n in by_key[k]] for k in keys]],
-            )[0]  # one code per range, as requested: a key Mooncake can't read gets its error in every range
-            for key, rcs in zip(keys, got):
-                for rc, (i, d, offset, length) in zip(rcs, by_key[key]):
-                    if rc == OBJECT_NOT_FOUND:
-                        raise Missing(key)
-                    if rc != length:
-                        raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
-                    results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()
+        self._grow_read_buffer(dst)
+        keys = list(by_key)
+        snapshot = self._client.prepare_get_into_ranges_snapshot(keys)
+        got = self._client.get_into_ranges_from_snapshot(
+            snapshot,
+            [self._read_buffer.ctypes.data],
+            [keys],
+            [[[d for _, d, _, _ in by_key[k]] for k in keys]],
+            [[[o for _, _, o, _ in by_key[k]] for k in keys]],
+            [[[n for _, _, _, n in by_key[k]] for k in keys]],
+        )[0]
+        # One code per range, as requested: a key Mooncake can't read gets its error in every range.
+        for key, rcs in zip(keys, got, strict=True):
+            for rc, (i, d, offset, length) in zip(rcs, by_key[key], strict=True):
+                if rc == OBJECT_NOT_FOUND:
+                    raise Missing(key)
+                if rc != length:
+                    raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
+                results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()

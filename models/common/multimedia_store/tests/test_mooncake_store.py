@@ -72,10 +72,13 @@ class FakeClient:
             return {}
         return {k: [_replica(seg, data, status)] * n for k, (seg, data, status, n) in self.objects.items() if k in keys}
 
-    def get_into_ranges(self, ptrs, keys, dst_offsets, src_offsets, sizes):
-        self.lookups += 1 + len(keys[0])  # Mooncake looks the keys up again: one batched lookup plus one per key
+    def prepare_get_into_ranges_snapshot(self, keys):
+        self.lookups += 1  # one batched lookup
+        return frozenset(keys)
+
+    def get_into_ranges_from_snapshot(self, snapshot, ptrs, keys, dst_offsets, src_offsets, sizes):
         ((ptr,), (keys,), (dsts,), (srcs,), (lens,)) = (ptrs, keys, dst_offsets, src_offsets, sizes)
-        assert ptr in self.registered
+        assert set(keys) <= snapshot and ptr in self.registered
         out = []
         for key, d_list, s_list, n_list in zip(keys, dsts, srcs, lens):
             if key not in self.objects:
@@ -108,14 +111,12 @@ def setup():
     return client, reader, local, remote
 
 
-def test_media_keys_are_read_under_their_hex(setup, expect_error):
+def test_media_keys_are_read_under_their_hex(setup):
     """By default the caller passes the encoder's raw 32-byte media key, and the reader looks up its lowercase hex, the
     key the encoder wrote under."""
     client, reader, local, remote = setup
     assert reader.key_transform == "hex" and _key(1).hex() in client.objects  # setup's put, as the encoder writes
     assert bytes(reader.fetch(_key(1))) == local.tobytes() and reader.size(_key(2)) == remote.nbytes
-    with expect_error(ValueError, "unknown media key transform"):
-        MooncakeEmbeddingReader(client, ME, key_transform="base64")
 
 
 def test_untransformed_keys_are_read_as_they_are(setup, expect_error):
@@ -147,7 +148,7 @@ def test_remote_value_is_a_view_into_the_read_buffer(setup):
     view = reader.fetch(_key(2))
     assert bytes(view) == remote.tobytes() and view.readonly
     assert np.frombuffer(view, np.uint8).ctypes.data in client.registered  # no copy out of the read buffer
-    assert client.lookups == 3  # the batched lookup, then get_into_ranges' own two
+    assert client.lookups == 2  # the reader's batched lookup, then the snapshot's
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (0, 1, remote.nbytes)
 
@@ -168,7 +169,7 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
     assert bytes(got[2]) == remote[-100:].tobytes()
     assert bytes(got[3]) == bytes(got[4]) == b""
     assert bytes(got[5]) == local.tobytes()
-    assert client.lookups == 3  # one batched lookup for all keys, then one remote read of one key
+    assert client.lookups == 2  # one batched lookup for all keys, then the snapshot of the one remote key
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["fetch_calls"]) == (3, 3, 1)
 
@@ -275,6 +276,6 @@ def test_plain_tuples_and_an_empty_batch(setup):
 def test_failed_remote_read_is_unavailable(setup, rc, expect_error):
     """The codes Mooncake returns when the host holding the value, or the master, has died."""
     client, reader, _, _ = setup
-    client.get_into_ranges = lambda *args: [[[rc]]]
+    client.get_into_ranges_from_snapshot = lambda *args: [[[rc]]]
     with expect_error(StoreUnavailable, f"read {rc} of"):
         reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])
