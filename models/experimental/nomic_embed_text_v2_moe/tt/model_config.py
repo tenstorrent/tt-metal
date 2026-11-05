@@ -290,6 +290,10 @@ class TtModelConfig:
     # routed_combine's gather and combine modes, as before.
     generated_dispatch: bool = True
     generated_combine: bool = True
+    # The router, routing_metadata and the dispatch as one generated op (ttnn.operations.nomic_moe_route_dispatch) on
+    # the residual's ND layout, for a one-pass layer of a window the generated glue takes (tt/experts.py:
+    # route_dispatch). Off, or where the op refuses a call: router_front_end, routing_metadata and the dispatch.
+    generated_route_dispatch: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     layout: ttnn.Layout = LAYOUT
 
