@@ -122,3 +122,4 @@ install(
 
 add_subdirectory(experimental/x280)
 add_subdirectory(debug/visualizer/common)
+add_subdirectory(debug/visualizer/capture)

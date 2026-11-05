@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Checks the fabric manifest written during fabric init against the live fabric. Each check covers one part of the
-// manifest and runs under every fabric configuration a fixture brings up.
+// manifest and runs under every fabric configuration a fixture brings up. CapturePlan checks capture's reading of the
+// same manifest, so a writer change that capture doesn't follow fails here, on every configuration.
 
 #include <gtest/gtest.h>
 #include <fmt/format.h>
@@ -25,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -36,6 +38,9 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_device.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
@@ -896,6 +901,100 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
     }
 }
 
+
+// The chips capture would find on this rank, from the mock cluster: each local chip's unique id, and the translated core
+// of each of its Ethernet channels, as a reader gives them.
+capture::ClusterFacts collect_cluster_facts(const json& manifest) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    capture::ClusterFacts facts;
+    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        for (const auto& [c_key, chip] : mesh.at("chips").items()) {
+            if (!chip.at("is_local").get<bool>()) {
+                continue;
+            }
+            const auto physical_chip_id = chip.at("physical_chip_id").get<ChipId>();
+            const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+            capture::FoundChip found{
+                .chip = physical_chip_id,
+                .asic_id = cluster.get_unique_chip_ids().at(physical_chip_id),
+                .arch = lower_enum_name(cluster.arch()),
+            };
+            for (uint32_t chan = 0; chan < soc_desc.get_num_eth_channels(); ++chan) {
+                const auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::TRANSLATED);
+                found.eth_cores_by_channel.emplace_back(
+                    capture::CoreXY{.x = static_cast<uint32_t>(core.x), .y = static_cast<uint32_t>(core.y)});
+            }
+            facts.chips.push_back(std::move(found));
+        }
+    }
+    return facts;
+}
+
+// Capture's reading of this manifest matches the live fabric. Capture reads the file itself, in the manifest's order,
+// as it will after a real run, and its plan holds:
+//   - this rank's routers, each on ControlPlane's channel, on a chip with the cluster's unique id for it
+//   - each router's stream registers, as the fixture's own walk over the router finds them
+//   - the HAL's L1 range and core registers, with the low wall clock word before the high one
+// and matching the plan to the cluster's chips finds every router at its manifest core.
+void check_capture_plan(
+    // Parse manifest file using capture's own reader
+    const std::filesystem::path& manifest_path, const json& manifest, const std::vector<RouterEntry>& routers) {
+    const capture::ManifestFile file = capture::read_manifest_file(manifest_path);
+    const capture::CapturePlan plan = capture::collect_capture_plan(file.json);
+    const capture::ManifestIdentity identity = capture::collect_manifest_identity(file);
+
+    // Validate mpi / distributed context
+    const auto world = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    EXPECT_EQ(identity.mpi_rank, static_cast<uint32_t>(*world->rank()));
+    EXPECT_EQ(identity.world_size, static_cast<uint32_t>(*world->size()));
+
+    // Validate HAL
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    using tt::tt_metal::HalL1MemAddrType;
+    using tt::tt_metal::HalProgrammableCoreType;
+    EXPECT_EQ(plan.arch, lower_enum_name(hal.get_arch()));
+    EXPECT_EQ(plan.l1_address, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::BASE));
+    EXPECT_EQ(plan.l1_size_bytes, hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::BASE));
+    const std::vector<capture::CoreRegister> core_registers = {
+        {.name = "soft_reset", .address = hal.get_risc_soft_reset_addr()},
+        {.name = "wall_clock_low", .address = hal.get_wall_clock_low_addr()},
+        {.name = "wall_clock_high", .address = hal.get_wall_clock_high_addr()},
+    };
+    EXPECT_EQ(plan.core_registers, core_registers);
+
+    // Validate planned routers match routers listed in manifest
+    const auto& unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+    size_t num_planned_routers = 0;
+    for (const capture::PlannedChip& chip : plan.chips) {
+        for (const capture::PlannedRouter& router : chip.routers) {
+            SCOPED_TRACE(router.path);
+            ++num_planned_routers;
+            const auto entry = std::ranges::find(routers, router.path, &RouterEntry::path);
+            ASSERT_NE(entry, routers.end());
+            EXPECT_EQ(router.eth_chan, entry->eth_chan);
+            EXPECT_EQ(chip.asic_id, unique_chip_ids.at(entry->physical_chip_id));
+
+            std::vector<std::pair<uint32_t, std::string>> streams;
+            collect_stream_registers(*entry->router, "", streams);
+            std::set<uint64_t> addresses;
+            for (const auto& [address, path] : streams) {
+                addresses.insert(address);
+            }
+            EXPECT_EQ(router.stream_register_addresses, std::vector<uint64_t>(addresses.begin(), addresses.end()));
+        }
+    }
+    EXPECT_EQ(num_planned_routers, routers.size());
+
+    // Collect cluster facts is using the mock cluster to find physical chips and cores, so we should never see
+    // any missing chips
+    const capture::CaptureTargets targets = capture::resolve_capture_targets(plan, collect_cluster_facts(manifest));
+    EXPECT_TRUE(targets.missing_chips.empty());
+    for (const capture::CaptureTarget& target : targets.cores) {
+        EXPECT_EQ(target.location, capture::CoreLocation::FOUND)
+            << target.router_path << " at " << target.manifest_core.x << "," << target.manifest_core.y;
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -991,7 +1090,8 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, RouterStreamRegisters) { check_router_stream_registers(routers_); }                    \
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
-    TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }
+    TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }                                \
+    TEST_F(Fixture, CapturePlan) { check_capture_plan(manifest_path_, manifest_, routers_); }
 
 TEST_MANIFEST_CHECKS(Manifest1DFixture)
 TEST_MANIFEST_CHECKS(Manifest2DFixture)
