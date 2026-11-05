@@ -106,7 +106,21 @@ def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, 
 
 
 class TtMiMoMoE:
-    def __init__(self, plan, cfg, layer_idx, router=None, experts=None, cache_dir=None, expert_dtype=ttnn.bfloat8_b):
+    def __init__(
+        self,
+        plan,
+        cfg,
+        layer_idx,
+        router=None,
+        experts=None,
+        cache_dir=None,
+        expert_dtype=ttnn.bfloat8_b,
+        prefill_expert_dtype=None,
+    ):
+        """``expert_dtype``: the experts decode and verify stream. ``prefill_expert_dtype``: a second copy for prefill
+        (PrefillExperts) in another format, or None to share the decode copy. The model's BFP8 layers keep BFP4 for
+        prefill: BFP8 PrefillExperts' weight CBs reach the decode streams' persistent L1 buffers, and in the last layer
+        prefill only gives the first token after each prompt (the layer's output feeds no KV cache)."""
         self.plan = plan
         self.cfg = cfg
         self.layer_idx = layer_idx
@@ -123,21 +137,11 @@ class TtMiMoMoE:
         self.router_mm = DramShardedMatmul(
             plan, self.hidden, self.num_experts, out_dtype=ttnn.float32, compute_kernel_config=self.router_config
         )
-        # bfloat4_b experts are stored prepared (expert_quant): same format and speed, lower error.
-        self.expert_quant = expert_quant(expert_dtype)
-        tag = f"_{self.expert_quant}" if self.expert_quant else ""
-        expert_cache = [cache_name(cache_dir, prefix, n + tag) for n in ("w_gate_up", "w_down")]
-        if all(cache_exists(f, expert_dtype) for f in expert_cache):
-            experts = None  # already converted: skip dequantizing 256 experts on the host
-        w_router = bias = w_gate_up = w_down = None
+        w_router = bias = None
         if router is not None:
             w_router = router["weight"].T.contiguous().to(torch.bfloat16)  # [hidden, E], replicated
             w_router = self.router_mm.pad_chip_blocks(w_router, 1)
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
-        if experts is not None:
-            w_gate_up, w_down = expert_weights_host(
-                experts, tp, self.inter_local, expert_dtype, layer_idx, self.expert_quant == "mse", self.expert_quant
-            )
 
         rep = plan.replicate()
         self.w_router = as_weight(
@@ -149,9 +153,13 @@ class TtMiMoMoE:
             memory_config=self.router_mm.weight_memory_config,
         )
         self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
-        self.w_gate_up = as_weight(w_gate_up, plan, plan.shard(-1), expert_dtype, expert_cache[0])
-        del w_gate_up
-        self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, expert_cache[1])
+        self.expert_quant = expert_quant(expert_dtype)
+        self.w_gate_up, self.w_down = self._expert_weights(experts, cache_dir, prefix, expert_dtype)
+        self.prefill_w_gate_up, self.prefill_w_down = self.w_gate_up, self.w_down
+        if prefill_expert_dtype is not None and prefill_expert_dtype != expert_dtype:
+            self.prefill_w_gate_up, self.prefill_w_down = self._expert_weights(
+                experts, cache_dir, prefix, prefill_expert_dtype
+            )
 
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.
@@ -326,6 +334,21 @@ class TtMiMoMoE:
                 self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias, rows=rows)
             except AssertionError:
                 self.router_scores = None
+
+    def _expert_weights(self, experts, cache_dir, prefix, dtype):
+        """(w_gate_up, w_down) in ``dtype`` from the cache, or converted from ``experts`` (dequantized lazily)."""
+        # bfloat4_b experts are stored prepared (expert_quant): same format and speed, lower error.
+        quant = expert_quant(dtype)
+        tag = f"_{quant}" if quant else ""
+        files = [cache_name(cache_dir, prefix, n + tag) for n in ("w_gate_up", "w_down")]
+        w_gate_up = w_down = None
+        if experts is not None and not all(cache_exists(f, dtype) for f in files):
+            w_gate_up, w_down = expert_weights_host(
+                experts, self.plan.tp, self.inter_local, dtype, self.layer_idx, quant == "mse", quant
+            )
+        w_gate_up = as_weight(w_gate_up, self.plan, self.plan.shard(-1), dtype, files[0])
+        w_down = as_weight(w_down, self.plan, self.plan.shard(-2), dtype, files[1])
+        return w_gate_up, w_down
 
     def reduce_residual(self, gathered, residual=None, norm=None, compact=None, route=False, consumer=None):
         """Row all-gather of the chips' compact [1, 1, 32, H / 8] rows -> a new [1, 1, 32, H]: their chip-ordered sum

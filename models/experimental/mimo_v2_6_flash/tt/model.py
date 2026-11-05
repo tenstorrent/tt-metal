@@ -154,7 +154,8 @@ def expert_bfp8_layers(cfg):
     directly and lifts the far tail of the output distribution, so sampling at temperature 1.0 picks stray
     foreign-script tokens inside tool calls (DeepSWE 57.5 on Galaxy vs 65.5 on GPU). Teacher-forced on GPU DeepSWE
     trajectories, BFP8 experts in the last layer alone cut those tokens ~5x, about as much as BFP8 in every layer;
-    no other single layer helps. It costs 0.4 GB of DRAM per chip (TP 8)."""
+    no other single layer helps. Decode and verify stream the BFP8 copy; prefill keeps the BFP4 one (moe.TtMiMoMoE), so a
+    BFP8 layer costs 0.86 GB of DRAM per chip (TP 8)."""
     value = os.environ.get("MIMO_EXPERT_BFP8_LAYERS", "last").strip()
     if not value:
         return set()
@@ -282,6 +283,7 @@ class TtMiMoModel:
                         attn_dtype=attn_dtype,
                         mlp_dtype=mlp_dtype,
                         expert_dtype=layer_expert_dtype,
+                        prefill_expert_dtype=expert_dtype,
                     )
                 )
                 del weights

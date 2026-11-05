@@ -190,6 +190,10 @@ class GateUpStream:
         """``w_dtype``: the expert weights' format, bfloat4_b or bfloat8_b (twice the bytes per tile and per block)."""
         device = plan.mesh_device
         self.w_dtype = w_dtype
+        if w_dtype == ttnn.bfloat8_b:
+            # Twice the bytes per block: half the blocks keep the ring's L1 and the bytes in flight as with BFP4 (the
+            # full 12-block ring of BFP8 tiles overruns the static circular-buffer region).
+            self.NUM_BUFFERS, self.IN_FLIGHT = self.NUM_BUFFERS // 2, self.IN_FLIGHT // 2
         self.dedup = DEDUP if dedup is None else dedup
         self.cores = list(dram_bank_cores(device))
         self.banks = device.dram_grid_size().x
@@ -424,6 +428,8 @@ class DownStream:
         ``w_dtype``: w_down's format, bfloat4_b or bfloat8_b."""
         device = plan.mesh_device
         self.w_dtype = w_dtype
+        if w_dtype == ttnn.bfloat8_b:  # as GateUpStream: the same ring bytes and bytes in flight as BFP4
+            self.NUM_BUFFERS, self.IN_FLIGHT = self.NUM_BUFFERS // 2, self.IN_FLIGHT // 2
         self.dedup = DEDUP if dedup is None else dedup
         assert rows == 4 or (rows == 8 and self.dedup), rows
         self.rows = rows
