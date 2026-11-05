@@ -26,8 +26,31 @@ constexpr int NR = LV + 8;   // -r and -2r per lane (shift amounts: negative = r
 constexpr int NB = NR + 2;   // IQ1_S: row group 2 of word-vectors 2 and 3, replicated
 constexpr int SG = PM;       // sign words with the parity bits, pre-shifted: SG + pidx(a, b, 0)
 
+// IQ1_S, IQ1_M, IQ2_XXS, IQ2_S and IQ2_XS: the level stage as one SFPMAD per output with the level read from the LReg
+// that the output's field indexes (iq2_ind_body, iq1_ind_body). ttsim has no indexed SFPMAD: under
+// DISABLE_SFPLOADMACRO these formats use the cast-and-MAD bodies.
+constexpr bool IQ_INDEXED = LOADMACRO;
+// Bits 2..3 above each field the body reads: set for IQ2 (LReg index 12 + q), cleared for IQ1 (index q).
+constexpr unsigned IQ_INDEX_BITS = IQ_INDEXED ? 0x0Cu : 0u;
+
+template <unsigned SET, unsigned CLEAR>
+sfpi_inline vUInt iq_index_bits(vUInt w)
+{
+    if constexpr (CLEAR != 0)
+    {
+        w = w & vUInt(~(CLEAR * 0x01010101u));
+    }
+    if constexpr (SET != 0)
+    {
+        w = w | vUInt(SET * 0x01010101u);
+    }
+    return w;
+}
+
 // Level words of the codebook formats (IQ2_XXS, IQ1_S): word-vector a's four row groups to every lane, shifted
-// right by 2r per lane, into LV + 4a + l; the shift amounts into NR first.
+// right by 2r per lane, into LV + 4a + l; the shift amounts into NR first. SET / CLEAR: bits set / cleared in every
+// byte afterwards.
+template <unsigned SET = 0, unsigned CLEAR = 0>
 sfpi_inline void iq_level_words()
 {
     {
@@ -43,16 +66,16 @@ sfpi_inline void iq_level_words()
         vUInt w2 = w0;
         vUInt w3 = w0;
         transp4(w0, w1, w2, w3);
-        sfpi::dst_reg[LV + 4 * a + 0].mode<sfpi::DataLayout::U32>() = shift_after_transp(w0, NR + 1);
-        sfpi::dst_reg[LV + 4 * a + 1].mode<sfpi::DataLayout::U32>() = shift_after_transp(w1, NR + 1);
-        sfpi::dst_reg[LV + 4 * a + 2].mode<sfpi::DataLayout::U32>() = shift_after_transp(w2, NR + 1);
-        sfpi::dst_reg[LV + 4 * a + 3].mode<sfpi::DataLayout::U32>() = shift_after_transp(w3, NR + 1);
+        sfpi::dst_reg[LV + 4 * a + 0].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w0, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 1].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w1, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 2].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w2, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 3].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w3, NR + 1));
     }
 }
 
 sfpi_inline void iq2_xxs_params()
 {
-    iq_level_words();
+    iq_level_words<IQ_INDEX_BITS, 0>();
 #pragma GCC unroll 2
     for (int b = 0; b < 2; b++)
     {
@@ -85,7 +108,7 @@ sfpi_inline void iq2_xxs_params()
 // delta = +-0.125: PS = d (2 ls + 1), PM = delta - 1.
 sfpi_inline void iq1_s_params()
 {
-    iq_level_words();
+    iq_level_words<0, IQ_INDEX_BITS>();
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
@@ -120,7 +143,7 @@ constexpr int DM = CO + 16; // rows 32..63 of the page tile, past the page
 template <int TI>
 sfpi_inline void iq1_m_params()
 {
-    iq_level_words();
+    iq_level_words<0, IQ_INDEX_BITS>();
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
@@ -215,7 +238,7 @@ sfpi_inline void iq2_xxs_init()
 // b, column 16a + 2c + b's scales of elements 0..15 / 16..31 in bits 4..7 / 12..15. S = d / 4 (ls + 0.5) per half.
 sfpi_inline void iq2_s_params()
 {
-    iq_level_words();
+    iq_level_words<IQ_INDEX_BITS, 0>();
 #pragma GCC unroll 2
     for (int b = 0; b < 2; b++)
     {
@@ -260,7 +283,7 @@ sfpi_inline void iq2_s_params()
 template <int TI>
 sfpi_inline void iq2_xs_params()
 {
-    iq_level_words();
+    iq_level_words<IQ_INDEX_BITS, 0>();
 #pragma GCC unroll 2
     for (int p = 0; p < 2; p++)
     {
@@ -512,6 +535,144 @@ sfpi_inline void iq2_xxs_body()
                 }
             }
         }
+    }
+}
+
+constexpr unsigned IQ_ZERO = p_sfpu::LCONST_0;
+
+constexpr unsigned iq_shr(const int k)
+{
+    return static_cast<unsigned>(-k) & 0xFFFu;
+}
+
+// IQ2_XXS, IQ2_S, IQ2_XS: levels 8, 25, 43 in the programmable constants (LReg 12..14). iq2_xxs_body's outputs: the
+// level word shifted to the output's field gives L7 = 12 + q, then T[q] S and the grid sign. L0 level word, L1 S,
+// L2 sign word, L3..L6 results.
+sfpi_inline void iq2_ind_init()
+{
+    sfpi::vConstFloatPrgm0 = 8.0f;
+    sfpi::vConstFloatPrgm1 = 25.0f;
+    sfpi::vConstFloatPrgm2 = 43.0f;
+}
+
+template <bool PER_H, bool ENTRY_SIGNS = false>
+sfpi_inline void iq2_ind_body()
+{
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+#pragma GCC unroll 2
+        for (int b = 0; b < 2; b++)
+        {
+#pragma GCC unroll 2
+            for (int h = 0; h < 2; h++)
+            {
+                if (h == 0 || PER_H)
+                {
+                    TTI_SFPLOAD(1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(a, b, PER_H ? h : 0)));
+                }
+#pragma GCC unroll 2
+                for (int jj = 0; jj < 2; jj++)
+                {
+                    if (ENTRY_SIGNS || (h == 0 && jj == 0))
+                    {
+                        TTI_SFPLOAD(2, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (SG + (ENTRY_SIGNS ? 2 * h + jj : pidx(a, b, 0))));
+                    }
+                    TTI_SFPLOAD(0, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (LV + 4 * a + 2 * h + jj));
+                    const int oa = 16 * h + 8 * a + 4 * jj + b;
+                    const int pa = ENTRY_SIGNS ? 8 * (2 * a + b) : 16 * h + 8 * jj;
+                    TTI_SFPSHFT(iq_shr(16 * b), 0, 7, SHIFT_IMM_OF_C);
+                    TTI_SFPMAD(0, 1, IQ_ZERO, 3, sfpi::SFPMAD_MOD1_SRCA_LREG7);
+                    TTI_SFPSHFT(31 - pa, 2, 4, SHIFT_IMM_OF_C);
+                    TTI_SFPSHFT(iq_shr(16 * b + 8), 0, 7, SHIFT_IMM_OF_C);
+                    TTI_SFPSETSGN(0, 3, 4, 0);
+                    TTI_SFPMAD(0, 1, IQ_ZERO, 5, sfpi::SFPMAD_MOD1_SRCA_LREG7);
+                    TTI_SFPSTORE(4, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * oa);
+                    TTI_SFPSHFT(27 - pa, 2, 6, SHIFT_IMM_OF_C);
+                    TTI_SFPSETSGN(0, 5, 6, 0);
+                    TTI_SFPSTORE(6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (oa + 2));
+                }
+            }
+        }
+    }
+}
+
+// IQ1_S, IQ1_M: levels 0, 1, 2 in L0..L2 (L7 = q), q S + D S: iq1_s_body's (q + D) S with the same single rounding,
+// since D S is exact. L3 level word, L4 S, L5 D S, L6 results.
+sfpi_inline void iq1_ind_init()
+{
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_FLOATB, 0x0000); // 0.0
+    TTI_SFPLOADI(1, sfpi::SFPLOADI_MOD0_FLOATB, 0x3F80); // 1.0
+    TTI_SFPLOADI(2, sfpi::SFPLOADI_MOD0_FLOATB, 0x4000); // 2.0
+}
+
+template <bool M>
+sfpi_inline void iq1_ind_body()
+{
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+#pragma GCC unroll 2
+        for (int b = 0; b < 2; b++)
+        {
+#pragma GCC unroll 2
+            for (int h = 0; h < 2; h++)
+            {
+                if (h == 0 || M)
+                {
+                    TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(a, b, M ? h : 0)));
+                }
+#pragma GCC unroll 2
+                for (int jj = 0; jj < 2; jj++)
+                {
+                    if (M || (h == 0 && jj == 0))
+                    {
+                        TTI_SFPLOAD(5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (M ? DM + 4 * (2 * a + b) + 2 * h + jj : PM + pidx(a, b, 0)));
+                    }
+                    TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (LV + 4 * a + 2 * h + jj));
+                    if (M || (h == 0 && jj == 0))
+                    {
+                        TTI_SFPMAD(5, 4, IQ_ZERO, 5, sfpi::SFPMAD_MOD1_OFFSET_NONE); // D S
+                    }
+                    const int oa = 16 * h + 8 * a + 4 * jj + b;
+                    TTI_SFPSHFT(iq_shr(16 * b), 3, 7, SHIFT_IMM_OF_C);
+                    TTI_SFPMAD(0, 4, 5, 6, sfpi::SFPMAD_MOD1_SRCA_LREG7);
+                    TTI_SFPSHFT(iq_shr(16 * b + 8), 3, 7, SHIFT_IMM_OF_C);
+                    TTI_SFPSTORE(6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * oa);
+                    TTI_SFPMAD(0, 4, 5, 6, sfpi::SFPMAD_MOD1_SRCA_LREG7);
+                    TTI_SFPSTORE(6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (oa + 2));
+                }
+            }
+        }
+    }
+}
+
+template <bool PER_H, bool ENTRY_SIGNS = false>
+sfpi_inline void iq2_stage()
+{
+    if constexpr (IQ_INDEXED)
+    {
+        iq2_ind_init();
+        iq2_ind_body<PER_H, ENTRY_SIGNS>();
+    }
+    else
+    {
+        iq2_xxs_init();
+        iq2_xxs_body<PER_H, ENTRY_SIGNS>();
+    }
+}
+
+template <bool M>
+sfpi_inline void iq1_stage()
+{
+    if constexpr (IQ_INDEXED)
+    {
+        iq1_ind_init();
+        iq1_ind_body<M>();
+    }
+    else
+    {
+        iq1_s_body<M>();
     }
 }
 
