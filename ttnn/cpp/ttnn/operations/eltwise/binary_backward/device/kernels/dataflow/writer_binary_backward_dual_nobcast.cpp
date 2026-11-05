@@ -2,13 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dual-output interleaved tile writer. Consumes one tile per output CB per iteration
-// and writes it to the corresponding output buffer at the same tile_id.
+// WRITE_{INPUT,OTHER}_GRAD defines gate per-slot NoC write; wait/pop stay unconditional
+// so compute's push always drains (partial-mask callers skip only the DRAM store).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+
+#ifndef WRITE_INPUT_GRAD
+#define WRITE_INPUT_GRAD 1
+#endif
+#ifndef WRITE_OTHER_GRAD
+#define WRITE_OTHER_GRAD 1
+#endif
 
 void kernel_main() {
     const uint32_t dst0_addr = get_arg_val<uint32_t>(0);
@@ -36,14 +43,22 @@ void kernel_main() {
     const uint32_t end_id = start_id + num_tiles;
     for (uint32_t tile_id = start_id; tile_id < end_id; ++tile_id) {
         dfb0.wait_front(onetile);
+#if WRITE_INPUT_GRAD
         noc.async_write(dfb0, s0, tile_bytes_0, {}, {.page_id = tile_id});
+#endif
 
         dfb1.wait_front(onetile);
+#if WRITE_OTHER_GRAD
         noc.async_write(dfb1, s1, tile_bytes_1, {}, {.page_id = tile_id});
+#endif
 
+#if WRITE_INPUT_GRAD || WRITE_OTHER_GRAD
         noc.async_writes_flushed();
+#endif
         dfb0.pop_front(onetile);
         dfb1.pop_front(onetile);
     }
+#if WRITE_INPUT_GRAD || WRITE_OTHER_GRAD
     noc.async_write_barrier();
+#endif
 }

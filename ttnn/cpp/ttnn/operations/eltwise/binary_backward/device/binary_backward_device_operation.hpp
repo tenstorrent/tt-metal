@@ -36,16 +36,14 @@ struct BinaryBackwardDeviceOperation {
         const std::optional<Tensor>& preallocated_input_grad,
         const std::optional<Tensor>& preallocated_other_grad);
 
-    // Cases composite handles (ROW_MAJOR, non-32x32 tile, sharded, partial mask, A1
-    // divergent mem_config, broadcast). Returning a reason routes to composite; the fused
-    // broadcast+reduce kernel (see program factory) is not wired yet, so broadcast reasons
-    // still fall back to composite reduce_to_shape.
+    // Returning a reason routes to composite: ROW_MAJOR, non-32x32 tiles, sharded,
+    // broadcast, mixed-dtype preallocated — all handled by composite's ttnn::assign/neg.
     static std::optional<std::string> soft_fallback_reason(
         BinaryBackwardOpType op_type,
         const Tensor& grad_output,
         const Tensor& input,
         const Tensor& other,
-        const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config,
+        const std::array<tt::tt_metal::MemoryConfig, 2>& output_memory_configs,
         std::array<bool, 2> are_required_outputs,
         const std::optional<Tensor>& preallocated_input_grad,
         const std::optional<Tensor>& preallocated_other_grad);
@@ -64,7 +62,7 @@ std::vector<Tensor> launch_binary_backward(
     const Tensor& input,
     const Tensor& other,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::array<tt::tt_metal::MemoryConfig, 2>& output_memory_configs,
     std::array<bool, 2> are_required_outputs,
     const std::optional<Tensor>& preallocated_input_grad,
     const std::optional<Tensor>& preallocated_other_grad);

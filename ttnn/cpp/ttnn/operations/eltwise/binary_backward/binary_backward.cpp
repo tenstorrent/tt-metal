@@ -230,7 +230,8 @@ std::vector<std::optional<Tensor>> add_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -241,11 +242,14 @@ std::vector<std::optional<Tensor>> add_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -344,7 +348,8 @@ std::vector<std::optional<Tensor>> sub_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -355,11 +360,14 @@ std::vector<std::optional<Tensor>> sub_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -773,7 +781,8 @@ std::vector<std::optional<Tensor>> rsub_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -784,11 +793,14 @@ std::vector<std::optional<Tensor>> rsub_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -970,7 +982,8 @@ std::vector<std::optional<Tensor>> div_bw(
             grad_tensor_arg,
             input_tensor_arg,
             other_tensor_arg,
-            output_mem_config,
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
             {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
@@ -981,11 +994,14 @@ std::vector<std::optional<Tensor>> div_bw(
                 input_tensor_arg,
                 other_tensor_arg,
                 tt::tt_metal::DataType::INVALID,
-                output_mem_config.value_or(input_tensor_arg.memory_config()),
-                {true, true},
+                {output_mem_config.value_or(input_tensor_arg.memory_config()),
+                 output_mem_config.value_or(other_tensor_arg.memory_config())},
+                {are_required_outputs.at(0), are_required_outputs.at(1)},
                 input_grad,
                 other_grad);
-            return {outs[0], outs[1]};
+            return {
+                are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+                are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
         }
     }
 
@@ -1166,7 +1182,8 @@ std::vector<std::optional<Tensor>> mul_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -1177,11 +1194,14 @@ std::vector<std::optional<Tensor>> mul_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
