@@ -176,6 +176,10 @@ def test_e2e_pipeline(device_params, device):
     # ------------------------------------------------------------------
     # HF reference forward
     # ------------------------------------------------------------------
+    # The WHOLE model runs on CPU here: refuse up front when it cannot fit host RAM.
+    from models.common.hf_reference_loading import require_whole_model_fits
+
+    require_whole_model_fits(HF_MODEL_ID, ("AutoModel",))
     hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     hf_model.eval()
 
@@ -818,6 +822,10 @@ def test_e2e_pipeline_harness(device_params, device):
         repo_root=Path.cwd(),
     )
 
+    # The WHOLE model runs on CPU here: refuse up front when it cannot fit host RAM.
+    from models.common.hf_reference_loading import require_whole_model_fits
+
+    require_whole_model_fits(HF_MODEL_ID, ("AutoModel",))
     hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     hf_model.eval()
 

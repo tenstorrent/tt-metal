@@ -505,19 +505,12 @@ def _build_torch_reference():
     # `agentic/probe.py:159`, `output_validation.py:830-965`, and
     # `activation_diff.py:1163-1171` so the PCC test harness resolves
     # the same class the capture step used.
-    model = None
-    _last_err = None
-    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
-        try:
-            _cls = getattr(transformers, _cls_name)
-        except AttributeError:
-            continue
-        try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
-            break
-        except Exception as _e:
-            _last_err = _e
-            continue
+    # Whole model when it fits host RAM (as before); otherwise only the blocks the paths this test
+    # resolves (captured path first, then the candidates) need.
+    from models.common.hf_reference_loading import load_hf_reference
+
+    _needed = [_p for _p in [_captured_submodule_path(COMPONENT_NAME)] if _p] + list(_CANDIDATE_SUBMODULE_PATHS)
+    model, _last_err, _ = load_hf_reference(HF_MODEL_ID, ("AutoModelForCausalLM", "AutoModel"), _needed)
     if model is None:
         try:
             import importlib.util as _ilu
@@ -1847,19 +1840,12 @@ def _get_torch_submodule():
         return _cache["module"]
     # AutoModelForCausalLM-first fallback (same rationale as
     # _PCC_TEST_TEMPLATE._build_torch_reference); see comment there.
-    model = None
-    _last_err = None
-    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
-        try:
-            _cls = getattr(transformers, _cls_name)
-        except AttributeError:
-            continue
-        try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
-            break
-        except Exception as _e:
-            _last_err = _e
-            continue
+    # Whole model when it fits host RAM (as before); otherwise only the blocks these paths need.
+    from models.common.hf_reference_loading import load_hf_reference
+
+    model, _last_err, _ = load_hf_reference(
+        HF_MODEL_ID, ("AutoModelForCausalLM", "AutoModel"), list(_CANDIDATE_SUBMODULE_PATHS)
+    )
     if model is None:
         raise RuntimeError(
             f"Could not load {{HF_MODEL_ID}} via AutoModelForCausalLM or "
@@ -2327,17 +2313,23 @@ def autofill_stubs(
             if _cls is not None:
                 _hf_load_classes.append((_attr, _cls))
         _last_exc: Optional[BaseException] = None
-        for _cls_name, _cls in _hf_load_classes:
+        # op-synth reads only the module TREE (classes, in/out features), never weight values. A model
+        # that fits host RAM loads exactly as before; one that does not is built weightless (meta
+        # params) -- loading ~628 GB to read structure got the run OOM-killed here.
+        from models.common.hf_reference_loading import build_hf_skeleton, fits_in_host_ram, load_hf_reference
+
+        _cls_names = tuple(n for n, _ in _hf_load_classes)
+        if not fits_in_host_ram(model_id, _cls_names):
             try:
-                hf_model = _cls.from_pretrained(
-                    model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
-                )
+                hf_model = build_hf_skeleton(model_id, _cls_names)
                 hf_model.eval()
-                _last_exc = None
-                break
-            except Exception as _exc:
+                print(f"  [op-synth] {model_id} exceeds host RAM: classifying ops on a weightless skeleton", flush=True)
+            except Exception as _exc:  # noqa: BLE001
                 _last_exc = _exc
-                continue
+        else:
+            hf_model, _last_exc, _ = load_hf_reference(model_id, _cls_names)
+            if hf_model is not None:
+                hf_model.eval()
         if hf_model is None and _last_exc is not None:
             print(
                 f"  [op-synth] could not load HF model {model_id!r} "
@@ -2714,19 +2706,12 @@ def _set_submodule(model, dotted: str, new_module):
 def _build_hf_model():
     # AutoModelForCausalLM-first fallback (see _PCC_TEST_TEMPLATE
     # ._build_torch_reference for rationale).
-    model = None
-    _last_err = None
-    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
-        try:
-            _cls = getattr(transformers, _cls_name)
-        except AttributeError:
-            continue
-        try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
-            break
-        except Exception as _e:
-            _last_err = _e
-            continue
+    # The WHOLE model runs here: refuse up front when it cannot fit host RAM (rather than an OOM kill
+    # minutes into the load), then load it exactly as before.
+    from models.common.hf_reference_loading import load_hf_reference, require_whole_model_fits
+
+    require_whole_model_fits(HF_MODEL_ID, ("AutoModelForCausalLM", "AutoModel"))
+    model, _last_err, _ = load_hf_reference(HF_MODEL_ID, ("AutoModelForCausalLM", "AutoModel"))
     if model is None:
         raise RuntimeError(
             f"Could not load {{HF_MODEL_ID}}: {{type(_last_err).__name__}}: {{_last_err}}"

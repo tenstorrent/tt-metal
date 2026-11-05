@@ -477,7 +477,7 @@ def discover_components_from_hf_id(
 
     Caller is responsible for ``del model`` afterwards if memory is
     tight."""
-    from transformers import AutoConfig, AutoModel
+    from transformers import AutoModel
 
     try:
         from .cpu_compat import install_cpu_compat
@@ -491,13 +491,9 @@ def discover_components_from_hf_id(
     def _build():
         if load_weights:
             return AutoModel.from_pretrained(model_id, low_cpu_mem_usage=True, **kwargs)
-        config = AutoConfig.from_pretrained(model_id, **kwargs)
-        try:
-            from accelerate import init_empty_weights
-        except Exception:
-            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
-        with init_empty_weights():
-            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        from models.common.hf_reference_loading import build_hf_skeleton
+
+        return build_hf_skeleton(model_id, ("AutoModel",), **kwargs)
 
     if install_cpu_compat is not None:
         install_cpu_compat()
