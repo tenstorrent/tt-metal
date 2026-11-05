@@ -63,6 +63,7 @@ def _state(device, g, block, num_blocks, layout):
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st.model, st.mesh, st.T, st.G, st.layout = None, device, T, 1, lay
     st.layers, st.layer_groups = [(0, dn, 0)], {0: 0}
+    st.kv_block_size, st._zero_pending, st._zeros = block, {}, None
     return st, dn, k, v
 
 
@@ -97,7 +98,8 @@ def test_pages_match_ring(device, geo_block_layout, B, hold):
     for u in range(B):
         book.set_prefill_blocks([torch.tensor([int(win[u, c.mi[u]])])])
         rec = ttnn.from_torch(c.state0[u : u + 1].float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        st._write_rec(dn, int(win[u, c.mi[u]]), rec)
+        with sbs._PageTables(st) as pts:
+            st._write_rec(dn, int(win[u, c.mi[u]]), rec, pts)
     live = [u for u in range(B) if u not in c.hold]
     book.set_step([win], torch.tensor(c.mi), live)
     words = op.ctrl_page(g, B, T, c.mi, c.par, c.hold).shape[-1]
@@ -133,8 +135,9 @@ def test_conv_history_round_trip(device, geo_block_layout):
     torch.manual_seed(3)
     carry = torch.randn(1, 3, g.C).bfloat16()
     rm = ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    for b in (5, 6, 17):
-        st._write_carry(dn, b, rm)
+    with sbs._PageTables(st) as pts:
+        for b in (5, 6, 17):
+            st._write_carry(dn, b, rm, pts)
     for b in (5, 6, 17):
         assert torch.equal(ttnn.to_torch(st._read_carry(dn, b)).reshape(1, 3, g.C), carry), f"block {b}"
     B = 4
@@ -142,7 +145,8 @@ def test_conv_history_round_trip(device, geo_block_layout):
     w_dev = ttnn.from_torch(window, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     dn.verify_win_cur = lambda: w_dev
     for u, t, dst in ((0, 0, 9), (2, 1, 10), (3, 3, 11)):
-        st.materialize(u, t, 0, dst)
+        with sbs._PageTables(st) as pts:
+            st.materialize(u, t, 0, dst, pts)
         got = ttnn.to_torch(st._read_carry(dn, dst)).reshape(3, g.C)
         assert torch.equal(got, window[u, t + 1 : t + 4]), f"row {u} column {t}"
     assert torch.equal(ttnn.to_torch(st._read_carry(dn, 5)).reshape(1, 3, g.C), carry), "a neighbor block changed"
@@ -205,10 +209,43 @@ def test_block_copies_keep_the_state(device, geo_block_layout):
     torch.manual_seed(11)
     rec = torch.randn(1, g.Nv, 128, 128)
     carry = torch.randn(1, 3, g.C).bfloat16()
-    st._write_rec(dn, 7, ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))
-    st._write_carry(dn, 7, ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+    with sbs._PageTables(st) as pts:
+        st._write_rec(dn, 7, ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), pts)
+        rm = ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        st._write_carry(dn, 7, rm, pts)
     for dst in (9, 10, 13, 20):
         st.copy_blocks([(7, dst)])
         got = ttnn.to_torch(st._read_rec(dn, dst)).reshape(1, g.Nv, 128, 128).float()
         assert torch.equal(got, rec), f"7 -> {dst} (phases {st.layout.phase(7)}, {st.layout.phase(dst)}): state"
         assert torch.equal(ttnn.to_torch(st._read_carry(dn, dst)).reshape(1, 3, g.C), carry), f"7 -> {dst}: conv"
+
+
+@pytest.mark.parametrize("block", [2048, 1024])
+def test_zero_only_the_pending_unwritten_blocks(device, block):
+    """flush_zero: the pending blocks minus the ones the prefill writes whole are zeroed, in fills of several blocks
+    (11 blocks: more than one fill), and every other block keeps its bytes."""
+    num_blocks = 40
+    k = ttnn.from_torch(
+        torch.ones(num_blocks, 1, block, 256),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    v = ttnn.clone(k)
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
+    st.mesh, st.kv_block_size, st._zero_pending, st._zeros = device, block, {}, None
+    st.book = SimpleNamespace(forget_block=lambda b: None)
+    pending = [3, 4, 5, 9, 11, 12, 13, 20, 21, 22, 30, 31, 33]
+    st.zero_blocks(pending)
+    st.flush_zero(written=(9, 33))
+    zeroed = set(pending) - {9, 33}
+    for name, t in (("K", k), ("V", v)):
+        host = ttnn.to_torch(t).float()
+        for b in range(num_blocks):
+            if b in zeroed:
+                assert not host[b].any(), f"{name} block {b} was not zeroed"
+            else:
+                assert torch.equal(host[b], torch.ones_like(host[b])), f"{name} block {b} changed"
+    assert not st._zero_pending

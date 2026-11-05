@@ -1303,6 +1303,16 @@ def _spec_step_timed(step_end):
     return deco
 
 
+def _whole_blocks_written(page_table, starts, lens, block_size):
+    """The attention blocks a prefill writes from their first position to their last: row i writes positions
+    [starts[i], lens[i]) through its page table row."""
+    out = set()
+    for i, (s, n) in enumerate(zip(starts, lens)):
+        for j in range(-(-int(s) // block_size), int(n) // block_size):
+            out.add(int(page_table[i, j]))
+    return out
+
+
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
@@ -1675,6 +1685,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             if ids is None:
                 raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
             gdn.set_prefill_blocks(ids)
+            lens = [int(prompt_lens[i]) if prompt_lens is not None else tokens.shape[1] for i in range(N)]
+            gdn.flush_zero(_whole_blocks_written(page_table[:N], starts or [0] * N, lens, gdn.kv_block_size))
         greq = (lambda i: {}) if gdn is None else (lambda i: {"gdn_req": i})
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])
@@ -1786,7 +1798,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     "decode_forward_begin takes no spec_sampling['mask']: pass the mask to decode_forward_finish"
                 )
         gdn_kw = {}
-        if getattr(self.model[0], "_spec_blocks", None) is not None:
+        blocks = getattr(self.model[0], "_spec_blocks", None)
+        if blocks is not None:
+            blocks.flush_zero()
             gdn_kw["gdn_windows"] = self._gdn_windows(kwargs, int(tokens.shape[0]))
         if narrow:
             return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, **gdn_kw)

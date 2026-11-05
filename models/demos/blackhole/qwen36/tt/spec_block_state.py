@@ -36,6 +36,8 @@ BF8_TILE = 1088
 HEAD_PAGES = 16  # fp32 pages of one [Dk, Dv] = [128, 128] head
 HALF_PAGES = 8  # fp32 pages of one [Dk / 2, Dv] slice: the unit of the rec views
 WARMUP_REQ = -1  # the prefill request index of the engine's warmup prompts: they write into vLLM's null block 0
+ZERO_BLOCKS_PER_FILL = 8  # attention blocks zeroed by one paged_fill_cache (the zero source is this many blocks long)
+ZERO_SOURCE_MAX_BYTES = 8 << 20  # cap of that zero source per device
 LAYOUTS = ("two_pool", "k_only")
 # S = tiles * 1088 is a multiple of 64, so block b's offset b * S modulo a 4096 B page repeats within 64 blocks: the
 # whole-page counts of blocks 0 .. 63 are those of every block
@@ -510,6 +512,9 @@ class SpecGdnBlockState:
                 "block-sized prefix hits"
             )
         self.book = SpecBlockBook(lay, self.G, self.bmax, self.T, cache_mode, mamba_block_size)
+        self.kv_block_size = int(kv_caches[0][0].shape[2])
+        self._zero_pending = {}  # attention blocks vLLM asked to zero, in order (flush_zero)
+        self._zeros = None  # [1, H, n * kv_block_size, D] zero source of _zero_now
         rep = ttnn.ReplicateTensorToMesh(mesh)
         self._idx_dev = [
             ttnn.from_torch(h, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
@@ -558,9 +563,9 @@ class SpecGdnBlockState:
         """Once the staged verify is enqueued and the window parity flipped (verify_win_cur is the window it writes):
         enqueue the conv writes it left due behind it."""
         due = self.book.take_pending()
-        with self._timed("boundary conv writes", len(due)):
+        with self._timed("boundary conv writes", len(due)), _PageTables(self) as pts:
             for u, t, g, b in due:
-                self.materialize(u, t, g, b)
+                self.materialize(u, t, g, b, pts)
 
     def _timed(self, kind, n):
         """QWEN36_MAMBA_SPEC_TIMING=1: synchronize around a block operation and log its milliseconds (the synchronizes
@@ -624,13 +629,14 @@ class SpecGdnBlockState:
         """Write the bound B=1 prefill scratch (rec_state, conv_carry) of every GDN layer into request u's state block."""
         import ttnn
 
-        for _, dn, g in self.layers:
-            b = self.book.prefill_block(g, u)
-            self.book.forget_block(b)
-            self._write_rec(dn, b, dn.rec_state)
-            rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            self._write_carry(dn, b, rm)
-            ttnn.deallocate(rm)
+        with self._timed("prefill block writes", len(self.layers)), _PageTables(self) as pts:
+            for _, dn, g in self.layers:
+                b = self.book.prefill_block(g, u)
+                self.book.forget_block(b)
+                self._write_rec(dn, b, dn.rec_state, pts)
+                rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                self._write_carry(dn, b, rm, pts)
+                ttnn.deallocate(rm)
 
     def warmup(self):
         """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
@@ -646,8 +652,9 @@ class SpecGdnBlockState:
             self.restore(WARMUP_REQ)
         finally:
             model._unbind_gdn_prefill_scratch(prev)
-        for g in range(self.G):
-            self.materialize(0, 0, g, 0)
+        with _PageTables(self) as pts:
+            for g in range(self.G):
+                self.materialize(0, 0, g, 0, pts)
         mesh = model.mesh_device
         pt = ttnn.from_torch(
             torch.tensor([[0]], dtype=torch.int32),
@@ -665,23 +672,26 @@ class SpecGdnBlockState:
                 ttnn.deallocate(blk)
         ttnn.deallocate(pt)
         zero_kv_blocks(model, [0])
+        self._zero_now([0])
 
     # ---------------------------------------------------------------- block hooks
     def copy_blocks(self, copies):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
 
         ops = self.book.copy_plan(copies)
+        for op in ops:
+            self._zero_pending.pop(int(op[-1]), None)  # the copy writes the destination's state
         n_conv = sum(1 for op in ops if op[0] == "conv")
-        with self._timed(f"block copies ({n_conv} with conv writes)", len(ops) - n_conv):
+        with self._timed(f"block copies ({n_conv} with conv writes)", len(ops) - n_conv), _PageTables(self) as pts:
             for op in ops:
                 if op[0] == "copy":
                     copy_kv_blocks(self.model, [(op[1], op[2])])
                 elif op[0] == "relayout":
-                    self._relayout(op[1], op[2])
+                    self._relayout(op[1], op[2], pts)
                 else:
-                    self.materialize(*op[1:])
+                    self.materialize(*op[1:], pts)
 
-    def _relayout(self, src, dst):
+    def _relayout(self, src, dst, pts):
         """Copy block src's state into block dst page by page with the layout of each (the blocks hold their whole
         fp32 pages at different offsets): in every layer slot, the head pages of each pool and the conv history."""
         import ttnn
@@ -696,27 +706,72 @@ class SpecGdnBlockState:
                 s0 = (int(ps[h0]) - off) // HALF_PAGES
                 part = ttnn.slice(view, (s0, 0, 0, 0), (s0 + n, 1, dn.Dk // 2, dn.Dv), memory_config=mc)
                 x = ttnn.reshape(part, (1, 1, n * dn.Dk // 2, dn.Dv))
-                pt = self._page_table((int(pd[h0]) - off) // HALF_PAGES, n)
-                ttnn.experimental.paged_fill_cache(view, x, pt, batch_idx=0)
-                ttnn.deallocate(pt)
+                ttnn.experimental.paged_fill_cache(view, x, pts((int(pd[h0]) - off) // HALF_PAGES, n), batch_idx=0)
                 ttnn.deallocate(part)
             vs, qs = dn._spec_paged.conv_at(lay.conv_page(src), lay.conv_pages_total)
             vd, qd = dn._spec_paged.conv_at(lay.conv_page(dst), lay.conv_pages_total)
             part = ttnn.slice(vs, (qs, 0, 0, 0), (qs + lay.conv_pages, 1, 32, 32), memory_config=mc)
             x = ttnn.reshape(part, (1, 1, lay.conv_pages * 32, 32))
-            pt = self._page_table(qd, lay.conv_pages)
-            ttnn.experimental.paged_fill_cache(vd, x, pt, batch_idx=0)
-            ttnn.deallocate(pt)
+            ttnn.experimental.paged_fill_cache(vd, x, pts(qd, lay.conv_pages), batch_idx=0)
             ttnn.deallocate(part)
 
     def zero_blocks(self, block_ids):
-        from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
-
+        """vLLM's new_block_ids_to_zero. vLLM lists only blocks new to an attention group (it records new block ids
+        for AttentionSpec managers), so these never hold a GDN state this class reads: a GDN block is written whole by
+        the prefill or a copy, or holds a valid state on a prefix hit. The zeroing waits for the next forward
+        (flush_zero), which skips the blocks its prefill writes from the first to the last position."""
         for b in block_ids:
             self.book.forget_block(int(b))
-        zero_kv_blocks(self.model, [int(b) for b in block_ids])
+            self._zero_pending[int(b)] = None
 
-    def materialize(self, u, t, g, dst):
+    def flush_zero(self, written=()):
+        """Zero the pending attention blocks except ``written`` (blocks the coming prefill writes whole: SDPA reads
+        none of their bytes before that). The others are read before they are written: the decode SDPA reads the tail
+        of a sequence's last block (masked), and stale GDN state bytes there decode as NaN / Inf."""
+        written = {int(b) for b in written}
+        ids = [b for b in self._zero_pending if b not in written]
+        self._zero_pending.clear()
+        if ids:
+            with self._timed("zeroed attention blocks", len(ids)):
+                self._zero_now(ids)
+
+    def _zero_now(self, ids):
+        """Zero blocks ``ids`` in every K and V buffer, ZERO_BLOCKS_PER_FILL blocks per paged_fill_cache (the page
+        table repeats the last block to fill the source's length)."""
+        import ttnn
+
+        kv = self.model._paged_kv_caches
+        k0 = kv[0][0]
+        if self._zeros is None:
+            shape = [int(x) for x in k0.shape]
+            tile_bytes = {"bfloat8_b": 1088, "bfloat16": 2048, "float32": 4096}[_dtype_name(k0.dtype)]
+            block_bytes = shape[1] * shape[2] * shape[3] // 1024 * tile_bytes
+            n = max(1, min(ZERO_BLOCKS_PER_FILL, ZERO_SOURCE_MAX_BYTES // block_bytes))
+            self._zeros = ttnn.from_torch(
+                torch.zeros([1, shape[1], n * shape[2], shape[3]], dtype=torch.bfloat16),
+                dtype=k0.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        n = int(self._zeros.shape[2]) // self.kv_block_size
+        for i in range(0, len(ids), n):
+            chunk = list(ids[i : i + n])
+            chunk += [chunk[-1]] * (n - len(chunk))
+            pt = ttnn.from_torch(
+                torch.tensor([chunk], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            for k, v in kv:
+                ttnn.experimental.paged_fill_cache(k, self._zeros, pt, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(v, self._zeros, pt, batch_idx=0)
+            ttnn.deallocate(pt)
+
+    def materialize(self, u, t, g, dst, pts):
         """Write the conv history after token t of engine row u's latest verify (rows t + 1 .. t + kc - 1 of the window
         the next verify reads, verify_win_cur) into block dst of every GDN layer of group g."""
         import ttnn
@@ -732,7 +787,7 @@ class SpecGdnBlockState:
             ttnn.deallocate(row)
             carry = ttnn.slice(rm, (0, t + 1, 0), (1, t + kc, C), memory_config=mc)
             ttnn.deallocate(rm)
-            self._write_carry(dn, dst, carry)
+            self._write_carry(dn, dst, carry, pts)
             ttnn.deallocate(carry)
 
     # ---------------------------------------------------------------- page I/O (eager)
@@ -754,7 +809,7 @@ class SpecGdnBlockState:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
 
-    def _write_rec(self, dn, b, rec):
+    def _write_rec(self, dn, b, rec, pts):
         """rec [1, Nv, Dk, Dv] fp32 TILE -> block b's head pages (paged_fill_cache over [Dk / 2, Dv] view blocks: a
         head's 16 pages are its two half-head view blocks, in the tile order of [Dk, Dv])."""
         import ttnn
@@ -769,9 +824,7 @@ class SpecGdnBlockState:
             first = int(pages[h0]) - off
             if first % HALF_PAGES:
                 raise ValueError(f"block {b}: head {h0} starts at page {first}, not a multiple of {HALF_PAGES}")
-            pt = self._page_table(first // HALF_PAGES, 2 * n)
-            ttnn.experimental.paged_fill_cache(view, src, pt, batch_idx=0)
-            ttnn.deallocate(pt)
+            ttnn.experimental.paged_fill_cache(view, src, pts(first // HALF_PAGES, 2 * n), batch_idx=0)
             ttnn.deallocate(part)
 
     def _read_rec(self, dn, b):
@@ -796,7 +849,7 @@ class SpecGdnBlockState:
             ttnn.deallocate(p)
         return out
 
-    def _write_carry(self, dn, b, carry_rm):
+    def _write_carry(self, dn, b, carry_rm, pts):
         """carry_rm [1, kc - 1, C] bf16 ROW_MAJOR -> block b's conv history: its row-major values, 32 per tile row,
         zero padded to whole tiles."""
         import ttnn
@@ -810,9 +863,7 @@ class SpecGdnBlockState:
         if z is not x:
             ttnn.deallocate(z)
         view, q0 = dn._spec_paged.conv_at(self.layout.conv_page(b), self.layout.conv_pages_total)
-        pt = self._page_table(q0, pages)
-        ttnn.experimental.paged_fill_cache(view, w, pt, batch_idx=0)
-        ttnn.deallocate(pt)
+        ttnn.experimental.paged_fill_cache(view, w, pts(q0, pages), batch_idx=0)
         ttnn.deallocate(w)
 
     def _read_carry(self, dn, b):
@@ -832,6 +883,30 @@ class SpecGdnBlockState:
         out = ttnn.to_layout(ttnn.reshape(rows, (1, kc - 1, C)), ttnn.TILE_LAYOUT, memory_config=mc)
         ttnn.deallocate(rows)
         return out
+
+
+class _PageTables:
+    """The page tables of one block operation, each built once and shared by every GDN layer (a block id names the
+    same pages in each layer slot's views); freed on exit."""
+
+    def __init__(self, state):
+        self._state, self._tabs = state, {}
+
+    def __call__(self, first, n):
+        key = (int(first), int(n))
+        if key not in self._tabs:
+            self._tabs[key] = self._state._page_table(*key)
+        return self._tabs[key]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        import ttnn
+
+        for t in self._tabs.values():
+            ttnn.deallocate(t)
+        self._tabs.clear()
 
 
 @dataclass

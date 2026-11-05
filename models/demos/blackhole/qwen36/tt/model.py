@@ -2059,9 +2059,10 @@ class Qwen36Model:
                     gdn_write()
                 if not final:
                     return None
+                # QWEN36_MAMBA_SPEC (gdn_write): the verify reads the recurrent state from the block, not from rec_state
                 snap = [
                     (
-                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        None if gdn_write is not None else ttnn.clone(dn.rec_state, memory_config=dram),
                         [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
                     )
                     for dn in dn_layers

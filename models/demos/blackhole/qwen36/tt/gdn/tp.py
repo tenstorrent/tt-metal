@@ -2864,7 +2864,8 @@ class TPGatedDeltaNet:
         """Write one user's B=1 prefill state into decode `slot`, preserving every other (live)
         row. The per-slot analogue of assemble_batched_state for vLLM continuous batching.
 
-        rec:   [1, Nv, Dk, Dv] the user's recurrent state.
+        rec:   [1, Nv, Dk, Dv] the user's recurrent state, or None (QWEN36_MAMBA_SPEC: the verify reads the state from
+               the request's vLLM block, so rec_state rows are not read and only the conv taps are written).
         convs: list of K [1, 1, qkv_dim_tp] the user's conv taps (conv_states[m] column). Unlike
                assemble_batched_state (which zeroes tap 0), every tap is written straight from the
                user's B=1 prefill state, so decode continues from exactly the produced shift register.
@@ -2883,36 +2884,39 @@ class TPGatedDeltaNet:
             elif self._conv_fmt in ("both", "hist"):
                 self._write_conv_hist_slot(slot, convs)
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
-        rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
-        if rec_src is not rec and consume:
-            ttnn.deallocate(rec)
-        if self.rec_state.shape[0] > 1 and self._inplace_slot_write() and self._rec_row_layout_ok():
-            # A DRAM-interleaved TILE source makes slice_write re-tilize and re-seat rec_state (new address, stale for
-            # baked traces); the L1-sharded copy of the row is written tile-for-tile in place.
-            src = ttnn.slice(rec_src, (0, 0, 0, 0), tuple(rec_src.shape), memory_config=self._rec_row_shard_memcfg())
-            ttnn.experimental.slice_write(
-                src,
-                self.rec_state,
-                [slot, 0, 0, 0],
-                [slot + 1] + list(self.rec_state.shape)[1:],
-                [1, 1, 1, 1],
-            )
-            ttnn.deallocate(src)
-            if consume or rec_src is not rec:
-                ttnn.deallocate(rec_src)
-        elif self.rec_state.shape[0] > 1:
-            # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
-            ttnn.experimental.slice_write(
-                rec_src,
-                self.rec_state,
-                [slot, 0, 0, 0],
-                [slot + 1] + list(self.rec_state.shape)[1:],
-                [1, 1, 1, 1],
-            )
-            if consume or rec_src is not rec:
-                ttnn.deallocate(rec_src)
-        else:
-            self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
+        if rec is not None:
+            rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
+            if rec_src is not rec and consume:
+                ttnn.deallocate(rec)
+            if self.rec_state.shape[0] > 1 and self._inplace_slot_write() and self._rec_row_layout_ok():
+                # A DRAM-interleaved TILE source makes slice_write re-tilize and re-seat rec_state (new address, stale
+                # for baked traces); the L1-sharded copy of the row is written tile-for-tile in place.
+                src = ttnn.slice(
+                    rec_src, (0, 0, 0, 0), tuple(rec_src.shape), memory_config=self._rec_row_shard_memcfg()
+                )
+                ttnn.experimental.slice_write(
+                    src,
+                    self.rec_state,
+                    [slot, 0, 0, 0],
+                    [slot + 1] + list(self.rec_state.shape)[1:],
+                    [1, 1, 1, 1],
+                )
+                ttnn.deallocate(src)
+                if consume or rec_src is not rec:
+                    ttnn.deallocate(rec_src)
+            elif self.rec_state.shape[0] > 1:
+                # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
+                ttnn.experimental.slice_write(
+                    rec_src,
+                    self.rec_state,
+                    [slot, 0, 0, 0],
+                    [slot + 1] + list(self.rec_state.shape)[1:],
+                    [1, 1, 1, 1],
+                )
+                if consume or rec_src is not rec:
+                    ttnn.deallocate(rec_src)
+            else:
+                self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
         # conv_states are stale (and fully rewritten by the hist -> states sync) while the fused history is the
         # authoritative format ("hist" / "packed"): skip the K slice+concat+copy writes then.
         write_states = not (self._hist_hook_active() and self._decode_B > 1 and self._conv_fmt in ("hist", "packed"))
