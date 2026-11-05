@@ -167,6 +167,10 @@ class NormRotation:
             )
 
         bf, f32 = ttnn.bfloat16, ttnn.float32
+        noc_xy = []  # the B cores' NOC coordinates: each sends its sum-of-squares partial to the others
+        for c in range(B):
+            v = device.worker_core_from_logical_core(ttnn.CoreCoord(c % grid.x, c // grid.x))
+            noc_xy += [v.x, v.y]
         rd_ct = (
             ttnn.TensorAccessorArgs(x).get_compile_time_args()
             + ttnn.TensorAccessorArgs(self.consts).get_compile_time_args()
@@ -182,7 +186,7 @@ class NormRotation:
                     kernel_source=KERNELS + "nrot_reader.cpp",
                     core_ranges=crs,
                     compile_time_args=rd_ct,
-                    common_runtime_args=[x.buffer_address(), self.consts.buffer_address(), grid.x, B],
+                    common_runtime_args=[x.buffer_address(), self.consts.buffer_address(), grid.x, B] + noc_xy,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -205,13 +209,15 @@ class NormRotation:
                     ),
                 ),
             ],
-            semaphores=[],
+            semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=crs, initial_value=0)],
             cbs=[
                 cb(0, bf, 2048, 1),
                 cb(2, f32, 4096, 6),
-                cb(3, bf, 2048, 2 * B),
+                cb(3, bf, 2048, 2),
+                cb(18, f32, 4096, 1),
+                cb(19, f32, 4096, B),
                 cb(24, bf, 2048, 1),
-                cb(25, f32, 4096, 2 * B),
+                cb(25, f32, 4096, 2),
                 cb(26, f32, 4096, 1),
                 cb(27, f32, 4096, 1),
                 cb(28, f32, 4096, 1),

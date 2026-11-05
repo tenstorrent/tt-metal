@@ -20,7 +20,7 @@
 namespace {
 constexpr uint32_t cb_x = 0, cb_c = 2, cb_sc = 3, cb_st = 23, cb_xt = 24, cb_sq = 25, cb_r = 26, cb_inv = 27,
                    cb_xd = 28;
-constexpr uint32_t cb_t = 29;
+constexpr uint32_t cb_t = 29, cb_p = 18, cb_peer = 19;
 constexpr uint32_t cb_xn = 17, cb_y = 16;
 constexpr uint32_t H = 0, H32 = 1, OM = 2, WB = 3, WDB = 4, ONES = 5;  // OM: the raw-order row-0 mask
 constexpr auto TO_A = EltwiseBinaryReuseDestType::DEST_TO_SRCA;
@@ -65,50 +65,59 @@ void kernel_main() {
     cb_push_back(cb_xt, 1);
     cb_pop_front(cb_x, 1);
     tilize_uninit(cb_x, cb_xt);
-    // Sum of squares straight from the raw pages (no tilize: a sum does not care about element order): each page
-    // is unpacked as if it were a tile, squared, and masked with RM (1 where the raw element is a face row 0 value,
-    // i.e. raw index % 32 < 16, laid out in tile order), then summed with ONES.
+    // This block's sum of squares straight from its raw pages (no tilize: a sum does not care about element order):
+    // each page is unpacked as if it were a tile, squared, and masked with OM (1 where the raw element is a face row
+    // 0 value), then summed with ONES into a tile with the partial in every element (the reader exchanges them).
     cb_wait_front(cb_xt, 1);
     cb_wait_front(cb_c, 6);
-    for (uint32_t i = 0; i < 2 * B; i += 8) {
-        const uint32_t n = 2 * B - i < 8 ? 2 * B - i : 8;
-        cb_wait_front(cb_sc, i + n);
-        tile_regs_acquire();
-        fmt(cb_sc, cb_sc);
-        mul_init(cb_sc, cb_sc);
-        for (uint32_t k = 0; k < n; ++k) {
-            mul_tiles(cb_sc, cb_sc, i + k, i + k, k);
-        }
-        fmt(cb_c, cb_c);
-        mul_reuse_dest_init<TO_A>(cb_c);
-        for (uint32_t k = 0; k < n; ++k) {
-            mul_reuse_dest_tiles<TO_A>(cb_c, OM, k);
-        }
-        put(cb_sq, n);
+    cb_wait_front(cb_sc, 2);
+    tile_regs_acquire();
+    fmt(cb_sc, cb_sc);
+    mul_init(cb_sc, cb_sc);
+    for (uint32_t k = 0; k < 2; ++k) {
+        mul_tiles(cb_sc, cb_sc, k, k, k);
     }
-    cb_pop_front(cb_sc, 2 * B);
-    cb_wait_front(cb_sq, 2 * B);
+    fmt(cb_c, cb_c);
+    mul_reuse_dest_init<TO_A>(cb_c);
+    for (uint32_t k = 0; k < 2; ++k) {
+        mul_reuse_dest_tiles<TO_A>(cb_c, OM, k);
+    }
+    put(cb_sq, 2);
+    cb_pop_front(cb_sc, 2);
+    cb_wait_front(cb_sq, 2);
     tile_regs_acquire();
     fmt_mm(cb_sq, cb_c);
     matmul_init(cb_sq, cb_c);
-    for (uint32_t k = 0; k < 2 * B; ++k) {
+    for (uint32_t k = 0; k < 2; ++k) {
         matmul_tiles(cb_sq, cb_c, k, ONES, 0);
     }
     put(cb_r, 1);
-    cb_pop_front(cb_sq, 2 * B);
+    cb_pop_front(cb_sq, 2);
     cb_wait_front(cb_r, 1);
-    // total in every element: ONES @ R (R[r][c] = row r's sum, the same for every c)
+    // the partial in every element: ONES @ R (R[r][c] = row r's sum, the same for every c)
     tile_regs_acquire();
     fmt_mm(cb_c, cb_r);
     matmul_init(cb_c, cb_r);
     matmul_tiles(cb_c, cb_r, ONES, 0, 0);
+    put(cb_p, 1);
+    cb_pop_front(cb_r, 1);
+    // the B partials (c_19, from the reader) summed: inv = rsqrt(sum / K + eps)
+    cb_wait_front(cb_peer, B);
+    tile_regs_acquire();
+    fmt(cb_peer, cb_peer);
+    copy_init(cb_peer);
+    copy_tile(cb_peer, 0, 0);
+    add_reuse_dest_init<TO_A>(cb_peer);
+    for (uint32_t k = 1; k < B; ++k) {
+        add_reuse_dest_tiles<TO_A>(cb_peer, k, 0);
+    }
     binop_with_scalar_tile_init();
     mul_unary_tile(0, inv_k);
     add_unary_tile(0, eps);
     rsqrt_tile_init();
     rsqrt_tile(0);
     put(cb_inv, 1);
-    cb_pop_front(cb_r, 1);
+    cb_pop_front(cb_peer, B);
     cb_wait_front(cb_inv, 1);
     // xn (normalised, untilized for the writer) and xd (with the signs, rotated below)
     tile_regs_acquire();
