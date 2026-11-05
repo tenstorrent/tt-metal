@@ -63,7 +63,8 @@ inline void llk_unpack_AB_matmul_impl(
         auto_ttsync,
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
-        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms keep the full mask for rows of 9 to 16 tiles
+        kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
         reuse_dir>(
         base_address_a,
