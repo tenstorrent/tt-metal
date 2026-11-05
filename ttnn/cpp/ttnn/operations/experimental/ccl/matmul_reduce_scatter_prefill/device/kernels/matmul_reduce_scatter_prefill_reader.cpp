@@ -38,16 +38,14 @@
 //
 // MRS_ADDCMUL (gated programs only): this kernel also reads the fused epilogue's operands, as the only reader of its
 // core's NoCs (the writer only writes; a second RISC reading on a NoC would share its read command buffer and break
-// both RISCs' read barriers). At the first K-step of a fin entry it issues the entry's addcmul_a tiles and addcmul_b
-// tiles (a broadcast b: its row tile 0 per wave column) on the A-read NoC (NoC1 when A alternates) under transaction id ADDCMUL_TRID (the step
-// reads use 1..NUM_TRIDS), and at the entry's last K-step it waits for exactly those and pushes them, so compute has
-// them by the time the entry's matmul ends. The CBs hold one fin entry (a broadcast b: core_n row tiles, else P): the
-// next fin entry is a whole chunk walk later, and compute pops a fin entry's operands with its finish, which needs no
-// further read of this kernel, so the next fin entry's reserve can only wait, never deadlock.
-// MRS_BIAS (bias programs only): every entry's bias row tiles (row tile 0 of the bias at the entry's core_n columns,
-// in the entry's block) under transaction id BIAS_TRID, issued one entry ahead (at the previous entry's first K-step,
-// when the CB has room; else at the entry's own) and pushed at the entry's first K-step, before its windows: compute
-// adds them in the entry's first super-block.
+// both RISCs' read barriers), on the A-read NoC (NoC1 when A alternates). addcmul_a and a full addcmul_b stream as
+// pieces, one output subblock each, in the order the finish consumes them (addcmul_pump, transaction ids 11..15): the
+// rings hold as many pieces as the plan's spare L1 allows (at least one), so the epilogue never shrinks the plan. A
+// broadcast b (one row tile per wave column) is read whole at the fin entry's first K-step (ADDCMUL_TRID) and pushed at
+// its last. MRS_BIAS (bias programs only): every entry's bias row tiles (row tile 0 of the bias at the entry's core_n
+// columns, in the entry's block) under transaction id BIAS_TRID, issued one entry ahead (at the previous entry's first
+// K-step, when the CB has room; else at the entry's own) and pushed at the entry's first K-step, before its windows:
+// compute adds them in the entry's first super-block.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -235,8 +233,187 @@ void kernel_main() {
             }
         }
     };
+#if defined(MRS_ADDCMUL) || defined(MRS_BIAS)
+    // the epilogue's reads (and their transaction ids) on one NoC: A's read NoC, or NoC1 when A alternates over both
+    // (a fold along M, whose W reads are on NoC0)
+    constexpr uint8_t epi_noc = a_alternate ? uint8_t{1} : a_read_noc;
+#endif
+#ifdef MRS_ADDCMUL
+    namespace act = mrs::reader_addcmul_ct;
+    constexpr uint32_t add_ct0 = decltype(w_args)::next_compile_time_args_offset();
+    constexpr uint32_t cb_add_a = get_compile_time_arg_val(add_ct0 + act::CB_A);
+    constexpr uint32_t cb_add_b = get_compile_time_arg_val(add_ct0 + act::CB_B);
+    constexpr bool b_bcast = get_compile_time_arg_val(add_ct0 + act::B_BCAST) != 0;
+    constexpr uint32_t add_a_bytes = get_compile_time_arg_val(add_ct0 + act::A_PAGE_BYTES);
+    constexpr uint32_t add_b_bytes = get_compile_time_arg_val(add_ct0 + act::B_PAGE_BYTES);
+    constexpr uint32_t fin_entry = get_compile_time_arg_val(add_ct0 + act::FIN_ENTRY);
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(add_ct0 + act::OUT_N_TILES);
+    constexpr uint32_t piece_tiles = get_compile_time_arg_val(add_ct0 + act::PIECE_TILES);
+    constexpr uint32_t piece_depth = get_compile_time_arg_val(add_ct0 + act::PIECE_DEPTH);
+    constexpr auto add_a_args = TensorAccessorArgs<add_ct0 + act::COUNT>();
+    constexpr auto add_b_args = TensorAccessorArgs<decltype(add_a_args)::next_compile_time_args_offset()>();
+    // transaction ids: the step reads use 1..8 (NUM_TRIDS), the bias 10; a broadcast b's row tiles 9; the pieces
+    // cycle through 11..15 (at most kPieceTrids in flight, consecutive)
+    constexpr uint32_t ADDCMUL_TRID = 9;
+    constexpr uint32_t PIECE_TRID0 = 11;
+    constexpr uint32_t kPieceTrids = 5;
+    static_assert(
+        PIECE_TRID0 + kPieceTrids - 1 <= NOC_MAX_TRANSACTION_ID, "the pieces need transaction ids of their own");
+    static_assert(piece_depth >= 1, "the piece ring holds at least one piece");
+    constexpr uint32_t pieces_in_flight = piece_depth < kPieceTrids ? piece_depth : kPieceTrids;
+    const auto add_a_acc =
+        TensorAccessor(add_a_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::A_ADDR), add_a_bytes);
+    const auto add_b_acc =
+        TensorAccessor(add_b_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::B_ADDR), add_b_bytes);
+    const uint32_t add_a_base = get_write_ptr(cb_add_a);  // ring slot 0 (the write pointer is at the base)
+    const uint32_t add_b_base = get_write_ptr(cb_add_b);
+    // STREAMED OPERANDS: a (and b, unless broadcast) reach compute one output subblock (a piece) at a time, in the
+    // finish's order (row group, then subblock), each piece dense in its slot (tile r * sb_w + c). The pump keeps up to
+    // pieces_in_flight pieces reserved with their reads in flight and pushes each, in order, once its reads landed; it
+    // never blocks and runs from try_land, which every wait of this kernel spins on, so compute waiting for a piece
+    // never waits on a blocked reader. The fin entry's subblock is the compute's (detail::choose_subblock of the wave).
+    auto subblock_of = [](uint32_t rows, uint32_t cols, uint32_t& bh, uint32_t& bw) {
+        bh = 1;
+        bw = 1;
+        for (uint32_t h = 1; h <= rows; ++h) {
+            if (rows % h != 0) {
+                continue;
+            }
+            for (uint32_t w = 1; w <= cols; ++w) {
+                if (cols % w != 0 || h * w > 8) {  // planner kDestTilesFp32FullSync
+                    continue;
+                }
+                if (h * w > bh * bw || (h * w == bh * bw && w > bw)) {
+                    bh = h;
+                    bw = w;
+                }
+            }
+        }
+    };
+    const uint32_t fin_wave_idx = waves_idx + fin_entry % num_waves;  // the fin entry's wave, every chunk
+    const uint32_t fin_wave = get_arg_val<uint32_t>(fin_wave_idx);
+    const uint32_t fin_rows = (fin_wave >> 16) & 0xFF, fin_cols = fin_wave >> 24;
+    uint32_t fin_bh, fin_bw;
+    subblock_of(fin_rows, fin_cols, fin_bh, fin_bw);
+    const uint32_t fin_sb_c = fin_cols / fin_bw;
+    const uint32_t fin_pieces = (fin_rows / fin_bh) * fin_sb_c;
+    uint32_t pc_chunk = 0, pc_piece = 0;  // the next piece to issue: its chunk walk and its index in the fin entry
+    // chunks whose fin entry has started: a chunk's pieces are read from its fin entry's first K-step on, as the
+    // whole-entry read was, never during the fill (every core reads DRAM then; reading the epilogue's operands there
+    // cost short calls 2-6%: LTX-2.3 ff2 M=1216 291 -> 299 us, H3 ff2 M=704 197 -> 209 us)
+    uint32_t pc_allowed = 0;
+    uint32_t pieces_issued = 0, pieces_pushed = 0;
+    auto issue_piece = [&](uint32_t slot, uint32_t trid) {
+        uint32_t im, in;
+        chunk_mn(pc_chunk, im, in);
+        const uint32_t row_off = fin_wave & 0xFF, col_off = (fin_wave >> 8) & 0xFF;
+        const uint32_t m_valid = valid_ext(block_m, chunk_m, im, row0);
+        const uint32_t n_valid = valid_ext(block_n, chunk_n, in, col0);
+        const uint32_t m_valid_w =
+            m_valid <= row_off ? 0u : (m_valid - row_off < fin_rows ? m_valid - row_off : fin_rows);
+        const uint32_t n_valid_w =
+            n_valid <= col_off ? 0u : (n_valid - col_off < fin_cols ? n_valid - col_off : fin_cols);
+        const uint32_t sr = pc_piece / fin_sb_c, sc = pc_piece % fin_sb_c;
+        const uint32_t a_dst = add_a_base + slot * piece_tiles * add_a_bytes;
+        const uint32_t b_dst = add_b_base + slot * piece_tiles * add_b_bytes;
+        noc_async_read_set_trid(trid, epi_noc);
+        for (uint32_t r = 0; r < fin_bh; ++r) {
+            const uint32_t i = sr * fin_bh + r;
+            if (i >= m_valid_w) {
+                break;
+            }
+            const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + in * chunk_n + col0 + col_off;
+            for (uint32_t c = 0; c < fin_bw; ++c) {
+                const uint32_t j = sc * fin_bw + c;
+                if (j >= n_valid_w) {
+                    break;
+                }
+                noc_async_read(
+                    add_a_acc.get_noc_addr(page + j, 0, epi_noc),
+                    a_dst + (r * fin_bw + c) * add_a_bytes,
+                    add_a_bytes,
+                    epi_noc);
+                if constexpr (!b_bcast) {
+                    noc_async_read(
+                        add_b_acc.get_noc_addr(page + j, 0, epi_noc),
+                        b_dst + (r * fin_bw + c) * add_b_bytes,
+                        add_b_bytes,
+                        epi_noc);
+                }
+            }
+        }
+    };
+    auto addcmul_pump = [&]() {
+        while (pieces_pushed < pieces_issued &&
+               ncrisc_noc_read_with_transaction_id_flushed(epi_noc, PIECE_TRID0 + pieces_pushed % kPieceTrids)) {
+            cb_push_back(cb_add_a, piece_tiles);
+            if constexpr (!b_bcast) {
+                cb_push_back(cb_add_b, piece_tiles);
+            }
+            ++pieces_pushed;
+        }
+        while (pc_chunk < pc_allowed && pieces_issued - pieces_pushed < pieces_in_flight) {
+            const uint32_t ahead = (pieces_issued - pieces_pushed + 1) * piece_tiles;  // from the write pointer
+            if (!cb_pages_reservable_at_back(cb_add_a, ahead) ||
+                (!b_bcast && !cb_pages_reservable_at_back(cb_add_b, ahead))) {
+                break;
+            }
+            cb_reserve_back(cb_add_a, ahead);  // free: returns at once
+            if constexpr (!b_bcast) {
+                cb_reserve_back(cb_add_b, ahead);
+            }
+            issue_piece(pieces_issued % piece_depth, PIECE_TRID0 + pieces_issued % kPieceTrids);
+            ++pieces_issued;
+            if (++pc_piece == fin_pieces) {
+                pc_piece = 0;
+                ++pc_chunk;
+            }
+        }
+    };
+    // at a fin entry's first K-step its pieces may be read; a broadcast b: the fin entry's row tiles (one per wave
+    // column), issued at its first K-step, pushed at its last
+    auto addcmul_step = [&](uint32_t s) {
+        const uint32_t eg = s / num_k_blocks;
+        const uint32_t kbi = s % num_k_blocks;
+        if (eg % num_entries != fin_entry) {
+            return;
+        }
+        if (kbi == 0) {
+            pc_allowed = eg / num_entries + 1;
+            addcmul_pump();
+        }
+        if constexpr (b_bcast) {
+            if (kbi == 0) {
+                uint32_t im, in;
+                chunk_mn(eg / num_entries, im, in);
+                const uint32_t col_off = (fin_wave >> 8) & 0xFF;
+                const uint32_t n_valid = valid_ext(block_n, chunk_n, in, col0);
+                const uint32_t n_valid_w =
+                    n_valid <= col_off ? 0u : (n_valid - col_off < fin_cols ? n_valid - col_off : fin_cols);
+                cb_reserve_back(cb_add_b, core_n);
+                const uint32_t b_dst = get_write_ptr(cb_add_b);
+                const uint32_t col_page = in * chunk_n + col0 + col_off;
+                noc_async_read_set_trid(ADDCMUL_TRID, epi_noc);
+                for (uint32_t j = 0; j < n_valid_w; ++j) {
+                    noc_async_read(
+                        add_b_acc.get_noc_addr(col_page + j, 0, epi_noc),
+                        b_dst + j * add_b_bytes,
+                        add_b_bytes,
+                        epi_noc);
+                }
+            }
+            if (kbi == num_k_blocks - 1) {
+                noc_async_read_barrier_with_trid(ADDCMUL_TRID, epi_noc);
+                cb_push_back(cb_add_b, core_n);
+            }
+        }
+    };
+#endif
     uint32_t land_next = 0;
     auto try_land = [&]() {
+#ifdef MRS_ADDCMUL
+        addcmul_pump();
+#endif
         if (report_chunks > 0) {
             try_report();
         }
@@ -366,6 +543,9 @@ void kernel_main() {
     // senders', so a multicast destination is always their current write pointer. Every core walks the parts in
     // the same order (a, a2, b, b2).
     constexpr uint32_t NUM_TRIDS = 8;
+#ifdef MRS_ADDCMUL
+    static_assert(NUM_TRIDS < ADDCMUL_TRID, "the step reads' transaction ids must stay below the epilogue's");
+#endif
     auto trid_of = [](uint32_t step) { return 1 + step % NUM_TRIDS; };
     auto set_trid = [](uint32_t trid) {
         noc_async_read_set_trid(trid, 0);
@@ -572,84 +752,6 @@ void kernel_main() {
         w_slot = w_slot + 1 == w_cap_windows ? 0 : w_slot + 1;
     };
 
-#if defined(MRS_ADDCMUL) || defined(MRS_BIAS)
-    // the epilogue's reads (and their transaction ids) on one NoC: A's read NoC, or NoC1 when A alternates over both
-    // (a fold along M, whose W reads are on NoC0)
-    constexpr uint8_t epi_noc = a_alternate ? uint8_t{1} : a_read_noc;
-#endif
-#ifdef MRS_ADDCMUL
-    namespace act = mrs::reader_addcmul_ct;
-    constexpr uint32_t add_ct0 = decltype(w_args)::next_compile_time_args_offset();
-    constexpr uint32_t cb_add_a = get_compile_time_arg_val(add_ct0 + act::CB_A);
-    constexpr uint32_t cb_add_b = get_compile_time_arg_val(add_ct0 + act::CB_B);
-    constexpr bool b_bcast = get_compile_time_arg_val(add_ct0 + act::B_BCAST) != 0;
-    constexpr uint32_t add_a_bytes = get_compile_time_arg_val(add_ct0 + act::A_PAGE_BYTES);
-    constexpr uint32_t add_b_bytes = get_compile_time_arg_val(add_ct0 + act::B_PAGE_BYTES);
-    constexpr uint32_t fin_entry = get_compile_time_arg_val(add_ct0 + act::FIN_ENTRY);
-    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(add_ct0 + act::OUT_N_TILES);
-    constexpr auto add_a_args = TensorAccessorArgs<add_ct0 + act::COUNT>();
-    constexpr auto add_b_args = TensorAccessorArgs<decltype(add_a_args)::next_compile_time_args_offset()>();
-    constexpr uint32_t b_tiles = b_bcast ? core_n : P;  // addcmul_b tiles per fin entry
-    constexpr uint32_t ADDCMUL_TRID = NUM_TRIDS + 1;
-    static_assert(ADDCMUL_TRID <= NOC_MAX_TRANSACTION_ID, "the epilogue's reads need a transaction id of their own");
-    const auto add_a_acc =
-        TensorAccessor(add_a_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::A_ADDR), add_a_bytes);
-    const auto add_b_acc =
-        TensorAccessor(add_b_args, get_common_arg_val<uint32_t>(mrs::reader_addcmul_common::B_ADDR), add_b_bytes);
-    // the fin entry's operands at its first K-step (issue) and its last (wait, push); entry eg of the walk
-    auto addcmul_step = [&](uint32_t s) {
-        const uint32_t eg = s / num_k_blocks;
-        const uint32_t kbi = s % num_k_blocks;
-        if (eg % num_entries != fin_entry) {
-            return;
-        }
-        if (kbi == 0) {
-            uint32_t im, in;
-            chunk_mn(eg / num_entries, im, in);
-            const uint32_t wave = wave_of(s);
-            const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
-            const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
-            const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
-            cb_reserve_back(cb_add_a, P);
-            cb_reserve_back(cb_add_b, b_tiles);
-            const uint32_t a_dst = get_write_ptr(cb_add_a);
-            const uint32_t b_dst = get_write_ptr(cb_add_b);
-            const uint32_t col_page = in * chunk_n + col0 + col_off;
-            noc_async_read_set_trid(ADDCMUL_TRID, epi_noc);
-            for (uint32_t i = 0; i < m_valid_w; ++i) {
-                const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + col_page;
-                for (uint32_t j = 0; j < n_valid_w; ++j) {
-                    noc_async_read(
-                        add_a_acc.get_noc_addr(page + j, 0, epi_noc),
-                        a_dst + (i * cols + j) * add_a_bytes,
-                        add_a_bytes,
-                        epi_noc);
-                    if constexpr (!b_bcast) {
-                        noc_async_read(
-                            add_b_acc.get_noc_addr(page + j, 0, epi_noc),
-                            b_dst + (i * cols + j) * add_b_bytes,
-                            add_b_bytes,
-                            epi_noc);
-                    }
-                }
-            }
-            if constexpr (b_bcast) {
-                for (uint32_t j = 0; j < n_valid_w; ++j) {
-                    noc_async_read(
-                        add_b_acc.get_noc_addr(col_page + j, 0, epi_noc),
-                        b_dst + j * add_b_bytes,
-                        add_b_bytes,
-                        epi_noc);
-                }
-            }
-        }
-        if (kbi == num_k_blocks - 1) {
-            noc_async_read_barrier_with_trid(ADDCMUL_TRID, epi_noc);
-            cb_push_back(cb_add_a, P);
-            cb_push_back(cb_add_b, b_tiles);
-        }
-    };
-#endif
 #ifdef MRS_BIAS
     namespace bct = mrs::reader_bias_ct;
 #ifdef MRS_ADDCMUL
@@ -678,8 +780,7 @@ void kernel_main() {
         const uint32_t dst = get_write_ptr(cb_bias);
         noc_async_read_set_trid(BIAS_TRID, epi_noc);
         for (uint32_t j = 0; j < n_valid_w; ++j) {
-            noc_async_read(
-                bias_acc.get_noc_addr(col_page + j, 0, epi_noc), dst + j * bias_bytes, bias_bytes, epi_noc);
+            noc_async_read(bias_acc.get_noc_addr(col_page + j, 0, epi_noc), dst + j * bias_bytes, bias_bytes, epi_noc);
         }
         bias_issued = eg + 1;
     };
@@ -710,6 +811,11 @@ void kernel_main() {
     while (land_next < total_entries) {
         try_land();
     }
+#ifdef MRS_ADDCMUL
+    while (pc_chunk < num_chunks || pieces_pushed < pieces_issued) {
+        addcmul_pump();  // the last fin entry's pieces: compute's finish may still be consuming them
+    }
+#endif
     while (reported[0] < (slots_fwd ? report_chunks : 0) || reported[1] < (slots_bwd ? report_chunks : 0)) {
         try_report();  // the upstream ports wait for these credits
     }

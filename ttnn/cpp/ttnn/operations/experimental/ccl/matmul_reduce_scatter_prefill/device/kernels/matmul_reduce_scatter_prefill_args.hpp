@@ -240,10 +240,8 @@ enum : uint32_t {
 // args or role bits, so its kernels, args and CBs are exactly those of the op without them.
 // ---------------------------------------------------------------------------------------------------------------
 namespace addcmul_cb {
-constexpr uint32_t A =
-    8;  // addcmul_a (residual) tiles of a fin entry, dense in the wave layout (kAddcmulDepth entries)
-constexpr uint32_t B =
-    9;  // addcmul_b (gate) tiles, same layout; a broadcast gate: one row tile per wave column (win_n)
+constexpr uint32_t A = 8;  // addcmul_a (residual): a ring of pieces, one output subblock each, in the finish's order
+constexpr uint32_t B = 9;  // addcmul_b (gate), the same; a broadcast gate: one row tile per wave column (win_n)
 constexpr uint32_t BIAS = 10;  // bias row tiles, one per wave column, per entry (kBiasDepth entries deep)
 }  // namespace addcmul_cb
 // compute: role word bit (fin entry: apply the epilogue to the final sum)
@@ -258,6 +256,7 @@ enum : uint32_t {
     B_BCAST,      // addcmul_b is one broadcast row: tile per column, row 0 broadcast by the unpacker
     HAS_SCALAR,   // scalar != 1.0: an SFPU multiply after the gate multiply
     SCALAR_BITS,  // fp32 bits of the scalar
+    PIECE_TILES,  // tiles of one piece slot of the addcmul_a / addcmul_b rings (planner addcmul_piece_tiles)
     COUNT
 };
 }  // namespace compute_addcmul_ct
@@ -272,6 +271,8 @@ enum : uint32_t {
     B_PAGE_BYTES,
     FIN_ENTRY,    // the fin entry's index in a chunk's entry walk (the chip's own block comes last)
     OUT_N_TILES,  // the output's width in tiles (its page row stride)
+    PIECE_TILES,  // tiles of one piece slot (one output subblock of the fin entry, planner addcmul_piece_tiles)
+    PIECE_DEPTH,  // piece slots the addcmul_a / addcmul_b rings hold (Plan::addcmul_ring / PIECE_TILES)
     COUNT
 };
 }  // namespace reader_addcmul_ct

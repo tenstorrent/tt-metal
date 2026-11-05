@@ -106,6 +106,9 @@ struct Plan {
     WavePlan waves;
     uint32_t P = 0;
     uint64_t footprint = 0;  // bytes per matmul core
+    // tiles of the addcmul_a ring (and of a full addcmul_b's; 0 without addcmul): whole pieces, at least one, grown
+    // into the L1 the plan leaves free, up to the whole fin entry
+    uint32_t addcmul_ring = 0;
 };
 
 // What the entry hands the planner, the device values already read.
@@ -129,9 +132,9 @@ struct PlanInputs {
     uint64_t staging_floor = 0;
     Flow flow = Flow::Grid2D;     // the caller's grid: every plan takes it
     bool w_dram_sharded = false;  // W is DRAM width-sharded (keeps the smaller unchunked K-window cap)
-    // fused addcmul epilogue (0: none): bytes per tile of the addcmul_a and addcmul_b CBs (kAddcmulDepth fin entries of
-    // P tiles per matmul core; a broadcast b: win_n) and the DRAM bytes the epilogue reads per output tile (a, plus b
-    // unless broadcast)
+    // fused addcmul epilogue (0: none): bytes per tile of the addcmul_a and addcmul_b CBs (Plan::addcmul_ring tiles per
+    // matmul core; a broadcast b: win_n) and the DRAM bytes the epilogue reads per output tile (a, plus b unless
+    // broadcast)
     uint32_t addcmul_a_tile_bytes = 0;
     uint32_t addcmul_b_tile_bytes = 0;
     uint32_t addcmul_dram_bytes_per_tile = 0;
@@ -146,8 +149,13 @@ constexpr uint32_t kMailboxStride = 16;      // bytes per matmul core in a port'
 constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_CHUNKS holds 2 batches)
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
 constexpr uint32_t kL1Headroom = 64 * 1024;  // default l1_headroom: bytes kept free per core beyond the footprint
-constexpr uint32_t kAddcmulDepth = 1;        // fin entries the addcmul_a / addcmul_b CBs hold (one per chunk walk)
-constexpr uint32_t kBiasDepth = 4;           // entries the bias CB holds (the reader reads one entry ahead)
+// The addcmul operands stream to compute one output subblock (a piece) at a time, in the finish's subblock order: a
+// piece slot holds the largest subblock (<= 8 fp32 DEST tiles, and never more than the slot P). The plan is chosen
+// with a ring of one piece in its footprint (so the epilogue's L1 never forces a smaller K-block than one piece
+// needs); the ring then grows into the L1 the chosen plan leaves free, up to the whole fin entry (Plan::addcmul_ring),
+// so the reader can prefetch the operands during the fin entry's matmul.
+constexpr uint32_t addcmul_piece_tiles(uint32_t P) { return P < 8 ? P : 8; }
+constexpr uint32_t kBiasDepth = 4;  // entries the bias CB holds (the reader reads one entry ahead)
 
 // The entry's plan: the cheapest (chunk_cost_us) of the unchunked plan and the chunk_candidates that fit L1; scatter on
 // M takes the unchunked plan whenever it fits. TT_THROWs when no plan fits L1 or the geometry cannot be laid out. A

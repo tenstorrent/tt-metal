@@ -62,13 +62,26 @@ constexpr uint32_t kComputeBoundCoreTiles = 8;
 constexpr uint32_t kKbMaxChunked = 32;
 constexpr uint32_t kKbMinResident = 8;
 constexpr uint32_t kDestTilesFp32FullSync = 8;  // subblock area cap
-// chunk_cost_us() fit
-constexpr double kCostFpuEff = 0.93;
-constexpr double kCostStepUs = 1.4;
-constexpr double kCostStepStreamUs = 2.1;
-constexpr double kCostHandoffUs = 0.29;
-constexpr double kCostDramGbps = 200.0;
-constexpr double kCostFloorUs = 8.0;
+// chunk_cost_us() fit: floor + max(compute, DRAM, transport), compute = matmul at fpu_eff + a fixed cost per K-step
+struct CostFit {
+    double fpu_eff;
+    double step_us;         // per K-step of a resident plan
+    double step_stream_us;  // per K-step of a streaming plan
+    double handoff_us;
+    double dram_gbps;
+    double floor_us;
+};
+constexpr CostFit kCost{0.93, 1.4, 2.1, 0.29, 200.0, 8.0};
+// Plans with a fused epilogue (bias / addcmul) rank by their own fit: the constants above misranked them by 6% on
+// average (QB2 1x4 ring, traced: 90 timed plans of the MiniMax-H3 ff2 shapes, M=2912-13952, the 10 the model above
+// ranked best per shape). They overrate a resident plan's per-step cost (1.4 us; refit 0.36) and so passed over the
+// resident plans with large K-blocks that fill the grid (M=4864: 3x5 chunks at kb 16, 1153 us, against the pick, 5x1
+// at kb 8, 1325 us). Refit by least squares on log time: mean regret 1.2% on those shapes, and on all 44 gated model
+// shapes (313 timed plans) 1.2% against 2.2% for kCost. Plans without an epilogue keep kCost (their plans, and so their
+// programs, are the op's without the epilogue); with one, solve_plan_uncached switches to this fit's pick only when it
+// predicts a clear gain.
+constexpr CostFit kCostEpilogue{0.793, 0.362, 1.432, 0.059, 203.2, 34.6};
+constexpr double kEpilogueSwitchMargin = 0.05;  // see solve_plan_uncached
 constexpr double kClockMhz = 1350.0;
 
 size_t dir_idx(Direction d) { return static_cast<size_t>(d); }
@@ -197,7 +210,7 @@ struct Geo {
     std::array<uint32_t, 2> hold_depths{};           // [resident]
     std::array<WavePlan, 2> waves_of;                // [resident]
     uint32_t zone_sets = 1;
-    uint64_t staging_floor = 0;  // PlanInputs::staging_floor
+    uint64_t staging_floor = 0;         // PlanInputs::staging_floor
     uint64_t addcmul_a_tile_bytes = 0;  // PlanInputs::addcmul_a_tile_bytes (0: no epilogue)
     uint64_t addcmul_b_tile_bytes = 0;
     bool addcmul_b_bcast = false;
@@ -227,8 +240,9 @@ uint64_t footprint(
         }
         staging = geo.staging_floor;  // the held staging occupies its whole size
     }
-    const uint64_t b_tiles = geo.addcmul_b_bcast ? wv.win_n : P;  // 0 bytes without the epilogue
-    const uint64_t addcmul = kAddcmulDepth * ((geo.addcmul_a_tile_bytes * P) + (geo.addcmul_b_tile_bytes * b_tiles));
+    const uint64_t ring = addcmul_piece_tiles(P);  // the minimum ring; plan_chunk_geometry grows it into spare L1
+    const uint64_t b_tiles = geo.addcmul_b_bcast ? wv.win_n : ring;  // 0 bytes without the epilogue
+    const uint64_t addcmul = (geo.addcmul_a_tile_bytes * ring) + (geo.addcmul_b_tile_bytes * b_tiles);
     const uint64_t bias = geo.bias_tile_bytes * kBiasDepth * wv.win_n;  // 0 without a bias
     return a + w + hold + staging + kStageTileBytes + addcmul + bias;
 }
@@ -469,6 +483,17 @@ Plan plan_on_grid(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in, cons
     pl.waves = geo.waves_of[r];
     pl.P = pl.waves.P;
     pl.footprint = footprint(kblk.kb, kblk.resident, kblk.depth, in.Kt, geo, pl.depths);
+    if (geo.addcmul_a_tile_bytes != 0) {
+        // the addcmul rings: one piece in the footprint, then as many more as the spare L1 holds, up to the fin entry
+        const uint32_t piece = addcmul_piece_tiles(pl.P);
+        const uint64_t per_piece =
+            uint64_t{piece} * (geo.addcmul_a_tile_bytes + (geo.addcmul_b_bcast ? 0 : geo.addcmul_b_tile_bytes));
+        const uint64_t max_depth = (pl.P + piece - 1) / piece;
+        const uint64_t spare = in.budget > pl.footprint ? in.budget - pl.footprint : 0;
+        const uint64_t depth = std::min<uint64_t>(max_depth, 1 + (spare / per_piece));
+        pl.addcmul_ring = static_cast<uint32_t>(depth * piece);
+        pl.footprint += (depth - 1) * per_piece;
+    }
     return pl;
 }
 
@@ -481,14 +506,14 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
         grid_of_flow(in.gx, in.gy, tt::div_up(in.block_m, n_m_req), tt::div_up(in.block_n, n_n_req), in.L, in.flow));
 }
 
-double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
+double chunk_cost_us(const Plan& pl, const PlanInputs& in, const CostFit& fit) {
     const double C = static_cast<double>(pl.n_m) * pl.n_n;
     const double cores = static_cast<double>(pl.grid.grid_m) * pl.grid.grid_n;
     const uint32_t k_steps = in.Kt / pl.kb;  // K-blocks per entry (kb divides Kt)
     const double steps = C * in.G * pl.waves.n * k_steps;
-    const double step_us = pl.resident ? kCostStepUs : kCostStepStreamUs;
+    const double step_us = pl.resident ? fit.step_us : fit.step_stream_us;
     const double compute =
-        (C * in.G * pl.P * pl.waves.n * in.Kt * tt::constants::TILE_WIDTH / kClockMhz / kCostFpuEff) +
+        (C * in.G * pl.P * pl.waves.n * in.Kt * tt::constants::TILE_WIDTH / kClockMhz / fit.fpu_eff) +
         (step_us * steps);
     const double a_bytes = static_cast<double>(in.Mt) * in.Kt * in.tA;
     const double w_bytes = static_cast<double>(in.Kt) * in.Nt * in.tW;
@@ -500,9 +525,9 @@ double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
     }
     // the epilogue's reads (0 without it): every output tile of this chip once
     traffic += static_cast<double>(in.block_m) * in.block_n * in.addcmul_dram_bytes_per_tile;
-    const double dram = traffic / (kCostDramGbps * 1e3);
-    const double transport = kCostHandoffUs * C * (in.G - 1) * cores / in.L;
-    return kCostFloorUs + std::max({compute, dram, transport});
+    const double dram = traffic / (fit.dram_gbps * 1e3);
+    const double transport = fit.handoff_us * C * (in.G - 1) * cores / in.L;
+    return fit.floor_us + std::max({compute, dram, transport});
 }
 
 // The unchunked plan, or nothing when it misses the L1 budget (the chunk search takes over).
@@ -669,14 +694,44 @@ Plan solve_plan_uncached(const PlanInputs& in) {
     // (the model misranks it there), unless a fused epilogue (bias / addcmul) is present: its CBs take L1 an unchunked
     // plan may only fit by shrinking its K-block to a few tiles, so there it competes on cost as well. Without an
     // epilogue every plan is the op's plan without it.
+    //
+    // With an epilogue, the plan kCost ranks best gives way to the one kCostEpilogue ranks best only when that refit
+    // predicts it kEpilogueSwitchMargin faster than kCost's pick: the refit misses near ties (LTX-2.3 ff2 M=5120 picked
+    // 4x4 over 5x2 chunks, 8.6% slower). With this margin 8 of the 44 gated model shapes measured switch, 7 of them
+    // 3-12% faster (H3 ff2 M=7104 7x1 -> 5x4 chunks, 1793 -> 1607 us), and none gets slower.
     const bool epilogue = in.addcmul_a_tile_bytes != 0 || in.bias_tile_bytes != 0;
-    std::optional<std::pair<double, Plan>> best;
+    //
+    // With an epilogue a streaming plan whose K-block is below kKbMinResident competes only when nothing else fits:
+    // in all 19 gated model shapes where one was timed it lost to another plan, by 1-23% (Wan 480p SP8 1x1 at kb 3,
+    // 1066 us, against 3x5 at kb 16, 868 us), and both fits ranked some of them first (LTX-2.3 ff2 M=5120: 1x1 at kb 4,
+    // 1143 us, against 5x2 at kb 32, 1055 us).
+    std::optional<std::pair<double, Plan>> best;      // by kCost
+    std::optional<std::pair<double, Plan>> best_fit;  // by kCostEpilogue (epilogue only)
+    std::optional<std::pair<double, Plan>> small_kb;  // epilogue only: the streaming plans below kKbMinResident
+    auto consider = [&](Plan&& pl) {
+        if (epilogue && !pl.resident && pl.kb < kKbMinResident) {
+            const double cost = chunk_cost_us(pl, in, kCost);
+            if (!small_kb.has_value() || cost < small_kb->first) {
+                small_kb = std::make_pair(cost, std::move(pl));
+            }
+            return;
+        }
+        if (epilogue) {
+            const double fit_cost = chunk_cost_us(pl, in, kCostEpilogue);
+            if (!best_fit.has_value() || fit_cost < best_fit->first) {
+                best_fit = std::make_pair(fit_cost, pl);
+            }
+        }
+        const double cost = chunk_cost_us(pl, in, kCost);
+        if (!best.has_value() || cost < best->first) {
+            best = std::make_pair(cost, std::move(pl));
+        }
+    };
     if (auto unchunked = plan_if_fits(in)) {
         if (in.scatter_dim == -2 && !epilogue) {
             return std::move(*unchunked);
         }
-        const double cost = chunk_cost_us(*unchunked, in);
-        best = std::make_pair(cost, std::move(*unchunked));
+        consider(std::move(*unchunked));
     }
     for (const auto& [n_m, n_n] : chunk_candidates(in.block_m, in.block_n, in.scatter_dim)) {
         if (n_m * n_n == 1) {
@@ -690,10 +745,10 @@ Plan solve_plan_uncached(const PlanInputs& in) {
         } catch (const GeometryMiss&) {
             continue;
         }
-        const double cost = chunk_cost_us(*cand, in);
-        if (!best.has_value() || cost < best->first) {
-            best = std::make_pair(cost, std::move(*cand));
-        }
+        consider(std::move(*cand));
+    }
+    if (!best.has_value() && small_kb.has_value()) {
+        return std::move(small_kb->second);
     }
     if (!best.has_value()) {
         throw L1Miss(fmt::format(
@@ -701,6 +756,10 @@ Plan solve_plan_uncached(const PlanInputs& in) {
             in.block_m,
             in.block_n,
             kMaxAutoChunks));
+    }
+    if (best_fit.has_value() &&
+        best_fit->first < chunk_cost_us(best->second, in, kCostEpilogue) * (1.0 - kEpilogueSwitchMargin)) {
+        return std::move(best_fit->second);
     }
     return std::move(best->second);
 }

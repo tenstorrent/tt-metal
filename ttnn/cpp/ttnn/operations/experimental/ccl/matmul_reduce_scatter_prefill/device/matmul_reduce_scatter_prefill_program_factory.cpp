@@ -597,6 +597,11 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         add_ct[args::reader_addcmul_ct::B_PAGE_BYTES] = static_cast<uint32_t>(tb.buffer()->aligned_page_size());
         add_ct[args::reader_addcmul_ct::FIN_ENTRY] = num_entries - 1;
         add_ct[args::reader_addcmul_ct::OUT_N_TILES] = block_n;
+        add_ct[args::reader_addcmul_ct::PIECE_TILES] = detail::addcmul_piece_tiles(P);
+        TT_FATAL(
+            plan.addcmul_ring > 0 && plan.addcmul_ring % detail::addcmul_piece_tiles(P) == 0,
+            "matmul_reduce_scatter_prefill: the addcmul ring must hold whole pieces");
+        add_ct[args::reader_addcmul_ct::PIECE_DEPTH] = plan.addcmul_ring / detail::addcmul_piece_tiles(P);
         mrs_append(reader_ct, add_ct);
         TensorAccessorArgs(*ta.buffer()).append_to(reader_ct);
         TensorAccessorArgs(*tb.buffer()).append_to(reader_ct);
@@ -636,6 +641,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         compute_ct[args::compute_addcmul_ct::B_BCAST] = attrs.addcmul_b_bcast ? 1 : 0;
         compute_ct[args::compute_addcmul_ct::HAS_SCALAR] = scalar != 1.0f ? 1 : 0;
         compute_ct[args::compute_addcmul_ct::SCALAR_BITS] = std::bit_cast<uint32_t>(scalar);
+        compute_ct[args::compute_addcmul_ct::PIECE_TILES] = detail::addcmul_piece_tiles(P);
     }
 
     std::vector<uint32_t> writer_ct(args::writer_ct::COUNT);
@@ -1018,14 +1024,14 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         used_port_crs));
     desc.cbs.push_back(mrs_plain_cb(args::cb::ZERO, 1, tile_bytes, tt::DataFormat::Float16_b, mm_crs));
     if (addcmul) {
-        // a: P tiles per fin entry; b: P, or a row tile per wave column when broadcast
+        // a: a ring of subblock pieces (Plan::addcmul_ring); b: the same, or a row tile per wave column when broadcast
         for (const auto& [index, t] :
              {std::pair{args::addcmul_cb::A, &*tensor_args.addcmul_a},
               std::pair{args::addcmul_cb::B, &*tensor_args.addcmul_b}}) {
-            const uint32_t tiles = index == args::addcmul_cb::B && attrs.addcmul_b_bcast ? win_n : P;
+            const uint32_t tiles = index == args::addcmul_cb::B && attrs.addcmul_b_bcast ? win_n : plan.addcmul_ring;
             desc.cbs.push_back(mrs_plain_cb(
                 index,
-                detail::kAddcmulDepth * tiles,
+                tiles,
                 static_cast<uint32_t>(t->buffer()->aligned_page_size()),
                 datatype_to_dataformat_converter(t->dtype()),
                 mm_crs));
