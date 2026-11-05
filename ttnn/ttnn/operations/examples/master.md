@@ -52,11 +52,14 @@ and for a few levers the verdict **flips**.
 | Achieved DRAM read + write, full grid (what the examples' copies reached — **not** a hardware limit, see below) | ~190 GB/s | ~415–430 GB/s |
 
 **"The DRAM ceiling" in every entry below means this row**: the read + write rate the examples'
-full-grid copies reached on that board, not the most the hardware can do. Entries that quote a single
-stream "at the ceiling" (~388–408 GB/s, BH) mean that stream's measured limit. Full-grid ops have measured
-above this row on BH p150b: ~444 GB/s read + write, and ~515 GB/s for the reads alone. So an op
-at or near this rate on one shape is DRAM-bound **on that shape** only; it is not evidence that the op
-has no headroom left on its other cells.
+full-grid copies happened to reach on that board — a rate known to be reachable, **not** a limit to
+stop at. Entries that quote a single stream "at the ceiling" (~388–408 GB/s, BH) mean that stream's
+measured rate, not a limit either. **Judge an op against the board's DRAM spec instead: ~288 GB/s on
+WH B0 n150, ~512 GB/s on BH p150b.** Full-grid ops have already measured above this row on BH p150b
+(~455 GB/s read + write, ~515 GB/s for reads alone), so matching or passing the row says nothing about
+headroom. Call a shape DRAM-bound only when its measured read + write rate is within a few percent of
+the spec; at 455 GB/s on BH ~10% is still left, and the question to measure is what holds the reads and
+writes short of the spec — not which other cell to move to.
 
 Where the boundary or verdict moves on BH p150b (everything else: same verdict, numbers in each entry):
 
