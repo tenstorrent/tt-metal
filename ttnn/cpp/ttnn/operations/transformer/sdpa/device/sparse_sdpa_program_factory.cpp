@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
@@ -222,6 +223,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         }
     }
     if (split_k) {
+        const size_t whole_token_cbs = desc.cbs.size();
         for (uint32_t id : {cb_send_out, cb_recv_out}) {
             cb(id, tile_bytes, Sqt * vDHt, bf);
         }
@@ -229,8 +231,21 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             cb(id, tile_bytes, Sqt, bf);
         }
         cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+        // Keep the whole-token split when the merge CBs do not fit in L1 (e.g. large H with large k_chunk).
+        const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+        uint64_t cb_bytes = 0;
+        for (const auto& c : desc.cbs) {
+            cb_bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
+        }
+        const uint64_t l1_budget =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        if (cb_bytes > l1_budget) {
+            desc.cbs.erase(desc.cbs.begin() + whole_token_cbs, desc.cbs.end());
+            split_k = false;
+        } else {
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+        }
     }
 
     // ---- compile-time args ----
