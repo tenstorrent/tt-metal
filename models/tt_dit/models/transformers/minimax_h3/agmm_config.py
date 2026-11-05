@@ -103,8 +103,10 @@ def agmm_block_size(k: int, n: int, m: int, *, rules_fallback: bool = False) -> 
     Pass `rules_fallback=is_blackhole()` only from call sites whose `force_transpose` matches the op's
     own `M > N` choice (the H3 attention and block do; the token refiner's ff1 does not), since
     `get_agmm_config` skips the rules otherwise and would land on its generic fallback.
-    Not yet A/B'd on device at the production lengths: `MINIMAX_H3_AGMM_DIVISOR_FALLBACK=1` restores
-    the borrowing for that comparison.
+    A/B'd on a BH Galaxy 4x8 at 160 W (2026-11-05, one H3 block, bucketed lengths, device kernel time
+    averaged over the mesh), rules vs borrowing: at 15 s (13952 rows) qkv 7416 -> 3466 us, to_out
+    3177 -> 2587 us, ff1 9668 -> 5387 us; at 5 s (4864 rows) to_out 1166 -> 916 us, qkv and ff1
+    within 1-4%. `MINIMAX_H3_AGMM_DIVISOR_FALLBACK=1` restores the borrowing for further comparison.
     """
     per_core_m = _per_core_m(m, n)
     if (k, n, per_core_m) in AGMM_BLOCK_SIZES:
