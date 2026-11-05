@@ -337,7 +337,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     ttnn::operations::data_movement::check_accessor_page_size(
         output, output.padded_shape()[-1] * input.element_size(), "output");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
 
     // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
     // fold into compute_program_hash(), so cache entries stay distinct per unique DFB layout.

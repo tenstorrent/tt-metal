@@ -86,8 +86,9 @@ void kernel_main() {
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_inp.pop_front(Wt);
-        cb_reduce.pop_front(1);
     }
+    // The reader pushes the reduce scaler once for all rows.
+    cb_reduce.pop_front(1);
 
     // if merge core, we need to do a final sum on the tile in cb_x2_idx and then write the result to cb_out_final_idx
     if (is_merge_core) {

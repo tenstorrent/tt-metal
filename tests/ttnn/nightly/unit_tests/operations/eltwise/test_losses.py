@@ -192,7 +192,7 @@ def test_l1_loss_with_output_tensor(device, input_shapes, loss_mode):
         [ttnn.l1_loss, ttnn.LossReductionMode.SUM],
     ],
 )
-def test_loss_with_mismatched_output_tensor_shape(device, loss_fn, loss_mode):
+def test_loss_with_mismatched_output_tensor_shape(device, loss_fn, loss_mode, expect_error):
     input_shape = [1, 1, 32, 32]
     torch_input_tensor_a = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -203,5 +203,5 @@ def test_loss_with_mismatched_output_tensor_shape(device, loss_fn, loss_mode):
     # Passing rank-4 [1, 1, 32, 32] instead of rank-0 [] should trigger TT_FATAL
     mismatched_out = ttnn.empty([1, 1, 32, 32], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError, match="produces a tensor with logical shape"):
+    with expect_error(RuntimeError, "produces a tensor with logical shape"):
         loss_fn(input_tensor_a, input_tensor_b, reduction=loss_mode, output_tensor=mismatched_out)
